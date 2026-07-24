@@ -1,0 +1,196 @@
+{
+  "schemaVersion": 1,
+  "source": "vspi.harness-sources",
+  "sources": [
+    {
+      "family": "anthropic",
+      "sourceUrl": "https://github.com/anthropics/claude-code",
+      "ref": {
+        "type": "commit",
+        "value": "2982f951552e94f38cd972764ae94c1d90c41da3"
+      },
+      "licensePolicy": "Review the repository LICENSE at the pinned commit before redistributing extracted text.",
+      "applicableModels": [
+        "anthropic-family"
+      ],
+      "extractionPath": "Docs/harness/anthropic.md",
+      "rewriteRationale": "Adapt stable engineering guidance into a short VSPi overlay without copying a complete upstream prompt.",
+      "evaluation": {
+        "status": "unreviewed",
+        "notes": "No paid or external model evaluation was authorized for v0.1.0."
+      },
+      "lastReviewed": "2026-07-24"
+    },
+    {
+      "family": "openai",
+      "sourceUrl": "https://github.com/openai/codex",
+      "ref": {
+        "type": "commit",
+        "value": "81da9deb065d7adb283816b19b40f89bcc484276"
+      },
+      "licensePolicy": "Review the repository LICENSE at the pinned commit before redistributing extracted text.",
+      "applicableModels": [
+        "openai-family"
+      ],
+      "extractionPath": "Docs/harness/openai.md",
+      "rewriteRationale": "Adapt stable engineering guidance into a short VSPi overlay without copying a complete upstream prompt.",
+      "evaluation": {
+        "status": "unreviewed",
+        "notes": "No paid or external model evaluation was authorized for v0.1.0."
+      },
+      "lastReviewed": "2026-07-24"
+    },
+    {
+      "family": "google",
+      "sourceUrl": "https://github.com/google-gemini/gemini-cli",
+      "ref": {
+        "type": "commit",
+        "value": "69b51f8fa2af0abf717daaba4dca1c627023d82d"
+      },
+      "licensePolicy": "Review the repository LICENSE at the pinned commit before redistributing extracted text.",
+      "applicableModels": [
+        "google-family"
+      ],
+      "extractionPath": "Docs/harness/google.md",
+      "rewriteRationale": "Adapt stable engineering guidance into a short VSPi overlay without copying a complete upstream prompt.",
+      "evaluation": {
+        "status": "unreviewed",
+        "notes": "No paid or external model evaluation was authorized for v0.1.0."
+      },
+      "lastReviewed": "2026-07-24"
+    },
+    {
+      "family": "deepseek",
+      "sourceUrl": "https://github.com/deepseek-ai/DeepSeek-V3",
+      "ref": {
+        "type": "commit",
+        "value": "9b4e9788e4a3a731f7567338ed15d3ec549ce03b"
+      },
+      "licensePolicy": "Review the repository LICENSE at the pinned commit before redistributing extracted text.",
+      "applicableModels": [
+        "deepseek-family"
+      ],
+      "extractionPath": "Docs/harness/deepseek.md",
+      "rewriteRationale": "Adapt stable engineering guidance into a short VSPi overlay without copying a complete upstream prompt.",
+      "evaluation": {
+        "status": "unreviewed",
+        "notes": "No paid or external model evaluation was authorized for v0.1.0."
+      },
+      "lastReviewed": "2026-07-24"
+    },
+    {
+      "family": "moonshot",
+      "sourceUrl": "https://github.com/MoonshotAI/kimi-cli",
+      "ref": {
+        "type": "commit",
+        "value": "4a550effdfcb29a25a5d325bf935296cc50cd417"
+      },
+      "licensePolicy": "Review the repository LICENSE at the pinned commit before redistributing extracted text.",
+      "applicableModels": [
+        "moonshot-family"
+      ],
+      "extractionPath": "Docs/harness/moonshot.md",
+      "rewriteRationale": "Adapt stable engineering guidance into a short VSPi overlay without copying a complete upstream prompt.",
+      "evaluation": {
+        "status": "unreviewed",
+        "notes": "No paid or external model evaluation was authorized for v0.1.0."
+      },
+      "lastReviewed": "2026-07-24"
+    },
+    {
+      "family": "z-ai",
+      "sourceUrl": "https://github.com/zai-org/GLM-4.5",
+      "ref": {
+        "type": "commit",
+        "value": "170f20b2c10659008fdbc909d478bc2a75bc3627"
+      },
+      "licensePolicy": "Review the repository LICENSE at the pinned commit before redistributing extracted text.",
+      "applicableModels": [
+        "z-ai-family"
+      ],
+      "extractionPath": "Docs/harness/z-ai.md",
+      "rewriteRationale": "Adapt stable engineering guidance into a short VSPi overlay without copying a complete upstream prompt.",
+      "evaluation": {
+        "status": "unreviewed",
+        "notes": "No paid or external model evaluation was authorized for v0.1.0."
+      },
+      "lastReviewed": "2026-07-24"
+    },
+    {
+      "family": "xiaomi",
+      "sourceUrl": "https://github.com/XiaomiMiMo/MiMo-V2-Flash",
+      "ref": {
+        "type": "commit",
+        "value": "b4eaae40d3728657ff7f0f9397dcce3c9ab3d3b7"
+      },
+      "licensePolicy": "Review the repository LICENSE at the pinned commit before redistributing extracted text.",
+      "applicableModels": [
+        "xiaomi-family"
+      ],
+      "extractionPath": "Docs/harness/xiaomi.md",
+      "rewriteRationale": "Adapt stable engineering guidance into a short VSPi overlay without copying a complete upstream prompt.",
+      "evaluation": {
+        "status": "unreviewed",
+        "notes": "No paid or external model evaluation was authorized for v0.1.0."
+      },
+      "lastReviewed": "2026-07-24"
+    },
+    {
+      "family": "minimax",
+      "sourceUrl": "https://github.com/MiniMax-AI/MiniMax-M2",
+      "ref": {
+        "type": "commit",
+        "value": "2e575efec12773cdc5d811341089512452bfb468"
+      },
+      "licensePolicy": "Review the repository LICENSE at the pinned commit before redistributing extracted text.",
+      "applicableModels": [
+        "minimax-family"
+      ],
+      "extractionPath": "Docs/harness/minimax.md",
+      "rewriteRationale": "Adapt stable engineering guidance into a short VSPi overlay without copying a complete upstream prompt.",
+      "evaluation": {
+        "status": "unreviewed",
+        "notes": "No paid or external model evaluation was authorized for v0.1.0."
+      },
+      "lastReviewed": "2026-07-24"
+    },
+    {
+      "family": "tencent",
+      "sourceUrl": "https://github.com/Tencent-Hunyuan/Hunyuan-A13B",
+      "ref": {
+        "type": "commit",
+        "value": "2798f3c8b6a69e0ce93950b0d2417203cf950fa0"
+      },
+      "licensePolicy": "Review the repository LICENSE at the pinned commit before redistributing extracted text.",
+      "applicableModels": [
+        "tencent-family"
+      ],
+      "extractionPath": "Docs/harness/tencent.md",
+      "rewriteRationale": "Adapt stable engineering guidance into a short VSPi overlay without copying a complete upstream prompt.",
+      "evaluation": {
+        "status": "unreviewed",
+        "notes": "No paid or external model evaluation was authorized for v0.1.0."
+      },
+      "lastReviewed": "2026-07-24"
+    },
+    {
+      "family": "alibaba",
+      "sourceUrl": "https://github.com/QwenLM/qwen-code",
+      "ref": {
+        "type": "commit",
+        "value": "2a97c55ac8d42c9673690dea8ebf1ad7a1aebcec"
+      },
+      "licensePolicy": "Review the repository LICENSE at the pinned commit before redistributing extracted text.",
+      "applicableModels": [
+        "alibaba-family"
+      ],
+      "extractionPath": "Docs/harness/alibaba.md",
+      "rewriteRationale": "Adapt stable engineering guidance into a short VSPi overlay without copying a complete upstream prompt.",
+      "evaluation": {
+        "status": "unreviewed",
+        "notes": "No paid or external model evaluation was authorized for v0.1.0."
+      },
+      "lastReviewed": "2026-07-24"
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "name": "vspi",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "vspi": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "Docs/tui-v1.md",
+    "Docs/harness"
+  ],
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "bridge": "tsx src/index.ts bridge",
+    "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "check": "tsc --noEmit && biome check src test",
+    "check:fix": "biome check --write src test",
+    "harness:check": "tsx scripts/harness-check.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke": "VSPi_FIXTURE=1 VSPi_REDUCED_MOTION=1 tsx src/index.ts --render-once"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.81.1",
+    "@earendil-works/pi-tui": "0.81.1",
+    "chalk": "5.6.2",
+    "highlight.js": "10.7.3",
+    "marked": "18.0.5",
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.2.0",
+    "@types/node": "24.1.0",
+    "tsx": "4.20.3",
+    "typescript": "5.9.2",
+    "vitest": "3.2.7"
+  }
+}
