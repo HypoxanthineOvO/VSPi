@@ -1,0 +1,353 @@
+import { mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  type AgentSession,
+  type AgentSessionEvent,
+  type ContextUsage,
+  type PromptOptions,
+  SessionManager,
+  type SessionStats,
+} from "@earendil-works/pi-coding-agent";
+import { describe, expect, it, vi } from "vitest";
+import { PiBackend } from "../src/backend/pi-backend.js";
+import type { ChatBackendEvents } from "../src/backend/types.js";
+import type { Attachment, TranscriptMessage, UsageSnapshot } from "../src/domain/types.js";
+import { PNG_1X1 } from "./helpers.js";
+
+interface FakeSessionOptions {
+  contextWindow?: number;
+  contextUsage?: () => ContextUsage | undefined;
+  sessionStats?: () => SessionStats;
+  compact?: () => Promise<unknown>;
+}
+
+function sessionStats(input = 0, output = 0, cost = 0): SessionStats {
+  return {
+    sessionFile: undefined,
+    sessionId: "session-id",
+    userMessages: 0,
+    assistantMessages: input + output > 0 ? 1 : 0,
+    toolCalls: 0,
+    toolResults: 0,
+    totalMessages: input + output > 0 ? 1 : 0,
+    tokens: { input, output, cacheRead: 0, cacheWrite: 0, total: input + output },
+    cost,
+  };
+}
+
+function fakeSession(provider = "test", name = "Vision Model", options: FakeSessionOptions = {}) {
+  let listener: ((event: AgentSessionEvent) => void) | undefined;
+  const prompt = vi.fn(async (_text: string, _options?: PromptOptions) => {});
+  const session = {
+    model: {
+      id: "vision-model",
+      name,
+      provider,
+      input: ["text", "image"],
+      contextWindow: options.contextWindow ?? 100_000,
+    },
+    messages: [],
+    sessionId: "session-id",
+    thinkingLevel: "medium",
+    isStreaming: false,
+    subscribe(callback: (event: AgentSessionEvent) => void) {
+      listener = callback;
+      return () => {
+        listener = undefined;
+      };
+    },
+    setThinkingLevel: vi.fn(),
+    prompt,
+    abort: vi.fn(async () => {}),
+    compact: vi.fn(options.compact ?? (async () => ({}))),
+    getContextUsage: vi.fn(options.contextUsage ?? (() => ({ tokens: 0, contextWindow: 100_000, percent: 0 }))),
+    getSessionStats: vi.fn(options.sessionStats ?? (() => sessionStats())),
+    dispose: vi.fn(),
+  } as unknown as AgentSession;
+  return { session, prompt, emit: (event: AgentSessionEvent) => listener?.(event) };
+}
+
+describe("pi backend adapter", () => {
+  it("publishes current context from getContextUsage independently of cumulative session stats", async () => {
+    let cumulative = sessionStats(90_000, 12_000, 3.25);
+    const fake = fakeSession("openai", "Context Model", {
+      contextUsage: () => ({ tokens: 50_176, contextWindow: 128_000, percent: 99 }),
+      sessionStats: () => cumulative,
+    });
+    const usage: UsageSnapshot[] = [];
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-pi-context-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+
+    await backend.start({
+      onMessage: vi.fn(),
+      onMessageUpdate: vi.fn(),
+      onBusy: vi.fn(),
+      onUsage: (snapshot) => usage.push(snapshot),
+      onNotice: vi.fn(),
+    });
+    expect(usage.at(-1)).toMatchObject({
+      contextTokens: 50_176,
+      contextWindow: 128_000,
+      contextPercent: 39,
+      inputTokens: 90_000,
+      outputTokens: 12_000,
+      costUsd: 3.25,
+    });
+
+    cumulative = sessionStats(190_000, 32_000, 8.5);
+    fake.emit({ type: "agent_end" } as AgentSessionEvent);
+    expect(usage.at(-1)).toMatchObject({
+      contextTokens: 50_176,
+      contextWindow: 128_000,
+      contextPercent: 39,
+      inputTokens: 190_000,
+      outputTokens: 32_000,
+      costUsd: 8.5,
+    });
+    expect(fake.session.getContextUsage).toHaveBeenCalled();
+    expect(fake.session.getSessionStats).toHaveBeenCalled();
+    await backend.dispose();
+  });
+
+  it("publishes unknown current context after compaction without zeroing cumulative usage", async () => {
+    let context: ContextUsage = { tokens: 50_176, contextWindow: 128_000, percent: 39.2 };
+    const fake = fakeSession("openai", "Compaction Model", {
+      contextUsage: () => context,
+      sessionStats: () => sessionStats(250_000, 40_000, 9.75),
+      compact: async () => {
+        context = { tokens: null, contextWindow: 128_000, percent: null };
+      },
+    });
+    const usage: UsageSnapshot[] = [];
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-pi-compact-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+    await backend.start({
+      onMessage: vi.fn(),
+      onMessageUpdate: vi.fn(),
+      onBusy: vi.fn(),
+      onUsage: (snapshot) => usage.push(snapshot),
+      onNotice: vi.fn(),
+    });
+
+    await backend.compact();
+
+    expect(usage.at(-1)).toMatchObject({
+      contextTokens: null,
+      contextWindow: 128_000,
+      contextPercent: null,
+      inputTokens: 250_000,
+      outputTokens: 40_000,
+      costUsd: 9.75,
+    });
+    await backend.dispose();
+  });
+
+  it("uses explicit zero context for an empty session without a configured context window", async () => {
+    const fake = fakeSession("test", "Empty Model", {
+      contextWindow: 0,
+      contextUsage: () => undefined,
+      sessionStats: () => sessionStats(),
+    });
+    const usage: UsageSnapshot[] = [];
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-pi-empty-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+    await backend.start({
+      onMessage: vi.fn(),
+      onMessageUpdate: vi.fn(),
+      onBusy: vi.fn(),
+      onUsage: (snapshot) => usage.push(snapshot),
+      onNotice: vi.fn(),
+    });
+
+    expect(usage.at(-1)).toMatchObject({ contextTokens: 0, contextWindow: 0, contextPercent: 0 });
+    await backend.dispose();
+  });
+
+  it("publishes the newly selected session context and cumulative totals after switching", async () => {
+    const first = fakeSession("openai", "First", {
+      contextUsage: () => ({ tokens: 8_000, contextWindow: 128_000, percent: 6.25 }),
+      sessionStats: () => sessionStats(10_000, 2_000, 0.5),
+    });
+    const second = fakeSession("deepseek", "Second", {
+      contextUsage: () => ({ tokens: 50_176, contextWindow: 128_000, percent: 39.2 }),
+      sessionStats: () => sessionStats(300_000, 60_000, 11.5),
+    });
+    const list = vi.spyOn(SessionManager, "list").mockResolvedValue([
+      {
+        id: "second-session",
+        path: "/tmp/second-session.jsonl",
+        cwd: "/workspace",
+        name: "Second",
+        firstMessage: "second",
+        created: new Date(),
+        modified: new Date(),
+        messageCount: 1,
+        allMessagesText: "second",
+      },
+    ]);
+    const open = vi.spyOn(SessionManager, "open").mockReturnValue({} as SessionManager);
+    let factoryCalls = 0;
+    const usage: UsageSnapshot[] = [];
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-pi-switch-")),
+      sessionFactory: async () => ({ session: factoryCalls++ === 0 ? first.session : second.session }),
+    });
+
+    try {
+      await backend.start({
+        onMessage: vi.fn(),
+        onMessageUpdate: vi.fn(),
+        onBusy: vi.fn(),
+        onUsage: (snapshot) => usage.push(snapshot),
+        onNotice: vi.fn(),
+      });
+      await backend.switchSession("second-session");
+
+      expect(usage.at(-1)).toMatchObject({
+        contextTokens: 50_176,
+        contextWindow: 128_000,
+        contextPercent: 39,
+        inputTokens: 300_000,
+        outputTokens: 60_000,
+        costUsd: 11.5,
+      });
+    } finally {
+      await backend.dispose();
+      list.mockRestore();
+      open.mockRestore();
+    }
+  });
+
+  it("normalizes the Provider display name without changing the model name", async () => {
+    const fake = fakeSession("openai", "Vision Model Exact");
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-pi-label-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+
+    await backend.start({
+      onMessage: vi.fn(),
+      onMessageUpdate: vi.fn(),
+      onBusy: vi.fn(),
+      onUsage: vi.fn(),
+      onNotice: vi.fn(),
+    });
+
+    expect(backend.modelLabel).toBe("OpenAI / Vision Model Exact");
+    await backend.dispose();
+  });
+
+  it("sends real image content with an alias manifest and maps text stream events", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-pi-backend-"));
+    const imagePath = join(cwd, "image.png");
+    await writeFile(imagePath, PNG_1X1);
+    const fake = fakeSession();
+    const backend = new PiBackend({
+      cwd,
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+    const messages: TranscriptMessage[] = [];
+    const events: ChatBackendEvents = {
+      onMessage: (message) => messages.push(message),
+      onMessageUpdate: (id, patch) => {
+        const index = messages.findIndex((message) => message.id === id);
+        const current = messages[index];
+        if (current) messages[index] = { ...current, ...patch } as TranscriptMessage;
+      },
+      onBusy: vi.fn(),
+      onUsage: vi.fn(),
+      onNotice: vi.fn(),
+    };
+    await backend.start(events);
+    const attachment: Attachment = {
+      id: "attachment-id",
+      alias: "登录页",
+      mimeType: "image/png",
+      width: 1,
+      height: 1,
+      size: PNG_1X1.length,
+      path: imagePath,
+      status: "ready",
+    };
+    await backend.send("检查图片", { attachments: [attachment], effort: "高", behavior: "prompt" });
+    const [promptText, promptOptions] = fake.prompt.mock.calls[0] ?? [];
+    expect(promptText).toContain("<attachment-manifest>");
+    expect(promptText).toContain("登录页");
+    expect(promptOptions?.images).toHaveLength(1);
+    expect(promptOptions?.images?.[0]).toMatchObject({ type: "image", mimeType: "image/png" });
+
+    const partial = {
+      role: "assistant",
+      content: [{ type: "text", text: "完成" }],
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    };
+    fake.emit({
+      type: "message_update",
+      message: partial,
+      assistantMessageEvent: { type: "text_start", contentIndex: 0, partial },
+    } as AgentSessionEvent);
+    fake.emit({
+      type: "message_update",
+      message: partial,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "完成", partial },
+    } as AgentSessionEvent);
+    expect(messages.at(-1)).toMatchObject({ kind: "text", text: "完成", streaming: true });
+
+    fake.emit({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: {} });
+    fake.emit({
+      type: "tool_execution_end",
+      toolCallId: "tool-1",
+      toolName: "read",
+      result: { content: [{ type: "text", text: "token=top-secret-value" }] },
+      isError: false,
+    });
+    expect(messages.at(-1)).toMatchObject({ kind: "tool", output: "token=[REDACTED]" });
+  });
+
+  it("rejects a symlink attachment instead of sending followed outside bytes", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-pi-attachment-symlink-"));
+    const outside = join(cwd, "outside-private.txt");
+    const attachmentPath = join(cwd, "swapped.png");
+    await writeFile(outside, "PRIVATE_PI_ATTACHMENT_BYTES");
+    await symlink(outside, attachmentPath);
+    const fake = fakeSession();
+    const backend = new PiBackend({ cwd, sessionFactory: async () => ({ session: fake.session }) });
+    await backend.start({
+      onMessage: vi.fn(),
+      onMessageUpdate: vi.fn(),
+      onBusy: vi.fn(),
+      onUsage: vi.fn(),
+      onNotice: vi.fn(),
+    });
+    const attachment: Attachment = {
+      id: "swapped-attachment",
+      alias: "已替换图片",
+      mimeType: "image/png",
+      width: 1,
+      height: 1,
+      size: PNG_1X1.length,
+      path: attachmentPath,
+      status: "ready",
+    };
+
+    await expect(
+      backend.send("不得读取外部文件", { attachments: [attachment], effort: "中", behavior: "prompt" }),
+    ).rejects.toThrow();
+    expect(fake.prompt).not.toHaveBeenCalled();
+    await backend.dispose();
+  });
+});

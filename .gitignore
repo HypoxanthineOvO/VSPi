@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.vspi/
+*.log
+.DS_Store
+tmp/
+.pipeline/memory/
+.pipeline/runtime/
+.pipeline/snapshots/
