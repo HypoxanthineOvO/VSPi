@@ -58,7 +58,7 @@ verify:
       done
   script:
     - npm run check
-    - npm test
+    - npm test -- --maxWorkers=4
     - git diff --check
     - test "$(node dist/index.js --version)" = "$(node -p "require('./package.json').version")"
     - npm pack
