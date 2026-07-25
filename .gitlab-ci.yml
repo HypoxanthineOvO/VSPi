@@ -73,7 +73,7 @@ verify:
     - export TARBALL="vspi-$(node -p "require('./package.json').version").tgz"
     - test -f "$TARBALL"
     - mkdir .package-smoke
-    - npm install --prefix .package-smoke --ignore-scripts --no-audit --no-fund "./$TARBALL"
+    - npm install --prefix .package-smoke --no-audit --no-fund "./$TARBALL"
     - test "$(.package-smoke/node_modules/.bin/vspi --version)" = "$(node -p "require('./package.json').version")"
   artifacts:
     when: on_success
