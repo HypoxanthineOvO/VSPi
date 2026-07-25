@@ -37,7 +37,15 @@ verify:
       NODE_ARCHIVE="node-v${NODE_VERSION}-linux-x64.tar.xz"
       NODE_HOME="$CI_PROJECT_DIR/node-v${NODE_VERSION}-linux-x64"
       if [ ! -x "$NODE_HOME/bin/node" ]; then
-        curl --proto '=https' --tlsv1.2 -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${NODE_ARCHIVE}"
+        NODE_PATH="v${NODE_VERSION}/${NODE_ARCHIVE}"
+        for base_url in "https://npmmirror.com/mirrors/node" "https://nodejs.org/dist"; do
+          if curl --proto '=https' --tlsv1.2 --retry 4 --retry-all-errors --retry-delay 3 \
+            --connect-timeout 15 --max-time 240 -fL -o "$NODE_ARCHIVE" "$base_url/$NODE_PATH"; then
+            break
+          fi
+          rm -f "$NODE_ARCHIVE"
+        done
+        test -f "$NODE_ARCHIVE"
         echo "${NODE_ARCHIVE_SHA256}  ${NODE_ARCHIVE}" | sha256sum -c -
         tar -xJf "$NODE_ARCHIVE"
         rm "$NODE_ARCHIVE"
