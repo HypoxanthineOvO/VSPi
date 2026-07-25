@@ -59,7 +59,7 @@ describe("M9 npm package artifact", () => {
     const tarball = join(output, packed.filename);
     const project = await mkdtemp(join(tmpdir(), "vspi-m9-consumer-"));
     await npm(["init", "--yes"], project);
-    await npm(["install", "--ignore-scripts", "--no-audit", "--no-fund", tarball], project);
+    await npm(["install", "--no-audit", "--no-fund", tarball], project);
 
     const bin = join(project, "node_modules", ".bin", "vspi");
     await chmod(bin, 0o700);
