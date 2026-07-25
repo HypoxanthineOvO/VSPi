@@ -71,6 +71,51 @@ describe("model panel responsive layout", () => {
     expect(lines.join("\n")).not.toContain("¥");
   });
 
+  it("groups runtime models by provider and hides the unavailable preset-group view", () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    panel.setModels([
+      {
+        id: "z-last",
+        provider: "z-provider",
+        brand: "Z Provider",
+        label: "Zeta",
+        vision: false,
+        efforts: ["off"],
+        price: { inputUsdPerMillion: 0, outputUsdPerMillion: 0 },
+      },
+      {
+        id: "a-second",
+        provider: "a-provider",
+        brand: "A Provider Name That Is Much Too Long For The List",
+        label: "Alpha Two",
+        vision: false,
+        efforts: ["off"],
+        price: { inputUsdPerMillion: 0, outputUsdPerMillion: 0 },
+      },
+      {
+        id: "a-first",
+        provider: "a-provider",
+        brand: "A Provider Name That Is Much Too Long For The List",
+        label: "Alpha One",
+        vision: false,
+        efforts: ["off"],
+        price: { inputUsdPerMillion: 0, outputUsdPerMillion: 0 },
+      },
+    ]);
+    panel.open("models");
+
+    const lines = render(panel, 60, 16);
+    const panes = splitPanes(lines);
+    expect(panes.left).toMatch(/A Provider.*…\s+2/);
+    expect(panes.left.indexOf("Alpha One")).toBeLessThan(panes.left.indexOf("Alpha Two"));
+    expect(panes.left.indexOf("Alpha Two")).toBeLessThan(panes.left.indexOf("Z Provider"));
+    expect(lines[1]).not.toContain("模型组");
+    expect(stripAnsi(panel.renderHint(60, plainTheme()))).not.toContain("Tab 切换视图");
+
+    panel.handleInput(TAB);
+    expect(render(panel, 60, 16).join("\n")).not.toContain("没有匹配的模型组");
+  });
+
   it("uses explicit list/detail navigation at 40 columns without leaking price into the list", () => {
     const panel = new PanelController(DEFAULT_SETTINGS);
     panel.setModels(MODELS, MODEL_GROUPS, "kimi-k3");

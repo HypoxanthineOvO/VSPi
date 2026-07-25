@@ -103,7 +103,7 @@ describe("M1 new-session scrollback contract", () => {
         expect(scrollback).toContain("M1 Session Fixture");
         expect(scrollback).toContain("Backend Fixture");
         expect(scrollback).toContain("Policy Standard");
-        expect(scrollback).toContain("Sandboxed");
+        expect(scrollback).toContain("Host");
         expect(scrollback).toContain(`v${VSPI_VERSION}`);
         expect(scrollback).not.toMatch(/\bMode\b|\bAuto\b/);
 

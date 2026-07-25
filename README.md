@@ -1,6 +1,22 @@
 # VSPi
 
-VSPi v0.1.0 是基于 `@earendil-works/pi-tui` 与 `@earendil-works/pi-coding-agent` 的自定义中文 TUI。当前实现已接入统一动作目录、真实 Session runtime、Provider/Model/Effort 真相源、执行 Policy、Question tool、图片附件，以及可配置的 thinking/代码换行渲染。
+VSPi v0.2.0 是基于 `@earendil-works/pi-tui` 与 `@earendil-works/pi-coding-agent` 的自定义中文 TUI。当前实现已接入统一动作目录、真实 Session runtime、Provider/Model/Effort 真相源、执行 Policy、Question tool、图片附件，以及可配置的 thinking/Markdown 渲染与可选只读 Workflow 投影。
+
+## 安装
+
+从公开 GitLab 仓库安装固定的 `v0.2.0` 版本：
+
+```bash
+# HTTPS
+npm install -g 'git+https://gitlab.vsplab.cn/heyx/vspi.git#v0.2.0'
+
+# 已配置 SSH key 时也可使用 SSH
+npm install -g 'git+ssh://git@gitlab.vsplab.cn/heyx/vspi.git#v0.2.0'
+
+vspi --version
+```
+
+固定 Tag 可以避免默认分支后续更新改变已安装版本。Workflow 默认关闭；需要只读 Workflow Plan 时使用 `vspi --workflow`。
 
 ## 环境与启动
 
@@ -45,6 +61,9 @@ VSPi_BACKEND=pi npm run dev
 # 显式信任当前项目；仅绑定启动时 workspace 的 realpath
 npm run dev -- --trust-project
 
+# 显式启用只读 Workflow Adapter；默认关闭
+npm run dev -- --workflow
+
 # 完全离线的交互 fixture（等价入口：VSPi_BACKEND=fixture）
 VSPi_FIXTURE=1 npm run dev
 ```
@@ -53,66 +72,72 @@ VSPi 沿用 Pi 的模型、Provider、凭据和 session 目录。VSPi 不保存 
 
 ## 启动与默认界面
 
-启动序列会先立即写出 initial brand-only 初始帧：它只显示 VSPi 品牌、现有六行块字符 Logo 和动画进度，不含运行状态或模型声明；应用初始化在同一轮启动并与封面动画并行。最终帧等待应用初始化完成，使用初始化后解析得到的真实 Model、`package.json` 解析出的包版本、真实 Backend 与执行 Policy。真实 pi 显示 `Backend Pi`，显式离线后端显示 `Backend Fixture`；边界以 `Policy Standard · Sandboxed` 或相应的 `Policy … · Host` 表达，Backend 与 Policy 是两项独立元数据。
+启动序列会先立即写出 initial brand-only 初始帧：它只显示 VSPi 品牌、现有六行块字符 Logo 和动画进度，不含运行状态或模型声明；应用初始化在同一轮启动并与封面动画并行。最终帧等待应用初始化完成，使用初始化后解析得到的真实 Model、`package.json` 解析出的包版本、真实 Backend 与执行 Policy。真实 pi 显示 `Backend Pi`，显式离线后端显示 `Backend Fixture`；执行边界统一显示 `Policy … · Host`，Policy 只控制审批强度，Backend 与 Policy 是两项独立元数据。
 
 完整 Logo 的最终帧连同结尾 newline 会先提交并写入终端 `scrollback`，之后才启动动态 TUI；后续刷新和差分渲染只管理它下方的动态区域，不会擦除、清空或覆盖这个最终帧。启动、`/new` 和它的 alias `/clear` 都遵守同一规则：先把完整 final Splash 写入 scrollback，再建立新的动态区域。启用 reduced motion 时不播放中间帧，但仍遵守相同的初始化屏障与最终帧写入顺序。
 
 默认的新工作区动态界面为空，不加载或预置对话、工具消息、演示计划、usage 或 session；文档中的对话和工具消息一律标为“交互示例”，不是启动内容。Plan 使用紧凑三行框并显示 `当前计划为空`；离线后端明确标识为 `Offline Fixture`。`80` 列状态固定为两行，并且每行可见宽度严格为 80 列：
 
 ```text
-Model OpenAI / GPT-5.4  Effort 高                       Context 50K / 128K 39%  
-/workspace/vspi · Policy Standard · Sandboxed       Token ↑12k ↓3.0k  Cost ¥1.01
+Model OpenAI / GPT-5.4  Effort High                     Context 50K / 128K 39%  
+/workspace/vspi · Policy Standard · Host            Token ↑12k ↓3.0k  Cost ¥1.01
 ```
 
-动态状态区只包含两条语义轨道：第一行严格为 `Model / Effort / Context`；第二行直接从路径值开始，再显示 `Policy / Token / Cost`，不显示冗余的 `Path` 标题。Backend 只保留在永久 Splash 与诊断信息中，不进入动态行。五个标签与对应值、以及无标题路径值分别着色，不把整行统一处理为弱文本。80/120 列的路径 flex 区从右侧保留完整 `Policy <name> · Sandboxed|Host` suffix；只有 Model 和路径变量值可以显示省略号，Effort、Context、Policy/Boundary、Token 与 Cost 不截断。
+动态状态区只包含两条语义轨道：第一行严格为 `Model / Effort / Context`；第二行直接从路径值开始，再显示 `Policy / Token / Cost`，不显示冗余的 `Path` 标题。Backend 只保留在永久 Splash 与诊断信息中，不进入动态行。五个标签与对应值、以及无标题路径值分别着色，不把整行统一处理为弱文本。80/120 列的路径 flex 区从右侧保留完整 `Policy <name> · Host` suffix；只有 Model 和路径变量值可以显示省略号，Effort、Context、Policy/Boundary、Token 与 Cost 不截断。
 
 M1 把 `Context` 明确定义为当前上下文占用、模型窗口和百分比，`Token` 则是独立的累计输入/输出量。三个状态例子分别是活动会话 `Context 50K / 128K 39%  Token ↑12K ↓3K`、空容量 `Context 0K / 0K 0%  Token ↑0 ↓0`，以及压缩后尚无法估算的 `Context ?K / 128K ?%  Token ↑12K ↓3K`。`K` 使用十进制千 token：10K 以下保留一位小数，10K 及以上显示整数；百分比始终由未格式化的原始占用量与窗口计算。
 
 Status 在 40、80、120 列都恰好两行，并按终端可见列而不是原始 ANSI 字节计算。Model 与 Effort 使用固定两个空格的小间距并组成连续左侧轨道；空间不足时只截断 Model，Effort 保持完整。80/120 的固定右轨从内容预算反向排布：Context 为 24 列并可为批准最大值扩到 25 列；Token 为 18 列，Cost 为 10 列并可扩到 13 列。剩余空间交给 Model/Effort 组合区和无标题路径 flex 区，因此长身份只截断自身，不会覆盖或推动右侧字段。代表最大值 `Context 999K / 1000K 100%`、`Token ↑999k ↓999k`、`Cost ¥9999.99` 必须完整显示。40 列仍严格保持两行、五个标签与直接路径值，可省略 busy/mode、Context token 细节、Token 输出；无法容纳的高位 Cost 显示明确的 `Cost …`，不冒充未知值 `?`。顺序不变且每行不超过 40；永久 Splash 已记录完整 Backend 真相。
 
-Status 的短模型样例左右锚是：80 列第一行 `Model 0 / Effort 24 / Context 56`、第二行 `路径值 0 / Token 52 / Cost 70`；120 列第一行 `Model 0 / Effort 24 / Context 96`、第二行 `路径值 0 / Token 92 / Cost 110`；40 列第一行 `Model 0 / Effort 15 / Context 25`、第二行 `路径值 0 / Token 20 / Cost 32`。Effort 的位置随 Model 实际宽度变化，但两者始终只隔两个空格；Context/Token/Cost 的右锚不受 Model 或路径长度影响。长路径只截断自身，不会推动 Token/Cost；批准最大值会让 Context/Cost 固定区向左扩展。
+Status 的短模型样例左右锚是：80 列第一行 `Model 0 / Effort 24 / Context 56`、第二行 `路径值 0 / Token 52 / Cost 70`；120 列第一行 `Model 0 / Effort 24 / Context 96`、第二行 `路径值 0 / Token 92 / Cost 110`；40 列使用原生 `High` 时第一行是 `Model 0 / Effort 13 / Context 25`，第二行是 `路径值 0 / Token 20 / Cost 32`。Effort 的位置随 Model 与原生档位名的实际宽度变化，但两者始终只隔两个空格；Context/Token/Cost 的右锚不受 Model 或路径长度影响。长路径只截断自身，不会推动 Token/Cost；批准最大值会让 Context/Cost 固定区向左扩展。
 
 ## 交互
 
-单独输入 `/` 会在原 Plan 区域打开完整命令目录，slash 和所有完整命令 cell 都不高亮或强调。v0.1 生产命令为：
+单独输入 `/` 会在原 Plan 区域打开完整命令目录，slash 和所有完整命令 cell 都不高亮或强调。v0.2 生产命令为：
 
 ```text
 /new       /sessions   /compact    /model      /providers
-/plan      /prompt     /thinking   /effort     /policy
-/usage     /settings   /theme      /quit
+/plan      /prompt     /thinking   /effort     /tools
+/policy    /usage      /settings   /theme      /quit
 ```
 
 `/compact` 在未绑定 Local Plan 时默认使用 Pi Native，绑定 Plan 时默认使用 Execution Continuity。
 使用 `/compact --list` 检查四种手动 profile；也可显式选择 `native`、`continuity`、`research`，
-或使用 `/compact custom <instructions>`。v0.1.0 的自动 threshold/overflow 压缩始终保持 Pi Native；
-统一配置自动压缩 profile 计划在 v0.2.0 提供。
+或使用 `/compact custom <instructions>`。v0.2.0 的自动 threshold/overflow 压缩仍保持 Pi Native；
+统一配置自动压缩 profile 留待后续版本。
 
-退出候选显示为 `quit (exit)`。canonical `/new` 的 alias 是 `/clear`；`/sessions` 的 aliases 是 `/session` 与 `/resume`；`/providers` 的 alias 是 `/provider`；canonical `/quit` 的 aliases（别名）是 `/exit` 和 `/q`，候选行会明确显示 `别名（/exit） → /quit`。`/thinking` 是 canonical 命令，不是 alias。插件/扩展命令保留 package `source` 来源，而内置命令显示 Built-in。
+退出候选显示为 `quit (exit)`。canonical `/new` 的 alias 是 `/clear`；`/sessions` 的 aliases 是 `/session` 与 `/resume`；`/providers` 的 alias 是 `/provider`；`/plan` 的 alias 是 `/workflow`；canonical `/quit` 的 aliases（别名）是 `/exit` 和 `/q`，候选行会明确显示 `别名（/exit） → /quit`。`/thinking` 是 canonical 命令，不是 alias。插件/扩展命令保留 package `source` 来源，而内置命令显示 Built-in。
 
 `Tab` 是唯一补全键，只处理无参数的单一 slash token，并且必须只有唯一候选：`/ex → /exit`，其可见结果只强调 `ex`，斜杠与 `it` 保持普通；`/qui → /quit` 只强调 `qui`，斜杠与 `t` 保持普通；`/ses → /sessions`、`/provi → /providers`、`/cl → /clear`。存在参数、普通文本或多个 token 候选时不改写。`Tab` 只修改 composer 文本，不会执行命令，也不写入 history（历史记录）；最终执行始终使用 canonical 命令身份。若两个不同 canonical 命令注册了同一个 exact alias，解析和面板 Enter 都会 fail closed，不会静默执行注册顺序中的第一项。composer 中的 slash token 与 Command 候选中的匹配前缀同时使用颜色和粗体、下划线、反显（bold / underline / inverse），因此无色终端仍可辨认，普通文本不受影响。
 
 Command 工作区在 40 列把每个命令排成身份行与详情/source 行，滚动时两行保持成组；80 列和 120 列使用稳定的“身份 / 描述 / source”三列。三档 Command 与 Status 都按终端可见列宽计算，不使用特殊全角填充。
 
-`/plan`、`/prompt` 与 `/policy` 都已接入真实生产工作区。Plan 使用不可变 revision、Session binding 和 typed tools；Prompt Profile 使用分层规则、Factory/Fork 与每轮 overlay。自更新不属于 v0.1.0 的生产表面。
+`/plan`（alias `/workflow`）、`/prompt`、`/tools` 与 `/policy` 都已接入真实生产工作区。Plan 在显式 `--workflow` 下只读投影 Workflow Delivery；Prompt Profile 使用分层规则、Factory/Fork 与每轮 overlay；Tools 公开当前能力、路由和失败边界。自更新不属于 v0.2.0 的生产表面。
 
-用户消息使用 full-width light rounded frame：正文背景 `#B8E6E3`、前景 `#102426`，边框使用焦点青 `#5FC7C7`。该契约在 40 列、80 列、120 列都保持整行等宽；硬换行、长单词 wrap 和附件摘要都留在 frame 内，transcript Inspect 选中时保留完整内容与 frame 形状。
+用户消息使用焦点色竖标和至少三行的全宽深色背景：正文背景 `#202428`、前景 `#F4F7FA`，短消息也保留上下留白，不绘制额外 frame。40/80/120 列下硬换行、长单词和附件摘要都保持宽度安全；Transcript Inspect 只改变选择态，不改变消息尺寸。
 
-- `Enter` 提交。
+Transcript 是按后端事件只追加的瀑布时间线。工具前文本、Tool 调用、Tool 结果和工具后最终回答分别拥有唯一节点；即使 Pi 在同一 Agent 回合重复使用相同 `contentIndex`，后来的文本也不会覆盖或移动到早先节点。同一批 Tool 组成一个执行组，名称使用组内固定宽度列，弱化的路径、命令或 Question 数量摘要从同一列开始，运行/失败状态位于摘要末尾；中间项使用 `├─`、末项使用 `└─`。组内仍有 queued/running 项时始终实时展示完整树；全部进入 success/error/cancelled 后，默认收束为包含总数和异常计数的一行摘要。Settings 中低强调的“完成后收起工具”可关闭此行为；Inspect/Enter 会临时恢复完整顺序、结果与 diff。
+
+- `Enter` 空闲时提交；工作中作为 Steer 插入，在当前工具批次结束后、下一次模型调用前送达。
 - `Shift+Enter` 或 `Ctrl+J` 换行。
 - 空输入时 `Tab` 进入 transcript Inspect；方向键选择、折叠和展开。
-- `Shift+Tab` 在 composer 与 Plan 之间切换。
-- `Alt+Enter` 将消息作为 follow-up 提交。
-- `Ctrl+C` 取消生成；空闲时退出。
+- `Shift+Tab` 在 Composer、Transcript 与 Plan 之间循环；Transcript 为空时跳过。
+- `Alt+Enter` 将消息作为 Follow-up 提交；工作中会等 Agent 完全空闲后送达。
+- `Esc` 在主界面中断当前运行，`Ctrl+C` 保留同样的直接中断；空闲时 `Ctrl+C` 退出。
 
-Model、Provider、Sessions、Settings、Usage、Theme 和 Question 共用底部工作区，不叠加多层弹窗。Pi 的真实 `question` ToolDefinition 支持单选、多选、排序和填空；模型发起调用后会等待用户在动态 Question 工作区完成最终检查。`Left/Right` 切题，`Up/Down` 选择，`Ctrl/Alt+Up/Down` 调整排序，`Tab` 直接回答，`Shift+S` 跳过，`Enter` 确认或提交。取消、Session replacement 与应用退出都会以 `AbortError` 终止 pending Question，不把 prompt、选项说明、路径或 secret 样式文本写回 tool result。
+Agent 从首次提交到真正 idle 期间，在 composer 上方持续显示独立的动态 `Working` 活动带；Steer 与 Follow-up 队列数量直接显示在活动带中。排队成功的用户消息立即进入 Transcript，并用“已插入下一次调用”或“任务完成后继续”标记确认接收。ESC 只 abort 当前运行，不创建或切换 Session，不删除已经发送的用户消息、partial thinking/text/tool，也不覆盖输入框中的未提交草稿；运行中的 Tool 收束为 cancelled。尚未送达的 Pi 原生队列会被取消并放回输入框，对应 Transcript 项标记为“队列已取消”。
+
+Question、Approval、Inspect、Preview 与普通面板打开时，Esc 先关闭当前交互层；回到主 composer 后再次按 Esc 才中断运行。保存结果和短时状态临时替换固定 contextual hint 行，约 3.5 秒后恢复；不创建 overlay、不改变布局高度，也不抢占 composer 焦点。
+
+Model、Provider、Sessions、Settings、Usage、Theme 和 Question 共用底部工作区，不叠加多层弹窗。VSPi 自有 `question` 通过 Pi ToolDefinition 接口注册，支持单选、多选、排序和填空；模型发起调用后会等待用户在动态 Question 工作区完成最终检查。`Left/Right` 切题，`Up/Down` 选择，`Ctrl/Alt+Up/Down` 调整排序，`Tab` 直接回答，`Shift+S` 跳过，`Enter` 确认或提交。取消、Session replacement 与应用退出都会以 `AbortError` 终止 pending Question，不把 prompt、选项说明、路径或 secret 样式文本写回 tool result。
 
 每个已接入工作区都有 contextual hint。hint 位于面板 frame外，并直接位于 composer上方；Command 的完整提示是 `↑↓ 选择  Tab 补全  Enter 执行  Esc 关闭`。Plan、Provider、Sessions、Settings、Usage、Theme、Question 和 Model 按当前真实可用动作生成提示；未来工作区接入前不得宣告无效键位。
 
 ## Model 与 Provider
 
-出厂内置 VSPLab 中转站 Provider（`https://api.vsplab.cn/v1`，OpenAI Responses 协议），预置 GPT-5.6 系列与 5.5、5.4 模型目录；VSPi 不保存 API key，只需设置环境变量 `VSPLAB_API_KEY` 即可使用。Provider 面板与模型列表按 VSPLab、DeepSeek、Xiaomi（MiMo）、Kimi、GLM（Zai）、MiniMax、OpenAI、Anthropic 优先排序，其余按字母序。
+出厂内置 VSPLab 中转站 Provider（`https://api.vsplab.cn/v1`，OpenAI Responses 协议），预置 GPT-5.6 系列与 5.5、5.4 模型目录；VSPi 不保存 API key，只需设置环境变量 `VSPLAB_API_KEY` 即可使用。Provider 面板与模型列表按 VSPLab、DeepSeek、Xiaomi（MiMo）、Kimi、GLM（Zai）、MiniMax、OpenAI、Anthropic 优先排序，其余按字母序。Model 列表按 Provider 显示标题与模型数量，组内按发布日期和名称稳定排序；超长标题只截断标题本身，不挤占右侧数量。没有可用角色预设时隐藏“模型组”页及对应 Tab 提示。
 
-Model 列表来自当前 Pi `ModelRuntime.getAvailable()`，不再使用生产 hard-coded catalog。选择模型会先 await `session.setModel()`；成功后才更新 Model、vision、Context、Profile model identity 和 UI，失败保留原状态。`/effort` 同样先写入 Pi session。M7 前 `profileModelId` 明确等于当前 `modelId`。外层 60 列及以上使用左列表/右详情；窄屏使用显式列表/详情导航。单模型 CNY 输入、输出单价仅显示在右侧详情，模型组不显示价格，也不显示汇率参考行。
+Model 列表来自当前 Pi `ModelRuntime.getAvailable()`，不再使用生产 hard-coded catalog。选择模型会先 await `session.setModel()`；成功后才更新 Model、vision、Context、Profile model identity 和 UI，失败保留原状态。`/effort` 直接读取当前模型的 `getAvailableThinkingLevels()`，只显示该模型支持的 `Off / Minimal / Low / Medium / High / X-High / Max` 子集；展示名首字母大写，持久值保留 Pi 原生小写名称。VSPLab GPT 5.4 支持到 X-High，GPT 5.5 不提供 Minimal，GPT 5.6 系列支持到 Max；这些差异通过 `thinkingLevelMap` 原样注册到 Pi runtime。Enter 应用、Esc 取消，不再循环切换或立即落盘；旧中文低/中/高配置在读取时迁移为 low/medium/high。成功提示只报告当前 Model/Effort，不显示配置文件路径。外层 60 列及以上使用左列表/右详情；窄屏使用显式列表/详情导航。单模型 CNY 输入、输出单价仅显示在右侧详情，模型组不显示价格，也不显示汇率参考行。
 
 Provider Enter 只打开本地 action menu，不会隐式验证。`check-config` 只校验 schema、URL、协议和模型，不发网络；`test-connection` 是显式网络动作；`minimal-generation` 必须在面板内再次按 Enter 确认费用。编辑器只包含名称、Base URL 和协议，只有 `Ctrl+S` 保存，Enter 不保存。
 
@@ -122,35 +147,47 @@ Provider catalog 按 built-in、Pi global `models.json`、trusted project `.vspi
 
 ## Execution Policy 与 Recovery
 
-执行等级固定为 `Safe < Standard < Auto < YOLO`，默认 `Standard`。CLI 或全局策略可选择上限，可信项目策略只能降低有效等级，不能提升到 Auto/YOLO。`/policy` 显示每级真实 boundary；切换先检查 capability，失败时原子回滚。YOLO 必须在警告界面明确按 Enter 确认；CLI 使用 YOLO 还必须额外传 `--acknowledge-yolo`。
+执行等级固定为 `Safe < Standard < YOLO < Auto`，默认 `Standard`。四档全部在当前 Host 用户权限下执行，只控制工具调用前的审批强度；可信项目策略只能降低 CLI/global 上限。
 
 | Policy | 文件系统 | 网络/共享/高风险 | Boundary |
 | --- | --- | --- | --- |
-| Safe | workspace 只读；任意写入拒绝 | 网络与共享拒绝 | bwrap · Sandboxed |
-| Standard | workspace 内可逆读写直接允许 | 网络、越界、共享、高风险默认询问；无确认即拒绝 | bwrap · Sandboxed |
-| Auto | workspace 内读写免询问 | 仅配置 allowlist 的网络动作免询问；越界与未配置共享拒绝 | bwrap · Sandboxed |
-| YOLO | 调用者请求的 Host 子进程 | 绕过 VSPi approval/sandbox；Workflow authority gate 仍独立 | Host |
+| Safe | `read/ls/find/grep` 与明确只读 Bash 免询问 | 其他操作询问 | Host |
+| Standard | 工作区读写、构建测试等日常开发免询问 | 网络、SSH、Git 写入、越界与高风险操作询问 | Host |
+| YOLO | 一般开发、网络与远程操作免询问 | 删除、容器、系统与其他高风险操作询问 | Host |
+| Auto | 所有工具调用免询问 | 无 | Host |
 
 Policy 配置分别位于全局 `~/.config/vspi/policy.json` 与项目 `<workspace>/.vspi/policy.json`，格式只接受 `policy` 和可选的 `networkAllowlist`。CLI 显式 Policy 优先于全局默认；项目文件只有在 `--trust-project` 下读取，并且只能降低 CLI/global 结果。网络范围以全局 allowlist 为上限，项目 allowlist 只能取交集；target 只接受无 userinfo、query、fragment 的 HTTP(S) origin 或 path。配置拒绝 secret、credential、敏感 header 与 `!command`，所有 URL 校验错误和 load diagnostic 都不回显被拒值。项目保存使用 expected hash、writer lock、0600 临时文件和原子 rename，symlink scope 会 fail closed。损坏文件给出有界诊断并回到安全默认，不会被自动覆盖。
 
 ```bash
 npm run dev -- --policy Safe
+npm run dev -- --policy YOLO
 npm run dev -- --policy Auto
-npm run dev -- --policy YOLO --acknowledge-yolo
 npm run dev -- --recovery
 ```
 
-Safe/Standard/Auto 的 `execute()` 在 spawn 前拒绝不允许的动作，允许的命令只通过 Linux bubblewrap 启动；没有可用 bwrap/user namespace 时不会退化为提示文案，执行与策略切换会明确失败。sandbox 只读挂载运行命令所需的系统目录和明确请求的 executable，并把 workspace 按等级挂为只读或可写。YOLO 只直接执行调用者传入的 command/args/cwd/env，不会扩大为其他后台权限。审计日志不记录环境值，并脱敏 token、secret、password、credential 与 API key 类值。所有等级都必须单独通过 Workflow authority gate，Policy 不能替 Workflow 授权发布、删除或接受。
+审批器提供“允许本次”“本会话允许同类”“提升到最低充分档位并执行”“拒绝”“拒绝并说明”五项决定；例如 Safe 的工作区写入提升到 Standard、Standard 的 SSH 提升到 YOLO、Standard 的删除直接提升到 Auto。本会话规则和提升等级只驻留内存。审批 Panel 在内容四周保留稳定 gutter，选项使用额外缩进；当前 Policy 在类别上方以固定 8 列的背景标签显示，Safe、Standard、YOLO 与 Auto 在其中居中，并分别使用绿、黄、橙、红的低亮度语义色。文字始终保留，因此无色终端和色觉差异不会丢失语义。首轮只做粗粒度分类，不承诺识别 Bash 中所有隐藏写操作；后续可以把同一结构化接口交给独立小模型。审计日志不记录环境值，并脱敏 token、secret、password、credential 与 API key 类值。Workflow authority gate 仍保持独立。
 
-生产 Pi Session 使用同名 `read/bash/edit/write` ToolDefinition 覆盖：保留 Pi 原生 schema、label、description 与 renderer，只替换 `execute`，并在初始、resume、new、switch/fork replacement runtime 中持续安装。启动层只创建一个 `ExecutionPolicyService` 实例，并把同一对象注入 Pi Backend 与 TUI Policy 面板，因此界面 snapshot、工具决策和 audit 来自同一状态源。嵌入方直接构造 `PiBackend` 而未传 `executionPolicy` 时，Backend 会自行创建 `Standard · Sandboxed`（Recovery 下为强制 Standard）服务并照常安装覆盖，绝不回退到 Pi SDK 的 Host-local reader/writer/shell。未接入 approval surface 时 Standard 风险动作默认拒绝；命令超时或 AbortSignal 会终止整个子进程组。扩展或自定义工具不会因注册本身自动获得 `Sandboxed` 声明，必须显式通过该服务执行。
+生产 Pi Session 启用原生 `read/ls/find/grep/bash/edit/write` ToolDefinition。VSPi 包装器只在原生 `execute()` 前请求审批，批准后完整委托回 Pi，因此保留图片读取、流式输出、秒制 timeout、AbortSignal、输出截断和编辑 diff。结构化 `question` 继续使用 VSPi 自有 schema 与 Panel，只借用 Pi ToolDefinition 接口；旧 `plan_*` 不进入模型工具列表，避免与 Workflow UI 形成双权威。
 
-YOLO acknowledgement 使用公开的一次性 broker。普通 TUI 只有 `/policy` 面板中真实选中 YOLO 后的 Enter 会 `grantOnce("tui")`，紧接着的同一 service switch 消费授权；取消、伪造事件、直接调用、切换失败或下一次调用都没有残留权限。CLI `--acknowledge-yolo` 只在本次启动最终请求 YOLO 时预授 `cli-startup`，启动切换立即消费；flag 不会成为进程生命周期内的 ambient YOLO authority。Recovery 从不授予该确认。
+`/tools` 是只读能力目录，不会向模型发送消息。Files/Search 直接复用 Pi 原生工具；Git 与 SSH 经 Pi Bash 执行并分别进入 `git-write`、`ssh` 审批类别；图片使用 Pi 原生 image read 与 VSPi 附件链路。Browser 与 MCP 当前显示 `Not connected`，不注册会失败的占位模型工具；Persistent PTY 显示 `Deferred`，当前 Bash 是一次性执行，不承诺持久进程所有权。Tools 面板支持 Up/Down 浏览和 Esc 返回，并在 40/80/120 列保持有界。
 
-`--recovery` 无条件覆盖 `--policy` 与 `--trust-project`，强制 `Standard · Sandboxed`、空网络 allowlist、global-only settings/models，并且完全不读取项目 Policy 配置；Pi ResourceLoader 同时禁用 extensions、skills、prompt templates、themes 与 project context files，界面会明确显示 `Recovery`。PiRuntimeBackend 也把该规则作为内部不变量：即使嵌入方同时传入 `recovery:true` 与冲突的 `trustedProject:true`，有效 trust 仍为 false，后续 new/resume/switch runtime 同样不能恢复项目权限。它不加载 Workflow Adapter，也不叫 `--safe`。
+审批 Panel 与模型主动调用的 Question 完全分离。Question 使用进度元数据、粗体标题、正文、分隔线、选项标题与次级说明建立层次；它本身也作为 `Question` Tool 节点出现在瀑布时间线中。Markdown 标题使用内容蓝色前景与字重建立层次，不增加背景块，也不复用运行状态色。Question、审批、Effort、Settings、预览和 Inspect 中的 Esc 先退出当前界面；回到主界面后 Esc 才中断当前生成或工具，Ctrl+C 保留直接中断。取消后的 generation 事件保持隔离到下一次主动发送，迟到的 retry、文本和 Tool 事件不能重新进入 Transcript；运行中的 Pi Bash 同时接收 AbortSignal 并终止子进程组。取消不会重置 Session 或回滚已显示的瀑布记录。
+
+`--recovery` 无条件覆盖 `--policy`、`--trust-project` 与 `--workflow`，强制 `Standard · Host`、拒绝需提升审批的工具、global-only settings/models，并且完全不读取项目 Policy 配置；Pi ResourceLoader 同时禁用 extensions、skills、prompt templates、themes 与 project context files，界面会明确显示 `Recovery`。它不加载 Workflow Adapter，也不叫 `--safe`。
 
 ## Workflow Adapter Bootstrap
 
-VSPi `0.2.0` 的首个 bootstrap 只读投影 Hypo-Workflow Plan；长期 Local Plan authority 的移除、Workstream Session binding 与模型组路由属于后续里程碑。Adapter 是 TypeScript host boundary，加载同一 Node.js 进程中的 ESM JavaScript Core；`.pipeline` 文件只能由 Core API 读写，VSPi 不直接解析或修改 authority YAML/JSON。
+VSPi `0.2.0` 的首个 bootstrap 只读投影 Hypo-Workflow Plan，并且默认关闭。只有显式传入 `--workflow` 才会读取 Workflow bundle identity、加载 Core 并访问 workspace Delivery；默认启动不会读取 Workflow 环境变量或项目状态。Plan 标题在展示层把 slug 分隔符转换为空格、把版本段转换为点号并首字母大写，持久 ID 完全不变；标题、Workflow 元数据、分隔线和里程碑列表形成独立层次。Adapter 是 TypeScript host boundary，加载同一 Node.js 进程中的 ESM JavaScript Core；`.pipeline` 文件只能由 Core API 读写，VSPi 不直接解析或修改 authority YAML/JSON。
+
+Workflow 集成选择“可选、只读 Provider”，而不是无 Workflow 或深度写入集成：
+
+| 方案 | 用户价值 | 失败面 | 结论 |
+| --- | --- | --- | --- |
+| 无 Workflow | 最少依赖，但丢失现有 Delivery、Milestone 与恢复状态 | 状态需由 VSPi 重新实现 | 不选 |
+| 可选只读 Provider | 已初始化项目显示真实 Workflow；未配置时其余编程能力仍可使用 | Core identity 或读取失败只影响 Plan 面板 | 采用 |
+| 深度写入集成 | 可从 VSPi 改变 Delivery/Workstream | Receipt、Session 绑定、并发写入和恢复耦合显著扩大 | 本 Cycle 不采用 |
+
+正常启动、交互和 `run` 均不再构造 Local Plan storage、router 或 capsule；`/plan` 只读取 Workflow Adapter，没有 Local Plan fallback。旧 Local Plan 模块与 Session entry 仅为源码兼容保留，未显式注入兼容 storage 时 binding 对 compaction、fork、UI 和模型工具均无效。所选 Provider 是 workspace 级只读投影，不创建或写入 Workstream，因此 Session/Workstream 写绑定在当前架构中明确不适用；Workflow 的 Receipt-bearing mutation 继续由 Hypo-Workflow 自身命令承担。
 
 普通启动需要一个已经 materialize runtime dependency、通过 manifest 校验且与已接受 Core 结果绑定的安装根目录。安装器还要为 `node_modules` 全树生成 `runtime-manifest.json`。六个配置值必须一起提供，semver 相同不代表 bundle 相同：
 
@@ -161,12 +198,14 @@ VSPI_WORKFLOW_SOURCE_COMMIT=<40-hex-commit> \
 VSPI_WORKFLOW_ARCHIVE_SHA256=<64-hex-sha256> \
 VSPI_WORKFLOW_MANIFEST_SHA256=<64-hex-sha256> \
 VSPI_WORKFLOW_RUNTIME_MANIFEST_SHA256=<64-hex-sha256> \
-vspi
+vspi --workflow
 ```
 
-Loader 在 import 前验证 archive digest、bundle/runtime manifest digest、release descriptor、source commit、全部 Core 文件与 runtime dependency 字节；manifest 必须绑定 descriptor 与 Core root export，`node_modules` 不允许未声明文件或 symlink。import 后再验证 required root exports 与 Host Contract v1。缺失、旧安装、sibling release、损坏或版本不兼容时 `/plan` 显示有界诊断，所有 Workflow authority 请求默认拒绝，普通聊天仍可用。`--recovery` 在读取上述环境变量之前就禁用 Adapter，因此即使这些值恶意或损坏也不会触发 bundle discovery、import 或项目 Workflow 读取。
+Loader 在 import 前验证 archive digest、bundle/runtime manifest digest、release descriptor、source commit、全部 Core 文件与 runtime dependency 字节；manifest 必须绑定 descriptor 与 Core root export，`node_modules` 不允许未声明文件或 symlink。import 后再验证 required root exports 与 Host Contract v1。未传 `--workflow` 时 `/plan` 显示未开启状态；显式开启后若配置缺失、安装过旧、sibling release、损坏或版本不兼容，`/plan` 显示有界诊断，所有 Workflow authority 请求默认拒绝，普通聊天仍可用。`--recovery` 在读取上述环境变量之前就禁用 Adapter，因此即使这些值恶意或损坏也不会触发 bundle discovery、import 或项目 Workflow 读取。
 
-`Policy … · Sandboxed` 只描述 VSPi `ExecutionPolicyService` 创建的子进程边界，不声称 Pi provider 请求或 Pi SDK runtime 进程本身已被 bwrap 包裹。bubblewrap `--share-net` 也不提供目标级 egress filter：Standard/Auto 在 spawn 前校验 allowlist，但获准命令进入共享网络 namespace 后仍可能自行访问其他地址；内核级网络 allowlist 和更强 TOCTOU containment 是后续安全加固项。
+0.2.0 不在 VSPi 内注册 `/hw:init`、`/hw:resume`、`/hw:accept` 等 Receipt-bearing 生命周期命令；这些命令继续由 Hypo-Workflow 自身提供。VSPi 只提供 `/plan` 与 `/workflow` 的只读状态入口。
+
+当前 Policy 不是 OS sandbox，也不把 SSH、容器或远程系统包装成隔离边界。更细的命令解析、小模型审批、远程目标约束和系统级 containment 属于后续安全加固，不阻塞本轮可用性。
 
 ## 图片附件
 
@@ -198,18 +237,18 @@ Bridge 只监听 loopback，使用随机 fragment token、Origin allowlist、速
 
 ## 配置与费用
 
-设置即时保存；只有本次启动显式使用 `--trust-project` 时，项目设置才会读取并覆盖全局设置：
+Settings 分别显示 Global 与 Project 草稿，只有 `Ctrl+S` 才 Apply，Esc Cancel；切换范围或修改开关不会立即写文件。只有本次启动显式使用 `--trust-project` 时，项目设置才会读取并覆盖全局设置：
 
 ```text
 ~/.config/vspi/settings.json
 <project>/.vspi/settings.json
 ```
 
-`reducedMotion`、`bridgeEnabled`、Theme、`showThinking` 和 `wrapCode` 均已接入运行时。关闭 `showThinking` 会立即隐藏普通 thinking 行，但 Inspect 仍按稳定 message id 选中并展开单条 thinking/tool；`wrapCode` 控制 fenced code 的长行是否换行，40/80/120 列均保持宽度安全。
+`reducedMotion`、`bridgeEnabled`、Theme、`thinkingDisplay` 和 `wrapCode` 均已接入运行时。`thinkingDisplay` 支持隐藏、折叠、展开：隐藏只收起正文并始终保留思考记录，折叠显示 Effort/耗时标题，展开直接显示正文；Inspect 仍按稳定 message id 选中并查看单条 thinking/tool。旧 `showThinking` 会自动迁移；`wrapCode` 控制 fenced code 的长行是否换行，40/80/120 列均保持宽度安全。
 
-默认 Model/Effort 单独保存在无 secret 的 `runtime-defaults.json`。global 总是可用；project 只有本次启动显式授予项目 trust 时才读取和写入。Model identity 始终只保存精确 `{provider,id}`；同 id 的不同 Provider 不会混用。Model 或 Effort 选择成功后按 Settings 当前 scope 原子保存；普通 `/new` 在重建 ModelRuntime 并注册当前可信 overlay 后按 `{provider,id}` 重解析模型，`/new --default` 则不继承旧模型对象，而是重新读取并应用默认值。
+默认 Model/Effort 单独保存在无 secret 的 `runtime-defaults.json`。global 总是可用；project 只有本次启动显式授予项目 trust 时才读取和写入。Model identity 始终只保存精确 `{provider,id}`；同 id 的不同 Provider 不会混用。只有 Pi 后端会持久化 runtime defaults，显式 Fixture 不得把 `fixture/offline-fixture` 写入共享默认值。Pi 遇到跨后端、失效或未认证的已保存模型时保留当前可用模型并显示警告，不阻断启动；已保存 Effort 不在当前模型的原生档位集合中时同样保留当前档位。Model 或 Effort 选择成功后按 Settings 当前 scope 原子保存；普通 `/new` 在重建 ModelRuntime 并注册当前可信 overlay 后按 `{provider,id}` 重解析模型，`/new --default` 则不继承旧模型对象，而是重新读取并应用默认值。
 
-项目路径 guard 会在每次关键文件操作前复验边界，但用户态 `lstat`/`realpath` 与最终 syscall 之间仍存在无法完全消除的 TOCTOU 窗口；M4 的 OS sandbox/进程 containment 必须继续承担对抗并发恶意替换的最终边界。
+项目路径 guard 会在每次关键配置写入前复验边界，但它不是 OS sandbox；并发恶意替换、更强的进程 containment 与远程目标约束留给后续安全 Cycle。
 
 pi 返回的模型价格和 usage 以 USD 为基础。VSPi 内部换算人民币估算；模型组不显示总价，单模型选择页只在右侧详情显示 CNY/人民币输入、输出单价，界面`不显示汇率参考行`、来源、日期或汇率换算样例行。
 
@@ -229,6 +268,6 @@ npm audit
 
 ## v1 边界
 
-当前实现包括统一 Action Registry、诚实 Splash、真实 Session lifecycle、ModelRuntime 驱动的 Model/Provider、原生模型与 Effort 写入、配置安全边界、显式 probe、Markdown 流式渲染、Question tool、图片提交、Local Plan、Prompt Profile、连续性压缩、Theme、`showThinking` 与 `wrapCode`。Sub Agent 与通用 Approval surface 不属于 v0.1.0。
+当前实现包括统一 Action Registry、诚实 Splash、真实 Session lifecycle、ModelRuntime 驱动的 Model/Provider、原生模型与 Effort 写入、Host 工具审批、显式 probe、Markdown 流式渲染、自有 Question、图片提交、Workflow 只读 Plan、Prompt Profile、连续性压缩、Theme、`thinkingDisplay`、`wrapCode` 与 `/tools` 能力目录。系统提示词在 pi base 之后始终注入内置中文语言约定（以简体中文为主回复，代码/命令/标识符保持原文），出厂 Prompt Profile 文案同为中文。Browser、MCP 与持久 PTY 仍是明确的后续扩展边界。
 
 详细界面规范见 [Docs/tui-v1.md](Docs/tui-v1.md)。

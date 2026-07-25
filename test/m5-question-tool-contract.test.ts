@@ -168,11 +168,11 @@ describe("M5 dynamic Question panel", () => {
     const panel = new PanelController(DEFAULT_SETTINGS);
     openQuestions(panel, QUESTIONS);
 
-    expect(panelText(panel)).toContain("第 1/4 · 布局");
+    expect(panelText(panel)).toMatch(/Question 1 \/ 4[\s\S]*布局/);
     panel.handleInput(Key.right);
-    expect(panelText(panel)).toContain("第 2/4 · 功能");
+    expect(panelText(panel)).toMatch(/Question 2 \/ 4[\s\S]*功能/);
     panel.handleInput(Key.left);
-    expect(panelText(panel)).toContain("第 1/4 · 布局");
+    expect(panelText(panel)).toMatch(/Question 1 \/ 4[\s\S]*布局/);
   });
 
   it("reorders ranking options with Ctrl/Alt arrows without changing questions", () => {

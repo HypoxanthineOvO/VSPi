@@ -7,6 +7,7 @@ import {
   prepareProjectPath,
   verifyProjectParent,
 } from "../config/project-path-guard.js";
+import type { EffortLevel } from "../domain/types.js";
 
 export type ProviderSource = "builtin" | "global" | "project";
 
@@ -20,6 +21,7 @@ export interface ProviderModelRecord {
   api?: string;
   baseUrl?: string;
   reasoning?: boolean;
+  thinkingLevelMap?: Partial<Record<EffortLevel, string | null>>;
   cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
   maxTokens?: number;
   headers?: Record<string, string>;
@@ -86,6 +88,7 @@ const MODEL_FIELDS = new Set([
   "api",
   "baseUrl",
   "reasoning",
+  "thinkingLevelMap",
   "cost",
   "maxTokens",
   "headers",
@@ -341,6 +344,9 @@ function parseModels(value: unknown, project: boolean, providerId: string): Prov
       if (typeof input.reasoning !== "boolean") throw new Error("model.reasoning 必须是 boolean");
       model.reasoning = input.reasoning;
     }
+    if (input.thinkingLevelMap !== undefined) {
+      model.thinkingLevelMap = parseThinkingLevelMap(input.thinkingLevelMap, providerId, index);
+    }
     if (input.cost !== undefined) model.cost = parseCost(input.cost);
     if (input.maxTokens !== undefined) {
       model.maxTokens = positiveNumber(input.maxTokens, "maxTokens");
@@ -351,6 +357,23 @@ function parseModels(value: unknown, project: boolean, providerId: string): Prov
     if (input.headers !== undefined) model.headers = parseHeaders(input.headers, project);
     return model;
   });
+}
+
+function parseThinkingLevelMap(
+  value: unknown,
+  providerId: string,
+  modelIndex: number,
+): Partial<Record<EffortLevel, string | null>> {
+  if (!isRecord(value)) throw new Error(`${providerId}.models[${modelIndex}].thinkingLevelMap 必须是 object`);
+  const levels = new Set<EffortLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+  const output: Partial<Record<EffortLevel, string | null>> = {};
+  for (const [level, mapped] of Object.entries(value)) {
+    if (!levels.has(level as EffortLevel) || (mapped !== null && typeof mapped !== "string")) {
+      throw new Error(`${providerId}.models[${modelIndex}].thinkingLevelMap schema 无效`);
+    }
+    output[level as EffortLevel] = mapped;
+  }
+  return output;
 }
 
 function parseCost(value: unknown): { input: number; output: number; cacheRead: number; cacheWrite: number } {

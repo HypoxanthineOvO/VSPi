@@ -9,8 +9,10 @@ import {
   matchCommands,
 } from "../domain/commands.js";
 import { FX } from "../domain/defaults.js";
+import { effortLabel } from "../domain/effort.js";
 import type {
   AppSettings,
+  EffortLevel,
   ModelGroup,
   ModelOption,
   PlanItem,
@@ -20,11 +22,27 @@ import type {
   UsageSnapshot,
 } from "../domain/types.js";
 import type { PlanStatus, StoredPlan } from "../plans/types.js";
-import { POLICY_LEVELS, type PolicyLevel, type PolicySnapshot } from "../policy/execution-policy.js";
+import {
+  type ApprovalRequest,
+  type ApprovalResponse,
+  POLICY_LEVELS,
+  type PolicyLevel,
+  type PolicySnapshot,
+} from "../policy/execution-policy.js";
 import { redactPrompt } from "../prompts/effective-prompt.js";
 import { BRAND_PRIORITY, providerPriorityIndex } from "../providers/builtins.js";
+import { TOOL_CAPABILITIES, type ToolCapabilityStatus } from "../tools/capability-catalog.js";
 import type { WorkflowSnapshot } from "../workflow/types.js";
-import { alignRight, emphasizePrefix, frame, padLine, stripAnsi, visibleWidth, wrapTextWithAnsi } from "./ansi.js";
+import {
+  alignRight,
+  emphasizePrefix,
+  frame,
+  padLine,
+  stripAnsi,
+  truncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
+} from "./ansi.js";
 import {
   type InteractionState,
   matchesInteraction,
@@ -45,6 +63,9 @@ export type PanelKind =
   | "usage"
   | "theme"
   | "question"
+  | "approval"
+  | "effort"
+  | "tools"
   | "policy";
 
 export type PanelEvent =
@@ -63,6 +84,8 @@ export type PanelEvent =
   | { type: "session"; session: SessionOption }
   | { type: "fork"; session: SessionOption }
   | { type: "settings"; settings: AppSettings }
+  | { type: "effort"; effort: EffortLevel }
+  | { type: "approval"; response: ApprovalResponse }
   | { type: "policyChange"; policy: PolicyLevel; requiresAcknowledgement: boolean }
   | { type: "questions"; questions: Question[] }
   | {
@@ -117,6 +140,32 @@ export interface PromptPanelSnapshot {
 
 const MODEL_WIDE_MIN_BODY_WIDTH = 58;
 
+type ModelListEntry =
+  | { type: "provider"; key: string; label: string; count: number }
+  | { type: "model"; model: ModelOption; modelIndex: number; providerKey: string };
+
+const WORKFLOW_STATUS_LABELS: Record<string, string> = {
+  ready: "就绪",
+  uninitialized: "未初始化",
+  unavailable: "不可用",
+  disabled: "已禁用",
+  error: "错误",
+};
+
+const DELIVERY_STATUS_LABELS: Record<string, string> = {
+  waiting_for_stone: "等待锚定",
+  executing: "执行中",
+  pending: "待启动",
+  completed: "已完成",
+  verified: "已验证",
+};
+
+const DELIVERY_KIND_LABELS: Record<string, string> = {
+  cycle: "周期",
+  plan: "计划",
+  goal: "目标",
+};
+
 function usesWideModelLayout(bodyWidth: number): boolean {
   return bodyWidth >= MODEL_WIDE_MIN_BODY_WIDTH;
 }
@@ -144,6 +193,12 @@ function statusStyle(status: ProviderOption["status"], theme: VspiTheme) {
   return theme.muted;
 }
 
+function thinkingDisplayLabel(mode: AppSettings["thinkingDisplay"]): string {
+  if (mode === "hidden") return "隐藏";
+  if (mode === "expanded") return "展开";
+  return "折叠";
+}
+
 function selectedLine(text: string, selected: boolean, width: number, theme: VspiTheme): string {
   const marker = selected ? theme.focus("› ") : "  ";
   const line = padLine(`${marker}${text}`, width);
@@ -159,6 +214,13 @@ function truncateStart(text: string, width: number): string {
     suffix = `${character}${suffix}`;
   }
   return `…${suffix}`;
+}
+
+function centerText(text: string, width: number): string {
+  const clipped = truncateToWidth(text, width, "");
+  const spacing = Math.max(0, width - visibleWidth(clipped));
+  const left = Math.floor(spacing / 2);
+  return `${" ".repeat(left)}${clipped}${" ".repeat(spacing - left)}`;
 }
 
 function tabLine(tabs: string[], selected: number, width: number, theme: VspiTheme): string {
@@ -236,22 +298,35 @@ export class PanelController {
   private promptImportEditing = false;
   private promptImportPath = "";
   private settings: AppSettings;
+  private settingsLayers: { global: AppSettings; project?: AppSettings; projectInherited: boolean };
+  private settingsDirty = false;
   private settingsTab = 1;
+  private effort: EffortLevel = "medium";
+  private effortLevels: EffortLevel[] = ["medium"];
   private questionIndex = 0;
   private questionReview = false;
   private questionDirectAnswer = false;
   private questionInput = "";
   private questions: Question[] = [];
+  private approvalRequest: ApprovalRequest | undefined;
+  private approvalReasonEditing = false;
+  private approvalReason = "";
   private lastBodyWidth = 78;
   private policySnapshot: PolicySnapshot = {
     policy: "Standard",
-    boundary: "Sandboxed",
-    sandboxed: true,
+    boundary: "Host",
+    sandboxed: false,
     recovery: false,
+    sessionAllowlist: [],
   };
 
   constructor(settings: AppSettings) {
     this.settings = { ...settings };
+    this.settingsLayers = {
+      global: { ...settings, scope: "global" },
+      ...(settings.scope === "project" ? { project: { ...settings, scope: "project" } } : {}),
+      projectInherited: false,
+    };
     this.settingsTab = settings.scope === "global" ? 0 : 1;
   }
 
@@ -264,6 +339,7 @@ export class PanelController {
     if (kind === "commands") this.state.selected = 0;
     if (kind === "models") this.modelNarrowDetail = false;
     if (kind === "policy") this.state.selected = Math.max(0, POLICY_LEVELS.indexOf(this.policySnapshot.policy));
+    if (kind === "effort") this.state.selected = Math.max(0, this.effortLevels.indexOf(this.effort));
     if (kind === "question") {
       this.questionIndex = 0;
       this.questionReview = false;
@@ -276,6 +352,36 @@ export class PanelController {
     if (questions.length === 0) throw new Error("Question panel requires at least one question");
     this.open("question");
     this.questions = structuredClone(questions);
+  }
+
+  openApproval(request: ApprovalRequest): void {
+    this.approvalRequest = structuredClone(request);
+    this.approvalReasonEditing = false;
+    this.approvalReason = "";
+    this.open("approval");
+  }
+
+  openEffort(effort: EffortLevel, levels: EffortLevel[]): void {
+    this.effort = effort;
+    this.effortLevels = levels.length > 0 ? [...levels] : ["off"];
+    this.open("effort");
+  }
+
+  setSettingsLayers(layers: { global: AppSettings; project?: AppSettings; projectInherited: boolean }): void {
+    this.settingsLayers = structuredClone(layers);
+    const preferred = this.settingsTab === 1 && layers.project ? layers.project : layers.global;
+    this.settingsTab = preferred.scope === "project" ? 1 : 0;
+    this.settings = { ...preferred };
+    this.settingsDirty = false;
+    this.state.selected = 0;
+  }
+
+  confirmSettings(settings: AppSettings): void {
+    if (settings.scope === "global") this.settingsLayers.global = { ...settings };
+    else this.settingsLayers.project = { ...settings };
+    this.settingsLayers.projectInherited = false;
+    this.settings = { ...settings };
+    this.settingsDirty = false;
   }
 
   close(): void {
@@ -294,6 +400,7 @@ export class PanelController {
   ): void {
     this.models = structuredClone(models);
     this.modelGroups = structuredClone(groups);
+    if (this.modelGroups.length === 0) this.modelTab = 0;
     if (selectedModel) {
       this.selectedModelKey =
         typeof selectedModel === "string"
@@ -357,7 +464,7 @@ export class PanelController {
       snapshot.status === "ready" && snapshot.delivery
         ? snapshot.delivery.milestones.map((milestone) => ({
             id: milestone.id,
-            label: `${milestone.id} ${milestone.title}${milestone.stone ? " · Stone" : ""}`,
+            label: `${milestone.id} ${milestone.title}`,
             status:
               milestone.status === "verified"
                 ? "done"
@@ -383,7 +490,7 @@ export class PanelController {
   }
 
   setPolicySnapshot(snapshot: PolicySnapshot): void {
-    this.policySnapshot = { ...snapshot };
+    this.policySnapshot = { ...snapshot, sessionAllowlist: [...(snapshot.sessionAllowlist ?? [])] };
     if (this.kind === "policy") this.state.selected = Math.max(0, POLICY_LEVELS.indexOf(snapshot.policy));
   }
 
@@ -400,6 +507,17 @@ export class PanelController {
   handleInput(data: string): PanelEvent | undefined {
     const interactionState = this.interactionState();
     if (matchesInteraction("panel", this.kind, "closePanel", data, interactionState)) {
+      if (this.kind === "approval" && this.approvalReasonEditing) {
+        this.approvalReasonEditing = false;
+        this.approvalReason = "";
+        return;
+      }
+      if (this.kind === "question" && (this.questionDirectAnswer || this.questionReview)) {
+        this.questionDirectAnswer = false;
+        this.questionReview = false;
+        this.questionInput = "";
+        return;
+      }
       if (this.providerEditing) {
         this.providerEditing = false;
         return;
@@ -413,6 +531,7 @@ export class PanelController {
         );
         return;
       }
+      if (this.kind === "settings") this.restoreSettingsDraft();
       if (this.kind !== "plan") {
         this.close();
         return { type: "close" };
@@ -441,6 +560,12 @@ export class PanelController {
     if (this.kind === "settings") return this.handleSettings(data);
     if (this.kind === "theme") return this.handleTheme(data);
     if (this.kind === "question") return this.handleQuestion(data);
+    if (this.kind === "approval") return this.handleApproval(data);
+    if (this.kind === "effort") return this.handleEffort(data);
+    if (this.kind === "tools") {
+      if (interaction.handler === "moveSelection") this.move(data, TOOL_CAPABILITIES.length);
+      return;
+    }
     if (this.kind === "policy") return this.handlePolicy(data);
     if (this.kind === "plan") return this.handlePlan(data, interaction.handler);
     return undefined;
@@ -461,17 +586,24 @@ export class PanelController {
     else if (this.kind === "usage") [title, body] = ["Usage", this.renderUsage(bodyWidth, usage)];
     else if (this.kind === "theme") [title, body] = ["Theme", this.renderTheme(bodyWidth, theme)];
     else if (this.kind === "question") [title, body] = ["Question", this.renderQuestion(bodyWidth, theme)];
+    else if (this.kind === "approval") [title, body] = ["需要批准", this.renderApproval(bodyWidth, theme)];
+    else if (this.kind === "effort") [title, body] = ["Effort", this.renderEffort(bodyWidth, theme)];
+    else if (this.kind === "tools") [title, body] = ["Tools", this.renderTools(bodyWidth, theme)];
     else if (this.kind === "policy") [title, body] = ["Policy", this.renderPolicy(bodyWidth, theme)];
     else [title, body] = ["当前计划", this.renderPlan(bodyWidth, theme, planFocused)];
 
     let footer: string | undefined;
     if (body.length > bodyRows) {
-      // 选中行由 selectedLine 以 "› " 前缀标记；用前缀而不是 includes 避免正文里的 "›" 误判。
+      // selectedLine may sit behind a panel gutter; only accept a leading marker after whitespace.
       const highlightedRows = body
-        .map((line, index) => (stripAnsi(line).startsWith("› ") ? index : -1))
+        .map((line, index) => (/^\s*› /.test(stripAnsi(line)) ? index : -1))
         .filter((index) => index >= 0);
-      const selectionStart = Math.max(0, Math.min(highlightedRows[0] ?? this.state.selected, body.length - 1));
-      const selectionEnd = highlightedRows.at(-1) ?? selectionStart;
+      let selectionStart = Math.max(0, Math.min(highlightedRows[0] ?? this.state.selected, body.length - 1));
+      let selectionEnd = highlightedRows.at(-1) ?? selectionStart;
+      if (this.kind === "tools") {
+        selectionStart = Math.min(this.state.selected * 2, body.length - 1);
+        selectionEnd = Math.min(selectionStart + 1, body.length - 1);
+      }
       this.state.scroll = Math.max(0, Math.min(this.state.scroll, body.length - bodyRows));
       if (selectionStart < this.state.scroll) this.state.scroll = selectionStart;
       if (selectionEnd >= this.state.scroll + bodyRows) this.state.scroll = selectionEnd - bodyRows + 1;
@@ -490,7 +622,13 @@ export class PanelController {
   renderHint(width: number, theme: VspiTheme): string {
     this.lastBodyWidth = Math.max(1, width - 2);
     const hint = renderInteractionHint("panel", this.kind, this.interactionState());
-    return theme.muted(padLine(this.kind === "question" ? this.questionHint(hint) : hint, width));
+    const contextualHint =
+      this.kind === "question"
+        ? this.questionHint(hint)
+        : this.kind === "models" && this.modelGroups.length === 0
+          ? hint.replace("Tab 切换视图  ", "")
+          : hint;
+    return theme.muted(padLine(contextualHint, width));
   }
 
   // Registry 的 Question hint 按 questionMode 粗粒度生成，这里按真实题型补齐/剔除键位。
@@ -530,7 +668,7 @@ export class PanelController {
         state.providerTextPresent = this.providerField !== 2 && text.length > 0;
       }
     } else if (this.kind === "policy") {
-      state.policyYolo = POLICY_LEVELS[this.state.selected] === "YOLO";
+      state.policyYolo = false;
     } else if (this.kind === "question") {
       const question = this.questions[this.questionIndex];
       state.questionMode = this.questionReview
@@ -540,6 +678,8 @@ export class PanelController {
           : question?.kind === "ranking"
             ? "ranking"
             : "choice";
+    } else if (this.kind === "approval") {
+      state.approvalReasonEditing = this.approvalReasonEditing;
     }
     return state;
   }
@@ -568,7 +708,7 @@ export class PanelController {
   }
 
   private handleModels(data: string): PanelEvent | undefined {
-    if (matchesKey(data, Key.tab)) {
+    if (matchesKey(data, Key.tab) && this.modelGroups.length > 0) {
       this.modelTab = this.modelTab === 0 ? 1 : 0;
       this.state.selected = 0;
       this.modelNarrowDetail = false;
@@ -702,24 +842,91 @@ export class PanelController {
 
   private handleSettings(data: string): PanelEvent | undefined {
     if (matchesKey(data, Key.left) || matchesKey(data, Key.right) || matchesKey(data, Key.tab)) {
-      this.settingsTab = this.settingsTab === 0 ? 1 : 0;
-      this.settings.scope = this.settingsTab === 0 ? "global" : "project";
-      return { type: "settings", settings: { ...this.settings } };
+      const nextTab = this.settingsTab === 0 ? 1 : 0;
+      const next = nextTab === 0 ? this.settingsLayers.global : this.settingsLayers.project;
+      if (!next) return { type: "notice", text: "项目未授予 trust，无法编辑项目设置", tone: "warning" };
+      this.settingsTab = nextTab;
+      this.settings = { ...next };
+      this.settingsDirty = false;
+      this.state.selected = 0;
+      return;
     }
     const rows = this.settingRows();
     if (this.move(data, rows.length)) return;
+    if (matchesKey(data, Key.ctrl("s"))) {
+      if (!this.settingsDirty) return { type: "notice", text: "设置没有变化", tone: "info" };
+      return { type: "settings", settings: { ...this.settings } };
+    }
     if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
       const row = rows[this.state.selected];
       if (!row) return;
       if (row.key === "theme") {
-        this.open("theme");
+        const themes: AppSettings["theme"][] = ["VSPi Dark", "VSPi Light", "Terminal"];
+        this.settings.theme = themes[(themes.indexOf(this.settings.theme) + 1) % themes.length] ?? "VSPi Dark";
+        this.settingsDirty = true;
+        return;
+      }
+      if (row.key === "thinkingDisplay") {
+        const modes: AppSettings["thinkingDisplay"][] = ["hidden", "collapsed", "expanded"];
+        this.settings.thinkingDisplay =
+          modes[(modes.indexOf(this.settings.thinkingDisplay) + 1) % modes.length] ?? "collapsed";
+        this.settingsDirty = true;
         return;
       }
       const key = row.key;
       this.settings[key] = !this.settings[key];
-      return { type: "settings", settings: { ...this.settings } };
+      this.settingsDirty = true;
+      return;
     }
     return undefined;
+  }
+
+  private restoreSettingsDraft(): void {
+    const source = this.settingsTab === 0 ? this.settingsLayers.global : this.settingsLayers.project;
+    if (source) this.settings = { ...source };
+    this.settingsDirty = false;
+  }
+
+  private handleEffort(data: string): PanelEvent | undefined {
+    if (this.move(data, this.effortLevels.length)) return;
+    if (!matchesKey(data, Key.enter)) return;
+    const effort = this.effortLevels[this.state.selected];
+    return effort ? { type: "effort", effort } : undefined;
+  }
+
+  private handleApproval(data: string): PanelEvent | undefined {
+    if (this.approvalReasonEditing) {
+      if (matchesKey(data, Key.backspace)) {
+        this.approvalReason = Array.from(this.approvalReason).slice(0, -1).join("");
+        return;
+      }
+      if (matchesKey(data, Key.enter)) {
+        const reason = this.approvalReason.trim();
+        return { type: "approval", response: { type: "deny", ...(reason ? { reason } : {}) } };
+      }
+      const value = printable(data);
+      if (value) this.approvalReason = Array.from(`${this.approvalReason}${value}`).slice(0, 500).join("");
+      return;
+    }
+    const request = this.approvalRequest;
+    const count = request?.requiredPolicy ? 5 : 4;
+    if (this.move(data, count)) return;
+    if (!matchesKey(data, Key.enter)) return;
+    if (this.state.selected === 0) return { type: "approval", response: { type: "allow-once" } };
+    if (this.state.selected === 1) {
+      return {
+        type: "approval",
+        response: { type: "allow-session", ...(request?.category ? { category: request.category } : {}) },
+      };
+    }
+    if (request?.requiredPolicy && this.state.selected === 2) {
+      return { type: "approval", response: { type: "elevate", level: request.requiredPolicy } };
+    }
+    const denialIndex = request?.requiredPolicy ? 3 : 2;
+    if (this.state.selected === denialIndex) return { type: "approval", response: { type: "deny" } };
+    this.approvalReasonEditing = true;
+    this.approvalReason = "";
+    return;
   }
 
   private handleTheme(data: string): PanelEvent | undefined {
@@ -740,7 +947,7 @@ export class PanelController {
     if (!matchesKey(data, Key.enter)) return;
     const policy = POLICY_LEVELS[this.state.selected];
     if (!policy) return;
-    return { type: "policyChange", policy, requiresAcknowledgement: policy === "YOLO" };
+    return { type: "policyChange", policy, requiresAcknowledgement: false };
   }
 
   private handlePlan(data: string, handler: string): PanelEvent | undefined {
@@ -1022,16 +1229,25 @@ export class PanelController {
     return this.models
       .filter((model) => !query || `${model.brand} ${model.label} ${model.id}`.toLowerCase().includes(query))
       .sort((left, right) => {
-        const brand = brandIndex(left.brand) - brandIndex(right.brand);
+        const priority = brandIndex(left.brand) - brandIndex(right.brand);
+        if (priority !== 0) return priority;
+        const brand = left.brand.localeCompare(right.brand);
         if (brand !== 0) return brand;
-        if (left.releasedAt && right.releasedAt) return right.releasedAt.localeCompare(left.releasedAt);
-        return 0;
+        if (left.releasedAt && right.releasedAt) {
+          const release = right.releasedAt.localeCompare(left.releasedAt);
+          if (release !== 0) return release;
+        } else if (left.releasedAt) {
+          return -1;
+        } else if (right.releasedAt) {
+          return 1;
+        }
+        return left.label.localeCompare(right.label) || left.id.localeCompare(right.id);
       });
   }
 
   private renderModels(width: number, theme: VspiTheme): string[] {
     const modelTab = this.modelSearch ? `选择模型 · ${this.modelSearch}` : "选择模型";
-    const tabs = tabLine([modelTab, "模型组"], this.modelTab, width, theme);
+    const tabs = tabLine(this.modelGroups.length > 0 ? [modelTab, "模型组"] : [modelTab], this.modelTab, width, theme);
     const body = usesWideModelLayout(width)
       ? this.renderWideModels(width, theme)
       : this.renderNarrowModels(width, theme);
@@ -1063,23 +1279,70 @@ export class PanelController {
   }
 
   private modelListRows(rowCount: number, width: number, theme: VspiTheme): string[] {
-    const items = this.modelTab === 0 ? this.filteredModels() : this.modelGroups;
-    const start = Math.max(0, Math.min(this.state.selected - Math.floor(rowCount / 2), items.length - rowCount));
+    if (this.modelTab === 1) {
+      const start = Math.max(
+        0,
+        Math.min(this.state.selected - Math.floor(rowCount / 2), this.modelGroups.length - rowCount),
+      );
+      return Array.from({ length: rowCount }, (_, row) => {
+        const index = start + row;
+        const group = this.modelGroups[index];
+        if (!group) return padLine("", width);
+        const selected = index === this.state.selected;
+        const marker = selected ? theme.focus("› ") : "  ";
+        const check = group.id === this.selectedGroupId ? theme.success("✓ ") : "  ";
+        const line = padLine(`${marker}${check}${group.label}`, width);
+        return selected ? theme.selected(line) : line;
+      });
+    }
+
+    const entries = this.modelListEntries();
+    const selectedRow = Math.max(
+      0,
+      entries.findIndex((entry) => entry.type === "model" && entry.modelIndex === this.state.selected),
+    );
+    const start = Math.max(0, Math.min(selectedRow - Math.floor(rowCount / 2), entries.length - rowCount));
+    let visible = entries.slice(start, start + rowCount);
+
+    const first = visible[0];
+    if (first?.type === "model") {
+      const providerRow = entries.findLastIndex(
+        (entry, index) => index < start && entry.type === "provider" && entry.key === first.providerKey,
+      );
+      if (providerRow >= 0)
+        visible = [entries[providerRow] as ModelListEntry, ...entries.slice(start, start + rowCount - 1)];
+    }
+
     return Array.from({ length: rowCount }, (_, row) => {
-      const index = start + row;
-      const item = items[index];
-      if (!item) return padLine("", width);
-      const selected = index === this.state.selected;
-      const active =
-        this.modelTab === 0
-          ? modelKey(item as ModelOption) === this.selectedModelKey
-          : (item as ModelGroup).id === this.selectedGroupId;
+      const entry = visible[row];
+      if (!entry) return padLine("", width);
+      if (entry.type === "provider") {
+        return alignRight(theme.bold(theme.muted(`  ${entry.label}`)), theme.muted(String(entry.count)), width);
+      }
+      const selected = entry.modelIndex === this.state.selected;
       const marker = selected ? theme.focus("› ") : "  ";
-      const check = active ? theme.success("✓ ") : "  ";
-      const vision = this.modelTab === 0 && (item as ModelOption).vision ? theme.blue(" ◉") : "";
-      const line = padLine(`${marker}${check}${item.label}${vision}`, width);
+      const check = modelKey(entry.model) === this.selectedModelKey ? theme.success("✓ ") : "  ";
+      const vision = entry.model.vision ? theme.blue(" ◉") : "";
+      const line = padLine(`${marker}${check}${entry.model.label}${vision}`, width);
       return selected ? theme.selected(line) : line;
     });
+  }
+
+  private modelListEntries(): ModelListEntry[] {
+    const models = this.filteredModels();
+    const counts = new Map<string, number>();
+    for (const model of models) counts.set(model.brand, (counts.get(model.brand) ?? 0) + 1);
+
+    const entries: ModelListEntry[] = [];
+    let providerKey: string | undefined;
+    models.forEach((model, modelIndex) => {
+      if (model.brand !== providerKey) {
+        providerKey = model.brand;
+        entries.push({ type: "provider", key: providerKey, label: providerKey, count: counts.get(providerKey) ?? 0 });
+      }
+      entries.push({ type: "model", model, modelIndex, providerKey });
+    });
+    return entries;
   }
 
   private modelDetailRows(rowCount: number, theme: VspiTheme): string[] {
@@ -1090,7 +1353,7 @@ export class PanelController {
     const provider = `${theme.muted("Provider  ")}${model.brand}`;
     const modelId = `${theme.muted("Model ID  ")}${model.id}`;
     const capability = `${theme.muted("能力  ")}${model.vision ? "文本 · 图片" : "文本"}`;
-    const effort = `${theme.muted("Effort  ")}${model.efforts.join(" / ")}`;
+    const effort = `${theme.muted("Effort  ")}${model.efforts.map(effortLabel).join(" / ")}`;
     const release = model.releasedAt ? `${theme.muted("发布  ")}${model.releasedAt}` : "";
     const price = `${theme.warning("输入 ¥")}${input.toFixed(2)} / 百万  ${theme.warning("输出 ¥")}${output.toFixed(2)} / 百万`;
     if (rowCount >= 6) {
@@ -1111,7 +1374,7 @@ export class PanelController {
     const rows = [theme.bold(theme.focus(group.label))];
     for (const role of group.roles) {
       const model = this.models.find((item) => item.id === role.modelId);
-      rows.push(`${theme.muted(`${role.role}  `)}${model?.label ?? role.modelId} · Effort ${role.effort}`);
+      rows.push(`${theme.muted(`${role.role}  `)}${model?.label ?? role.modelId} · Effort ${effortLabel(role.effort)}`);
     }
     return rows.slice(0, rowCount);
   }
@@ -1209,20 +1472,35 @@ export class PanelController {
 
   private settingRows(): Array<{
     label: string;
-    key: "theme" | "reducedMotion" | "showThinking" | "wrapCode" | "bridgeEnabled";
+    key: "theme" | "reducedMotion" | "thinkingDisplay" | "wrapCode" | "collapseTools" | "bridgeEnabled";
     group: string;
   }> {
     return [
       { group: "外观", label: `主题  ${this.settings.theme}`, key: "theme" },
       { group: "外观", label: `减少动效  ${this.settings.reducedMotion ? "开" : "关"}`, key: "reducedMotion" },
-      { group: "Transcript", label: `显示 thinking  ${this.settings.showThinking ? "开" : "关"}`, key: "showThinking" },
+      {
+        group: "Transcript",
+        label: `thinking 显示模式  ${thinkingDisplayLabel(this.settings.thinkingDisplay)}`,
+        key: "thinkingDisplay",
+      },
       { group: "Transcript", label: `代码自动换行  ${this.settings.wrapCode ? "开" : "关"}`, key: "wrapCode" },
+      {
+        group: "Transcript",
+        label: `完成后收起工具  ${this.settings.collapseTools ? "开" : "关"}`,
+        key: "collapseTools",
+      },
       { group: "附件", label: `SSH 图片桥接  ${this.settings.bridgeEnabled ? "开" : "关"}`, key: "bridgeEnabled" },
     ];
   }
 
   private renderSettings(width: number, theme: VspiTheme): string[] {
-    const lines = [tabLine(["全局", "项目"], this.settingsTab, width, theme)];
+    const projectLabel = this.settingsLayers.project
+      ? this.settingsLayers.projectInherited
+        ? "项目（继承）"
+        : "项目"
+      : "项目（不可用）";
+    const dirty = this.settingsDirty ? theme.warning("未应用") : theme.muted("已同步");
+    const lines = [tabLine(["全局", projectLabel], this.settingsTab, width, theme), alignRight("", dirty, width)];
     let group: string | undefined;
     this.settingRows().forEach((row, index) => {
       if (row.group !== group) {
@@ -1260,23 +1538,98 @@ export class PanelController {
   private renderPolicy(width: number, theme: VspiTheme): string[] {
     const rows = POLICY_LEVELS.map((policy, index) => {
       const active = policy === this.policySnapshot.policy;
-      const boundary = policy === "YOLO" ? "Host" : "Sandboxed";
       return selectedLine(
-        `${active ? theme.success("✓ ") : "  "}${policy} · ${boundary}`,
+        `${active ? theme.success("✓ ") : "  "}${policy} · Host`,
         index === this.state.selected,
         width,
         theme,
       );
     });
     const selected = POLICY_LEVELS[this.state.selected];
-    if (selected === "YOLO") {
-      rows.push(theme.warning(padLine("YOLO · Host 高风险：绕过 VSPi approval 与 sandbox；Enter 明确确认", width)));
+    if (selected === "Auto") {
+      rows.push(theme.warning(padLine("Auto · Host：本会话所有工具调用都不再询问", width)));
     } else if (this.policySnapshot.recovery) {
-      rows.push(theme.warning(padLine("Recovery 强制 Standard · Sandboxed，拒绝切换", width)));
+      rows.push(theme.warning(padLine("Recovery 强制 Standard · Host，拒绝切换", width)));
     } else {
-      rows.push(theme.muted(padLine("Safe 只读 · Standard 默认询问 · Auto 有界免询问", width)));
+      rows.push(theme.muted(padLine("Safe 最严格 · Standard 日常开发 · YOLO 仅高风险询问 · Auto 不询问", width)));
+    }
+    if ((this.policySnapshot.sessionAllowlist?.length ?? 0) > 0) {
+      rows.push(theme.muted(padLine(`本会话已允许  ${this.policySnapshot.sessionAllowlist.join("、")}`, width)));
     }
     return rows;
+  }
+
+  private renderTools(width: number, theme: VspiTheme): string[] {
+    const statusLabel: Record<ToolCapabilityStatus, string> = {
+      native: "Native",
+      available: "Available",
+      "not-connected": "Not connected",
+      deferred: "Deferred",
+    };
+    return TOOL_CAPABILITIES.flatMap((capability, index) => {
+      const selected = index === this.state.selected;
+      const symbol =
+        capability.status === "native" || capability.status === "available"
+          ? theme.success("✓")
+          : capability.status === "not-connected"
+            ? theme.warning("○")
+            : theme.muted("…");
+      const header = alignRight(
+        `${symbol} ${theme.bold(capability.label)}`,
+        theme.muted(statusLabel[capability.status]),
+        Math.max(1, width - 2),
+      );
+      const detail = padLine(`    ${capability.route} · ${capability.boundary}`, width);
+      return [selectedLine(header, selected, width, theme), selected ? theme.selected(detail) : theme.muted(detail)];
+    });
+  }
+
+  private renderEffort(width: number, theme: VspiTheme): string[] {
+    return this.effortLevels.map((level, index) =>
+      selectedLine(
+        `${level === this.effort ? theme.success("✓ ") : "  "}${effortLabel(level)}`,
+        index === this.state.selected,
+        width,
+        theme,
+      ),
+    );
+  }
+
+  private renderApproval(width: number, theme: VspiTheme): string[] {
+    const request = this.approvalRequest;
+    if (!request) return [theme.error(padLine("审批请求已失效", width))];
+    const gutter = width >= 12 ? 2 : width >= 6 ? 1 : 0;
+    const contentWidth = Math.max(1, width - gutter * 2);
+    const inset = (line: string) => padLine(`${" ".repeat(gutter)}${padLine(line, contentWidth)}`, width);
+    const target = request.action.target ?? request.action.operation ?? request.category;
+    const badgeWidth = Math.min(8, contentWidth);
+    const policyBadge = theme.policyBadge(request.policy, centerText(request.policy, badgeWidth));
+    const lines = [
+      inset(alignRight("", policyBadge, contentWidth)),
+      inset(theme.bold(request.category)),
+      ...wrapTextWithAnsi(target, contentWidth).map((line) => theme.muted(inset(line))),
+      padLine("", width),
+    ];
+    if (this.approvalReasonEditing) {
+      lines.push(theme.error(inset("拒绝并说明")));
+      lines.push(inset(theme.selected(padLine(` ${this.approvalReason}${this._cursor(theme)} `, contentWidth))));
+      return lines;
+    }
+    const choices = [
+      "允许本次",
+      `本会话允许 ${request.category}`,
+      ...(request.requiredPolicy ? [`切换到 ${request.requiredPolicy} 并执行`] : []),
+      "拒绝",
+      "拒绝并说明...",
+    ];
+    const optionIndent = contentWidth >= 8 ? 2 : 0;
+    const optionWidth = Math.max(1, contentWidth - optionIndent);
+    choices.forEach((choice, index) => {
+      lines.push(
+        inset(`${" ".repeat(optionIndent)}${selectedLine(choice, index === this.state.selected, optionWidth, theme)}`),
+      );
+    });
+    return lines;
   }
 
   private visiblePlanItems(): PlanItem[] {
@@ -1344,35 +1697,50 @@ export class PanelController {
     if (!snapshot) return [theme.muted(padLine("Workflow Plan 未加载", width))];
     if (snapshot.status !== "ready" || !snapshot.delivery) {
       return [
-        alignRight(theme.bold("Workflow Plan"), theme.warning(snapshot.status), width),
+        alignRight(
+          theme.bold("Workflow Plan"),
+          theme.warning(WORKFLOW_STATUS_LABELS[snapshot.status] ?? snapshot.status),
+          width,
+        ),
         theme.muted(padLine(snapshot.diagnostic, width)),
       ];
     }
     const delivery = snapshot.delivery;
     const identity = snapshot.identity;
+    const version = identity?.version?.split("+")[0] ?? "unknown";
     const lines = [
-      alignRight(theme.bold(delivery.id), theme.muted(`r${delivery.revision} · ${delivery.status}`), width),
-      padLine(
-        `Workflow  Host Contract v${identity?.contractVersion ?? "?"} · ${identity?.version ?? "unknown"}`,
+      alignRight(
+        theme.bold(theme.focus(humanizePlanId(delivery.id))),
+        theme.muted(`${DELIVERY_STATUS_LABELS[delivery.status] ?? delivery.status} · 修订 ${delivery.revision}`),
         width,
       ),
-      padLine(`Plan  ${delivery.planHash.slice(0, 12)} · ${delivery.kind}`, width),
+      theme.muted(
+        padLine(
+          `Workflow · ${DELIVERY_KIND_LABELS[delivery.kind] ?? delivery.kind} · Workspace Read-only · 契约 v${identity?.contractVersion ?? "?"} · ${version}`,
+          width,
+        ),
+      ),
+      theme.border(padLine((theme.capabilities.unicode ? "─" : "-").repeat(width), width)),
     ];
+    const idWidth = Math.max(...delivery.milestones.map((milestone) => milestone.id.length));
     this.visiblePlanItems().forEach((item, index) => {
       const milestone = delivery.milestones.find((candidate) => candidate.id === item.id);
       const symbol =
         item.status === "done" ? theme.success("✓") : item.status === "current" ? theme.focus("●") : theme.muted("○");
+      // 标记已承载 done/current/pending 语义，只有"待锚定"这类附加信息才补文字
+      const statusText = milestone?.status === "pending_stone" ? " · 待锚定" : "";
+      const id = (milestone?.id ?? item.id).padEnd(idWidth);
       lines.push(
         selectedLine(
-          `${symbol} ${item.label} · ${milestone?.status ?? "unknown"}`,
+          `${symbol} ${id} ${milestone?.title ?? item.label}${statusText}`,
           focused && index === this.state.selected,
           width,
           theme,
         ),
       );
     });
-    if (delivery.currentMilestoneId) lines.push(theme.blue(padLine(`当前  ${delivery.currentMilestoneId}`, width)));
-    lines.push(theme.muted(padLine(`Core  ${identity?.sourceCommit.slice(0, 12) ?? "unknown"}`, width)));
+    if (delivery.currentMilestoneId)
+      lines.push(theme.blue(padLine(`当前里程碑  ${delivery.currentMilestoneId}`, width)));
     return lines;
   }
 
@@ -1427,14 +1795,19 @@ export class PanelController {
     const skipped = this.questions.filter((question) => question.skipped).length;
     const status = theme.muted(`已答 ${answered} · 跳过 ${skipped}`);
     if (this.questionReview) {
-      const lines = [alignRight(theme.bold("最终检查"), status, width)];
+      const lines = [
+        alignRight(theme.muted("Question · Review"), status, width),
+        theme.bold(padLine("最终检查", width)),
+        theme.border(padLine((theme.capabilities.unicode ? "─" : "-").repeat(width), width)),
+      ];
       for (const question of this.questions) {
         const answer = question.skipped
           ? "已跳过"
           : Array.isArray(question.answer)
             ? question.answer.join(" → ")
             : question.answer || "未回答";
-        lines.push(padLine(`${question.title}  ${theme.blue(answer)}`, width));
+        lines.push(padLine(theme.bold(question.title), width));
+        lines.push(theme.muted(padLine(`  ${answer}`, width)));
       }
       lines.push(theme.selected(padLine(" 提交答案 ", width)));
       return lines;
@@ -1442,14 +1815,13 @@ export class PanelController {
     const question = this.questions[this.questionIndex];
     if (!question) return [];
     const lines = [
-      alignRight(
-        theme.bold(`第 ${this.questionIndex + 1}/${this.questions.length} · ${question.title}`),
-        status,
-        width,
-      ),
-      ...wrapTextWithAnsi(question.prompt, width),
+      alignRight(theme.muted(`Question ${this.questionIndex + 1} / ${this.questions.length}`), status, width),
+      theme.bold(padLine(question.title, width)),
+      ...wrapTextWithAnsi(question.prompt, width).map((line) => padLine(line, width)),
+      theme.border(padLine((theme.capabilities.unicode ? "─" : "-").repeat(width), width)),
     ];
     if (this.questionDirectAnswer || question.kind === "freeText") {
+      lines.push(theme.muted(padLine("你的回答", width)));
       lines.push(theme.selected(padLine(` ${this.questionInput}${this._cursor(theme)} `, width)));
       return lines;
     }
@@ -1458,14 +1830,12 @@ export class PanelController {
       const answer = Array.isArray(question.answer) ? question.answer : [];
       const checked = question.kind === "multiChoice" && answer.includes(option.id) ? theme.success("✓ ") : "";
       const rank = question.kind === "ranking" && option.id !== "other" ? `${index + 1}. ` : "";
-      lines.push(
-        selectedLine(
-          `${checked}${rank}${option.label}${"description" in option && option.description ? theme.muted(`  ${option.description}`) : ""}`,
-          index === this.state.selected,
-          width,
-          theme,
-        ),
-      );
+      const selected = index === this.state.selected;
+      lines.push(selectedLine(`${checked}${rank}${option.label}`, selected, width, theme));
+      if ("description" in option && option.description) {
+        const description = padLine(`    ${option.description}`, width);
+        lines.push(selected ? theme.selected(description) : theme.muted(description));
+      }
     });
     lines.push(theme.muted(padLine("  直接回答    跳过", width)));
     return lines;
@@ -1474,6 +1844,18 @@ export class PanelController {
   private _cursor(theme: VspiTheme): string {
     return theme.inverse(" ");
   }
+}
+
+export function humanizePlanId(id: string): string {
+  const normalized = id.replace(/\bv(\d+)-(\d+)-(\d+)\b/gi, "v$1.$2.$3");
+  return normalized
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => {
+      if (part.toLowerCase() === "vspi") return "VSPi";
+      return `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`;
+    })
+    .join(" ");
 }
 
 function modelKey(model: { provider?: string; id: string } | undefined): string {

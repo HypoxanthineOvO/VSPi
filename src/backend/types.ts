@@ -32,6 +32,7 @@ export interface ChatBackendEvents {
   onMessage: (message: TranscriptMessage) => void;
   onMessageUpdate: (id: string, patch: Partial<TranscriptMessage>) => void;
   onBusy: (busy: boolean) => void;
+  onQueueUpdate?: (queue: ChatQueueState) => void;
   onUsage: (usage: UsageSnapshot) => void;
   onNotice: (message: string, tone: "info" | "success" | "warning" | "error") => void;
   onSessionInvalidating?: () => void;
@@ -39,6 +40,11 @@ export interface ChatBackendEvents {
   onQuestion?: (questions: Question[], signal?: AbortSignal) => Promise<Question[]>;
   onPlanBindingChange?: (binding: PlanBinding | undefined) => void;
   onEffectivePrompt?: (segments: EffectivePromptSegment[]) => void;
+}
+
+export interface ChatQueueState {
+  steering: number;
+  followUp: number;
 }
 
 export type SessionResetReason = "startup" | "new" | "resume" | "fork";
@@ -55,7 +61,12 @@ export interface NewSessionOptions {
 }
 
 export interface SendResult {
-  status: "completed" | "cancelled";
+  status: "completed" | "cancelled" | "queued";
+  delivery?: "steer" | "followUp";
+}
+
+export interface CancelResult {
+  queuedMessages: string[];
 }
 
 export interface SendOptions {
@@ -74,7 +85,8 @@ export interface ChatBackend {
   // Existing extension backends may not report a result; VSPi backends return SendResult.
   // biome-ignore lint/suspicious/noConfusingVoidType: void preserves the public backend compatibility contract.
   send(text: string, options: SendOptions): Promise<void | SendResult>;
-  cancel(): Promise<void>;
+  // biome-ignore lint/suspicious/noConfusingVoidType: void preserves extension backend compatibility.
+  cancel(): Promise<void | CancelResult>;
   compact(options?: CompactOptions): Promise<void>;
   abortCompaction?(): void;
   newSession(options?: NewSessionOptions): Promise<void>;
@@ -88,6 +100,7 @@ export interface ChatBackend {
   getModelGroups?(): Promise<ModelGroup[]>;
   getProviderOptions?(): Promise<ProviderOption[]>;
   selectModel?(provider: string, id: string): Promise<ModelSelectionResult>;
+  getEffortOptions?(): Promise<EffortLevel[]>;
   setEffort?(level: EffortLevel): Promise<void>;
   isProjectTrusted?(): boolean;
   runProviderProbe?(

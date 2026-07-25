@@ -30,4 +30,33 @@ describe("offline fixture backend defaults", () => {
 
     await backend.dispose();
   });
+
+  it("mirrors native queue and cancellation semantics for offline interaction testing", async () => {
+    const backend = new FixtureBackend();
+    const queueUpdates: Array<{ steering: number; followUp: number }> = [];
+    await backend.start({
+      onMessage: vi.fn(),
+      onMessageUpdate: vi.fn(),
+      onBusy: vi.fn(),
+      onQueueUpdate: (queue) => queueUpdates.push(queue),
+      onUsage: vi.fn(),
+      onNotice: vi.fn(),
+    });
+
+    const active = backend.send("primary", { attachments: [], effort: "high", behavior: "prompt" });
+    await expect(backend.send("correction", { attachments: [], effort: "high", behavior: "prompt" })).resolves.toEqual({
+      status: "queued",
+      delivery: "steer",
+    });
+    await expect(backend.send("summary", { attachments: [], effort: "high", behavior: "followUp" })).resolves.toEqual({
+      status: "queued",
+      delivery: "followUp",
+    });
+    expect(queueUpdates).toContainEqual({ steering: 1, followUp: 1 });
+
+    await expect(backend.cancel()).resolves.toEqual({ queuedMessages: ["correction", "summary"] });
+    await expect(active).resolves.toEqual({ status: "cancelled" });
+    expect(queueUpdates.at(-1)).toEqual({ steering: 0, followUp: 0 });
+    await backend.dispose();
+  });
 });

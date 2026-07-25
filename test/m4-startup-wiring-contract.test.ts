@@ -85,7 +85,7 @@ describe("M4 startup Policy composition", () => {
     expect(await service.evaluate({ kind: "network", target: "http://127.0.0.1:43210/path" })).toMatchObject({
       allowed: true,
       approval: "not-required",
-      sandboxed: true,
+      sandboxed: false,
     });
     expect(approvalBroker).not.toHaveBeenCalled();
     expect(await service.evaluate({ kind: "workflow-authority", operation: "release" })).toMatchObject({
@@ -117,7 +117,7 @@ describe("M4 startup Policy composition", () => {
       acknowledgeYolo,
       workflowAuthority: async () => true,
     });
-    expect(service.snapshot()).toMatchObject({ policy: "Standard", boundary: "Sandboxed", recovery: true });
+    expect(service.snapshot()).toMatchObject({ policy: "Standard", boundary: "Host", recovery: true });
     expect(await service.evaluate({ kind: "network", target: "http://127.0.0.1:43210" })).toMatchObject({
       allowed: false,
     });

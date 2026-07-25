@@ -41,7 +41,7 @@ describe("startup cover", () => {
     expect(lines.every((line) => visibleWidth(line) === 80)).toBe(true);
     expectTruthfulStatus(lines, status);
     expect(renderedText(lines)).toContain(status.version);
-    expect(renderedText(lines)).not.toContain("v0.1.0");
+    expect(renderedText(lines)).not.toContain("v0.2.0");
   });
 
   it.each([

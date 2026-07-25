@@ -78,7 +78,7 @@ describe("M3 real ModelRuntime and Pi Session mutation", () => {
         provider: string,
         id: string,
       ): Promise<{ modelId: string; vision: boolean; contextWindow: number; profileModelId: string }>;
-      setEffort(level: "低" | "中" | "高"): Promise<void>;
+      setEffort(level: "low" | "medium" | "high"): Promise<void>;
     };
     await backend.start({
       onMessage: vi.fn(),
@@ -98,7 +98,7 @@ describe("M3 real ModelRuntime and Pi Session mutation", () => {
       profileModelId: "vision-model",
     });
     expect(fake.setModel).toHaveBeenCalledOnce();
-    await backend.setEffort("高");
+    await backend.setEffort("high");
     expect(fake.setThinkingLevel).toHaveBeenLastCalledWith("high");
 
     await expect(backend.selectModel("google", "broken-model")).rejects.toThrow("model switch failure sentinel");
@@ -137,7 +137,7 @@ describe("M3 Provider and Model 80x24 interaction contract", () => {
           brand: "Anthropic",
           label: "Runtime Model",
           vision: true,
-          efforts: ["低", "中", "高"],
+          efforts: ["low", "medium", "high"],
           price: { inputUsdPerMillion: 1, outputUsdPerMillion: 5 },
         },
       ],
@@ -145,7 +145,7 @@ describe("M3 Provider and Model 80x24 interaction contract", () => {
         {
           id: "runtime-group",
           label: "Runtime Group",
-          roles: [{ role: "默认", modelId: "runtime-model", effort: "中" }],
+          roles: [{ role: "默认", modelId: "runtime-model", effort: "medium" }],
         },
       ],
     );

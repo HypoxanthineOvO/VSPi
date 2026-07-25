@@ -10,7 +10,7 @@ import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/domain/fixtures.js";
 import { composeEffectivePrompt } from "../src/prompts/effective-prompt.js";
 import { createFactoryPromptRegistry } from "../src/prompts/factory-registry.js";
 import { checkHarnessSources, type HarnessSource } from "../src/prompts/harness-check.js";
-import { createPromptProfileExtension } from "../src/prompts/pi-prompt-profile-extension.js";
+import { createPromptProfileExtension, VSPI_LANGUAGE_CONTRACT } from "../src/prompts/pi-prompt-profile-extension.js";
 import { createPromptProfileService, type PromptProfileService } from "../src/prompts/profile-service.js";
 import type { PromptProfile, PromptProfileConfig, PromptProfileSnapshot } from "../src/prompts/types.js";
 import { stripAnsi } from "../src/ui/ansi.js";
@@ -472,6 +472,7 @@ describe("M7 corrective: effective runtime projection and Harness resolver", () 
 
     expect(onEffectivePrompt).toHaveBeenCalledWith([
       { source: "pi-base", content: assembled },
+      { source: "append", content: VSPI_LANGUAGE_CONTRACT },
       { source: "profile", content: "PROFILE OVERLAY" },
     ]);
     const segments = onEffectivePrompt.mock.calls[0]?.[0] as Array<{ source: string; content: string }>;

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/domain/fixtures.js";
+import { resolveStartupSecurity } from "../src/policy/startup-security.js";
 import { stripAnsi } from "../src/ui/ansi.js";
 import { PanelController } from "../src/ui/panels.js";
 import { loadWorkflowCore } from "../src/workflow/core-loader.js";
@@ -81,6 +82,7 @@ describe("C2 M1 Workflow Adapter bootstrap", () => {
     const adapter = await createStartupWorkflowAdapter({
       enabled: false,
       workspace: "/workspace/recovery",
+      disabledReason: "recovery",
       env,
       loadCore,
     });
@@ -90,6 +92,34 @@ describe("C2 M1 Workflow Adapter bootstrap", () => {
       diagnostic: "Recovery 已禁用 Workflow Adapter",
     });
     expect(await adapter.authorize({ kind: "workflow-authority", operation: "release" })).toBe(false);
+    expect(loadCore).not.toHaveBeenCalled();
+  });
+
+  it("keeps Workflow opt-in and avoids environment discovery until --workflow is explicit", async () => {
+    expect(resolveStartupSecurity({ argv: [] }).workflowAdapter).toBe(false);
+    expect(resolveStartupSecurity({ argv: ["--workflow"] }).workflowAdapter).toBe(true);
+    expect(resolveStartupSecurity({ argv: ["--workflow", "--recovery"] }).workflowAdapter).toBe(false);
+
+    const loadCore = vi.fn();
+    const env = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("disabled Workflow touched environment");
+        },
+      },
+    ) as NodeJS.ProcessEnv;
+    const adapter = await createStartupWorkflowAdapter({
+      enabled: false,
+      workspace: "/workspace/default-off",
+      disabledReason: "not-enabled",
+      env,
+      loadCore,
+    });
+    expect(await adapter.snapshot()).toEqual({
+      status: "disabled",
+      diagnostic: "Workflow 未开启；使用 --workflow 启用只读集成",
+    });
     expect(loadCore).not.toHaveBeenCalled();
   });
 
@@ -117,11 +147,12 @@ describe("C2 M1 Workflow Adapter bootstrap", () => {
     panel.setWorkflowSnapshot(snapshot);
     panel.open("plan");
     const rendered = panel.render(100, 16, plainTheme(), DEFAULT_USAGE, true).map(stripAnsi).join("\n");
-    expect(rendered).toContain("vspi-v0-2-0-workflow-integration");
-    expect(rendered).toContain("r1 · executing");
-    expect(rendered).toContain("Host Contract v1");
-    expect(rendered).toContain("M1 Workflow Adapter Bootstrap · Stone · executing");
-    expect(rendered).toContain(COMMIT.slice(0, 12));
+    expect(rendered).toContain("VSPi V0.2.0 Workflow Integration");
+    expect(rendered).toContain("执行中 · 修订 1");
+    expect(rendered).toContain("契约 v1");
+    expect(rendered).toContain("M1 Workflow Adapter Bootstrap");
+    expect(rendered).not.toContain("pending");
+    expect(rendered).not.toContain(COMMIT.slice(0, 12));
   });
 });
 

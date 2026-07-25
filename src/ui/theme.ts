@@ -7,6 +7,7 @@ export const PALETTE = {
   background: "#111315",
   text: "#E8EAED",
   muted: "#92989F",
+  thinkingText: "#AEB4BA",
   focus: "#5FC7C7",
   blue: "#8FB7FF",
   success: "#7CCB8A",
@@ -14,9 +15,19 @@ export const PALETTE = {
   error: "#F07878",
   planBackground: "#182529",
   selectionBackground: "#2B3E41",
+  safeBadgeBackground: "#244A31",
+  safeBadgeText: "#B8F5C4",
+  standardBadgeBackground: "#54451F",
+  standardBadgeText: "#FFE39A",
+  yoloBadgeBackground: "#5A351C",
+  yoloBadgeText: "#FFC38A",
+  autoBadgeBackground: "#55272B",
+  autoBadgeText: "#FFB0B0",
   codeBackground: "#202428",
-  userBackground: "#B8E6E3",
-  userText: "#102426",
+  userBackground: "#202428",
+  userText: "#F4F7FA",
+  activityBackground: "#182529",
+  noticeBackground: "#252B2F",
   border: "#465058",
 } as const;
 
@@ -25,6 +36,7 @@ export interface VspiTheme {
   plain: (text: string) => string;
   text: (text: string) => string;
   muted: (text: string) => string;
+  thinking: (text: string) => string;
   focus: (text: string) => string;
   blue: (text: string) => string;
   success: (text: string) => string;
@@ -36,10 +48,13 @@ export interface VspiTheme {
   underline: (text: string) => string;
   inverse: (text: string) => string;
   selected: (text: string) => string;
+  policyBadge: (policy: "Safe" | "Standard" | "YOLO" | "Auto", text: string) => string;
   planSurface: (text: string) => string;
   code: (text: string) => string;
   codeBlock: (text: string) => string;
   userSurface: (text: string) => string;
+  activitySurface: (text: string) => string;
+  noticeSurface: (text: string) => string;
   markdown: MarkdownTheme;
 }
 
@@ -113,6 +128,7 @@ export function createTheme(capabilities: TerminalCapabilities): VspiTheme {
 
   const text = color(PALETTE.text, 255);
   const muted = color(PALETTE.muted, 246);
+  const thinking = color(PALETTE.thinkingText, 249);
   const focus = color(PALETTE.focus, 80);
   const blue = color(PALETTE.blue, 111);
   const success = color(PALETTE.success, 114);
@@ -120,10 +136,19 @@ export function createTheme(capabilities: TerminalCapabilities): VspiTheme {
   const error = color(PALETTE.error, 210);
   const border = color(PALETTE.border, 240);
   const selectionBg = bg(PALETTE.selectionBackground, 237);
+  const policyBadges = {
+    Safe: (value: string) => bg(PALETTE.safeBadgeBackground, 22)(color(PALETTE.safeBadgeText, 120)(chalk.bold(value))),
+    Standard: (value: string) =>
+      bg(PALETTE.standardBadgeBackground, 58)(color(PALETTE.standardBadgeText, 222)(chalk.bold(value))),
+    YOLO: (value: string) => bg(PALETTE.yoloBadgeBackground, 94)(color(PALETTE.yoloBadgeText, 215)(chalk.bold(value))),
+    Auto: (value: string) => bg(PALETTE.autoBadgeBackground, 52)(color(PALETTE.autoBadgeText, 217)(chalk.bold(value))),
+  } as const;
   const planBg = bg(PALETTE.planBackground, 235);
   const codeBg = bg(PALETTE.codeBackground, 236);
-  const userBg = bg(PALETTE.userBackground, 152);
-  const userText = color(PALETTE.userText, 234);
+  const userBg = bg(PALETTE.userBackground, 236);
+  const activityBg = bg(PALETTE.activityBackground, 235);
+  const noticeBg = bg(PALETTE.noticeBackground, 236);
+  const userText = color(PALETTE.userText, 255);
   const code = (value: string) => codeBg(warning(value));
   const codeBlock = (value: string) => codeBg(text(value));
 
@@ -143,7 +168,7 @@ export function createTheme(capabilities: TerminalCapabilities): VspiTheme {
   };
 
   const markdown: MarkdownTheme = {
-    heading: focus,
+    heading: blue,
     link: blue,
     linkUrl: muted,
     code,
@@ -166,6 +191,7 @@ export function createTheme(capabilities: TerminalCapabilities): VspiTheme {
     plain: (value) => value,
     text,
     muted,
+    thinking,
     focus,
     blue,
     success,
@@ -177,10 +203,13 @@ export function createTheme(capabilities: TerminalCapabilities): VspiTheme {
     underline: chalk.underline,
     inverse: chalk.inverse,
     selected: (value) => selectionBg(text(value)),
+    policyBadge: (policy, value) => policyBadges[policy](value),
     planSurface: (value) => planBg(text(value)),
     code,
     codeBlock,
     userSurface: (value) => userBg(userText(value)),
+    activitySurface: (value) => activityBg(text(value)),
+    noticeSurface: (value) => noticeBg(text(value)),
     markdown,
   };
 }

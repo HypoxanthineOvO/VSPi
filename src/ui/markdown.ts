@@ -3,34 +3,51 @@ import { fillBackground, padLine, stripAnsi, visibleWidth, wrapTextWithAnsi } fr
 import type { VspiTheme } from "./theme.js";
 
 function normalizeHeadings(source: string): string {
-  // pi-tui already renders H1 bold + underlined. VSPi intentionally gives H2 the same treatment.
-  return source.replace(/^##(?!#)\s+/gm, "# ");
+  // pi-tui exposes literal hashes for H3+. Keep H1 distinct and use one clean subordinate style for H2+.
+  return source.replace(/^#{3,6}(?!#)\s+/gm, "## ");
 }
 
-function listSymbol(depth: number, unicode: boolean): string {
-  if (!unicode) return depth % 3 === 0 ? "*" : depth % 3 === 1 ? "o" : ">";
+function listSymbol(depth: number): string {
   return ["•", "◦", "▪"][depth % 3] ?? "•";
 }
 
 function replaceListMarker(line: string, theme: VspiTheme): string {
   const plain = stripAnsi(line);
-  const match = /^(\s*)- (?:\[[ xX]\] )?/.exec(plain);
+  const match = /^(\s*)- (?:\[([ xX])\] )?/.exec(plain);
   if (!match) return line;
-  const depth = Math.floor((match[1]?.length ?? 0) / 4);
-  const source = theme.markdown.listBullet("- ");
-  const replacement = theme.markdown.listBullet(`${listSymbol(depth, theme.capabilities.unicode)} `);
+  const indent = match[1] ?? "";
+  const task = match[2];
+  const depth = Math.floor(indent.length / 4);
+  const sourceMarker = task === undefined ? "- " : `- [${task}] `;
+  const replacementMarker = task === undefined ? `${listSymbol(depth)} ` : `${task === " " ? "○" : "✓"} `;
+  const source = `${indent}${theme.markdown.listBullet(sourceMarker)}`;
+  const replacement = `${indent}${theme.markdown.listBullet(replacementMarker)}`;
   return line.replace(source, replacement);
 }
 
-// biome-ignore lint/suspicious/noControlCharactersInRegex: OSC-8 framing is defined by ESC and BEL controls.
-const OSC8_LINK = /\x1b]8;;([^\x07\x1b]*)(?:\x07|\x1b\\)([\s\S]*?)\x1b]8;;(?:\x07|\x1b\\)/g;
+function styleTableBorders(line: string, theme: VspiTheme): string {
+  return line.replace(/[┌┬┐├┼┤└┴┘─│]+/g, (border) => theme.border(border));
+}
 
-function showLinkTargets(line: string, theme: VspiTheme): string {
-  return line.replace(OSC8_LINK, (link, href: string, label: string) => {
-    const comparableHref = href.startsWith("mailto:") ? href.slice(7) : href;
-    if (stripAnsi(label) === comparableHref) return link;
-    return `${link}${theme.markdown.linkUrl(` (${href})`)}`;
-  });
+function codeLabel(fence: string): string {
+  const language = fence.slice(3).trim().split(/\s+/, 1)[0];
+  return (language || "CODE").toUpperCase();
+}
+
+function codeHeader(label: string, width: number, theme: VspiTheme): string {
+  const prefix = theme.capabilities.colorLevel === 0 ? `${theme.capabilities.unicode ? "│" : "|"} ` : "  ";
+  return fillBackground(theme.markdown.codeBlockBorder(`${prefix}${label}`), width, theme.codeBlock);
+}
+
+function codeBody(line: string, width: number, theme: VspiTheme): string {
+  if (theme.capabilities.colorLevel > 0) return fillBackground(line, width, theme.codeBlock);
+  const border = theme.capabilities.unicode ? "│" : "|";
+  return fillBackground(`${border} ${line.replace(/^ {0,2}/, "")}`, width, theme.codeBlock);
+}
+
+function pushBlank(output: string[], width: number): void {
+  if (output.length === 0 || stripAnsi(output.at(-1) ?? "").trim() === "") return;
+  output.push(padLine("", width));
 }
 
 export class VspiMarkdown implements Component {
@@ -43,11 +60,13 @@ export class VspiMarkdown implements Component {
     text: string,
     private readonly theme: VspiTheme,
     paddingX = 0,
-    private readonly options: { wrapCode?: boolean } = {},
+    private readonly options: { wrapCode?: boolean; tone?: "default" | "thinking" } = {},
   ) {
     this.text = text;
     this.tokenizedSource = normalizeHeadings(text);
-    this.renderer = new Markdown(this.tokenizedSource, paddingX, 0, theme.markdown, { color: theme.text });
+    this.renderer = new Markdown(this.tokenizedSource, paddingX, 0, theme.markdown, {
+      color: options.tone === "thinking" ? theme.thinking : theme.text,
+    });
   }
 
   setText(text: string): void {
@@ -72,16 +91,38 @@ export class VspiMarkdown implements Component {
     const rendered = this.renderer.render(width).map((line) => replaceListMarker(line, this.theme));
     const output: string[] = [];
     let insideCode = false;
+    let insideTable = false;
+    let codeClosingBlank = false;
     for (const line of rendered) {
       const trimmed = stripAnsi(line).trimStart();
       const fence = trimmed.startsWith("```");
-      if (fence) insideCode = !insideCode;
-      if (insideCode || fence) {
-        output.push(fillBackground(line, width, this.theme.codeBlock));
-      } else {
-        const withTargets = showLinkTargets(line.trimEnd(), this.theme);
-        output.push(...wrapTextWithAnsi(withTargets, width).map((part) => padLine(part, width)));
+      if (fence && !insideCode) {
+        pushBlank(output, width);
+        output.push(codeHeader(codeLabel(trimmed), width, this.theme));
+        insideCode = true;
+        codeClosingBlank = false;
+        continue;
       }
+      if (fence) {
+        insideCode = false;
+        pushBlank(output, width);
+        codeClosingBlank = true;
+        continue;
+      }
+      if (insideCode) {
+        output.push(codeBody(line, width, this.theme));
+        continue;
+      }
+      if (codeClosingBlank && trimmed === "") {
+        codeClosingBlank = false;
+        continue;
+      }
+      codeClosingBlank = false;
+      const plain = stripAnsi(line).trimStart();
+      if (plain.startsWith("┌")) insideTable = true;
+      const styled = insideTable ? styleTableBorders(line.trimEnd(), this.theme) : line.trimEnd();
+      output.push(...wrapTextWithAnsi(styled, width).map((part) => padLine(part, width)));
+      if (insideTable && plain.startsWith("└")) insideTable = false;
     }
     return output;
   }
@@ -91,7 +132,7 @@ export function renderMarkdown(
   text: string,
   width: number,
   theme: VspiTheme,
-  options: { wrapCode?: boolean } = {},
+  options: { wrapCode?: boolean; tone?: "default" | "thinking" } = {},
 ): string[] {
   return new VspiMarkdown(text, theme, 0, options).render(width);
 }

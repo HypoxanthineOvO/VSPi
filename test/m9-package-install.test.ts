@@ -79,7 +79,11 @@ describe("M9 npm package artifact", () => {
       await readFile(join(project, "node_modules", "vspi", "package.json"), "utf8"),
     ) as {
       bin?: Record<string, string>;
+      private?: boolean;
+      version?: string;
     };
     expect(installedPackage.bin).toEqual({ vspi: "dist/index.js" });
+    expect(installedPackage.version).toBe("0.2.0");
+    expect(installedPackage.private).not.toBe(true);
   }, 150_000);
 });

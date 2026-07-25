@@ -1,29 +1,56 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 
-export const POLICY_LEVELS = ["Safe", "Standard", "Auto", "YOLO"] as const;
+export const POLICY_LEVELS = ["Safe", "Standard", "YOLO", "Auto"] as const;
 export type PolicyLevel = (typeof POLICY_LEVELS)[number];
+
+export type ApprovalCategory =
+  | "file-read"
+  | "file-write"
+  | "bash-read"
+  | "process"
+  | "network"
+  | "ssh"
+  | "git-write"
+  | "destructive"
+  | "container"
+  | "system"
+  | "shared";
 
 export interface PolicySnapshot {
   policy: PolicyLevel;
-  boundary: "Sandboxed" | "Host";
-  sandboxed: boolean;
+  boundary: "Host";
+  sandboxed: false;
   recovery: boolean;
+  sessionAllowlist: ApprovalCategory[];
 }
 
 export interface PolicyAction {
   kind: "file-read" | "file-write" | "process" | "network" | "shared" | "workflow-authority";
   target?: string;
-  risk?: "low" | "high";
+  risk?: "low" | "medium" | "high";
   operation?: string;
+  category?: ApprovalCategory;
 }
+
+export interface ApprovalRequest {
+  action: PolicyAction;
+  category: ApprovalCategory;
+  policy: PolicyLevel;
+  requiredPolicy?: PolicyLevel;
+}
+
+export type ApprovalResponse =
+  | { type: "allow-once" }
+  | { type: "allow-session"; category?: ApprovalCategory }
+  | { type: "elevate"; level?: PolicyLevel }
+  | { type: "deny"; reason?: string };
 
 export interface PolicyDecision {
   allowed: boolean;
   approval: "not-required" | "required" | "granted" | "denied";
   reason: string;
-  sandboxed: boolean;
+  sandboxed: false;
 }
 
 export interface PolicyExecutionResult {
@@ -46,7 +73,7 @@ export interface PolicyExecutionInput {
 
 export interface ExecutionPolicyService {
   snapshot(): PolicySnapshot;
-  evaluate(action: PolicyAction): Promise<PolicyDecision>;
+  evaluate(action: PolicyAction, signal?: AbortSignal): Promise<PolicyDecision>;
   switchPolicy(policy: PolicyLevel): Promise<PolicySnapshot>;
   execute(input: PolicyExecutionInput): Promise<PolicyExecutionResult>;
   auditLog(): readonly unknown[];
@@ -55,11 +82,13 @@ export interface ExecutionPolicyService {
 export interface ExecutionPolicyServiceOptions {
   workspace: string;
   policy?: PolicyLevel;
-  approval?: (action: PolicyAction) => Promise<boolean>;
-  acknowledgeYolo?: () => Promise<boolean>;
-  networkAllowlist?: string[];
+  approval?: (request: ApprovalRequest, signal?: AbortSignal) => Promise<ApprovalResponse | boolean>;
   workflowAuthority?: (action: PolicyAction) => Promise<boolean>;
   recovery?: boolean;
+  /** Retained for source compatibility with v0.1 callers. */
+  acknowledgeYolo?: () => Promise<boolean>;
+  /** Retained for config compatibility; M1 no longer treats it as a sandbox boundary. */
+  networkAllowlist?: string[];
 }
 
 interface AuditEntry {
@@ -73,22 +102,22 @@ interface AuditEntry {
 export function resolveEffectivePolicy(
   input: { globalPolicy?: PolicyLevel; cliPolicy?: PolicyLevel; projectPolicy?: PolicyLevel; recovery?: boolean } = {},
 ): PolicySnapshot {
-  if (input.recovery) return snapshotFor("Standard", true);
+  if (input.recovery) return snapshotFor("Standard", true, new Set());
   const requested = input.cliPolicy ?? input.globalPolicy ?? "Standard";
   const requestedIndex = POLICY_LEVELS.indexOf(requested);
   const projectIndex = input.projectPolicy ? POLICY_LEVELS.indexOf(input.projectPolicy) : requestedIndex;
   const effective = POLICY_LEVELS[Math.min(requestedIndex, projectIndex)] ?? "Standard";
-  return snapshotFor(effective, false);
+  return snapshotFor(effective, false, new Set());
 }
 
 export function createExecutionPolicyService(options: ExecutionPolicyServiceOptions): ExecutionPolicyService {
   const workspace = resolve(options.workspace);
-  const initialPolicy = options.recovery || options.policy === "YOLO" ? "Standard" : (options.policy ?? "Standard");
-  let current = snapshotFor(initialPolicy, options.recovery ?? false);
+  let policy: PolicyLevel = options.recovery ? "Standard" : (options.policy ?? "Standard");
+  const recovery = options.recovery ?? false;
+  const sessionAllowlist = new Set<ApprovalCategory>();
   const entries: AuditEntry[] = [];
-  const allowlist = (options.networkAllowlist ?? []).map(normalizeNetworkTarget);
 
-  async function evaluate(action: PolicyAction): Promise<PolicyDecision> {
+  async function evaluate(action: PolicyAction, signal?: AbortSignal): Promise<PolicyDecision> {
     let decision: PolicyDecision;
     if (action.kind === "workflow-authority") {
       const authorized = (await options.workflowAuthority?.(action)) ?? false;
@@ -96,86 +125,70 @@ export function createExecutionPolicyService(options: ExecutionPolicyServiceOpti
         authorized,
         "not-required",
         authorized ? "Workflow authority gate granted independently" : "Workflow authority gate denied",
-        current.sandboxed,
       );
-    } else if (current.policy === "YOLO") {
-      decision = decisionFor(true, "not-required", "YOLO Host request allowed after acknowledgement", false);
-    } else if (current.policy === "Safe") {
-      decision = evaluateSafe(action, workspace);
-    } else if (current.policy === "Auto") {
-      decision = evaluateAuto(action, workspace, allowlist);
     } else {
-      decision = await evaluateStandard(action, workspace, allowlist, options.approval);
+      const category = categoryFor(action);
+      if (sessionAllowlist.has(category)) {
+        decision = decisionFor(true, "not-required", `Session allows ${category}`);
+      } else if (!requiresApproval(policy, action, workspace)) {
+        decision = decisionFor(true, "not-required", `${policy} permits ${category} on Host`);
+      } else {
+        decision = await requestApproval(action, category, signal);
+      }
     }
-    entries.push({ at: new Date().toISOString(), policy: current.policy, action: redactAction(action), decision });
+    entries.push({ at: new Date().toISOString(), policy, action: redactAction(action), decision });
     return decision;
   }
 
-  async function switchPolicy(policy: PolicyLevel): Promise<PolicySnapshot> {
-    if (!POLICY_LEVELS.includes(policy)) throw new Error(`未知 Policy：${policy}`);
-    if (policy === current.policy) return { ...current };
-    if (current.recovery) throw new Error("Recovery 强制 Standard · Sandboxed，拒绝切换 Policy");
-    const previous = current;
-    try {
-      if (policy === "YOLO") {
-        const acknowledged = (await options.acknowledgeYolo?.()) ?? false;
-        if (!acknowledged) throw new Error("YOLO Host 高风险模式需要不可跳过的明确确认 (acknowledge)");
-      } else {
-        const support = await inspectLinuxSandboxSupport();
-        if (!support.supported) throw new Error(`Policy 切换失败：${support.diagnostic}`);
-      }
-      current = snapshotFor(policy, false);
-      return { ...current };
-    } catch (error) {
-      current = previous;
-      throw error;
+  async function requestApproval(
+    action: PolicyAction,
+    category: ApprovalCategory,
+    signal?: AbortSignal,
+  ): Promise<PolicyDecision> {
+    if (signal?.aborted) throw abortError();
+    const requiredPolicy = requiredPolicyFor(policy, action, workspace);
+    const raw = await options.approval?.(
+      { action: structuredClone(action), category, policy, ...(requiredPolicy ? { requiredPolicy } : {}) },
+      signal,
+    );
+    const response = normalizeApprovalResponse(raw);
+    if (response.type === "allow-once") return decisionFor(true, "granted", `Approved ${category} once`);
+    if (response.type === "allow-session") {
+      const allowedCategory = response.category ?? category;
+      sessionAllowlist.add(allowedCategory);
+      return decisionFor(true, "granted", `Approved ${allowedCategory} for this session`);
     }
+    if (response.type === "elevate") {
+      const level = response.level ?? requiredPolicy;
+      if (!level || level !== requiredPolicy || requiresApproval(level, action, workspace)) {
+        return decisionFor(false, "denied", "Approval level does not permit the requested action");
+      }
+      if (recovery) return decisionFor(false, "denied", "Recovery keeps Standard approval level");
+      policy = level;
+      return decisionFor(true, "granted", `Approval level raised to ${level} for this session`);
+    }
+    return decisionFor(false, "denied", response.reason?.trim() || `${category} was rejected by the user`);
+  }
+
+  async function switchPolicy(next: PolicyLevel): Promise<PolicySnapshot> {
+    if (!POLICY_LEVELS.includes(next)) throw new Error(`未知 Policy：${next}`);
+    if (recovery && next !== "Standard") throw new Error("Recovery 强制 Standard · Host，拒绝切换 Policy");
+    policy = next;
+    return snapshotFor(policy, recovery, sessionAllowlist);
   }
 
   async function execute(input: PolicyExecutionInput): Promise<PolicyExecutionResult> {
-    const decision = await evaluate(input.action);
+    const decision = await evaluate(input.action, input.signal);
     if (!decision.allowed) return { decision, started: false, exitCode: null, stdout: "", stderr: decision.reason };
-
-    let result: Omit<PolicyExecutionResult, "decision" | "started">;
-    if (current.policy === "YOLO") {
-      result = await runChild(input.command, input.args, {
-        cwd: input.cwd ?? workspace,
-        env: { ...process.env, ...input.env },
-        ...(input.signal ? { signal: input.signal } : {}),
-        ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
-      });
-    } else {
-      const support = await inspectLinuxSandboxSupport();
-      if (!support.supported) {
-        const unavailable = decisionFor(false, "denied", support.diagnostic, true);
-        entries.push({
-          at: new Date().toISOString(),
-          policy: current.policy,
-          action: redactAction(input.action),
-          decision: unavailable,
-          execution: { started: false, exitCode: null, command: basename(input.command) },
-        });
-        return { decision: unavailable, started: false, exitCode: null, stdout: "", stderr: support.diagnostic };
-      }
-      const bwrap = buildBubblewrapArgs({
-        workspace,
-        writable: current.policy !== "Safe",
-        network: input.action.kind === "network",
-        ...(input.cwd ? { cwd: input.cwd } : {}),
-        ...(input.env ? { env: input.env } : {}),
-        command: input.command,
-        args: input.args,
-      });
-      result = await runChild("bwrap", bwrap, {
-        cwd: workspace,
-        env: process.env,
-        ...(input.signal ? { signal: input.signal } : {}),
-        ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
-      });
-    }
+    const result = await runChild(input.command, input.args, {
+      cwd: input.cwd ?? workspace,
+      env: { ...process.env, ...input.env },
+      ...(input.signal ? { signal: input.signal } : {}),
+      ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+    });
     entries.push({
       at: new Date().toISOString(),
-      policy: current.policy,
+      policy,
       action: redactAction(input.action),
       decision,
       execution: { started: true, exitCode: result.exitCode, command: basename(input.command) },
@@ -184,7 +197,7 @@ export function createExecutionPolicyService(options: ExecutionPolicyServiceOpti
   }
 
   return {
-    snapshot: (): PolicySnapshot => ({ ...current }),
+    snapshot: () => snapshotFor(policy, recovery, sessionAllowlist),
     evaluate,
     switchPolicy,
     execute,
@@ -192,95 +205,45 @@ export function createExecutionPolicyService(options: ExecutionPolicyServiceOpti
   };
 }
 
-export async function inspectLinuxSandboxSupport(): Promise<{
-  supported: boolean;
-  backend: "bwrap" | "unsupported";
-  diagnostic: string;
-}> {
-  if (process.platform !== "linux") {
-    return { supported: false, backend: "unsupported", diagnostic: "bwrap Linux sandbox unsupported on this OS" };
+function requiresApproval(policy: PolicyLevel, action: PolicyAction, workspace: string): boolean {
+  if (policy === "Auto") return false;
+  const category = categoryFor(action);
+  if (policy === "Safe") return category !== "file-read" && category !== "bash-read";
+  if (policy === "Standard") {
+    if (action.risk === "high") return true;
+    if (category === "file-read" || category === "bash-read") return false;
+    if (category === "file-write") return !insideWorkspace(action.target, workspace);
+    return ["network", "ssh", "git-write", "destructive", "container", "system", "shared"].includes(category);
   }
-  try {
-    const version = await runChild("bwrap", ["--version"], { env: process.env });
-    if (version.exitCode !== 0 || !/bubblewrap/i.test(version.stdout))
-      throw new Error(version.stderr || "invalid bwrap");
-    const probe = await runChild(
-      "bwrap",
-      ["--die-with-parent", "--unshare-all", "--ro-bind", "/", "/", "--", "/bin/true"],
-      { env: process.env },
-    );
-    if (probe.exitCode !== 0) throw new Error(probe.stderr || "user namespace probe failed");
-    return {
-      supported: true,
-      backend: "bwrap",
-      diagnostic: `${version.stdout.trim()} · user namespace available`,
-    };
-  } catch (error) {
-    return {
-      supported: false,
-      backend: "unsupported",
-      diagnostic: `bwrap/user namespace unsupported：${error instanceof Error ? error.message : "unknown"}`,
-    };
-  }
+  return action.risk === "high" || ["destructive", "container", "system"].includes(category);
 }
 
-function evaluateSafe(action: PolicyAction, workspace: string): PolicyDecision {
-  if (action.kind === "file-read" && insideWorkspace(action.target, workspace)) {
-    return decisionFor(true, "not-required", "Safe permits workspace reads", true);
-  }
-  if (action.kind === "process" && action.risk !== "high") {
-    return decisionFor(true, "not-required", "Safe permits a read-only sandboxed process", true);
-  }
-  return decisionFor(false, "not-required", "Safe is read-only and has no network/shared/Host authority", true);
+function categoryFor(action: PolicyAction): ApprovalCategory {
+  if (action.category) return action.category;
+  if (action.kind === "file-read") return "file-read";
+  if (action.kind === "file-write") return "file-write";
+  if (action.kind === "network") return "network";
+  if (action.kind === "shared") return "shared";
+  return action.operation === "read" ? "bash-read" : "process";
 }
 
-async function evaluateStandard(
-  action: PolicyAction,
-  workspace: string,
-  allowlist: string[],
-  approval: ExecutionPolicyServiceOptions["approval"],
-): Promise<PolicyDecision> {
-  const routineWorkspace =
-    (action.kind === "file-read" || action.kind === "file-write") && insideWorkspace(action.target, workspace);
-  const routineProcess = action.kind === "process" && action.risk !== "high";
-  if (routineWorkspace || routineProcess) {
-    return decisionFor(true, "not-required", "Standard permits reversible workspace activity", true);
-  }
-  const approved = (await approval?.(action)) ?? false;
-  if (!approved) return decisionFor(false, "denied", "Standard approval denied or unavailable", true);
-  if (action.kind === "network" && !networkAllowed(action.target, allowlist)) {
-    return decisionFor(false, "denied", "Standard network target is outside the configured allowlist", true);
-  }
-  return decisionFor(true, "granted", "Standard action explicitly approved", true);
+function requiredPolicyFor(current: PolicyLevel, action: PolicyAction, workspace: string): PolicyLevel | undefined {
+  const currentIndex = POLICY_LEVELS.indexOf(current);
+  return POLICY_LEVELS.slice(currentIndex + 1).find((candidate) => !requiresApproval(candidate, action, workspace));
 }
 
-function evaluateAuto(action: PolicyAction, workspace: string, allowlist: string[]): PolicyDecision {
-  if (action.kind === "network") {
-    return networkAllowed(action.target, allowlist)
-      ? decisionFor(true, "not-required", "Auto network target is configured", true)
-      : decisionFor(false, "not-required", "Auto network target is outside configured bounds", true);
-  }
-  if (action.kind === "file-read" || action.kind === "file-write") {
-    return insideWorkspace(action.target, workspace)
-      ? decisionFor(true, "not-required", "Auto permits workspace activity", true)
-      : decisionFor(false, "not-required", "Auto remains confined to the workspace", true);
-  }
-  if (action.kind === "process") return decisionFor(true, "not-required", "Auto permits sandboxed processes", true);
-  return decisionFor(false, "not-required", "Auto has no unconfigured shared-resource authority", true);
+function normalizeApprovalResponse(value: ApprovalResponse | boolean | undefined): ApprovalResponse {
+  if (value === true) return { type: "allow-once" };
+  if (!value) return { type: "deny" };
+  return value;
 }
 
-function decisionFor(
-  allowed: boolean,
-  approval: PolicyDecision["approval"],
-  reason: string,
-  sandboxed: boolean,
-): PolicyDecision {
-  return { allowed, approval, reason, sandboxed };
+function decisionFor(allowed: boolean, approval: PolicyDecision["approval"], reason: string): PolicyDecision {
+  return { allowed, approval, reason, sandboxed: false };
 }
 
-function snapshotFor(policy: PolicyLevel, recovery: boolean): PolicySnapshot {
-  const sandboxed = policy !== "YOLO";
-  return { policy, boundary: sandboxed ? "Sandboxed" : "Host", sandboxed, recovery };
+function snapshotFor(policy: PolicyLevel, recovery: boolean, sessionAllowlist: Set<ApprovalCategory>): PolicySnapshot {
+  return { policy, boundary: "Host", sandboxed: false, recovery, sessionAllowlist: [...sessionAllowlist].sort() };
 }
 
 function insideWorkspace(target: string | undefined, workspace: string): boolean {
@@ -288,64 +251,6 @@ function insideWorkspace(target: string | undefined, workspace: string): boolean
   const candidate = resolve(workspace, target);
   const relation = relative(workspace, candidate);
   return relation === "" || (!relation.startsWith("..") && !isAbsolute(relation));
-}
-
-function normalizeNetworkTarget(value: string): string {
-  try {
-    const url = new URL(value);
-    return `${url.protocol}//${url.host}${url.pathname === "/" ? "" : url.pathname.replace(/\/$/, "")}`;
-  } catch {
-    return value.replace(/\/$/, "");
-  }
-}
-
-function networkAllowed(target: string | undefined, allowlist: string[]): boolean {
-  if (!target) return false;
-  const normalized = normalizeNetworkTarget(target);
-  return allowlist.some((entry) => normalized === entry || normalized.startsWith(`${entry}/`));
-}
-
-function buildBubblewrapArgs(input: {
-  workspace: string;
-  writable: boolean;
-  network: boolean;
-  cwd?: string;
-  env?: Record<string, string>;
-  command: string;
-  args: string[];
-}): string[] {
-  const args = ["--die-with-parent", "--new-session", "--unshare-all"];
-  if (input.network) args.push("--share-net");
-  args.push("--clearenv", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", "/tmp");
-  for (const path of ["/usr", "/bin", "/lib", "/lib64", "/etc"]) {
-    if (existsSync(path)) args.push("--ro-bind", path, path);
-  }
-  args.push("--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp");
-  if (isAbsolute(input.command) && !systemPath(input.command)) {
-    for (const parent of destinationParents(input.command)) args.push("--dir", parent);
-    args.push("--ro-bind", input.command, input.command);
-  }
-  for (const parent of destinationParents(input.workspace)) args.push("--dir", parent);
-  args.push(input.writable ? "--bind" : "--ro-bind", input.workspace, input.workspace);
-  const cwd = input.cwd && insideWorkspace(input.cwd, input.workspace) ? resolve(input.cwd) : input.workspace;
-  args.push("--chdir", cwd);
-  for (const [name, value] of Object.entries(input.env ?? {})) args.push("--setenv", name, value);
-  args.push("--", input.command, ...input.args);
-  return args;
-}
-
-function systemPath(path: string): boolean {
-  return ["/usr", "/bin", "/lib", "/lib64", "/etc"].some((root) => path === root || path.startsWith(`${root}/`));
-}
-
-function destinationParents(path: string): string[] {
-  const parents: string[] = [];
-  let current = dirname(path);
-  while (current !== "/" && current !== ".") {
-    parents.push(current);
-    current = dirname(current);
-  }
-  return parents.reverse().filter((entry) => entry !== "/tmp");
 }
 
 async function runChild(
@@ -413,4 +318,10 @@ function redact(value: string): string {
 
 function basename(command: string): string {
   return command.split(/[\\/]/).at(-1) || "process";
+}
+
+function abortError(): Error {
+  const error = new Error("Approval cancelled");
+  error.name = "AbortError";
+  return error;
 }

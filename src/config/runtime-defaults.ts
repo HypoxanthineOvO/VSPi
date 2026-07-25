@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { normalizeEffortLevel } from "../domain/effort.js";
 import type { EffortLevel } from "../domain/types.js";
 import {
   assertProjectEntrySafe,
@@ -21,7 +22,7 @@ export interface RuntimeDefaultsServiceOptions {
   trustedProject: boolean;
 }
 
-const EFFORTS = new Set<EffortLevel>(["低", "中", "高"]);
+const STORED_EFFORTS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max", "低", "中", "高"]);
 
 export function createRuntimeDefaultsService(options: RuntimeDefaultsServiceOptions) {
   const home = options.home ?? homedir();
@@ -42,7 +43,7 @@ export function createRuntimeDefaultsService(options: RuntimeDefaultsServiceOpti
         ...global,
         ...project,
         ...(model ? { model } : {}),
-        effort: project?.effort ?? global?.effort ?? "中",
+        effort: normalizeEffortLevel(project?.effort ?? global?.effort),
       },
       diagnostics,
     };
@@ -105,7 +106,8 @@ async function readDefaults(path: string, diagnostics: string[]): Promise<Runtim
   try {
     const value: unknown = JSON.parse(await readFile(path, "utf8"));
     validateDefaults(value);
-    return value;
+    const defaults = value as RuntimeDefaults;
+    return { ...defaults, effort: normalizeEffortLevel(defaults.effort) };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     diagnostics.push(`${path} 无效：${error instanceof Error ? error.message : "未知错误"}`);
@@ -118,7 +120,9 @@ function validateDefaults(value: unknown): asserts value is RuntimeDefaults {
   const input = value as Record<string, unknown>;
   if (Object.keys(input).some((key) => key !== "model" && key !== "effort"))
     throw new Error("runtime defaults 包含未知字段");
-  if (!EFFORTS.has(input.effort as EffortLevel)) throw new Error("default effort 必须是 低/中/高");
+  if (typeof input.effort !== "string" || !STORED_EFFORTS.has(input.effort)) {
+    throw new Error("default effort 必须是 off/minimal/low/medium/high/xhigh/max");
+  }
   if (input.model !== undefined) {
     if (!input.model || typeof input.model !== "object" || Array.isArray(input.model)) {
       throw new Error("default model 必须是 {provider,id}");

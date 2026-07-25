@@ -75,7 +75,7 @@ describe("M3 App Provider action boundary", () => {
         saveProjectProvider,
       }),
       runtimeDefaultsFactory: () => ({
-        load: async () => ({ value: { effort: "中" }, diagnostics: [] }),
+        load: async () => ({ value: { effort: "medium" }, diagnostics: [] }),
         save: async () => "/tmp/runtime-defaults.json",
       }),
       onExit: vi.fn(),
@@ -122,7 +122,7 @@ describe("M3 App Provider action boundary", () => {
         vision: model.vision,
         contextWindow: 128_000,
         profileModelId: id,
-        effort: "高" as const,
+        effort: "high" as const,
       };
     });
     const setEffort = vi.fn(async () => {});
@@ -151,7 +151,7 @@ describe("M3 App Provider action boundary", () => {
           brand: "OpenAI",
           label: "Startup",
           vision: false,
-          efforts: ["中"],
+          efforts: ["medium"],
           price: { inputUsdPerMillion: 1, outputUsdPerMillion: 2 },
         },
         {
@@ -160,7 +160,7 @@ describe("M3 App Provider action boundary", () => {
           brand: "Anthropic",
           label: "Default",
           vision: true,
-          efforts: ["高"],
+          efforts: ["high"],
           price: { inputUsdPerMillion: 1, outputUsdPerMillion: 2 },
         },
         {
@@ -169,7 +169,7 @@ describe("M3 App Provider action boundary", () => {
           brand: "Google",
           label: "Broken",
           vision: false,
-          efforts: ["中"],
+          efforts: ["medium"],
           price: { inputUsdPerMillion: 1, outputUsdPerMillion: 2 },
         },
       ]),
@@ -182,11 +182,11 @@ describe("M3 App Provider action boundary", () => {
     const load = vi
       .fn()
       .mockResolvedValueOnce({
-        value: { model: { provider: "openai", id: "startup-model" }, effort: "低" },
+        value: { model: { provider: "openai", id: "startup-model" }, effort: "low" },
         diagnostics: [],
       })
       .mockResolvedValueOnce({
-        value: { model: { provider: "anthropic", id: "default-model" }, effort: "高" },
+        value: { model: { provider: "anthropic", id: "default-model" }, effort: "high" },
         diagnostics: [],
       });
     const save = vi.fn(async () => "/tmp/project-runtime-defaults.json");
@@ -201,21 +201,25 @@ describe("M3 App Provider action boundary", () => {
     await app.start();
     const testable = app as unknown as TestableApp;
     expect(selectModel).toHaveBeenCalledWith("openai", "startup-model");
-    expect(setEffort).toHaveBeenCalledWith("低");
+    expect(setEffort).toHaveBeenCalledWith("low");
 
     selectModel.mockClear();
     setEffort.mockClear();
     await testable.submit("/new --default");
     expect(selectModel).toHaveBeenCalledWith("anthropic", "default-model");
-    expect(setEffort).toHaveBeenCalledWith("高");
+    expect(setEffort).toHaveBeenCalledWith("high");
     expect(app.render(80).join("\n")).toContain("anthropic / defa");
 
     save.mockClear();
     await testable.submit("/effort");
-    expect(setEffort).toHaveBeenLastCalledWith("低");
+    app.handleInput("\u001b[A");
+    app.handleInput("\u001b[A");
+    app.handleInput("\r");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(setEffort).toHaveBeenLastCalledWith("high");
     expect(save).toHaveBeenCalledWith(
       "project",
-      expect.objectContaining({ model: { provider: "anthropic", id: "default-model" }, effort: "低" }),
+      expect.objectContaining({ model: { provider: "anthropic", id: "default-model" }, effort: "high" }),
     );
 
     save.mockClear();
@@ -227,7 +231,7 @@ describe("M3 App Provider action boundary", () => {
         brand: "Google",
         label: "Broken",
         vision: false,
-        efforts: ["中"],
+        efforts: ["medium"],
         price: { inputUsdPerMillion: 1, outputUsdPerMillion: 2 },
       },
     });
@@ -246,7 +250,7 @@ describe("M3 App Provider action boundary", () => {
         brand: "Wrong",
         label: "Shared",
         vision: false,
-        efforts: ["中"],
+        efforts: ["medium"],
         price: { inputUsdPerMillion: 0, outputUsdPerMillion: 0 },
       },
       {
@@ -255,7 +259,7 @@ describe("M3 App Provider action boundary", () => {
         brand: "Right",
         label: "Shared",
         vision: true,
-        efforts: ["中", "高"],
+        efforts: ["medium", "high"],
         price: { inputUsdPerMillion: 0, outputUsdPerMillion: 0 },
       },
     ];
@@ -290,7 +294,7 @@ describe("M3 App Provider action boundary", () => {
       attachments: fakeAttachments(),
       renderOnce: true,
       runtimeDefaultsFactory: () => ({
-        load: async () => ({ value: { effort: "中" }, diagnostics: [] }),
+        load: async () => ({ value: { effort: "medium" }, diagnostics: [] }),
         save,
       }),
       onExit: vi.fn(),
@@ -298,10 +302,13 @@ describe("M3 App Provider action boundary", () => {
     await app.start();
     save.mockClear();
     await (app as unknown as TestableApp).submit("/effort");
+    app.handleInput("\u001b[B");
+    app.handleInput("\r");
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect.soft(save).toHaveBeenCalledWith("project", {
       model: { provider: "right", id: "shared" },
-      effort: "高",
+      effort: "high",
     });
     expect(Object.keys((savedValue as { model?: object } | undefined)?.model ?? {}).sort()).toEqual(["id", "provider"]);
     await app.dispose();

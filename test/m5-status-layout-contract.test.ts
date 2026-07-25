@@ -24,7 +24,7 @@ function input(overrides: Partial<StatusLineInput> = {}): StatusLineInput {
     cwd: LONG_PATH,
     usage: MAX_USAGE,
     modelLabel: LONG_MODEL,
-    effort: "高",
+    effort: "high",
     busy: false,
     backend: "Pi",
     policy: "Standard",
@@ -107,7 +107,7 @@ describe("M5 dynamic status layout", () => {
     expect(ansi).toHaveLength(2);
     expect(ansi.every((line) => visibleWidth(line) <= 40)).toBe(true);
     expectOrder(plain[0] ?? "", ["Model", "Effort", "Context"]);
-    expect(plain[0]).toMatch(/Effort\s+高\s+Context/);
+    expect(plain[0]).toMatch(/Effort\s+High\s+Context/);
     expect(plain[1]).toMatch(/^\//);
     expect(plain[1]).not.toMatch(/\bPath\b/);
     expectOrder(plain[1] ?? "", ["Token", "Cost"]);
@@ -121,7 +121,7 @@ describe("M5 dynamic status layout", () => {
       cwd: "/workspace/vspi",
       usage: { ...DEFAULT_USAGE, contextTokens: 50_000, contextWindow: 128_000, contextPercent: 39 },
       modelLabel: "OpenAI / GPT-5.4",
-      effort: "高",
+      effort: "high",
       busy: false,
     };
     const rendered = renderStatusLines(status, 120, plainTheme({ colorLevel: 3, truecolor: true })).join("\n");
@@ -133,7 +133,7 @@ describe("M5 dynamic status layout", () => {
     for (const label of ["Model", "Effort", "Context", "Token", "Cost"]) {
       expect(isAnsiStyled(rendered, label), `${label} label color`).toBe(true);
     }
-    for (const value of ["OpenAI / GPT-5.4", "高", "50K / 128K 39%", "/workspace/vspi", "↑0 ↓0", "¥0.00"]) {
+    for (const value of ["OpenAI / GPT-5.4", "High", "50K / 128K 39%", "/workspace/vspi", "↑0 ↓0", "¥0.00"]) {
       expect(isAnsiStyled(rendered, value), `${value} value color`).toBe(true);
     }
   });

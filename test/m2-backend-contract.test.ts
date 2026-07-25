@@ -31,7 +31,13 @@ function emptyStats(sessionId = "session-id"): SessionStats {
 
 function fakePiSession(
   messages: unknown[],
-  options: { sessionId?: string; configured?: boolean; prompt?: () => Promise<void> } = {},
+  options: {
+    sessionId?: string;
+    configured?: boolean;
+    prompt?: () => Promise<void>;
+    isStreaming?: boolean;
+    clearQueue?: () => { steering: string[]; followUp: string[] };
+  } = {},
 ) {
   let listener: ((event: AgentSessionEvent) => void) | undefined;
   const sessionId = options.sessionId ?? "m2-restored-session";
@@ -49,7 +55,7 @@ function fakePiSession(
     messages,
     sessionId,
     thinkingLevel: "high",
-    isStreaming: false,
+    isStreaming: options.isStreaming ?? false,
     subscribe(callback: (event: AgentSessionEvent) => void) {
       listener = callback;
       return () => {
@@ -58,6 +64,9 @@ function fakePiSession(
     },
     setThinkingLevel: vi.fn(),
     prompt: vi.fn(async (_text: string, _options?: PromptOptions) => options.prompt?.()),
+    steer: vi.fn(async () => {}),
+    followUp: vi.fn(async () => {}),
+    clearQueue: vi.fn(options.clearQueue ?? (() => ({ steering: [], followUp: [] }))),
     abort: vi.fn(async () => {}),
     compact: vi.fn(async () => ({})),
     getContextUsage: vi.fn(() => ({ tokens: 512, contextWindow: 200_000, percent: 0.256 })),
@@ -77,6 +86,7 @@ function eventRecorder() {
       if (current) messages[index] = { ...current, ...patch } as TranscriptMessage;
     },
     onBusy: vi.fn(),
+    onQueueUpdate: vi.fn(),
     onUsage: vi.fn(),
     onNotice: vi.fn(),
   };
@@ -152,7 +162,12 @@ describe("M2 Pi history hydration", () => {
     expect(recorder.messages).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ role: "user", kind: "text", text: "RESTORED_USER_SENTINEL" }),
-        expect.objectContaining({ role: "assistant", kind: "thinking", text: "RESTORED_THINKING_SENTINEL" }),
+        expect.objectContaining({
+          role: "assistant",
+          kind: "thinking",
+          text: "RESTORED_THINKING_SENTINEL",
+          streaming: false,
+        }),
         expect.objectContaining({ role: "assistant", kind: "text", text: "RESTORED_ASSISTANT_SENTINEL" }),
       ]),
     );
@@ -176,6 +191,61 @@ describe("M2 Pi history hydration", () => {
     expect(source).toMatch(/runtime\.newSession\s*\(/);
     expect(source).toMatch(/runtime\.switchSession\s*\(/);
     expect(source).toMatch(/runtime\.fork\s*\(/);
+  });
+
+  it("delegates busy messages to Pi steer and followUp without replacing the active generation", async () => {
+    const fake = fakePiSession([], { isStreaming: true });
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-m2-native-queue-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+    await backend.start(eventRecorder().events);
+
+    await expect(
+      backend.send("在下一次调用前修正", { attachments: [], effort: "high", behavior: "prompt" }),
+    ).resolves.toEqual({ status: "queued", delivery: "steer" });
+    expect(fake.session.steer).toHaveBeenCalledWith("在下一次调用前修正", []);
+
+    await expect(
+      backend.send("完成后总结", { attachments: [], effort: "high", behavior: "followUp" }),
+    ).resolves.toEqual({ status: "queued", delivery: "followUp" });
+    expect(fake.session.followUp).toHaveBeenCalledWith("完成后总结", []);
+    expect(fake.session.prompt).not.toHaveBeenCalled();
+    await backend.dispose();
+  });
+
+  it("keeps Working active across agent boundaries until the generation and native queues are both idle", async () => {
+    let releasePrompt: (() => void) | undefined;
+    const fake = fakePiSession([], {
+      prompt: () =>
+        new Promise<void>((resolve) => {
+          releasePrompt = resolve;
+        }),
+    });
+    const recorder = eventRecorder();
+    const busy = vi.mocked(recorder.events.onBusy);
+    const queue = vi.mocked(recorder.events.onQueueUpdate as NonNullable<ChatBackendEvents["onQueueUpdate"]>);
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-m2-working-continuity-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+    await backend.start(recorder.events);
+
+    const pending = backend.send("长任务", { attachments: [], effort: "high", behavior: "prompt" });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(busy).toHaveBeenLastCalledWith(true);
+    fake.emit({ type: "agent_start" } as AgentSessionEvent);
+    fake.emit({ type: "queue_update", steering: ["修正"], followUp: ["总结"] } as AgentSessionEvent);
+    fake.emit({ type: "agent_end" } as AgentSessionEvent);
+    expect(busy).toHaveBeenLastCalledWith(true);
+    expect(queue).toHaveBeenLastCalledWith({ steering: 1, followUp: 1 });
+
+    releasePrompt?.();
+    await pending;
+    expect(busy).toHaveBeenLastCalledWith(true);
+    fake.emit({ type: "queue_update", steering: [], followUp: [] } as AgentSessionEvent);
+    expect(busy).toHaveBeenLastCalledWith(false);
+    await backend.dispose();
   });
 
   it("maps one streamed assistant block to one transcript row across repeated deltas and message_end", async () => {
@@ -209,6 +279,63 @@ describe("M2 Pi history hydration", () => {
     expect(recorder.messages).toEqual([
       expect.objectContaining({ kind: "text", text: "STREAM_FINAL_SENTINEL", streaming: false }),
     ]);
+    await backend.dispose();
+  });
+
+  it("keeps tool calls between separate assistant blocks with the same content index", async () => {
+    const fake = fakePiSession([]);
+    const recorder = eventRecorder();
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-m2-waterfall-order-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+    const beforeTool = { role: "assistant", content: [{ type: "text", text: "先检查目录。" }] };
+    const afterTool = { role: "assistant", content: [{ type: "text", text: "目录检查完成。" }] };
+    await backend.start(recorder.events);
+
+    fake.emit({ type: "agent_start" } as AgentSessionEvent);
+    for (const partial of [beforeTool, afterTool]) {
+      if (partial === afterTool) {
+        fake.emit({
+          type: "tool_execution_start",
+          toolCallId: "waterfall-ls",
+          toolName: "ls",
+          args: { path: "src" },
+        } as AgentSessionEvent);
+        fake.emit({
+          type: "tool_execution_end",
+          toolCallId: "waterfall-ls",
+          toolName: "ls",
+          result: { content: [{ type: "text", text: "app\nui" }] },
+          isError: false,
+        } as unknown as AgentSessionEvent);
+      }
+      fake.emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_start", contentIndex: 0, partial },
+      } as AgentSessionEvent);
+      fake.emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: partial.content[0]?.text, partial },
+      } as AgentSessionEvent);
+      fake.emit({ type: "message_end", message: partial } as AgentSessionEvent);
+    }
+
+    expect(recorder.messages.map((message) => message.kind)).toEqual(["text", "tool", "text"]);
+    expect(recorder.messages.map((message) => message.id)).toEqual([
+      expect.stringContaining("pi-text-"),
+      expect.stringContaining("pi-tool-"),
+      expect.stringContaining("pi-text-"),
+    ]);
+    expect(new Set(recorder.messages.map((message) => message.id)).size).toBe(3);
+    expect(recorder.messages[0]).toMatchObject({ kind: "text", text: "先检查目录。", streaming: false });
+    expect(recorder.messages[1]).toMatchObject({
+      kind: "tool",
+      name: "ls",
+      summary: "src",
+      status: "success",
+    });
+    expect(recorder.messages[2]).toMatchObject({ kind: "text", text: "目录检查完成。", streaming: false });
     await backend.dispose();
   });
 
@@ -268,7 +395,7 @@ describe("M2 Pi history hydration", () => {
     await expect(backend.switchSession("broken-target")).rejects.toBe(primaryError);
     expect(reset).toHaveBeenCalledTimes(1);
     await expect(
-      backend.send("must not reach disposed session", { attachments: [], effort: "中", behavior: "prompt" }),
+      backend.send("must not reach disposed session", { attachments: [], effort: "medium", behavior: "prompt" }),
     ).rejects.toThrow(/session 尚未启动/);
     expect(first.session.prompt).not.toHaveBeenCalled();
     expect(list).toHaveBeenCalled();
@@ -308,7 +435,7 @@ describe("M2 Pi history hydration", () => {
     await expect(backend.switchSession("double-dispose-target")).rejects.toBe(primaryError);
     expect(disposeCalls).toBe(1);
     await expect(
-      backend.send("runtime must remain failed closed", { attachments: [], effort: "中", behavior: "prompt" }),
+      backend.send("runtime must remain failed closed", { attachments: [], effort: "medium", behavior: "prompt" }),
     ).rejects.toThrow(/session 尚未启动/);
   });
 
@@ -327,6 +454,105 @@ describe("M2 Pi history hydration", () => {
 
     await expect(backend.cancel()).rejects.toBe(abortError);
     expect(busy).toHaveBeenLastCalledWith(false);
+    await backend.dispose();
+  });
+
+  it("quarantines late retry, text, and tool events after a successful abort until the next send", async () => {
+    let firstPrompt = true;
+    let releaseFirstPrompt: (() => void) | undefined;
+    const fake = fakePiSession([], {
+      prompt: () => {
+        if (!firstPrompt) return Promise.resolve();
+        firstPrompt = false;
+        return new Promise<void>((resolve) => {
+          releaseFirstPrompt = resolve;
+        });
+      },
+    });
+    vi.spyOn(fake.session, "abort").mockImplementation(async () => {
+      releaseFirstPrompt?.();
+    });
+    const recorder = eventRecorder();
+    const busy = vi.mocked(recorder.events.onBusy);
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-m2-abort-late-events-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+    await backend.start(recorder.events);
+
+    const first = backend.send("cancel me", { attachments: [], effort: "high", behavior: "prompt" });
+    await new Promise((resolve) => setImmediate(resolve));
+    fake.emit({ type: "agent_start" } as AgentSessionEvent);
+    const activePartial = { role: "assistant", content: [{ type: "text", text: "PARTIAL_BEFORE_CANCEL" }] };
+    fake.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_start", contentIndex: 0, partial: activePartial },
+    } as AgentSessionEvent);
+    fake.emit({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "PARTIAL_BEFORE_CANCEL",
+        partial: activePartial,
+      },
+    } as AgentSessionEvent);
+    fake.emit({
+      type: "tool_execution_start",
+      toolCallId: "active-tool",
+      toolName: "bash",
+      args: { command: "npm test" },
+    } as AgentSessionEvent);
+    await backend.cancel();
+    await expect(first).resolves.toEqual({ status: "cancelled" });
+    expect(recorder.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "text", text: "PARTIAL_BEFORE_CANCEL", streaming: false }),
+        expect.objectContaining({ kind: "tool", name: "bash", status: "cancelled" }),
+      ]),
+    );
+    const messagesAfterCancel = recorder.messages.length;
+
+    const stalePartial = {
+      role: "assistant",
+      content: [{ type: "text", text: "LATE_CANCELLED_TEXT" }],
+    };
+    fake.emit({ type: "agent_end", willRetry: true } as unknown as AgentSessionEvent);
+    fake.emit({ type: "agent_start", retry: true } as unknown as AgentSessionEvent);
+    fake.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_start", contentIndex: 0, partial: stalePartial },
+    } as AgentSessionEvent);
+    fake.emit({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "LATE_CANCELLED_TEXT",
+        partial: stalePartial,
+      },
+    } as AgentSessionEvent);
+    fake.emit({
+      type: "tool_execution_start",
+      toolCallId: "late-tool",
+      toolName: "bash",
+      args: { command: "touch LATE_CANCELLED_TOOL" },
+    } as AgentSessionEvent);
+    expect(recorder.messages).toHaveLength(messagesAfterCancel);
+    expect(busy).toHaveBeenLastCalledWith(false);
+
+    await backend.send("next turn", { attachments: [], effort: "high", behavior: "prompt" });
+    const nextPartial = { role: "assistant", content: [{ type: "text", text: "NEXT_TURN_OK" }] };
+    fake.emit({ type: "agent_start" } as AgentSessionEvent);
+    fake.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_start", contentIndex: 0, partial: nextPartial },
+    } as AgentSessionEvent);
+    fake.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "NEXT_TURN_OK", partial: nextPartial },
+    } as AgentSessionEvent);
+    expect(recorder.messages).toHaveLength(messagesAfterCancel + 1);
     await backend.dispose();
   });
 

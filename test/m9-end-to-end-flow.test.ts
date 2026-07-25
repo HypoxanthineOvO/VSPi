@@ -376,8 +376,8 @@ const GROUP: ModelGroup = {
   id: "release-group",
   label: "Release Group",
   roles: [
-    { role: "默认", modelId: "group-model", effort: "高" },
-    { role: "总结", modelId: "summary-model", effort: "低" },
+    { role: "默认", modelId: "group-model", effort: "high" },
+    { role: "总结", modelId: "summary-model", effort: "low" },
   ],
 };
 
@@ -388,7 +388,7 @@ function runtimeModel(provider: string, id = "group-model"): RuntimeModelOption 
     brand: provider,
     label: id === "group-model" ? "Group Model" : "Summary Model",
     vision: false,
-    efforts: ["低", "中", "高"],
+    efforts: ["low", "medium", "high"],
     price: { inputUsdPerMillion: 0, outputUsdPerMillion: 0 },
     contextWindow: 128_000,
   };
@@ -405,7 +405,7 @@ async function modelGroupHarness(models: RuntimeModelOption[]) {
       vision: selected.vision,
       contextWindow: selected.contextWindow,
       profileModelId: id,
-      effort: "中" as const,
+      effort: "medium" as const,
     };
   });
   const setEffort = vi.fn(async () => {});
@@ -473,9 +473,9 @@ describe("M9 Model Group availability", () => {
     try {
       await h.api.applyPanelEvent(event);
       expect(h.selectModel).toHaveBeenCalledWith("openai", "group-model");
-      expect(h.setEffort).toHaveBeenCalledWith("高");
+      expect(h.setEffort).toHaveBeenCalledWith("high");
       expect(h.api.modelLabel).toBe("OpenAI / Group Model");
-      expect(h.api.effort).toBe("高");
+      expect(h.api.effort).toBe("high");
       expect(h.app.render(120).map(stripAnsi).join("\n")).not.toMatch(/尚未接入|不可用|歧义/);
     } finally {
       await h.app.dispose();
@@ -492,7 +492,7 @@ describe("M9 Model Group availability", () => {
       expect(h.selectModel).not.toHaveBeenCalled();
       expect(h.setEffort).not.toHaveBeenCalled();
       expect(h.api.modelLabel).toBe("OpenAI / Initial Model");
-      expect(h.api.effort).toBe("中");
+      expect(h.api.effort).toBe("medium");
       expect(h.api.notice).toMatchObject({ tone: "error", text: expect.stringMatching(diagnostic) });
     } finally {
       await h.app.dispose();
@@ -506,10 +506,10 @@ describe("M9 Model Group availability", () => {
       expect(h.api.currentModelIdentity).toEqual({ provider: "openai", id: "initial-model" });
       await h.api.applyPanelEvent({ type: "modelGroup", group: GROUP });
 
-      expect(h.setEffort).toHaveBeenCalledWith("高");
+      expect(h.setEffort).toHaveBeenCalledWith("high");
       expect(h.selectModel).not.toHaveBeenCalled();
       expect(h.api.modelLabel).toBe("OpenAI / Initial Model");
-      expect(h.api.effort).toBe("中");
+      expect(h.api.effort).toBe("medium");
       expect(h.api.currentModelIdentity).toEqual({ provider: "openai", id: "initial-model" });
       expect(h.api.notice).toMatchObject({ tone: "error", text: expect.stringContaining("effort write failed") });
       expect(h.app.render(120).map(stripAnsi).join("\n")).toContain("OpenAI / Initial Model");

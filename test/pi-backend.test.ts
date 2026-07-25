@@ -12,7 +12,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { PiBackend } from "../src/backend/pi-backend.js";
 import type { ChatBackendEvents } from "../src/backend/types.js";
-import type { Attachment, TranscriptMessage, UsageSnapshot } from "../src/domain/types.js";
+import type { Attachment, EffortLevel, TranscriptMessage, UsageSnapshot } from "../src/domain/types.js";
 import { PNG_1X1 } from "./helpers.js";
 
 interface FakeSessionOptions {
@@ -20,6 +20,7 @@ interface FakeSessionOptions {
   contextUsage?: () => ContextUsage | undefined;
   sessionStats?: () => SessionStats;
   compact?: () => Promise<unknown>;
+  thinkingLevels?: EffortLevel[];
 }
 
 function sessionStats(input = 0, output = 0, cost = 0): SessionStats {
@@ -58,6 +59,7 @@ function fakeSession(provider = "test", name = "Vision Model", options: FakeSess
       };
     },
     setThinkingLevel: vi.fn(),
+    getAvailableThinkingLevels: vi.fn(() => options.thinkingLevels ?? ["off", "low", "medium", "high"]),
     prompt,
     abort: vi.fn(async () => {}),
     compact: vi.fn(options.compact ?? (async () => ({}))),
@@ -69,6 +71,36 @@ function fakeSession(provider = "test", name = "Vision Model", options: FakeSess
 }
 
 describe("pi backend adapter", () => {
+  it("uses the current model's native thinking levels for Effort", async () => {
+    const fake = fakeSession("openai", "Extended Reasoning", {
+      thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+    });
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-pi-effort-levels-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+    await backend.start({
+      onMessage: vi.fn(),
+      onMessageUpdate: vi.fn(),
+      onBusy: vi.fn(),
+      onUsage: vi.fn(),
+      onNotice: vi.fn(),
+    });
+
+    await expect(backend.getEffortOptions()).resolves.toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    await backend.setEffort("max");
+    expect(fake.session.setThinkingLevel).toHaveBeenCalledWith("max");
+    await backend.dispose();
+  });
+
   it("publishes current context from getContextUsage independently of cumulative session stats", async () => {
     let cumulative = sessionStats(90_000, 12_000, 3.25);
     const fake = fakeSession("openai", "Context Model", {
@@ -276,7 +308,7 @@ describe("pi backend adapter", () => {
       path: imagePath,
       status: "ready",
     };
-    await backend.send("检查图片", { attachments: [attachment], effort: "高", behavior: "prompt" });
+    await backend.send("检查图片", { attachments: [attachment], effort: "high", behavior: "prompt" });
     const [promptText, promptOptions] = fake.prompt.mock.calls[0] ?? [];
     expect(promptText).toContain("<attachment-manifest>");
     expect(promptText).toContain("登录页");
@@ -318,6 +350,50 @@ describe("pi backend adapter", () => {
     expect(messages.at(-1)).toMatchObject({ kind: "tool", output: "token=[REDACTED]" });
   });
 
+  it("marks live thinking as streaming until thinking_end", async () => {
+    const fake = fakeSession();
+    const messages: TranscriptMessage[] = [];
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-pi-thinking-stream-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+    await backend.start({
+      onMessage: (message) => messages.push(message),
+      onMessageUpdate: (id, patch) => {
+        const index = messages.findIndex((message) => message.id === id);
+        const current = messages[index];
+        if (current) messages[index] = { ...current, ...patch } as TranscriptMessage;
+      },
+      onBusy: vi.fn(),
+      onUsage: vi.fn(),
+      onNotice: vi.fn(),
+    });
+
+    fake.emit({ type: "agent_start" } as AgentSessionEvent);
+    const partial = { role: "assistant", content: [{ type: "thinking", thinking: "正在分析" }] };
+    fake.emit({
+      type: "message_update",
+      message: partial,
+      assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial },
+    } as AgentSessionEvent);
+    expect(messages.at(-1)).toMatchObject({ kind: "thinking", text: "", streaming: true });
+
+    fake.emit({
+      type: "message_update",
+      message: partial,
+      assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "正在分析", partial },
+    } as AgentSessionEvent);
+    expect(messages.at(-1)).toMatchObject({ kind: "thinking", text: "正在分析", streaming: true });
+
+    fake.emit({
+      type: "message_update",
+      message: partial,
+      assistantMessageEvent: { type: "thinking_end", contentIndex: 0, content: "分析完成", partial },
+    } as AgentSessionEvent);
+    expect(messages.at(-1)).toMatchObject({ kind: "thinking", text: "分析完成", streaming: false });
+    await backend.dispose();
+  });
+
   it("rejects a symlink attachment instead of sending followed outside bytes", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-pi-attachment-symlink-"));
     const outside = join(cwd, "outside-private.txt");
@@ -345,7 +421,7 @@ describe("pi backend adapter", () => {
     };
 
     await expect(
-      backend.send("不得读取外部文件", { attachments: [attachment], effort: "中", behavior: "prompt" }),
+      backend.send("不得读取外部文件", { attachments: [attachment], effort: "medium", behavior: "prompt" }),
     ).rejects.toThrow();
     expect(fake.prompt).not.toHaveBeenCalled();
     await backend.dispose();

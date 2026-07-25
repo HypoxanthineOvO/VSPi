@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { DEFAULT_USAGE } from "../domain/defaults.js";
 import type { EffortLevel, TextMessage } from "../domain/types.js";
 import type {
+  CancelResult,
   ChatBackend,
   ChatBackendEvents,
   NewSessionOptions,
@@ -19,6 +20,9 @@ export class FixtureBackend implements ChatBackend {
   readonly supportsVision = true;
   private events?: ChatBackendEvents;
   private cancelled = false;
+  private running = false;
+  private steeringQueue: Array<{ text: string; options: SendOptions }> = [];
+  private followUpQueue: Array<{ text: string; options: SendOptions }> = [];
   private sessionId: string = randomUUID();
 
   async start(events: ChatBackendEvents): Promise<void> {
@@ -29,8 +33,29 @@ export class FixtureBackend implements ChatBackend {
 
   async send(text: string, options: SendOptions): Promise<SendResult> {
     if (!this.events) throw new Error("Fixture backend has not started");
+    if (this.running) {
+      const delivery = options.behavior === "followUp" ? "followUp" : "steer";
+      const queue = delivery === "followUp" ? this.followUpQueue : this.steeringQueue;
+      queue.push({ text, options });
+      this.publishQueue();
+      return { status: "queued", delivery };
+    }
     this.cancelled = false;
+    this.running = true;
     this.events.onBusy(true);
+    let current: { text: string; options: SendOptions } | undefined = { text, options };
+    while (current && !this.cancelled) {
+      await this.emitResponse(current.text, current.options);
+      current = this.steeringQueue.shift() ?? this.followUpQueue.shift();
+      this.publishQueue();
+    }
+    this.running = false;
+    this.events.onBusy(false);
+    return { status: this.cancelled ? "cancelled" : "completed" };
+  }
+
+  private async emitResponse(text: string, options: SendOptions): Promise<void> {
+    if (!this.events) return;
     const id = randomUUID();
     const attachmentNote =
       options.attachments.length > 0
@@ -56,13 +81,21 @@ export class FixtureBackend implements ChatBackend {
       await new Promise((resolve) => setTimeout(resolve, 12));
     }
     this.events.onMessageUpdate(id, { text: message.text, streaming: false });
-    this.events.onBusy(false);
-    return { status: this.cancelled ? "cancelled" : "completed" };
   }
 
-  async cancel(): Promise<void> {
+  async cancel(): Promise<CancelResult> {
+    const queuedMessages = [...this.steeringQueue, ...this.followUpQueue].map((item) => item.text);
+    this.steeringQueue = [];
+    this.followUpQueue = [];
     this.cancelled = true;
+    this.running = false;
+    this.publishQueue();
     this.events?.onBusy(false);
+    return { queuedMessages };
+  }
+
+  private publishQueue(): void {
+    this.events?.onQueueUpdate?.({ steering: this.steeringQueue.length, followUp: this.followUpQueue.length });
   }
 
   async compact(): Promise<void> {
@@ -106,7 +139,7 @@ export class FixtureBackend implements ChatBackend {
         brand: "Fixture",
         label: this.modelLabel,
         vision: true,
-        efforts: ["低", "中", "高"] as EffortLevel[],
+        efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as EffortLevel[],
         price: { inputUsdPerMillion: 0, outputUsdPerMillion: 0 },
         contextWindow: 0,
       },
@@ -131,7 +164,11 @@ export class FixtureBackend implements ChatBackend {
 
   async selectModel(provider: string, id: string) {
     if (provider !== "fixture" || id !== this.modelId) throw new Error("Fixture 仅提供 Offline Fixture 模型");
-    return { modelId: id, vision: true, contextWindow: 0, profileModelId: id, effort: "中" as const };
+    return { modelId: id, vision: true, contextWindow: 0, profileModelId: id, effort: "medium" as const };
+  }
+
+  async getEffortOptions(): Promise<EffortLevel[]> {
+    return ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
   }
 
   async setEffort(): Promise<void> {}

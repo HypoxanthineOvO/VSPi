@@ -76,8 +76,8 @@ export class AdaptiveBackend implements ChatBackend {
     return this.active.send(text, options);
   }
 
-  async cancel(): Promise<void> {
-    await this.active.cancel();
+  async cancel() {
+    return this.active.cancel();
   }
 
   async compact(options?: CompactOptions): Promise<void> {
@@ -133,6 +133,10 @@ export class AdaptiveBackend implements ChatBackend {
   async selectModel(provider: string, id: string): Promise<ModelSelectionResult> {
     if (!this.active.selectModel) throw new Error("当前后端不支持模型切换");
     return this.active.selectModel(provider, id);
+  }
+
+  async getEffortOptions(): Promise<EffortLevel[]> {
+    return this.active.getEffortOptions?.() ?? ["medium"];
   }
 
   async setEffort(level: EffortLevel): Promise<void> {

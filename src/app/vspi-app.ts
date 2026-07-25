@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { type Component, type Focusable, Key, matchesKey, TUI } from "@earendil-works/pi-tui";
 import type { AttachmentService } from "../attachments/service.js";
-import type { ChatBackend, ModelSelectionResult, NewSessionOptions } from "../backend/types.js";
-import { saveSettings } from "../config/settings.js";
+import type {
+  ChatBackend,
+  ChatQueueState,
+  ModelSelectionResult,
+  NewSessionOptions,
+  RuntimeModelOption,
+} from "../backend/types.js";
+import { loadSettingsLayers, saveSettings } from "../config/settings.js";
 import { COMPACTION_PROFILES, type CompactOptions } from "../continuity/compaction-profiles.js";
 import {
   type ActionDefinition,
@@ -12,6 +18,7 @@ import {
   resolveCommand,
 } from "../domain/commands.js";
 import { DEFAULT_USAGE } from "../domain/defaults.js";
+import { effortLabel } from "../domain/effort.js";
 import type {
   AppSettings,
   Attachment,
@@ -21,8 +28,17 @@ import type {
   UsageSnapshot,
 } from "../domain/types.js";
 import type { LocalPlanBackend, PlanBinding, PlanInput, PlanStatus, StoredPlan } from "../plans/types.js";
-import { createExecutionPolicyService, type PolicySnapshot } from "../policy/execution-policy.js";
-import { createYoloAcknowledgementBroker, type YoloAcknowledgementBroker } from "../policy/startup-runtime.js";
+import {
+  type ApprovalRequest,
+  type ApprovalResponse,
+  createExecutionPolicyService,
+  type PolicySnapshot,
+} from "../policy/execution-policy.js";
+import {
+  createYoloAcknowledgementBroker,
+  type InteractiveApprovalBroker,
+  type YoloAcknowledgementBroker,
+} from "../policy/startup-runtime.js";
 import type { EffectivePromptSegment } from "../prompts/effective-prompt.js";
 import type {
   ModelIdentity,
@@ -31,6 +47,7 @@ import type {
   PromptProfileSnapshot,
   ResolvedPromptProfile,
 } from "../prompts/types.js";
+import { renderActivityRail } from "../ui/activity.js";
 import { padLine } from "../ui/ansi.js";
 import { Composer } from "../ui/composer.js";
 import {
@@ -43,7 +60,7 @@ import { PanelController, type PanelEvent } from "../ui/panels.js";
 import { renderSplash, type StartupStatus } from "../ui/splash.js";
 import { renderStatusLines } from "../ui/status.js";
 import type { VspiTheme } from "../ui/theme.js";
-import { renderTranscript } from "../ui/transcript.js";
+import { buildTranscriptNodes, renderTranscript, type TranscriptNode } from "../ui/transcript.js";
 import { VSPI_VERSION } from "../version.js";
 import type { WorkflowAdapter, WorkflowSnapshot } from "../workflow/types.js";
 
@@ -55,6 +72,7 @@ export interface VspiAppOptions {
   providerConfigFactory?: (trustedProject: boolean) => ProviderConfigUi;
   runtimeDefaultsFactory?: (trustedProject: boolean) => RuntimeDefaultsUi;
   executionPolicy?: ExecutionPolicyUi;
+  approvalBroker?: InteractiveApprovalBroker;
   yoloAcknowledgementBroker?: YoloAcknowledgementBroker;
   planBackend?: Pick<LocalPlanBackend, "read" | "update">;
   planTaskRouter?: PlanTaskRouter;
@@ -120,6 +138,8 @@ interface ProviderConfigUi {
 
 type NoticeTone = "info" | "success" | "warning" | "error";
 
+const WORKING_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+
 interface ActiveSubmission {
   id: number;
   raw: string;
@@ -135,17 +155,31 @@ interface PendingQuestion {
   cleanup(): void;
 }
 
+interface PendingApproval {
+  resolve(response: ApprovalResponse): void;
+  reject(error: Error): void;
+  cleanup(): void;
+}
+
 export class VspiApp implements Component, Focusable {
   readonly composer: Composer;
   private tui: TUI;
   private messages: TranscriptMessage[] = [];
   private readonly panels: PanelController;
   private usage: UsageSnapshot = DEFAULT_USAGE;
-  private effort: EffortLevel = "中";
+  private effort: EffortLevel = "medium";
   private modelLabel: string;
   private busy = false;
+  private runActive = false;
+  private queueState: ChatQueueState = { steering: 0, followUp: 0 };
+  private workingFrame = 0;
+  private workingTimer: NodeJS.Timeout | undefined;
+  private workspaceFocus: "composer" | "transcript" | "plan" = "composer";
   private panelFocused = false;
   private inspectIndex: number | undefined;
+  private inspectNodeId: string | undefined;
+  private inspectToolId: string | undefined;
+  private inspectDepth: "node" | "tool" = "node";
   private nextBehavior: "prompt" | "followUp" = "prompt";
   private renameAttachmentId: string | undefined;
   private renameInput = "";
@@ -163,10 +197,13 @@ export class VspiApp implements Component, Focusable {
   private providerConfig: ProviderConfigUi | undefined;
   private providerCatalogHash: string | undefined;
   private runtimeDefaults: RuntimeDefaultsUi | undefined;
+  private startupRuntimeDefaultsDiagnostic: string | undefined;
   private currentModelIdentity: { provider: string; id: string } | undefined;
+  private modelOptions: RuntimeModelOption[] = [];
   private readonly executionPolicy: ExecutionPolicyUi;
   private readonly yoloAcknowledgementBroker: YoloAcknowledgementBroker;
   private pendingQuestion: PendingQuestion | undefined;
+  private pendingApproval: PendingApproval | undefined;
   private attachmentSessionId: string | undefined;
   private planSnapshot: StoredPlan | undefined;
   private promptProfileSnapshot: PromptProfileSnapshot | undefined;
@@ -202,6 +239,7 @@ export class VspiApp implements Component, Focusable {
         acknowledgeYolo: () => this.yoloAcknowledgementBroker.consume(),
       });
     this.panels.setPolicySnapshot(this.executionPolicy.snapshot());
+    options.approvalBroker?.setHandler((request, signal) => this.requestApproval(request, signal));
     this.modelLabel = backend.modelLabel;
     this.composer.onSubmit = (text) => void this.submit(text);
     this.composer.onChange = (text) => {
@@ -216,7 +254,7 @@ export class VspiApp implements Component, Focusable {
       await this.backend.start({
         onMessage: (message) => {
           if (this.sessionTransition) return;
-          this.messages.push(message);
+          this.messages.push(this.withThinkingDisplayDefault(message));
           this.requestRender();
         },
         onMessageUpdate: (id, patch) => {
@@ -228,8 +266,12 @@ export class VspiApp implements Component, Focusable {
         },
         onBusy: (busy) => {
           if (this.sessionTransition) return;
-          this.busy = busy;
-          if (this.renderReady) this.tui.terminal.setProgress(busy);
+          this.setBusy(busy);
+        },
+        onQueueUpdate: (queue) => {
+          if (this.sessionTransition) return;
+          this.queueState = { ...queue };
+          this.syncActivityPresentation();
           this.requestRender();
         },
         onUsage: (usage) => {
@@ -268,6 +310,7 @@ export class VspiApp implements Component, Focusable {
         ? { provider: this.backend.modelProvider, id: this.backend.modelId }
         : undefined;
       this.panels.setModels(models, groups, backendModelIdentity);
+      this.modelOptions = structuredClone(models);
       this.providerConfig = this.options.providerConfigFactory?.(this.backend.isProjectTrusted?.() ?? false);
       const catalog = await this.providerConfig?.loadCatalog();
       this.providerCatalogHash = catalog?.hash;
@@ -298,6 +341,11 @@ export class VspiApp implements Component, Focusable {
         },
         this.options.settings.bridgeEnabled,
       );
+      if (this.startupRuntimeDefaultsDiagnostic) {
+        const diagnostic = this.startupRuntimeDefaultsDiagnostic;
+        this.startupRuntimeDefaultsDiagnostic = undefined;
+        this.showNotice(diagnostic, "warning");
+      }
       this.renderReady = true;
       await this.refreshPlanSnapshot(this.sessionEpoch);
       await this.refreshWorkflowSnapshot();
@@ -319,7 +367,10 @@ export class VspiApp implements Component, Focusable {
     this.renderReady = false;
     this.yoloAcknowledgementBroker.cancel();
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
+    if (this.workingTimer) clearInterval(this.workingTimer);
     this.cancelPendingQuestion("Question cancelled because VSPi is closing");
+    this.cancelPendingApproval("Approval cancelled because VSPi is closing");
+    this.options.approvalBroker?.setHandler(undefined);
     try {
       await this.options.attachments.dispose();
     } finally {
@@ -346,19 +397,19 @@ export class VspiApp implements Component, Focusable {
       }
       return;
     }
-    if (this.inspectIndex !== undefined) {
+    if (this.workspaceFocus === "transcript") {
       this.handleInspectInput(data);
       return;
     }
     const composerState = {
-      busy: this.busy,
+      busy: this.activityActive(),
       hasMessages: this.messages.length > 0,
       composerEmpty: this.composer.getText() === "",
       commandCompletable: this.commandCompletionAvailable(),
       selectedAttachment: this.composer.selectedAttachment() !== undefined,
     };
     if (matchesInteraction("composer", "main", "cancelOrExit", data, composerState)) {
-      if (this.busy) void this.cancelGeneration();
+      if (this.activityActive()) void this.cancelGeneration();
       else this.options.onExit();
       return;
     }
@@ -388,10 +439,6 @@ export class VspiApp implements Component, Focusable {
       }
     }
     if (matchesInteraction("composer", "main", "submitFollowUp", data, composerState)) {
-      if (this.busy) {
-        this.showNotice("生成中，请等待完成后再提交", "info");
-        return;
-      }
       const text = this.composer.getText();
       if (text.trim()) {
         this.nextBehavior = "followUp";
@@ -400,15 +447,20 @@ export class VspiApp implements Component, Focusable {
       return;
     }
     if (matchesInteraction("composer", "main", "enterInspect", data, composerState)) {
-      this.inspectIndex = this.messages.length - 1;
-      this.requestRender();
+      this.focusTranscript();
       return;
     }
     if (matchesInteraction("composer", "main", "completeCommand", data, composerState) && this.completeCommandToken())
       return;
-    if (this.panels.kind === "plan" && matchesInteraction("composer", "main", "togglePlanFocus", data, composerState)) {
-      this.panelFocused = !this.panelFocused;
-      this.requestRender();
+    if (
+      this.panels.kind === "plan" &&
+      matchesInteraction("composer", "main", "cycleWorkspaceFocus", data, composerState)
+    ) {
+      this.cycleWorkspaceFocus();
+      return;
+    }
+    if (this.panels.kind === "plan" && this.panelFocused && matchesKey(data, Key.escape)) {
+      this.focusComposer();
       return;
     }
     if (this.panels.kind === "commands") {
@@ -420,12 +472,12 @@ export class VspiApp implements Component, Focusable {
       this.handlePanelInput(data);
       return;
     }
-    if (matchesKey(data, Key.tab) && composerState.composerEmpty && !composerState.hasMessages) {
-      this.showNotice("暂无消息，无法进入 Inspect", "info");
+    if (matchesInteraction("composer", "main", "interruptGeneration", data, composerState)) {
+      void this.cancelGeneration();
       return;
     }
-    if (this.busy && matchesKey(data, Key.enter)) {
-      this.showNotice("生成中，请等待完成后再提交", "info");
+    if (matchesKey(data, Key.tab) && composerState.composerEmpty && !composerState.hasMessages) {
+      this.showNotice("暂无消息，无法进入 Inspect", "info");
       return;
     }
     this.composer.handleInput(data);
@@ -475,35 +527,60 @@ export class VspiApp implements Component, Focusable {
   }
 
   render(width: number): string[] {
-    const inspectedId = this.inspectIndex === undefined ? undefined : this.messages[this.inspectIndex]?.id;
+    const transcriptFocused = this.workspaceFocus === "transcript";
     const output = renderTranscript(this.messages, width, this.theme, {
-      ...(inspectedId ? { inspectedId } : {}),
-      showThinking: this.options.settings.showThinking,
+      ...(transcriptFocused && this.inspectNodeId ? { selectedNodeId: this.inspectNodeId } : {}),
+      ...(transcriptFocused && this.inspectDepth === "tool" && this.inspectToolId
+        ? { selectedToolId: this.inspectToolId }
+        : {}),
+      thinkingDisplay: this.options.settings.thinkingDisplay,
       wrapCode: this.options.settings.wrapCode,
+      collapseCompletedTools: this.options.settings.collapseTools,
     });
     if (output.length > 0) output.push("");
     const composer = this.composer.render(width);
+    const activity = this.activityActive()
+      ? [
+          renderActivityRail(
+            {
+              indicator: this.options.settings.reducedMotion
+                ? this.theme.capabilities.unicode
+                  ? "●"
+                  : "*"
+                : this.theme.capabilities.unicode
+                  ? (WORKING_FRAMES[this.workingFrame % WORKING_FRAMES.length] ?? WORKING_FRAMES[0])
+                  : "*",
+              ...this.queueState,
+            },
+            width,
+            this.theme,
+          ),
+        ]
+      : [];
     const status = this.renderStatus(width);
     const panelRows =
-      this.tui.terminal.rows <= 24
-        ? Math.max(3, 9 - (status.length - 1))
-        : Math.min(16, Math.max(3, this.tui.terminal.rows - composer.length - 7 - status.length));
+      this.panels.kind === "approval"
+        ? Math.min(14, Math.max(3, this.tui.terminal.rows - composer.length - activity.length - status.length - 6))
+        : this.tui.terminal.rows <= 24
+          ? Math.max(3, 9 - activity.length - (status.length - 1))
+          : Math.min(16, Math.max(3, this.tui.terminal.rows - composer.length - activity.length - 7 - status.length));
     if (this.preview) {
       output.push(...this.preview.render(width));
-      output.push(this.theme.muted(padLine(this.previewLabel, width)));
+      output.push(this.notice ? this.renderNotice(width) : this.theme.muted(padLine(this.previewLabel, width)));
     } else {
       output.push(...this.panels.render(width, panelRows, this.theme, this.usage, this.panelFocused));
-      const hint =
-        this.inspectIndex === undefined
-          ? this.renderPanelHint(width)
-          : this.theme.muted(
+      const hint = this.notice
+        ? this.renderNotice(width)
+        : transcriptFocused
+          ? this.theme.muted(
               padLine(renderInteractionHint("inspect", "transcript", this.inspectInteractionState()), width),
-            );
+            )
+          : this.renderPanelHint(width);
       output.push(hint);
     }
+    output.push(...activity);
     output.push(...composer);
     output.push(...status);
-    if (this.notice) output.push(this.renderNotice(width));
     return output;
   }
 
@@ -520,10 +597,15 @@ export class VspiApp implements Component, Focusable {
 
   private async submit(raw: string, options?: { skipPlanRoute?: boolean }): Promise<void> {
     const text = raw.trim();
-    if (!text || this.busy) return;
+    if (!text) return;
+    const queuedDuringWork = this.activityActive();
     const behavior = this.nextBehavior;
     this.nextBehavior = "prompt";
     if (text.startsWith("/")) {
+      if (queuedDuringWork) {
+        this.showNotice("命令需等待当前任务结束；普通消息可直接 Enter 插入", "info");
+        return;
+      }
       const command = resolveCommand(text);
       if (!command) {
         this.showNotice(`未知命令：${text.split(/\s+/, 1)[0]}`, "error");
@@ -534,7 +616,7 @@ export class VspiApp implements Component, Focusable {
       await this.executeCommand(command, text);
       return;
     }
-    const binding = this.backend.getPlanBinding?.();
+    const binding = queuedDuringWork ? undefined : this.backend.getPlanBinding?.();
     if (binding && this.options.planBackend && this.planSnapshot?.id !== binding.planId) {
       await this.refreshPlanSnapshot(this.sessionEpoch);
       if (this.planSnapshot?.id !== binding.planId) {
@@ -563,9 +645,38 @@ export class VspiApp implements Component, Focusable {
     }
     const transcriptLength = this.messages.length;
     const attachments = this.composer.clearAttachments();
-    this.messages.push({ id: randomUUID(), role: "user", kind: "text", text, attachments });
+    const messageId = randomUUID();
+    const delivery = queuedDuringWork ? (behavior === "followUp" ? "followUp" : "steer") : undefined;
+    this.messages.push({
+      id: messageId,
+      role: "user",
+      kind: "text",
+      text,
+      attachments,
+      ...(delivery ? { delivery } : {}),
+    });
     this.composer.setText("");
     this.requestRender();
+    if (queuedDuringWork) {
+      try {
+        const result = await this.backend.send(text, { attachments, effort: this.effort, behavior });
+        this.composer.editor.addToHistory(text);
+        const mode = result?.delivery ?? delivery;
+        this.showNotice(
+          mode === "followUp" ? "已加入 Follow-up，将在当前任务完成后继续" : "已插入，将在下一次模型调用前送达",
+          "success",
+        );
+      } catch (error) {
+        this.messages = this.messages.filter((message) => message.id !== messageId);
+        const currentDraft = this.composer.getText().trim();
+        this.composer.restoreDraft([raw, currentDraft].filter(Boolean).join("\n\n"), [
+          ...attachments,
+          ...this.composer.attachments,
+        ]);
+        this.showNotice(error instanceof Error ? error.message : "排队消息发送失败", "error");
+      }
+      return;
+    }
     const submission: ActiveSubmission = {
       id: ++this.submissionId,
       raw,
@@ -575,26 +686,27 @@ export class VspiApp implements Component, Focusable {
       restored: false,
     };
     this.activeSubmission = submission;
+    this.setRunActive(true);
     try {
       const result = await this.backend.send(text, { attachments, effort: this.effort, behavior });
       if (submission.cancelled || result?.status === "cancelled") {
-        this.restoreCancelledSubmission(submission);
+        this.finalizeCancelledSubmission(submission);
         return;
       }
       this.modelLabel = this.backend.modelLabel;
       this.composer.editor.addToHistory(text);
     } catch (error) {
       if (submission.cancelled) {
-        this.restoreCancelledSubmission(submission);
+        this.finalizeCancelledSubmission(submission);
         return;
       }
-      this.busy = false;
-      this.tui.terminal.setProgress(false);
+      this.setBusy(false);
       this.messages.splice(transcriptLength);
       this.composer.restoreDraft(raw, pendingAttachments);
       this.showNotice(error instanceof Error ? error.message : "消息发送失败", "error");
     } finally {
       if (this.activeSubmission?.id === submission.id) this.activeSubmission = undefined;
+      if (!submission.cancelled) this.setRunActive(false);
     }
   }
 
@@ -608,9 +720,9 @@ export class VspiApp implements Component, Focusable {
     }
     const policy = this.executionPolicy.snapshot();
     const mode =
-      this.inspectIndex !== undefined
+      this.workspaceFocus === "transcript"
         ? "Inspect"
-        : this.panelFocused
+        : this.workspaceFocus === "plan"
           ? "Plan"
           : policy.recovery
             ? "Recovery"
@@ -622,7 +734,8 @@ export class VspiApp implements Component, Focusable {
         usage: this.usage,
         modelLabel: this.modelLabel,
         effort: this.effort,
-        busy: this.busy,
+        // Runtime activity has a dedicated rail above the composer; keep telemetry free of duplicate busy text.
+        busy: false,
         backend: runtime.backend,
         policy: runtime.policy,
         boundary: runtime.boundary,
@@ -651,8 +764,45 @@ export class VspiApp implements Component, Focusable {
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
     this.noticeTimer = setTimeout(() => {
       this.notice = undefined;
+      this.noticeTimer = undefined;
       this.requestRender();
     }, 3500);
+    this.requestRender();
+  }
+
+  private setBusy(busy: boolean): void {
+    this.busy = busy;
+    this.syncActivityPresentation();
+  }
+
+  private setRunActive(active: boolean): void {
+    this.runActive = active;
+    if (active && this.workspaceFocus === "plan") {
+      this.workspaceFocus = "composer";
+      this.panelFocused = false;
+      this.inspectIndex = undefined;
+    }
+    this.syncActivityPresentation();
+  }
+
+  private activityActive(): boolean {
+    return this.runActive || this.busy || this.queueState.steering + this.queueState.followUp > 0;
+  }
+
+  private syncActivityPresentation(): void {
+    const active = this.activityActive();
+    if (active && !this.workingTimer && !this.options.settings.reducedMotion) {
+      this.workingTimer = setInterval(() => {
+        this.workingFrame = (this.workingFrame + 1) % WORKING_FRAMES.length;
+        this.requestRender();
+      }, 240);
+      this.workingTimer.unref();
+    } else if (!active && this.workingTimer) {
+      clearInterval(this.workingTimer);
+      this.workingTimer = undefined;
+      this.workingFrame = 0;
+    }
+    if (this.renderReady) this.tui.terminal.setProgress(active);
     this.requestRender();
   }
 
@@ -714,26 +864,28 @@ export class VspiApp implements Component, Focusable {
       return;
     }
     if (action.handler === "effort") {
-      const levels: EffortLevel[] = ["低", "中", "高"];
-      const next = levels[(levels.indexOf(this.effort) + 1) % levels.length] ?? "中";
       try {
-        if (!this.backend.setEffort) throw new Error("当前后端不支持 Effort 切换");
-        await this.backend.setEffort(next);
-        this.effort = next;
-        await this.persistRuntimeDefaults();
-        this.panels.close();
+        const currentModel = this.currentModelIdentity
+          ? this.modelOptions.find(
+              (model) =>
+                model.provider === this.currentModelIdentity?.provider && model.id === this.currentModelIdentity.id,
+            )
+          : undefined;
+        const levels = (await this.backend.getEffortOptions?.()) ?? currentModel?.efforts ?? ["off"];
+        this.panels.openEffort(this.effort, levels);
       } catch (error) {
-        this.showNotice(`Effort 切换失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+        this.showNotice(`Effort 读取失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
       }
       return;
     }
     if (action.handler === "models") this.panels.open("models");
     else if (action.handler === "providers") this.panels.open("providers");
+    else if (action.handler === "tools") this.panels.open("tools");
     else if (action.handler === "plan") {
       if (this.options.workflowAdapter) await this.refreshWorkflowSnapshot();
       else await this.refreshPlanSnapshot(this.sessionEpoch);
       this.panels.open("plan");
-      this.panelFocused = true;
+      this.focusPlan();
     } else if (action.handler === "prompt") {
       await this.executePromptCommand(raw);
     } else if (action.handler === "sessions") {
@@ -743,13 +895,22 @@ export class VspiApp implements Component, Focusable {
       } catch (error) {
         this.showNotice(`会话读取失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
       }
-    } else if (action.handler === "settings" || action.handler === "thinkingSettings") this.panels.open("settings");
-    else if (action.handler === "usage") this.panels.open("usage");
+    } else if (action.handler === "settings" || action.handler === "thinkingSettings") {
+      try {
+        const layers = await loadSettingsLayers(this.options.cwd, undefined, {
+          trustedProject: this.backend.isProjectTrusted?.() ?? false,
+        });
+        this.panels.setSettingsLayers(layers);
+        this.panels.open("settings");
+      } catch (error) {
+        this.showNotice(`设置读取失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+      }
+    } else if (action.handler === "usage") this.panels.open("usage");
     else if (action.handler === "policy") {
       this.panels.setPolicySnapshot(this.executionPolicy.snapshot());
       this.panels.open("policy");
     } else if (action.handler === "theme") this.panels.open("theme");
-    if (action.handler !== "plan") this.panelFocused = false;
+    if (action.handler !== "plan") this.focusComposer();
     this.requestRender();
   }
 
@@ -786,6 +947,12 @@ export class VspiApp implements Component, Focusable {
     }
     if (event.type === "close") {
       if (this.composer.getText() === "/") this.composer.setText("");
+      if (this.pendingApproval) {
+        const pending = this.pendingApproval;
+        this.pendingApproval = undefined;
+        pending.cleanup();
+        pending.resolve({ type: "deny", reason: "Approval cancelled by user" });
+      }
       if (this.pendingQuestion) this.cancelPendingQuestion("Question cancelled by user");
       if (this.pendingRouteSubmission) {
         this.composer.setText(this.pendingRouteSubmission.raw);
@@ -795,7 +962,7 @@ export class VspiApp implements Component, Focusable {
       this.composer.setText("");
       await this.executeCommand(event.command, event.command.label);
     } else if (event.type === "model") {
-      if (this.busy) {
+      if (this.activityActive()) {
         this.showNotice("生成中，请等待完成后再切换模型", "warning");
         this.requestRender();
         return;
@@ -807,13 +974,15 @@ export class VspiApp implements Component, Focusable {
         this.currentModelIdentity = { provider: event.model.provider, id: selected.modelId };
         this.effort = selected.effort;
         this.panels.confirmModelSelection({ provider: event.model.provider, id: selected.modelId });
-        await this.persistRuntimeDefaults();
+        const defaultsSaved = await this.persistRuntimeDefaults();
         this.panels.close();
+        if (defaultsSaved)
+          this.showNotice(`模型已切换为 ${this.modelLabel} · Effort ${effortLabel(this.effort)}`, "success");
       } catch (error) {
         this.showNotice(`模型切换失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
       }
     } else if (event.type === "modelGroup") {
-      if (this.busy) {
+      if (this.activityActive()) {
         this.showNotice("生成中，请等待完成后再切换模型", "warning");
         this.requestRender();
         return;
@@ -843,8 +1012,10 @@ export class VspiApp implements Component, Focusable {
         this.effort = role.effort;
         this.panels.confirmModelSelection(this.currentModelIdentity);
         this.panels.confirmModelGroupSelection(event.group.id);
-        await this.persistRuntimeDefaults();
+        const defaultsSaved = await this.persistRuntimeDefaults();
         this.panels.close();
+        if (defaultsSaved)
+          this.showNotice(`模型组已切换为 ${event.group.label} · Effort ${effortLabel(this.effort)}`, "success");
       } catch (error) {
         this.showNotice(`模型组切换失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
       }
@@ -900,20 +1071,39 @@ export class VspiApp implements Component, Focusable {
         this.showNotice(`会话分支失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
       }
     } else if (event.type === "settings") {
-      this.options.settings = { ...event.settings };
       try {
         const path = await saveSettings(this.options.cwd, event.settings, undefined, {
           trustedProject: this.backend.isProjectTrusted?.() ?? false,
         });
-        this.showNotice(`设置已保存到 ${path}`, "success");
+        this.panels.confirmSettings(event.settings);
+        if (this.options.settings.scope === event.settings.scope) {
+          this.options.settings = { ...event.settings };
+          this.applyThinkingDisplay(event.settings.thinkingDisplay);
+        }
+        this.panels.close();
+        this.showNotice(`${event.settings.scope === "global" ? "全局" : "项目"}设置已保存到 ${path}`, "success");
       } catch (error) {
         this.showNotice(`设置保存失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
       }
+    } else if (event.type === "effort") {
+      try {
+        if (!this.backend.setEffort) throw new Error("当前后端不支持 Effort 切换");
+        await this.backend.setEffort(event.effort);
+        this.effort = event.effort;
+        const defaultsSaved = await this.persistRuntimeDefaults();
+        this.panels.close();
+        if (defaultsSaved) this.showNotice(`Effort 已切换为 ${effortLabel(event.effort)}`, "success");
+      } catch (error) {
+        this.showNotice(`Effort 切换失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+      }
+    } else if (event.type === "approval") {
+      const pending = this.pendingApproval;
+      this.pendingApproval = undefined;
+      pending?.cleanup();
+      pending?.resolve(event.response);
+      this.panels.close();
     } else if (event.type === "policyChange") {
       try {
-        if (event.policy === "YOLO" && !event.requiresAcknowledgement) {
-          throw new Error("YOLO Host 高风险模式缺少 Panel 明确确认");
-        }
         const snapshot = await this.executionPolicy.switchPolicy(event.policy);
         this.panels.setPolicySnapshot(snapshot);
         this.showNotice(`Policy 已切换为 ${snapshot.policy} · ${snapshot.boundary}`, "success");
@@ -933,7 +1123,7 @@ export class VspiApp implements Component, Focusable {
       const routed = this.pendingRouteSubmission;
       this.pendingRouteSubmission = undefined;
       if (routed) {
-        if (this.busy) this.composer.setText(routed.raw);
+        if (this.activityActive()) this.composer.setText(routed.raw);
         else void this.submit(routed.raw, { skipPlanRoute: true });
       }
     } else if (event.type === "planEdit") {
@@ -1222,6 +1412,41 @@ export class VspiApp implements Component, Focusable {
     pending.reject(error);
   }
 
+  private requestApproval(request: ApprovalRequest, signal?: AbortSignal): Promise<ApprovalResponse> {
+    if (this.pendingApproval) return Promise.resolve({ type: "deny", reason: "Another approval is already active" });
+    return new Promise<ApprovalResponse>((resolve, reject) => {
+      const abort = () => {
+        if (!this.pendingApproval) return;
+        this.pendingApproval = undefined;
+        if (this.panels.kind === "approval") this.panels.close();
+        const error = new Error("Approval cancelled");
+        error.name = "AbortError";
+        reject(error);
+        this.requestRender();
+      };
+      signal?.addEventListener("abort", abort, { once: true });
+      this.pendingApproval = {
+        resolve,
+        reject,
+        cleanup: () => signal?.removeEventListener("abort", abort),
+      };
+      this.panels.openApproval(request);
+      this.requestRender();
+      if (signal?.aborted) abort();
+    });
+  }
+
+  private cancelPendingApproval(message: string): void {
+    const pending = this.pendingApproval;
+    if (!pending) return;
+    this.pendingApproval = undefined;
+    pending.cleanup();
+    if (this.panels.kind === "approval") this.panels.close();
+    const error = new Error(message);
+    error.name = "AbortError";
+    pending.reject(error);
+  }
+
   private async runProviderProbe(
     providerId: string,
     mode: "check-config" | "test-connection" | "minimal-generation",
@@ -1236,75 +1461,235 @@ export class VspiApp implements Component, Focusable {
     }
   }
 
-  private async persistRuntimeDefaults(): Promise<void> {
-    if (!this.runtimeDefaults) return;
+  private async persistRuntimeDefaults(): Promise<boolean> {
+    if (!this.runtimeDefaults || this.backend.kind !== "pi") return true;
     try {
-      const path = await this.runtimeDefaults.save(this.options.settings.scope, {
+      await this.runtimeDefaults.save(this.options.settings.scope, {
         ...(this.currentModelIdentity ? { model: this.currentModelIdentity } : {}),
         effort: this.effort,
       });
-      this.showNotice(`${this.options.settings.scope} 默认 Model/Effort 已保存到 ${path}`, "success");
+      return true;
     } catch (error) {
       this.showNotice(
         `当前选择已生效，但默认配置未保存：${error instanceof Error ? error.message : "未知错误"}`,
         "warning",
       );
+      return false;
     }
   }
 
   private async applyRuntimeDefaults(): Promise<void> {
     const defaults = await this.runtimeDefaults?.load();
     if (!defaults) return;
+    const diagnostics = [...defaults.diagnostics];
     if (defaults.value.model && this.backend.kind === "pi") {
-      if (!this.backend.selectModel) throw new Error("当前后端不支持默认模型选择");
-      await this.backend.selectModel(defaults.value.model.provider, defaults.value.model.id);
-      this.currentModelIdentity = { ...defaults.value.model };
-      this.modelLabel = this.backend.modelLabel;
-      this.panels.confirmModelSelection(defaults.value.model);
+      const identity = `${defaults.value.model.provider}/${defaults.value.model.id}`;
+      try {
+        if (!this.backend.selectModel) throw new Error("当前后端不支持默认模型选择");
+        await this.backend.selectModel(defaults.value.model.provider, defaults.value.model.id);
+        this.currentModelIdentity = { ...defaults.value.model };
+        this.modelLabel = this.backend.modelLabel;
+        this.panels.confirmModelSelection(defaults.value.model);
+      } catch (error) {
+        diagnostics.push(
+          `默认模型 ${identity} 当前不可用，已保留 ${this.modelLabel}：${error instanceof Error ? error.message : "未知错误"}`,
+        );
+      }
     }
-    if (this.backend.setEffort) await this.backend.setEffort(defaults.value.effort);
-    this.effort = defaults.value.effort;
-    if (defaults.diagnostics.length > 0) this.showNotice(defaults.diagnostics[0] ?? "默认配置诊断", "warning");
+    if (this.backend.setEffort) {
+      try {
+        const levels = await this.backend.getEffortOptions?.();
+        if (levels && !levels.includes(defaults.value.effort)) {
+          diagnostics.push(`默认 Effort ${effortLabel(defaults.value.effort)} 不受当前模型支持，已保留当前档位`);
+        } else {
+          await this.backend.setEffort(defaults.value.effort);
+          this.effort = defaults.value.effort;
+        }
+      } catch (error) {
+        diagnostics.push(`默认 Effort 未应用：${error instanceof Error ? error.message : "未知错误"}`);
+      }
+    }
+    if (diagnostics.length > 0) {
+      const diagnostic = diagnostics.slice(0, 2).join("；");
+      if (this.renderReady) this.showNotice(diagnostic, "warning");
+      else this.startupRuntimeDefaultsDiagnostic = diagnostic;
+    }
+  }
+
+  private focusComposer(): void {
+    this.workspaceFocus = "composer";
+    this.panelFocused = false;
+    this.inspectIndex = undefined;
+    this.requestRender();
+  }
+
+  private focusPlan(): void {
+    this.workspaceFocus = "plan";
+    this.panelFocused = true;
+    this.inspectIndex = undefined;
+    this.requestRender();
+  }
+
+  private focusTranscript(): boolean {
+    const nodes = buildTranscriptNodes(this.messages);
+    if (nodes.length === 0) {
+      this.showNotice("暂无消息，无法进入 Transcript", "info");
+      return false;
+    }
+
+    this.workspaceFocus = "transcript";
+    this.panelFocused = false;
+    const selected =
+      nodes.find((node) => node.id === this.inspectNodeId) ??
+      nodes.find((node) => this.inspectIndex !== undefined && node.messageIndexes.includes(this.inspectIndex)) ??
+      nodes.at(-1);
+    if (!selected) return false;
+    this.inspectNodeId = selected.id;
+    const selectedToolIndex = selected.messageIndexes.find(
+      (index) => this.messages[index]?.kind === "tool" && this.messages[index]?.id === this.inspectToolId,
+    );
+    if (selected.kind !== "toolGroup" || this.inspectDepth !== "tool" || selectedToolIndex === undefined) {
+      this.inspectDepth = "node";
+      this.inspectToolId = undefined;
+      this.inspectIndex = selected.messageIndexes[0];
+    } else {
+      this.inspectIndex = selectedToolIndex;
+    }
+    this.requestRender();
+    return true;
+  }
+
+  private cycleWorkspaceFocus(): void {
+    if (this.workspaceFocus === "composer") {
+      if (buildTranscriptNodes(this.messages).length > 0) this.focusTranscript();
+      else this.focusPlan();
+      return;
+    }
+    if (this.workspaceFocus === "transcript") {
+      this.focusPlan();
+      return;
+    }
+    this.focusComposer();
   }
 
   private handleInspectInput(data: string): void {
     if (matchesInteraction("composer", "main", "cancelOrExit", data)) {
-      if (this.busy) void this.cancelGeneration();
+      if (this.activityActive()) void this.cancelGeneration();
       else this.options.onExit();
       return;
     }
     const interaction = matchingInteraction("inspect", "transcript", data, this.inspectInteractionState());
     if (!interaction) return;
     if (interaction.handler === "closeInspect") {
-      this.inspectIndex = undefined;
+      this.focusComposer();
+      return;
+    }
+    if (interaction.handler === "cycleWorkspaceFocus") {
+      this.focusPlan();
+      return;
+    }
+
+    const nodes = buildTranscriptNodes(this.messages);
+    const nodeIndex = nodes.findIndex((node) => node.id === this.inspectNodeId);
+    const selectedNode = nodes[nodeIndex];
+    if (!selectedNode) {
+      this.focusTranscript();
+      return;
+    }
+
+    if (this.inspectDepth === "tool" && selectedNode.kind === "toolGroup") {
+      this.handleToolInspectInput(data, selectedNode);
       this.requestRender();
       return;
     }
-    if (interaction.handler === "moveInspect" && matchesKey(data, Key.up)) {
-      this.inspectIndex = Math.max(0, (this.inspectIndex ?? 0) - 1);
-    } else if (interaction.handler === "moveInspect" && matchesKey(data, Key.down)) {
-      this.inspectIndex = Math.min(this.messages.length - 1, (this.inspectIndex ?? 0) + 1);
-    } else {
-      const message = this.messages[this.inspectIndex ?? -1];
-      if ((matchesKey(data, Key.left) || matchesKey(data, Key.right) || matchesKey(data, Key.enter)) && message) {
-        if (message.kind === "thinking" || message.kind === "tool") {
-          const expand =
-            matchesKey(data, Key.right) ||
-            (matchesKey(data, Key.enter) && (message.kind === "thinking" ? message.collapsed : !message.expanded));
-          if (message.kind === "thinking") message.collapsed = !expand;
-          else message.expanded = expand;
+
+    if (interaction.handler === "moveInspect") {
+      const offset = matchesKey(data, Key.up) ? -1 : 1;
+      const next = nodes[Math.max(0, Math.min(nodes.length - 1, nodeIndex + offset))];
+      if (next) {
+        this.inspectNodeId = next.id;
+        this.inspectToolId = undefined;
+        this.inspectDepth = "node";
+        this.inspectIndex = next.messageIndexes[0];
+      }
+    } else if (interaction.handler === "toggleInspectItem") {
+      const message = this.messages[selectedNode.messageIndexes[0] ?? -1];
+      if (selectedNode.kind === "toolGroup" && (matchesKey(data, Key.right) || matchesKey(data, Key.enter))) {
+        const firstTool = selectedNode.messageIndexes
+          .map((index) => this.messages[index])
+          .find((candidate) => candidate?.kind === "tool");
+        if (firstTool?.kind === "tool") {
+          this.inspectDepth = "tool";
+          this.inspectToolId = firstTool.id;
+          this.inspectIndex = selectedNode.messageIndexes.find((index) => this.messages[index]?.id === firstTool.id);
         }
+      } else if (message?.kind === "thinking") {
+        if (matchesKey(data, Key.right)) message.collapsed = false;
+        else if (matchesKey(data, Key.left)) message.collapsed = true;
+        else if (matchesKey(data, Key.enter)) message.collapsed = !message.collapsed;
       }
     }
     this.requestRender();
   }
 
+  private handleToolInspectInput(data: string, node: TranscriptNode): void {
+    const toolIndexes = node.messageIndexes.filter((index) => this.messages[index]?.kind === "tool");
+    if (toolIndexes.length === 0) {
+      this.inspectDepth = "node";
+      this.inspectToolId = undefined;
+      this.inspectIndex = node.messageIndexes[0];
+      return;
+    }
+    const currentIndex = Math.max(
+      0,
+      toolIndexes.findIndex((index) => this.messages[index]?.id === this.inspectToolId),
+    );
+    if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
+      const offset = matchesKey(data, Key.up) ? -1 : 1;
+      const nextIndex = toolIndexes[Math.max(0, Math.min(toolIndexes.length - 1, currentIndex + offset))];
+      const next = this.messages[nextIndex ?? -1];
+      if (next?.kind === "tool") {
+        this.inspectToolId = next.id;
+        this.inspectIndex = nextIndex;
+      }
+      return;
+    }
+
+    const messageIndex = toolIndexes[currentIndex];
+    const message = this.messages[messageIndex ?? -1];
+    if (message?.kind !== "tool") return;
+    if (matchesKey(data, Key.right)) message.expanded = true;
+    else if (matchesKey(data, Key.enter)) message.expanded = !message.expanded;
+    else if (matchesKey(data, Key.left)) {
+      if (message.expanded) message.expanded = false;
+      else {
+        this.inspectDepth = "node";
+        this.inspectToolId = undefined;
+        this.inspectIndex = node.messageIndexes[0];
+      }
+    }
+  }
+
   private inspectInteractionState(): InteractionState {
-    const selected = this.messages[this.inspectIndex ?? -1];
+    const nodes = buildTranscriptNodes(this.messages);
+    const selectedNode = nodes.find((node) => node.id === this.inspectNodeId);
+    const selected = this.messages[selectedNode?.messageIndexes[0] ?? -1];
     return {
-      hasItems: selected !== undefined,
-      expandable: selected?.kind === "thinking" || selected?.kind === "tool",
+      hasItems: nodes.length > 0,
+      expandable: this.inspectDepth === "tool" || selectedNode?.kind === "toolGroup" || selected?.kind === "thinking",
+      inspectDepth: this.inspectDepth,
     };
+  }
+
+  private withThinkingDisplayDefault(message: TranscriptMessage): TranscriptMessage {
+    if (message.kind !== "thinking") return message;
+    return { ...message, collapsed: this.options.settings.thinkingDisplay !== "expanded" };
+  }
+
+  private applyThinkingDisplay(mode: AppSettings["thinkingDisplay"]): void {
+    for (const message of this.messages) {
+      if (message.kind === "thinking") message.collapsed = mode !== "expanded";
+    }
   }
 
   private async pasteAttachment(): Promise<void> {
@@ -1319,14 +1704,22 @@ export class VspiApp implements Component, Focusable {
     const submission = this.activeSubmission;
     if (submission) submission.cancelled = true;
     try {
-      await this.backend.cancel();
+      const result = await this.backend.cancel();
+      const queuedMessages = result?.queuedMessages ?? [];
+      if (queuedMessages.length > 0) this.restoreCancelledQueue(queuedMessages);
+      this.showNotice(
+        queuedMessages.length > 0
+          ? `已中断当前运行，并将 ${queuedMessages.length} 条排队消息放回输入框`
+          : "已中断当前运行；Session、消息和部分输出已保留",
+        "info",
+      );
     } catch (error) {
       this.showNotice(`取消生成失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
     } finally {
-      if (submission) this.restoreCancelledSubmission(submission);
+      if (submission) this.finalizeCancelledSubmission(submission);
       else {
-        this.busy = false;
-        this.tui.terminal.setProgress(false);
+        this.setRunActive(false);
+        this.setBusy(false);
       }
     }
   }
@@ -1334,6 +1727,7 @@ export class VspiApp implements Component, Focusable {
   private resetSessionState(): number {
     this.sessionEpoch += 1;
     this.cancelPendingQuestion("Question cancelled because the session changed");
+    this.cancelPendingApproval("Approval cancelled because the session changed");
     if (this.activeSubmission) {
       this.activeSubmission.cancelled = true;
       this.activeSubmission.restored = true;
@@ -1341,8 +1735,15 @@ export class VspiApp implements Component, Focusable {
     }
     this.messages = [];
     this.usage = DEFAULT_USAGE;
-    this.busy = false;
+    this.queueState = { steering: 0, followUp: 0 };
+    this.runActive = false;
+    this.setBusy(false);
+    this.workspaceFocus = "composer";
+    this.panelFocused = false;
     this.inspectIndex = undefined;
+    this.inspectNodeId = undefined;
+    this.inspectToolId = undefined;
+    this.inspectDepth = "node";
     this.nextBehavior = "prompt";
     this.pendingRouteSubmission = undefined;
     this.composer.restoreDraft("", []);
@@ -1367,14 +1768,37 @@ export class VspiApp implements Component, Focusable {
     }
   }
 
-  private restoreCancelledSubmission(submission: ActiveSubmission): void {
+  private finalizeCancelledSubmission(submission: ActiveSubmission): void {
     if (submission.restored) return;
     submission.restored = true;
-    this.messages.splice(submission.transcriptLength);
-    this.composer.restoreDraft(submission.raw, submission.attachments);
-    this.busy = false;
-    this.tui.terminal.setProgress(false);
-    this.requestRender();
+    this.setRunActive(false);
+    this.setBusy(false);
+  }
+
+  private restoreCancelledQueue(queuedMessages: string[]): void {
+    const restoredAttachments: Attachment[] = [];
+    for (const queued of queuedMessages) {
+      const message = [...this.messages]
+        .reverse()
+        .find(
+          (candidate) =>
+            candidate.kind === "text" &&
+            candidate.role === "user" &&
+            (candidate.delivery === "steer" || candidate.delivery === "followUp") &&
+            queued.startsWith(candidate.text),
+        );
+      if (message?.kind === "text") {
+        message.delivery = "cancelled";
+        restoredAttachments.push(...(message.attachments ?? []));
+      }
+    }
+    const currentDraft = this.composer.getText().trim();
+    const attachments = [...restoredAttachments, ...this.composer.attachments].filter(
+      (attachment, index, all) => all.findIndex((candidate) => candidate.id === attachment.id) === index,
+    );
+    this.composer.restoreDraft([...queuedMessages, currentDraft].filter(Boolean).join("\n\n"), attachments);
+    this.queueState = { steering: 0, followUp: 0 };
+    this.syncActivityPresentation();
   }
 
   private async removeAttachment(id: string): Promise<void> {
@@ -1387,7 +1811,7 @@ export class VspiApp implements Component, Focusable {
 
   private handleRenameInput(data: string): void {
     if (matchesInteraction("composer", "main", "cancelOrExit", data)) {
-      if (this.busy) void this.cancelGeneration();
+      if (this.activityActive()) void this.cancelGeneration();
       else this.options.onExit();
       return;
     }

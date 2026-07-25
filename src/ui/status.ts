@@ -1,4 +1,5 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { effortLabel } from "../domain/effort.js";
 import type { EffortLevel, UsageSnapshot } from "../domain/types.js";
 import { padLine, stripAnsi, visibleWidth } from "./ansi.js";
 import type { VspiTheme } from "./theme.js";
@@ -9,6 +10,11 @@ export interface StatusLineInput {
   modelLabel: string;
   effort: EffortLevel;
   busy: boolean;
+  working?: {
+    indicator: string;
+    steering: number;
+    followUp: number;
+  };
   mode?: string;
   backend?: "Pi" | "Fixture";
   policy?: string;
@@ -100,10 +106,26 @@ function variableField(prefix: string, variable: string, suffix: string, width: 
 }
 
 function effortField(input: StatusLineInput, theme: VspiTheme, compact = false): string {
-  const parts = [value(input.effort, theme)];
-  if (!compact && input.busy) parts.push(theme.warning("生成中"));
+  const parts = [value(effortLabel(input.effort), theme)];
+  if (input.busy) {
+    if (input.working) {
+      const queued = input.working.steering + input.working.followUp;
+      const working = compact
+        ? `W${input.working.indicator}${queued > 0 ? queued : ""}`
+        : [
+            `Working ${input.working.indicator}`,
+            input.working.steering ? `插入 ${input.working.steering}` : "",
+            input.working.followUp ? `后续 ${input.working.followUp}` : "",
+          ]
+            .filter(Boolean)
+            .join(" · ");
+      parts.push(theme.warning(working));
+    } else if (!compact) {
+      parts.push(theme.warning("生成中"));
+    }
+  }
   if (!compact && input.mode) parts.push(theme.blue(input.mode));
-  return `${label("Effort", "warning", theme)}${join(parts, " · ", theme)}`;
+  return `${label("Effort", "warning", theme)}${join(parts, compact ? " " : " · ", theme)}`;
 }
 
 function modelEffortField(input: StatusLineInput, width: number, theme: VspiTheme, compact = false): string {

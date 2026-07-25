@@ -20,6 +20,7 @@ export interface WorkflowMilestoneSnapshot {
 export interface WorkflowSnapshot {
   status: WorkflowAdapterStatus;
   diagnostic: string;
+  projection?: { scope: "workspace"; access: "read-only" };
   identity?: WorkflowBundleIdentity;
   workspaceId?: string;
   delivery?: {

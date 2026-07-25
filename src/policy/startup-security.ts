@@ -33,7 +33,7 @@ export function resolveStartupSecurity(input: {
     resourceScope: recovery ? "global-only" : "workspace",
     projectSettings: trustedProject,
     extensions: !recovery,
-    workflowAdapter: !recovery,
+    workflowAdapter: !recovery && input.argv.includes("--workflow"),
   };
 }
 
