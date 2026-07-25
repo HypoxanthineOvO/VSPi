@@ -1,5 +1,3 @@
-image: node:22-bookworm-slim
-
 workflow:
   rules:
     - if: '$CI_COMMIT_TAG'
@@ -18,9 +16,12 @@ default:
         - package-lock.json
     paths:
       - .npm/
+      - node-v22.22.3-linux-x64/
 
 variables:
   npm_config_cache: "$CI_PROJECT_DIR/.npm"
+  NODE_ARCHIVE_SHA256: "2e5d13569282d016861fae7c8f935e741693c269101a5bebcf761a5376d1f99f"
+  NODE_VERSION: "22.22.3"
 
 stages:
   - verify
@@ -28,8 +29,19 @@ stages:
 verify:
   stage: verify
   before_script:
-    - node --version
-    - npm --version
+    - |
+      set -eu
+      NODE_ARCHIVE="node-v${NODE_VERSION}-linux-x64.tar.xz"
+      NODE_HOME="$CI_PROJECT_DIR/node-v${NODE_VERSION}-linux-x64"
+      if [ ! -x "$NODE_HOME/bin/node" ]; then
+        curl --proto '=https' --tlsv1.2 -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${NODE_ARCHIVE}"
+        echo "${NODE_ARCHIVE_SHA256}  ${NODE_ARCHIVE}" | sha256sum -c -
+        tar -xJf "$NODE_ARCHIVE"
+        rm "$NODE_ARCHIVE"
+      fi
+      export PATH="$NODE_HOME/bin:$PATH"
+      node --version
+      npm --version
     - npm ci --ignore-scripts --no-audit --no-fund
   script:
     - npm run check
