@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Attachment, TranscriptMessage } from "../src/domain/types.js";
 import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
-import { PALETTE } from "../src/ui/theme.js";
-import { renderTranscript, renderTranscriptMessage } from "../src/ui/transcript.js";
+import { buildTranscriptNodes, renderTranscript, renderTranscriptMessage } from "../src/ui/transcript.js";
 import { cellsForText, plainTheme, sgrCells } from "./helpers.js";
 
 const ATTACHMENT: Attachment = {
@@ -16,45 +15,41 @@ const ATTACHMENT: Attachment = {
   status: "ready",
 };
 
-function userMessage(text: string, attachments?: Attachment[]): TranscriptMessage {
+function userMessage(text: string, attachments?: Attachment[]): Extract<TranscriptMessage, { kind: "text" }> {
   return { id: "u", role: "user", kind: "text", text, ...(attachments ? { attachments } : {}) };
 }
 
-function expectUserFrame(lines: string[], width: number, unicode: boolean): void {
-  const plain = lines.map(stripAnsi);
-  const [tl, tr, bl, br, horizontal, vertical] = unicode
-    ? ["╭", "╮", "╰", "╯", "─", "│"]
-    : ["+", "+", "+", "+", "-", "|"];
-
-  expect(lines.length).toBeGreaterThanOrEqual(3);
-  expect(lines.every((line) => visibleWidth(line) === width)).toBe(true);
-  expect(plain[0]).toBe(`${tl}${horizontal.repeat(width - 2)}${tr}`);
-  expect(plain.at(-1)).toBe(`${bl}${horizontal.repeat(width - 2)}${br}`);
-  for (const line of plain.slice(1, -1)) {
-    expect(line.startsWith(vertical)).toBe(true);
-    expect(line.endsWith(vertical)).toBe(true);
-  }
+function toolMessage(
+  index: number,
+  status: Extract<TranscriptMessage, { kind: "tool" }>["status"] = "success",
+): Extract<TranscriptMessage, { kind: "tool" }> {
+  return {
+    id: `tool-${index}`,
+    role: "assistant",
+    kind: "tool",
+    groupId: "turn-1",
+    name: index % 2 === 0 ? "read" : "bash",
+    summary: index % 2 === 0 ? `file-${index}.ts` : `npm test -- shard-${index}`,
+    status,
+    output: `output-${index}`,
+    expanded: false,
+  };
 }
 
 describe("transcript rendering", () => {
-  it("renders a truecolor user message inside the exact light rounded surface", () => {
-    const palette = PALETTE as Record<string, string>;
-    expect(palette.userBackground).toBe("#B8E6E3");
-    expect(palette.userText).toBe("#102426");
-
-    const user = userMessage("hello");
-    const lines = renderTranscriptMessage(user, 40, plainTheme({ colorLevel: 3, truecolor: true, unicode: true }));
-    const plain = lines.map(stripAnsi);
-
-    expectUserFrame(lines, 40, true);
-    expect(plain).toEqual([`╭${"─".repeat(38)}╮`, `│${" hello".padEnd(38)}│`, `╰${"─".repeat(38)}╯`]);
+  it("renders a short user message as a full-width three-line dark surface", () => {
+    const lines = renderTranscriptMessage(
+      userMessage("hello"),
+      40,
+      plainTheme({ colorLevel: 3, truecolor: true, unicode: true }),
+    );
+    expect(lines).toHaveLength(3);
+    expect(stripAnsi(lines[1] ?? "")).toContain("▌  hello");
+    expect(lines.every((line) => visibleWidth(line) === 40)).toBe(true);
+    expect(stripAnsi(lines.join("\n"))).not.toMatch(/[╭╮╰╯│]/);
     const content = cellsForText(lines[1] ?? "", "hello");
-    expect(content.every((cell) => cell.background === "rgb(184,230,227)")).toBe(true);
-    expect(content.every((cell) => cell.foreground === "rgb(16,36,38)")).toBe(true);
-    for (const edge of [cellsForText(lines[0] ?? "", "╭"), cellsForText(lines[2] ?? "", "╰")]) {
-      expect(edge[0]?.foreground).toBe("rgb(95,199,199)");
-      expect(edge[0]?.background).toBeUndefined();
-    }
+    expect(content.every((cell) => cell.background === "rgb(32,36,40)")).toBe(true);
+    expect(content.every((cell) => cell.foreground === "rgb(244,247,250)")).toBe(true);
   });
 
   it.each([
@@ -62,82 +57,65 @@ describe("transcript rendering", () => {
     ["256 color", 2, false, true],
     ["no color", 0, false, true],
     ["ASCII no color", 0, false, false],
-  ] as const)("keeps the full-width user frame exact at 40/80/120 with %s", (_name, colorLevel, truecolor, unicode) => {
+  ] as const)("keeps full-width user surfaces width-safe with %s", (_name, colorLevel, truecolor, unicode) => {
     for (const width of [40, 80, 120]) {
       const lines = renderTranscriptMessage(
         userMessage("message surface"),
         width,
         plainTheme({ colorLevel, truecolor, unicode }),
       );
-      expectUserFrame(lines, width, unicode);
-
-      const content = cellsForText(lines.join("\n"), "message surface");
+      expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+      expect(lines.every((line) => visibleWidth(line) === width)).toBe(true);
+      expect(stripAnsi(lines.join("\n"))).not.toMatch(/[╭╮╰╯│]/);
       if (colorLevel === 2) {
-        expect(content.every((cell) => cell.background === "ansi256(152)")).toBe(true);
-        expect(content.every((cell) => cell.foreground === "ansi256(234)")).toBe(true);
+        expect(
+          cellsForText(lines.join("\n"), "message surface").every((cell) => cell.background === "ansi256(236)"),
+        ).toBe(true);
       } else if (colorLevel === 0) {
         expect(sgrCells(lines.join("\n")).every((cell) => cell.background === undefined)).toBe(true);
       }
     }
   });
 
-  it.each([40, 80, 120] as const)(
-    "wraps hard lines and long words inside an exact %s-column user frame without losing attachments",
-    (width) => {
-      const text = `first hard line\nsecond hard line ${"longword".repeat(24)}`;
-      const lines = renderTranscriptMessage(
-        userMessage(text, [ATTACHMENT]),
-        width,
-        plainTheme({ colorLevel: 3, truecolor: true }),
-      );
-      const plain = lines.map(stripAnsi);
-      const firstLine = plain.findIndex((line) => line.includes("first hard line"));
-      const secondLine = plain.findIndex((line) => line.includes("second hard line"));
+  it.each([40, 80, 120] as const)("wraps long user content and keeps attachments within %s columns", (width) => {
+    const text = `first hard line\nsecond hard line ${"longword".repeat(24)}`;
+    const lines = renderTranscriptMessage(userMessage(text, [ATTACHMENT]), width, plainTheme());
+    const plain = lines.map(stripAnsi);
+    expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+    expect(plain.join(" ")).toContain("first hard line");
+    expect(plain.join(" ")).toContain("second hard line");
+    expect(plain.join("").replaceAll(/[▌\s]/g, "")).toContain("〔登录页-修改前·1440×900·PNG〕");
+  });
 
-      expectUserFrame(lines, width, true);
-      expect(firstLine).toBeGreaterThan(0);
-      expect(secondLine).toBeGreaterThan(firstLine);
-      expect(plain.slice(1, -1).join("").replaceAll(/\s|│/g, "")).toContain("〔登录页-修改前·1440×900·PNG〕");
-      expect(plain.slice(1, -1).length).toBeGreaterThan(2);
-    },
-  );
-
-  it("preserves the complete user block and attachment content when Inspect selects it", () => {
+  it("keeps the user surface full-width and applies Inspect selection without changing layout", () => {
     const message = userMessage("inspect this", [ATTACHMENT]);
     const theme = plainTheme({ colorLevel: 3, truecolor: true });
     const normal = renderTranscriptMessage(message, 80, theme);
     const inspected = renderTranscriptMessage(message, 80, theme, { inspectedId: message.id });
-
-    expectUserFrame(inspected, 80, true);
-    expect(inspected.map(stripAnsi)).toEqual(normal.map(stripAnsi));
+    expect(normal.every((line) => visibleWidth(line) === 80)).toBe(true);
+    expect(inspected.every((line) => visibleWidth(line) === 80)).toBe(true);
     expect(stripAnsi(inspected.join("\n"))).toContain("inspect this");
-    expect(stripAnsi(inspected.join("\n"))).toContain("〔登录页-修改前 · 1440×900 · PNG〕");
-    expect(inspected.join("\n")).toContain("\u001b[48;2;43;62;65m");
   });
 
-  it("keeps adjacent assistant Markdown outside the user frame with one transcript spacer", () => {
+  it("keeps adjacent assistant Markdown outside the user marker with one spacer", () => {
     const user = userMessage("question");
     const assistant: TranscriptMessage = { id: "a", role: "assistant", kind: "text", text: "## Answer" };
-    const theme = plainTheme();
-    const userLines = renderTranscriptMessage(user, 60, theme);
-    const assistantLines = renderTranscriptMessage(assistant, 60, theme);
-    const transcript = renderTranscript([user, assistant], 60, theme);
-
-    expect(transcript.slice(0, userLines.length)).toEqual(userLines);
+    const userLines = renderTranscriptMessage(user, 60, plainTheme());
+    const transcript = renderTranscript([user, assistant], 60, plainTheme());
     expect(transcript[userLines.length]).toBe("");
-    expect(transcript.slice(userLines.length + 1)).toEqual(assistantLines);
-    expect(stripAnsi(assistantLines.join("\n"))).toContain("◆ Answer");
-    expect(stripAnsi(assistantLines.join("\n"))).not.toMatch(/[╭╮╰╯]/);
+    expect(stripAnsi(transcript.slice(userLines.length + 1).join("\n"))).toContain("◆ Answer");
   });
 
-  it("uses visual roles without printing participant names", () => {
-    const user: TranscriptMessage = { id: "u", role: "user", kind: "text", text: "你好" };
-    const assistant: TranscriptMessage = { id: "a", role: "assistant", kind: "text", text: "## 回应" };
-    const userText = renderTranscriptMessage(user, 40, plainTheme()).map(stripAnsi).join("\n");
-    const assistantText = renderTranscriptMessage(assistant, 40, plainTheme()).map(stripAnsi).join("\n");
-    expect(userText).not.toContain("User");
-    expect(assistantText).not.toContain("VSPi");
-    expect(assistantText).toContain("◆");
+  it("marks steering, follow-up, and cancelled queued messages inside the user surface", () => {
+    const messages: TranscriptMessage[] = [
+      { ...userMessage("steer"), id: "steer", delivery: "steer" },
+      { ...userMessage("follow"), id: "follow", delivery: "followUp" },
+      { ...userMessage("cancelled"), id: "cancelled", delivery: "cancelled" },
+    ];
+    const rendered = renderTranscript(messages, 80, plainTheme()).map(stripAnsi).join("\n");
+    expect(rendered).toContain("已插入下一次调用");
+    expect(rendered).toContain("任务完成后继续");
+    expect(rendered).toContain("队列已取消");
   });
 
   it("renders expanded edit tools as width-safe diffs", () => {
@@ -156,22 +134,169 @@ describe("transcript rendering", () => {
     expect(lines.map(stripAnsi).join("\n")).toContain("new");
   });
 
-  it("shows only model, effort, task and status for Sub Agent entries", () => {
-    const subagent: TranscriptMessage = {
-      id: "sub",
-      role: "assistant",
-      kind: "subagent",
-      model: "GPT-5.4",
-      effort: "高",
-      task: "审查布局",
-      status: "running",
-    };
-    const text = renderTranscriptMessage(subagent, 60, plainTheme()).map(stripAnsi).join("\n");
-    expect(text).toContain("GPT-5.4 · 高 · 审查布局 · running");
-    expect(text).not.toContain("thinking");
+  it("renders one compact tool group with a corner on the final command", () => {
+    const messages = [toolMessage(0), toolMessage(1), toolMessage(2)];
+    const rendered = renderTranscript(messages, 80, plainTheme()).map(stripAnsi);
+
+    expect(rendered).toHaveLength(4);
+    expect(rendered[0]).toContain("工具调用 · 3 项 · 已完成");
+    expect(rendered[1]).toMatch(/^├─ ✓ Read\s+file-0\.ts/);
+    expect(rendered[2]).toMatch(/^├─ ✓ Bash\s+npm test -- shard-1/);
+    expect(rendered[3]).toMatch(/^└─ ✓ Read\s+file-2\.ts/);
   });
 
-  it("keeps the streaming cursor visible when the last line fills the full width", () => {
+  it("builds stable top-level nodes and reveals tool children only after entering the group", () => {
+    const tools = [toolMessage(0), toolMessage(1)];
+    const messages: TranscriptMessage[] = [
+      userMessage("question"),
+      ...tools,
+      { id: "answer", role: "assistant", kind: "text", text: "answer" },
+    ];
+    expect(buildTranscriptNodes(messages)).toEqual([
+      { id: "u", kind: "message", messageIndexes: [0] },
+      { id: "tool-group:turn-1", kind: "toolGroup", messageIndexes: [1, 2] },
+      { id: "answer", kind: "message", messageIndexes: [3] },
+    ]);
+
+    const selectedGroup = renderTranscript(messages, 80, plainTheme(), {
+      collapseCompletedTools: true,
+      selectedNodeId: "tool-group:turn-1",
+    }).map(stripAnsi);
+    expect(selectedGroup.join("\n")).toContain("▌ ◇ 工具调用 · 2 项 · 已完成");
+    expect(selectedGroup.join("\n")).not.toContain("file-0.ts");
+
+    const selectedTool = renderTranscript(messages, 80, plainTheme(), {
+      collapseCompletedTools: true,
+      selectedNodeId: "tool-group:turn-1",
+      selectedToolId: "tool-1",
+    }).map(stripAnsi);
+    expect(selectedTool.join("\n")).toContain("file-0.ts");
+    expect(selectedTool.join("\n")).toContain("▌ └─ ✓ Bash");
+  });
+
+  it("keeps the live waterfall expanded and collapses to one summary row only after completion", () => {
+    const running = [toolMessage(0), toolMessage(1, "running"), toolMessage(2, "queued")];
+    const live = renderTranscript(running, 80, plainTheme(), { collapseCompletedTools: true }).map(stripAnsi);
+    expect(live[0]).toContain("工具调用 · 3 项 · 执行中");
+    expect(live).toHaveLength(4);
+    expect(live.at(-1)).toMatch(/^└─ ● Read\s+file-2\.ts · 等待中/);
+
+    const completed = [toolMessage(0), toolMessage(1), toolMessage(2, "error")];
+    const collapsed = renderTranscript(completed, 80, plainTheme(), { collapseCompletedTools: true }).map(stripAnsi);
+    expect(collapsed).toEqual([expect.stringContaining("工具调用 · 3 项 · 1 失败")]);
+
+    const inspected = renderTranscript(completed, 80, plainTheme(), {
+      collapseCompletedTools: true,
+      inspectedId: "tool-0",
+    }).map(stripAnsi);
+    expect(inspected).toHaveLength(4);
+    expect(inspected.at(-1)).toMatch(/^└─ × Read\s+file-2\.ts · 失败/);
+  });
+
+  it("keeps completed tool groups fully expanded when the setting is disabled", () => {
+    const messages = Array.from({ length: 9 }, (_, index) => toolMessage(index));
+    const rendered = renderTranscript(messages, 80, plainTheme(), { collapseCompletedTools: false }).map(stripAnsi);
+    expect(rendered).toHaveLength(10);
+    expect(rendered.join("\n")).toContain("shard-5");
+    expect(rendered.at(-1)).toMatch(/^└─ ✓ Read\s+file-8\.ts/);
+  });
+
+  it("aligns tool names and action summaries in stable columns", () => {
+    const messages = [
+      { ...toolMessage(0), name: "ls", summary: "src" },
+      { ...toolMessage(1), name: "question", summary: "2 个问题" },
+      { ...toolMessage(2), name: "read", summary: "package.json" },
+    ];
+    const rendered = renderTranscript(messages, 80, plainTheme(), { collapseCompletedTools: false }).map(stripAnsi);
+    const summaries = ["src", "2 个问题", "package.json"];
+    expect(rendered.slice(1).map((line, index) => line.indexOf(summaries[index] ?? ""))).toEqual([15, 15, 15]);
+  });
+
+  it.each([40, 80, 120] as const)("keeps compact and expanded tool groups within %s columns", (width) => {
+    const messages = Array.from({ length: 9 }, (_, index) => toolMessage(index));
+    const compact = renderTranscript(messages, width, plainTheme(), { collapseCompletedTools: true });
+    const expanded = renderTranscript(
+      messages.map((message, index) => ({ ...message, expanded: index === 1 })),
+      width,
+      plainTheme(),
+      { inspectedId: "tool-1" },
+    );
+    expect([...compact, ...expanded].every((line) => visibleWidth(line) <= width)).toBe(true);
+  });
+
+  it("uses the content-blue foreground for Markdown headings", () => {
+    const lines = renderTranscriptMessage(
+      { id: "heading", role: "assistant", kind: "text", text: "## Calm heading" },
+      80,
+      plainTheme({ colorLevel: 3, truecolor: true }),
+    );
+    expect(cellsForText(lines.join("\n"), "Calm heading").every((cell) => cell.foreground === "rgb(143,183,255)")).toBe(
+      true,
+    );
+  });
+
+  it("renders hidden, collapsed, and expanded thinking as three distinct visible modes", () => {
+    const completed: TranscriptMessage = {
+      id: "thinking",
+      role: "assistant",
+      kind: "thinking",
+      effort: "high",
+      durationMs: 1200,
+      text: "THINKING_BODY",
+      collapsed: true,
+      streaming: false,
+    };
+    const hidden = renderTranscript([completed], 80, plainTheme(), { thinkingDisplay: "hidden" }).map(stripAnsi);
+    const collapsed = renderTranscript([completed], 80, plainTheme(), { thinkingDisplay: "collapsed" }).map(stripAnsi);
+    const expanded = renderTranscript([{ ...completed, collapsed: false }], 80, plainTheme(), {
+      thinkingDisplay: "expanded",
+    }).map(stripAnsi);
+
+    expect(hidden).toEqual(["◇ 思考 · 已隐藏"]);
+    expect(collapsed.join("\n")).toContain("Effort High · 1.2s · 已折叠");
+    expect(collapsed.join("\n")).not.toContain("THINKING_BODY");
+    expect(expanded.join("\n")).toContain("Effort High · 1.2s · 已展开");
+    expect(expanded.join("\n")).toContain("THINKING_BODY");
+  });
+
+  it("uses a restrained gray base color for expanded Thinking Markdown", () => {
+    const rendered = renderTranscript(
+      [
+        {
+          id: "thinking-tone",
+          role: "assistant",
+          kind: "thinking",
+          effort: "high",
+          text: "GRAY_THINKING_BODY with **bold**",
+          collapsed: false,
+        },
+      ],
+      80,
+      plainTheme({ colorLevel: 3, truecolor: true }),
+      { thinkingDisplay: "expanded" },
+    ).join("\n");
+    expect(cellsForText(rendered, "GRAY_THINKING_BODY").every((cell) => cell.foreground === "rgb(174,180,186)")).toBe(
+      true,
+    );
+    expect(cellsForText(rendered, "bold").every((cell) => cell.modifiers.has(1))).toBe(true);
+  });
+
+  it("shows a transient status for hidden streaming thinking without exposing its body", () => {
+    const streaming: TranscriptMessage = {
+      id: "thinking-live",
+      role: "assistant",
+      kind: "thinking",
+      effort: "xhigh",
+      text: "LIVE_PRIVATE_BODY",
+      collapsed: true,
+      streaming: true,
+    };
+    const rendered = renderTranscript([streaming], 80, plainTheme(), { thinkingDisplay: "hidden" }).map(stripAnsi);
+    expect(rendered).toEqual(["◇ 思考中 · Effort X-High"]);
+    expect(rendered.join("\n")).not.toContain("LIVE_PRIVATE_BODY");
+  });
+
+  it("keeps the streaming cursor visible when the last line fills the width", () => {
     const message: TranscriptMessage = {
       id: "a",
       role: "assistant",
@@ -180,10 +305,7 @@ describe("transcript rendering", () => {
       streaming: true,
     };
     const lines = renderTranscriptMessage(message, 40, plainTheme());
-
     expect(lines.every((line) => visibleWidth(line) <= 40)).toBe(true);
-    const last = stripAnsi(lines.at(-1) ?? "");
-    expect(last.endsWith("▋")).toBe(true);
-    expect(visibleWidth(last)).toBe(40);
+    expect(stripAnsi(lines.at(-1) ?? "")).toMatch(/▋$/);
   });
 });

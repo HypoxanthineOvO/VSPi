@@ -9,11 +9,11 @@ describe("M3 runtime Model/Effort defaults", () => {
     const home = await mkdtemp(join(tmpdir(), "vspi-m3-defaults-home-"));
     const cwd = await mkdtemp(join(tmpdir(), "vspi-m3-defaults-project-"));
     const service = createRuntimeDefaultsService({ cwd, home, trustedProject: true });
-    await service.save("global", { model: { provider: "openai", id: "global-model" }, effort: "低" });
-    await service.save("project", { model: { provider: "anthropic", id: "project-model" }, effort: "高" });
+    await service.save("global", { model: { provider: "openai", id: "global-model" }, effort: "low" });
+    await service.save("project", { model: { provider: "anthropic", id: "project-model" }, effort: "high" });
 
     expect(await service.load()).toMatchObject({
-      value: { model: { provider: "anthropic", id: "project-model" }, effort: "高" },
+      value: { model: { provider: "anthropic", id: "project-model" }, effort: "high" },
       diagnostics: [],
     });
   });
@@ -22,28 +22,38 @@ describe("M3 runtime Model/Effort defaults", () => {
     const home = await mkdtemp(join(tmpdir(), "vspi-m3-untrusted-home-"));
     const cwd = await mkdtemp(join(tmpdir(), "vspi-m3-untrusted-project-"));
     const trusted = createRuntimeDefaultsService({ cwd, home, trustedProject: true });
-    await trusted.save("global", { model: { provider: "openai", id: "global-model" }, effort: "中" });
-    await trusted.save("project", { model: { provider: "google", id: "ignored-project-model" }, effort: "高" });
+    await trusted.save("global", { model: { provider: "openai", id: "global-model" }, effort: "medium" });
+    await trusted.save("project", { model: { provider: "google", id: "ignored-project-model" }, effort: "high" });
     const untrusted = createRuntimeDefaultsService({ cwd, home, trustedProject: false });
 
     expect((await untrusted.load()).value).toEqual({
       model: { provider: "openai", id: "global-model" },
-      effort: "中",
+      effort: "medium",
     });
-    await expect(untrusted.save("project", { effort: "低" })).rejects.toThrow(/trust|拒绝/i);
+    await expect(untrusted.save("project", { effort: "low" })).rejects.toThrow(/trust|拒绝/i);
   });
 
   it("reports damaged defaults and falls back without leaking file contents", async () => {
     const home = await mkdtemp(join(tmpdir(), "vspi-m3-damaged-home-"));
     const cwd = await mkdtemp(join(tmpdir(), "vspi-m3-damaged-project-"));
     const service = createRuntimeDefaultsService({ cwd, home, trustedProject: true });
-    await service.save("global", { effort: "低" });
-    await service.save("project", { effort: "高" });
+    await service.save("global", { effort: "low" });
+    await service.save("project", { effort: "high" });
     await writeFile(service.paths.project, "{ DAMAGED_DEFAULT_SECRET");
 
     const loaded = await service.load();
-    expect(loaded.value).toEqual({ effort: "低" });
+    expect(loaded.value).toEqual({ effort: "low" });
     expect(loaded.diagnostics.join(" ")).toMatch(/runtime-defaults\.json|无效|JSON/i);
     expect(loaded.diagnostics.join(" ")).not.toContain("DAMAGED_DEFAULT_SECRET");
+  });
+
+  it("migrates legacy Chinese effort values to Pi-native levels on read", async () => {
+    const home = await mkdtemp(join(tmpdir(), "vspi-m3-legacy-effort-home-"));
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-m3-legacy-effort-project-"));
+    const service = createRuntimeDefaultsService({ cwd, home, trustedProject: false });
+    await service.save("global", { effort: "low" });
+    await writeFile(service.paths.global, `${JSON.stringify({ effort: "中" })}\n`);
+
+    expect((await service.load()).value).toEqual({ effort: "medium" });
   });
 });

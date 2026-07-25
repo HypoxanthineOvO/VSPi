@@ -1,4 +1,5 @@
-export type EffortLevel = "低" | "中" | "高";
+export const EFFORT_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
 
 export interface UsageSnapshot {
   contextTokens: number | null;
@@ -32,6 +33,7 @@ export interface TextMessage {
   text: string;
   streaming?: boolean;
   attachments?: Attachment[];
+  delivery?: "steer" | "followUp" | "cancelled";
 }
 
 export interface ThinkingMessage {
@@ -42,12 +44,14 @@ export interface ThinkingMessage {
   durationMs?: number;
   text: string;
   collapsed: boolean;
+  streaming?: boolean;
 }
 
 export interface ToolMessage {
   id: string;
   role: "assistant";
   kind: "tool";
+  groupId?: string;
   name: string;
   summary: string;
   status: "queued" | "running" | "success" | "error" | "cancelled";
@@ -145,7 +149,8 @@ export interface AppSettings {
   scope: "global" | "project";
   theme: "VSPi Dark" | "VSPi Light" | "Terminal";
   reducedMotion: boolean;
-  showThinking: boolean;
+  thinkingDisplay: "hidden" | "collapsed" | "expanded";
   wrapCode: boolean;
+  collapseTools: boolean;
   bridgeEnabled: boolean;
 }

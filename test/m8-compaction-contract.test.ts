@@ -10,6 +10,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { PiBackend } from "../src/backend/pi-backend.js";
 import type { ChatBackendEvents } from "../src/backend/types.js";
+import { createLocalPlanBackend } from "../src/plans/local-plan-backend.js";
 
 type ProfileId = "pi-native" | "execution-continuity" | "research-decisions" | "custom";
 
@@ -55,6 +56,7 @@ async function harness(compactImpl?: (instructions?: string) => Promise<unknown>
   const managers: SessionManager[] = [];
   const backend = new PiBackend({
     cwd,
+    planBackend: createLocalPlanBackend({ rootDir: join(cwd, "compatibility-plans") }),
     sessionFactory: async (manager: SessionManager) => {
       managers.push(manager);
       return {

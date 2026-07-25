@@ -35,6 +35,7 @@ describe("responsive layout", () => {
       "usage",
       "theme",
       "question",
+      "tools",
     ];
     for (const width of [40, 80, 120]) {
       for (const kind of kinds) {

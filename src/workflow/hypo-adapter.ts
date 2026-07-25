@@ -23,6 +23,7 @@ export function createHypoWorkflowAdapter(input: {
         last = {
           status: "ready",
           diagnostic: "Workflow Core ready",
+          projection: { scope: "workspace", access: "read-only" },
           identity: { ...input.loaded.identity },
           delivery: {
             id: text(objectRef.id, "Delivery id"),
@@ -41,6 +42,7 @@ export function createHypoWorkflowAdapter(input: {
         last = {
           status: uninitialized ? "uninitialized" : "error",
           diagnostic: uninitialized ? "Workflow 未初始化；请显式运行 /hw:init" : boundedDiagnostic(message),
+          projection: { scope: "workspace", access: "read-only" },
           identity: { ...input.loaded.identity },
         };
         return structuredClone(last);

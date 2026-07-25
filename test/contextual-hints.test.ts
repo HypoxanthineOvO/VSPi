@@ -46,7 +46,7 @@ function backendWithInspectableMessage(): ChatBackend {
         id: "inspect-thinking",
         role: "assistant",
         kind: "thinking",
-        effort: "高",
+        effort: "high",
         text: "可展开的思考内容",
         collapsed: true,
       });
@@ -117,7 +117,7 @@ describe("contextual panel hints", () => {
   it.each([
     ["plan", undefined, "Shift+Tab"],
     ["commands", "/", COMMAND_HINT],
-    ["models", "/model", "Tab"],
+    ["models", "/model", "Enter"],
     ["providers", "/providers", "Enter"],
     ["empty sessions", "/sessions", "Esc 关闭"],
     ["settings", "/settings", "Tab"],
@@ -149,7 +149,7 @@ describe("contextual panel hints", () => {
 
     expect(hint).toContain("Shift+S");
     expect(hint).toContain("Enter");
-    expect(rendered).toContain("第 1/1");
+    expect(rendered).toContain("Question 1 / 1");
   });
 
   it("keeps the command scroll footer and literal hint visible together", async () => {
@@ -165,6 +165,30 @@ describe("contextual panel hints", () => {
     }
   });
 
+  it("temporarily replaces the fixed hint row without changing layout height", async () => {
+    const result = await renderPanel(undefined);
+    const before = result.app.render(80).map(stripAnsi);
+    const beforeHint = contextualRow(before).hint;
+    vi.useFakeTimers();
+    try {
+      (result.app as unknown as { showNotice(text: string, tone: "success"): void }).showNotice(
+        "已保存到 /workspace/.vspi/settings.json",
+        "success",
+      );
+      const notified = result.app.render(80).map(stripAnsi);
+      expect(notified).toHaveLength(before.length);
+      expect(contextualRow(notified).hint).toContain("已保存到 /workspace/.vspi/settings.json");
+
+      vi.advanceTimersByTime(3500);
+      const restored = result.app.render(80).map(stripAnsi);
+      expect(restored).toHaveLength(before.length);
+      expect(contextualRow(restored).hint).toBe(beforeHint);
+    } finally {
+      vi.useRealTimers();
+      await result.app.dispose();
+    }
+  });
+
   it("switches the rendered contextual hint to the Inspect transcript registry after empty-composer Tab", async () => {
     const result = await renderPanel(undefined, backendWithInspectableMessage());
     try {
@@ -176,16 +200,16 @@ describe("contextual panel hints", () => {
       const row = contextualRow(inspected);
       const expected = renderInteractionHint("inspect", "transcript", {
         hasItems: true,
-        cancellable: false,
-        retryable: false,
+        expandable: true,
+        inspectDepth: "node",
       });
 
       expect(inspected.join("\n")).toContain("Inspect");
       expect(row.hint).toBe(expected);
-      expect(row.hint).toContain("Esc 关闭");
+      expect(row.hint).toContain("Esc 返回输入");
       expect(row.hint).toContain("↑↓ 选择");
-      expect(row.hint).toContain("←→ 折叠/展开");
-      expect(row.hint).not.toContain("Shift+Tab");
+      expect(row.hint).toContain("Enter/→ 进入/展开");
+      expect(row.hint).toContain("Shift+Tab 进入 Plan");
 
       result.app.handleInput("\u001b[C");
       expect(result.app.render(80).map(stripAnsi).join("\n")).toContain("已展开");

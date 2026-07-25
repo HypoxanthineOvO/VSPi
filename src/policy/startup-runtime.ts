@@ -1,9 +1,30 @@
 import {
+  type ApprovalRequest,
+  type ApprovalResponse,
   createExecutionPolicyService,
   type ExecutionPolicyService,
   type PolicyAction,
   type PolicyLevel,
 } from "./execution-policy.js";
+
+export interface InteractiveApprovalBroker {
+  request(request: ApprovalRequest, signal?: AbortSignal): Promise<ApprovalResponse>;
+  setHandler(
+    handler: ((request: ApprovalRequest, signal?: AbortSignal) => Promise<ApprovalResponse>) | undefined,
+  ): void;
+}
+
+export function createInteractiveApprovalBroker(): InteractiveApprovalBroker {
+  let handler: ((request: ApprovalRequest, signal?: AbortSignal) => Promise<ApprovalResponse>) | undefined;
+  return {
+    request(request, signal) {
+      return handler?.(request, signal) ?? Promise.resolve({ type: "deny", reason: "Approval UI is unavailable" });
+    },
+    setHandler(next) {
+      handler = next;
+    },
+  };
+}
 
 export type YoloAcknowledgementSource = "tui" | "cli-startup";
 
@@ -41,7 +62,7 @@ export async function createStartupPolicyRuntime(options: {
       networkAllowlist: string[];
     }>;
   };
-  approvalBroker?: (action: unknown) => Promise<boolean>;
+  approvalBroker?: (request: ApprovalRequest, signal?: AbortSignal) => Promise<ApprovalResponse | boolean>;
   acknowledgeYolo?: () => Promise<boolean>;
   workflowAuthority?: (action: PolicyAction) => Promise<boolean>;
 }): Promise<ExecutionPolicyService> {
@@ -51,16 +72,24 @@ export async function createStartupPolicyRuntime(options: {
   const service = createExecutionPolicyService({
     workspace: options.workspace,
     recovery,
-    policy: policy === "YOLO" ? "Standard" : policy,
+    policy,
     networkAllowlist: recovery ? [] : config.networkAllowlist,
-    approval: recovery ? async () => false : async (action) => (await options.approvalBroker?.(action)) ?? false,
+    approval: recovery
+      ? async () => ({ type: "deny", reason: "Recovery does not grant elevated tool approval" })
+      : async (request, signal) =>
+          (await options.approvalBroker?.(request, signal)) ?? {
+            type: "deny",
+            reason: "Approval UI is unavailable",
+          },
     acknowledgeYolo: recovery ? async () => false : async () => (await options.acknowledgeYolo?.()) ?? false,
     workflowAuthority: recovery
       ? async () => false
       : async (action) => (await options.workflowAuthority?.(action)) ?? false,
   });
-  if (policy === "YOLO" && !recovery) await service.switchPolicy("YOLO");
   return service;
 }
 
-export type StartupApprovalBroker = (action: PolicyAction) => Promise<boolean>;
+export type StartupApprovalBroker = (
+  request: ApprovalRequest,
+  signal?: AbortSignal,
+) => Promise<ApprovalResponse | boolean>;

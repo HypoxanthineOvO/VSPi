@@ -19,6 +19,7 @@ export type ActionHandler =
   | "thinkingSettings"
   | "effort"
   | "policy"
+  | "tools"
   | "usage"
   | "theme"
   | "quit";
@@ -88,7 +89,7 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
   },
   {
     id: "plan",
-    aliases: [],
+    aliases: ["workflow"],
     label: "/plan",
     description: "查看 Workflow Plan",
     group: "VSPi",
@@ -120,6 +121,15 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
     description: "设置思考强度",
     group: "VSPi",
     handler: "effort",
+    availability: "enabled",
+  },
+  {
+    id: "tools",
+    aliases: ["capabilities"],
+    label: "/tools",
+    description: "查看工具与集成边界",
+    group: "VSPi",
+    handler: "tools",
     availability: "enabled",
   },
   {

@@ -13,7 +13,7 @@ const PI_STATUS = {
   model: "OpenAI / GPT-5.4",
   backend: "Pi" as const,
   policy: "Standard",
-  boundary: "Sandboxed" as const,
+  boundary: "Host" as const,
   version: "9.8.7-test",
 };
 const DYNAMIC_MARKERS = ["当前计划为空", "输入消息", PI_STATUS.model] as const;

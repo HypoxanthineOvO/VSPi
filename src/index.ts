@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { ProcessTerminal, type Terminal, TUI } from "@earendil-works/pi-tui";
 import { shutdownInteractiveSession, startUiAfterSplash } from "./app/startup.js";
@@ -13,13 +12,13 @@ import { AdaptiveBackend, type BackendMode } from "./backend/adaptive-backend.js
 import { createRuntimeDefaultsService } from "./config/runtime-defaults.js";
 import { loadSettings } from "./config/settings.js";
 import type { TranscriptMessage } from "./domain/types.js";
-import { createLocalPlanBackend } from "./plans/local-plan-backend.js";
-import { createDefaultPlanTaskRouter } from "./plans/task-router.js";
 import { createPolicyConfigService } from "./policy/config-service.js";
 import type { ExecutionPolicyService } from "./policy/execution-policy.js";
 import {
+  createInteractiveApprovalBroker,
   createStartupPolicyRuntime,
   createYoloAcknowledgementBroker,
+  type InteractiveApprovalBroker,
   type YoloAcknowledgementBroker,
 } from "./policy/startup-runtime.js";
 import { resolveStartupSecurity, type StartupSecuritySnapshot } from "./policy/startup-security.js";
@@ -52,7 +51,8 @@ class HeadlessTerminal implements Terminal {
 
 async function renderOnce(): Promise<void> {
   const workspace = process.cwd();
-  const { security, executionPolicy, yoloAcknowledgementBroker, workflowAdapter } = await startupPolicy(workspace);
+  const { security, executionPolicy, approvalBroker, yoloAcknowledgementBroker, workflowAdapter } =
+    await startupPolicy(workspace);
   const terminal = new HeadlessTerminal();
   const tui = new TUI(terminal);
   const settings = await loadSettings(workspace, undefined, { trustedProject: security.trustedProject });
@@ -60,7 +60,6 @@ async function renderOnce(): Promise<void> {
   const capabilities = applySettingsToCapabilities(detected, settings);
   const theme = createTheme(capabilities);
   const attachments = new AttachmentService(randomUUID(), capabilities, theme);
-  const planBackend = createLocalPlanBackend({ rootDir: join(getAgentDir(), "vspi-local-plans") });
   const promptProfileService = createPromptProfileService({
     cwd: workspace,
     home: process.env.HOME ?? homedir(),
@@ -73,7 +72,7 @@ async function renderOnce(): Promise<void> {
     security.trustedProject,
     security.recovery,
     executionPolicy,
-    planBackend,
+    undefined,
     { resolve: async (identity) => promptProfileService.resolve(identity) },
     { continueRecent: startupSessionMode().continueRecent },
   );
@@ -82,6 +81,7 @@ async function renderOnce(): Promise<void> {
     settings,
     attachments,
     executionPolicy,
+    approvalBroker,
     yoloAcknowledgementBroker,
     providerConfigFactory: (trustedProject) =>
       createProviderConfigService({
@@ -91,8 +91,6 @@ async function renderOnce(): Promise<void> {
         builtins: BUILTIN_PROVIDERS,
       }),
     runtimeDefaultsFactory: (trustedProject) => createRuntimeDefaultsService({ cwd: workspace, trustedProject }),
-    planBackend,
-    planTaskRouter: createDefaultPlanTaskRouter(),
     workflowAdapter,
     promptProfiles: promptProfileService,
     onExit() {},
@@ -122,7 +120,8 @@ async function interactive(): Promise<void> {
     throw new Error("VSPi interactive mode requires a TTY. Use --render-once for a non-interactive smoke render.");
   }
   const workspace = process.cwd();
-  const { security, executionPolicy, yoloAcknowledgementBroker, workflowAdapter } = await startupPolicy(workspace);
+  const { security, executionPolicy, approvalBroker, yoloAcknowledgementBroker, workflowAdapter } =
+    await startupPolicy(workspace);
   const terminal = new ProcessTerminal();
   const tui = new TUI(terminal, true);
   const settings = await loadSettings(workspace, undefined, { trustedProject: security.trustedProject });
@@ -130,7 +129,6 @@ async function interactive(): Promise<void> {
   const theme = createTheme(capabilities);
   let closing = false;
   const mode = resolveBackendMode();
-  const planBackend = createLocalPlanBackend({ rootDir: join(getAgentDir(), "vspi-local-plans") });
   const promptProfileService = createPromptProfileService({
     cwd: workspace,
     home: process.env.HOME ?? homedir(),
@@ -144,7 +142,7 @@ async function interactive(): Promise<void> {
     security.trustedProject,
     security.recovery,
     executionPolicy,
-    planBackend,
+    undefined,
     { resolve: async (identity) => promptProfileService.resolve(identity) },
     { continueRecent: sessionMode.continueRecent },
   );
@@ -154,6 +152,7 @@ async function interactive(): Promise<void> {
     settings,
     attachments,
     executionPolicy,
+    approvalBroker,
     yoloAcknowledgementBroker,
     providerConfigFactory: (trustedProject) =>
       createProviderConfigService({
@@ -163,8 +162,6 @@ async function interactive(): Promise<void> {
         builtins: BUILTIN_PROVIDERS,
       }),
     runtimeDefaultsFactory: (trustedProject) => createRuntimeDefaultsService({ cwd: workspace, trustedProject }),
-    planBackend,
-    planTaskRouter: createDefaultPlanTaskRouter(),
     workflowAdapter,
     promptProfiles: promptProfileService,
     ...(sessionMode.openOnStart ? { openOnStart: sessionMode.openOnStart } : {}),
@@ -208,6 +205,7 @@ function resolveBackendMode(): BackendMode {
 async function startupPolicy(workspace: string): Promise<{
   security: StartupSecuritySnapshot;
   executionPolicy: ExecutionPolicyService;
+  approvalBroker: InteractiveApprovalBroker;
   yoloAcknowledgementBroker: YoloAcknowledgementBroker;
   workflowAdapter: WorkflowAdapter;
 }> {
@@ -225,24 +223,22 @@ async function startupPolicy(workspace: string): Promise<{
     globalPolicy: config.globalPolicy,
     ...(config.projectPolicy ? { projectPolicy: config.projectPolicy } : {}),
   });
-  if (security.policy === "YOLO" && !argv.includes("--acknowledge-yolo")) {
-    throw new Error("--policy YOLO 需要额外的 --acknowledge-yolo 明确确认 Host 高风险边界");
-  }
-  const yoloAcknowledgementBroker = createYoloAcknowledgementBroker({
-    startupAuthorized: security.policy === "YOLO" && argv.includes("--acknowledge-yolo"),
-  });
+  const yoloAcknowledgementBroker = createYoloAcknowledgementBroker();
+  const approvalBroker = createInteractiveApprovalBroker();
   const workflowAdapter = await createStartupWorkflowAdapter({
     enabled: security.workflowAdapter,
     workspace,
+    disabledReason: security.recovery ? "recovery" : "not-enabled",
   });
   const executionPolicy = await createStartupPolicyRuntime({
     workspace,
     security,
     configService: { load: async () => config },
+    approvalBroker: (request, signal) => approvalBroker.request(request, signal),
     acknowledgeYolo: () => yoloAcknowledgementBroker.consume(),
     workflowAuthority: (action) => workflowAdapter.authorize(action),
   });
-  return { security, executionPolicy, yoloAcknowledgementBroker, workflowAdapter };
+  return { security, executionPolicy, approvalBroker, yoloAcknowledgementBroker, workflowAdapter };
 }
 
 async function bridge(): Promise<void> {
@@ -278,16 +274,17 @@ function printHelp(): void {
   vspi bridge              启动附件 Bridge（SSH 粘贴图片）
 
 选项：
-  --policy <level>         Safe | Standard | Auto | YOLO（YOLO 需配合 --acknowledge-yolo）
-  --acknowledge-yolo       确认 YOLO 的 Host 高风险边界
+  --policy <level>         Safe | Standard | YOLO | Auto（只控制审批强度）
   --trust-project          信任当前项目（读取 .vspi/ 配置与 Provider overlay）
-  --recovery               恢复模式：强制 Standard · Sandboxed，禁用项目资源
+  --workflow               启用只读 Workflow Plan 投影（默认关闭）
+  --recovery               恢复模式：强制 Standard · Host，禁用项目资源与 Workflow
   --render-once            渲染一帧后退出（smoke 用）
   -h, --help               显示本帮助
   -v, --version            显示版本号
 
 环境变量：
   VSPi_BACKEND=pi|fixture  选择后端（fixture 等价 VSPi_FIXTURE=1，完全离线）
+  VSPI_WORKFLOW_*          --workflow 所需的完整 bundle identity（详见 README）
   Provider API key 经环境变量注入（如 VSPLAB_API_KEY、DEEPSEEK_API_KEY），VSPi 不保存密钥
 `);
 }
@@ -297,7 +294,6 @@ async function runOnce(prompt: string): Promise<void> {
   if (!prompt.trim()) throw new Error('用法：vspi run "<prompt>"');
   const workspace = process.cwd();
   const { security, executionPolicy } = await startupPolicy(workspace);
-  const planBackend = createLocalPlanBackend({ rootDir: join(getAgentDir(), "vspi-local-plans") });
   const promptProfileService = createPromptProfileService({
     cwd: workspace,
     home: process.env.HOME ?? homedir(),
@@ -310,7 +306,7 @@ async function runOnce(prompt: string): Promise<void> {
     security.trustedProject,
     security.recovery,
     executionPolicy,
-    planBackend,
+    undefined,
     { resolve: async (identity) => promptProfileService.resolve(identity) },
     { continueRecent: false },
   );
@@ -333,7 +329,7 @@ async function runOnce(prompt: string): Promise<void> {
       onSessionInvalidating: () => {},
       onSessionReset: () => {},
     });
-    const result = await backend.send(prompt, { attachments: [], effort: "中", behavior: "prompt" });
+    const result = await backend.send(prompt, { attachments: [], effort: "medium", behavior: "prompt" });
     const reply = [...messages].reverse().find((message) => message.role === "assistant" && message.kind === "text");
     if (reply && reply.kind === "text") process.stdout.write(`${reply.text}\n`);
     if (result && result.status === "cancelled") process.exitCode = 130;

@@ -146,7 +146,7 @@ describe("M2 session identity isolation", () => {
 });
 
 describe("M2 cancellation recovery", () => {
-  it("restores the submitted draft and clears busy after consecutive Ctrl+C cancellations", async () => {
+  it("retains submitted messages in the transcript and clears busy after consecutive Ctrl+C cancellations", async () => {
     let events: ChatBackendEvents | undefined;
     let releaseSend: (() => void) | undefined;
     const send = vi.fn(async (_text: string, _options: SendOptions) => {
@@ -188,17 +188,16 @@ describe("M2 cancellation recovery", () => {
       await pending;
       await flush();
 
-      expect(app.composer.getText()).toBe(draft);
+      expect(app.composer.getText()).toBe("");
       expect(testable.busy).toBe(false);
-      expect(testable.messages.some((message) => message.kind === "text" && message.text === draft)).toBe(false);
-      app.composer.setText("");
+      expect(testable.messages.some((message) => message.kind === "text" && message.text === draft)).toBe(true);
     }
     expect(cancel).toHaveBeenCalledTimes(2);
     expect(send).toHaveBeenCalledTimes(2);
     await app.dispose();
   });
 
-  it("restores draft, attachments and idle state immediately when backend abort rejects", async () => {
+  it("keeps the submitted message and attachment in the transcript when backend abort rejects", async () => {
     let events: ChatBackendEvents | undefined;
     let releaseSend: (() => void) | undefined;
     const send = vi.fn(async () => {
@@ -254,9 +253,11 @@ describe("M2 cancellation recovery", () => {
     let sendSettled = false;
     try {
       expect(cancel).toHaveBeenCalledOnce();
-      expect(app.composer.getText()).toBe(draft);
-      expect(app.composer.attachments).toEqual([attachment]);
-      expect(testable.messages.some((message) => message.kind === "text" && message.text === draft)).toBe(false);
+      expect(app.composer.getText()).toBe("");
+      expect(app.composer.attachments).toEqual([]);
+      expect(testable.messages).toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: "text", text: draft, attachments: [attachment] })]),
+      );
       expect(testable.busy).toBe(false);
       expect(setProgress).toHaveBeenLastCalledWith(false);
       expect(testable.notice).toMatchObject({ tone: "error" });
@@ -269,8 +270,8 @@ describe("M2 cancellation recovery", () => {
       await pending;
       await flush();
       expect(app.composer.getText()).toBe("NEW_DRAFT_AFTER_CANCEL_RECOVERY");
-      expect(app.composer.attachments).toEqual([attachment]);
-      expect(testable.messages.some((message) => message.kind === "text" && message.text === draft)).toBe(false);
+      expect(app.composer.attachments).toEqual([]);
+      expect(testable.messages.some((message) => message.kind === "text" && message.text === draft)).toBe(true);
       expect(testable.busy).toBe(false);
       expect(testable.notice?.text).toContain(cancelError.message);
     } finally {

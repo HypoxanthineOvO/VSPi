@@ -159,8 +159,8 @@ function expectSharedFacts(content: string, artifact: string): void {
     .soft(content, `${artifact}: removed Update command is absent from the whole artifact`)
     .not.toContain("/update");
   expect
-    .soft(content, `${artifact}: self-update is explicitly outside the v0.1 production surface`)
-    .toMatch(/自更新[^。\n]{0,120}(?:不属于|不在|不提供|后续)[^。\n]{0,80}v0\.1/i);
+    .soft(content, `${artifact}: self-update is explicitly outside the v0.2 production surface`)
+    .toMatch(/自更新[^。\n]{0,120}(?:不属于|不在|不提供|后续)[^。\n]{0,80}v0\.2/i);
 }
 
 function hasNearby(content: string, left: string[], right: string[], distance = 240): boolean {
@@ -312,18 +312,16 @@ function expectRevisionFiveFacts(content: string, artifact: string): void {
   expect
     .soft(content, `${artifact}: 40-column fixed status starts`)
     .toMatch(
-      /40\s*列[^。\n]{0,300}Model\s*0\s*\/\s*Effort\s*15\s*\/\s*Context\s*25[^。\n]{0,120}路径值\s*0\s*\/\s*Token\s*20\s*\/\s*Cost\s*32/,
+      /40\s*列[^。\n]{0,300}Model\s*0\s*\/\s*Effort\s*13\s*\/\s*Context\s*25[^。\n]{0,120}路径值\s*0\s*\/\s*Token\s*20\s*\/\s*Cost\s*32/,
     );
   expect
     .soft(content, `${artifact}: long paths do not push telemetry`)
     .toMatch(/长路径[^。\n]{0,160}(?:不(?:会)?推动|不移动|不能移动|只截断)/);
   expect.soft(content, `${artifact}: fixed two-line status at every width`).toMatch(/40\s*列[^。\n]{0,180}两行/i);
 
-  expect.soft(content, `${artifact}: user message background`).toContain("#B8E6E3");
-  expect.soft(content, `${artifact}: user message foreground`).toContain("#102426");
-  expect
-    .soft(content, `${artifact}: cyan user border`)
-    .toMatch(/(?:用户消息[^。\n]{0,200}(?:边框|焦点青|#5FC7C7)|(?:边框|焦点青|#5FC7C7)[^。\n]{0,200}用户消息)/);
+  expect.soft(content, `${artifact}: user message background`).toContain("#202428");
+  expect.soft(content, `${artifact}: user message foreground`).toContain("#F4F7FA");
+  expect.soft(content, `${artifact}: full-width user surface`).toMatch(/用户消息[^。\n]{0,240}(?:全宽|竖标|至少三行)/i);
   for (const width of [40, 80, 120]) {
     expect
       .soft(hasNearby(content, ["用户消息"], [`${width} 列`, `${width}列`], 700), `${artifact}: user message ${width}`)
@@ -386,7 +384,7 @@ describe("delivered TUI documentation contract", () => {
     expect(readme).toContain("Offline Fixture");
     expect(readme).toContain("Backend Pi");
     expect(readme).toContain("Backend Fixture");
-    expect(readme).toMatch(/Policy[^。\n]{0,100}Sandboxed/);
+    expect(readme).toMatch(/Policy[^。\n]{0,100}Host/);
     expect(readme).not.toMatch(/Mode[^。\n]{0,60}Auto/);
   });
 
@@ -442,7 +440,7 @@ describe("delivered TUI documentation contract", () => {
       return lines.some(
         (line, index) =>
           visibleColumn(line, "Model") === 0 &&
-          visibleColumn(line, "Effort") === 15 &&
+          visibleColumn(line, "Effort") === 13 &&
           visibleColumn(line, "Context") === 25 &&
           visibleWidth(line) === 40 &&
           (lines[index + 1] ?? "").startsWith("/workspace/vspi") &&
@@ -462,29 +460,11 @@ describe("delivered TUI documentation contract", () => {
     expect(blocks.join("\n")).not.toMatch(/中国外汇交易中心参考价\s*·|USD\/CNY\s*7\.18/);
   });
 
-  it("mocks the Unicode and ASCII user-message frame shapes", () => {
+  it("mocks the compact user-message marker without a full-width frame", () => {
     const blocks = textBlocks(docs);
-    const unicode = blocks.find((block) => {
-      const lines = block.trimEnd().split("\n");
-      return (
-        /^╭─+╮$/.test(lines[0] ?? "") &&
-        /^╰─+╯$/.test(lines.at(-1) ?? "") &&
-        !BLOCK_LOGO.some((logoLine) => block.includes(logoLine))
-      );
-    });
-    expect(unicode, "Docs must include a rounded Unicode user-message mock").toBeDefined();
-    const unicodeLines = unicode?.trimEnd().split("\n") ?? [];
-    expect(unicodeLines.slice(1, -1).every((line) => /^│.*│$/.test(line))).toBe(true);
-    expect(new Set(unicodeLines.map(visibleWidth)).size).toBe(1);
-
-    const ascii = blocks.find((block) => {
-      const lines = block.trimEnd().split("\n");
-      return /^\+-+\+$/.test(lines[0] ?? "") && /^\+-+\+$/.test(lines.at(-1) ?? "");
-    });
-    expect(ascii, "Docs must include an ASCII user-message fallback mock").toBeDefined();
-    const asciiLines = ascii?.trimEnd().split("\n") ?? [];
-    expect(asciiLines.slice(1, -1).every((line) => /^\|.*\|$/.test(line))).toBe(true);
-    expect(new Set(asciiLines.map(visibleWidth)).size).toBe(1);
+    const marker = blocks.find((block) => block.trim() === "▌  message");
+    expect(marker, "Docs must include the compact user-message marker mock").toBeDefined();
+    expect(marker).not.toMatch(/[╭╮╰╯│+|-]/);
   });
 
   it("retains the attachment and Markdown boundaries", () => {

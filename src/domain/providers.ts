@@ -14,6 +14,8 @@ const OFFICIAL_NAMES = new Map<string, string>([
   ["openrouter", "OpenRouter"],
   ["mistralai", "Mistral AI"],
   ["azureopenai", "Azure OpenAI"],
+  ["azureopenairesponses", "Azure OpenAI"],
+  ["openaicodex", "OpenAI Codex"],
   ["googlevertexai", "Google Vertex AI"],
   ["amazonbedrock", "Amazon Bedrock"],
   ["githubcopilot", "GitHub Copilot"],

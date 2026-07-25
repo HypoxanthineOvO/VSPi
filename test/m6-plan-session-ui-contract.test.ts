@@ -10,6 +10,7 @@ import { PiBackend } from "../src/backend/pi-backend.js";
 import type { ChatBackend, ChatBackendEvents } from "../src/backend/types.js";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/domain/fixtures.js";
 import type { Question } from "../src/domain/types.js";
+import { createLocalPlanBackend } from "../src/plans/local-plan-backend.js";
 import { createDefaultPlanTaskRouter } from "../src/plans/task-router.js";
 import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
 import { PanelController, type PanelEvent } from "../src/ui/panels.js";
@@ -187,6 +188,7 @@ async function piHarness(label: string) {
   const managers: SessionManager[] = [];
   const backend = new PiBackend({
     cwd,
+    planBackend: createLocalPlanBackend({ rootDir: join(root, "compatibility-plans") }),
     sessionFactory: async (manager) => {
       managers.push(manager);
       return { session: fakePiSession(manager) };

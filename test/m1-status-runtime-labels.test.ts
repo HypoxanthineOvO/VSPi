@@ -31,7 +31,7 @@ function statusInput(overrides: Record<string, unknown> = {}): StatusLineInput {
       costUsd: 0.414,
     },
     modelLabel: "OpenAI / GPT-5.4",
-    effort: "高",
+    effort: "high",
     busy: false,
     backend: "Pi",
     policy: "Standard",

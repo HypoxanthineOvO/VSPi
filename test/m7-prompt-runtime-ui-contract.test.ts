@@ -35,6 +35,7 @@ type PiExtensionFactory = (pi: { on(event: "before_agent_start", handler: Before
 async function runtimeModule() {
   const specifier = "../src/prompts/pi-prompt-profile-extension.js";
   return (await import(specifier)) as {
+    VSPI_LANGUAGE_CONTRACT: string;
     createPromptProfileExtension(options: {
       resolve(identity: ModelIdentity): Promise<PromptOverlayResolution>;
       getModelIdentity(): ModelIdentity;
@@ -64,7 +65,7 @@ function beforeAgentStart(systemPrompt: string): BeforeAgentStartEvent {
 
 describe("M7 Pi per-turn Prompt Profile overlay", () => {
   it("resolves against the current model on every turn and returns only a temporary system prompt replacement", async () => {
-    const { createPromptProfileExtension } = await runtimeModule();
+    const { createPromptProfileExtension, VSPI_LANGUAGE_CONTRACT } = await runtimeModule();
     let identity: ModelIdentity = { provider: "openai", model: "gpt-5" };
     const resolve = vi.fn(
       async (model: ModelIdentity): Promise<PromptOverlayResolution> => ({
@@ -80,18 +81,22 @@ describe("M7 Pi per-turn Prompt Profile overlay", () => {
     );
 
     const first = await handler(beforeAgentStart("Pi base turn one"));
-    expect(first).toEqual({ systemPrompt: "Pi base turn one\n\nProfile for openai/gpt-5" });
+    expect(first).toEqual({
+      systemPrompt: `Pi base turn one\n\n${VSPI_LANGUAGE_CONTRACT}\n\nProfile for openai/gpt-5`,
+    });
     expect(first).not.toHaveProperty("message");
 
     identity = { provider: "anthropic", model: "claude-sonnet-4" };
     const second = await handler(beforeAgentStart("Pi base turn two"));
-    expect(second).toEqual({ systemPrompt: "Pi base turn two\n\nProfile for anthropic/claude-sonnet-4" });
+    expect(second).toEqual({
+      systemPrompt: `Pi base turn two\n\n${VSPI_LANGUAGE_CONTRACT}\n\nProfile for anthropic/claude-sonnet-4`,
+    });
     expect(resolve).toHaveBeenNthCalledWith(1, { provider: "openai", model: "gpt-5" });
     expect(resolve).toHaveBeenNthCalledWith(2, { provider: "anthropic", model: "claude-sonnet-4" });
   });
 
-  it("leaves the Pi prompt unchanged when profiles are off and never manufactures a hidden/custom message", async () => {
-    const { createPromptProfileExtension } = await runtimeModule();
+  it("always injects the built-in Chinese language contract and never manufactures a hidden/custom message", async () => {
+    const { createPromptProfileExtension, VSPI_LANGUAGE_CONTRACT } = await runtimeModule();
     const handler = registerBeforeAgentStart(
       createPromptProfileExtension({
         resolve: async () => ({}),
@@ -100,7 +105,9 @@ describe("M7 Pi per-turn Prompt Profile overlay", () => {
     );
 
     const result = await handler(beforeAgentStart("Original assembled Pi prompt"));
-    expect(result === undefined || Object.keys(result).length === 0).toBe(true);
+    expect(result).toEqual({ systemPrompt: `Original assembled Pi prompt\n\n${VSPI_LANGUAGE_CONTRACT}` });
+    expect(VSPI_LANGUAGE_CONTRACT).toMatch(/简体中文为主进行思考/);
+    expect(VSPI_LANGUAGE_CONTRACT).toMatch(/不使用 emoji.*标题前缀/);
     expect(result?.message).toBeUndefined();
   });
 

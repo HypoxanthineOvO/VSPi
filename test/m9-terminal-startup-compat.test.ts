@@ -58,10 +58,10 @@ afterEach(() => {
 
 describe("M9 terminal render matrix", () => {
   const policies = [
-    ["Safe", "Sandboxed"],
-    ["Standard", "Sandboxed"],
-    ["Auto", "Sandboxed"],
+    ["Safe", "Host"],
+    ["Standard", "Host"],
     ["YOLO", "Host"],
+    ["Auto", "Host"],
   ] as const;
 
   it.each([40, 80, 120] as const)(
@@ -81,7 +81,7 @@ describe("M9 terminal render matrix", () => {
               costUsd: 9_999.99,
             },
             modelLabel: "OpenAI / A Very Long Production Model Identity",
-            effort: "高",
+            effort: "high",
             busy: true,
             policy: "Standard",
             boundary: "Sandboxed",
@@ -114,7 +114,7 @@ describe("M9 terminal render matrix", () => {
         cwd: "/workspace/vspi",
         usage: DEFAULT_USAGE,
         modelLabel: "Provider / Model",
-        effort: "中",
+        effort: "medium",
         busy: false,
         policy,
         boundary,
@@ -125,7 +125,7 @@ describe("M9 terminal render matrix", () => {
     expect(plain.join("\n")).toContain(`Policy ${policy} · ${boundary}`);
   });
 
-  it("makes Recovery visible while forcing Standard Sandboxed", () => {
+  it("makes Recovery visible while forcing Standard Host", () => {
     const security = resolveStartupSecurity({
       argv: ["--recovery", "--trust-project", "--policy", "YOLO"],
       globalPolicy: "YOLO",
@@ -134,7 +134,7 @@ describe("M9 terminal render matrix", () => {
     expect(security).toMatchObject({
       recovery: true,
       policy: "Standard",
-      boundary: "Sandboxed",
+      boundary: "Host",
       trustedProject: false,
       resourceScope: "global-only",
       extensions: false,
@@ -145,7 +145,7 @@ describe("M9 terminal render matrix", () => {
         cwd: "/workspace/vspi",
         usage: DEFAULT_USAGE,
         modelLabel: "Provider / Model",
-        effort: "中",
+        effort: "medium",
         busy: false,
         mode: "Recovery",
         policy: security.policy,
@@ -157,7 +157,7 @@ describe("M9 terminal render matrix", () => {
       .map(stripAnsi)
       .join("\n");
     expect(rendered).toContain("Recovery");
-    expect(rendered).toContain("Policy Standard · Sandboxed");
+    expect(rendered).toContain("Policy Standard · Host");
     expect(rendered).not.toContain("YOLO");
   });
 });
@@ -228,7 +228,7 @@ describe("M9 startup and legacy compatibility", () => {
       ...DEFAULT_SETTINGS,
       scope: "project",
       theme: "Terminal",
-      showThinking: false,
+      thinkingDisplay: "hidden",
     });
   });
 });

@@ -18,7 +18,7 @@ export const MODELS: ModelOption[] = [
     label: "Kimi K2.5",
     releasedAt: "2026-06-01",
     vision: true,
-    efforts: ["低", "中", "高"],
+    efforts: ["low", "medium", "high"],
     price: { inputUsdPerMillion: 0.6, outputUsdPerMillion: 2.5 },
   },
   {
@@ -27,7 +27,7 @@ export const MODELS: ModelOption[] = [
     label: "Kimi K3",
     releasedAt: "2026-07-15",
     vision: true,
-    efforts: ["中", "高"],
+    efforts: ["medium", "high"],
     price: { inputUsdPerMillion: 1, outputUsdPerMillion: 4 },
   },
   {
@@ -36,7 +36,7 @@ export const MODELS: ModelOption[] = [
     label: "GPT-5.4",
     releasedAt: "2026-06-30",
     vision: true,
-    efforts: ["低", "中", "高"],
+    efforts: ["low", "medium", "high", "xhigh", "max"],
     price: { inputUsdPerMillion: 2, outputUsdPerMillion: 8 },
   },
   {
@@ -44,7 +44,7 @@ export const MODELS: ModelOption[] = [
     brand: "智谱",
     label: "GLM-5",
     vision: false,
-    efforts: ["低", "中", "高"],
+    efforts: ["low", "medium", "high"],
     price: { inputUsdPerMillion: 0.7, outputUsdPerMillion: 2.8 },
   },
   {
@@ -52,7 +52,7 @@ export const MODELS: ModelOption[] = [
     brand: "千问",
     label: "Qwen3 Coder",
     vision: false,
-    efforts: ["低", "中"],
+    efforts: ["low", "medium"],
     price: { inputUsdPerMillion: 0.5, outputUsdPerMillion: 2 },
   },
   {
@@ -61,7 +61,7 @@ export const MODELS: ModelOption[] = [
     label: "DeepSeek V3.2",
     releasedAt: "2026-05-12",
     vision: false,
-    efforts: ["低", "中"],
+    efforts: ["low", "medium"],
     price: { inputUsdPerMillion: 0.28, outputUsdPerMillion: 0.42 },
   },
 ];
@@ -71,9 +71,9 @@ export const MODEL_GROUPS: ModelGroup[] = [
     id: "auto-safe",
     label: "auto/safe",
     roles: [
-      { role: "默认", modelId: "kimi-k3", effort: "中" },
-      { role: "复杂代码", modelId: "gpt-5.4", effort: "高" },
-      { role: "总结", modelId: "deepseek-v3.2", effort: "低" },
+      { role: "默认", modelId: "kimi-k3", effort: "medium" },
+      { role: "复杂代码", modelId: "gpt-5.4", effort: "high" },
+      { role: "总结", modelId: "deepseek-v3.2", effort: "low" },
     ],
   },
 ];
@@ -156,7 +156,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   scope: "project",
   theme: "VSPi Dark",
   reducedMotion: false,
-  showThinking: true,
+  thinkingDisplay: "collapsed",
   wrapCode: false,
+  collapseTools: true,
   bridgeEnabled: true,
 };

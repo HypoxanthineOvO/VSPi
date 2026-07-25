@@ -3,7 +3,7 @@ import { DEFAULT_SETTINGS, DEFAULT_USAGE, MODEL_GROUPS, MODELS, PROVIDERS } from
 import type { Question } from "../src/domain/types.js";
 import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
 import { PanelController } from "../src/ui/panels.js";
-import { plainTheme } from "./helpers.js";
+import { cellsForText, plainTheme, sgrCells } from "./helpers.js";
 
 const ENTER = "\r";
 const DOWN = "\u001b[B";
@@ -47,6 +47,157 @@ function text(panel: PanelController, width = 80, rows = 14): string {
 }
 
 describe("panel controller", () => {
+  it("returns all five structured approval decisions and layers Escape inside reason input", () => {
+    const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
+    const request = {
+      action: { kind: "network" as const, category: "ssh" as const, target: "ssh build-host" },
+      category: "ssh" as const,
+      policy: "Standard" as const,
+      requiredPolicy: "YOLO" as const,
+    };
+
+    panel.openApproval(request);
+    expect(text(panel)).toContain("允许本次");
+    expect(panel.handleInput(ENTER)).toEqual({ type: "approval", response: { type: "allow-once" } });
+
+    panel.openApproval(request);
+    panel.handleInput(DOWN);
+    expect(panel.handleInput(ENTER)).toEqual({
+      type: "approval",
+      response: { type: "allow-session", category: "ssh" },
+    });
+
+    panel.openApproval(request);
+    panel.handleInput(DOWN);
+    panel.handleInput(DOWN);
+    expect(panel.handleInput(ENTER)).toEqual({
+      type: "approval",
+      response: { type: "elevate", level: "YOLO" },
+    });
+
+    panel.openApproval(request);
+    for (let index = 0; index < 4; index += 1) panel.handleInput(DOWN);
+    expect(panel.handleInput(ENTER)).toBeUndefined();
+    panel.handleInput("不要连接生产环境");
+    expect(panel.handleInput("\u001b")).toBeUndefined();
+    expect(panel.kind).toBe("approval");
+    for (let index = 0; index < 4; index += 1) panel.handleInput(DOWN);
+    panel.handleInput(ENTER);
+    panel.handleInput("不要连接生产环境");
+    expect(panel.handleInput(ENTER)).toEqual({
+      type: "approval",
+      response: { type: "deny", reason: "不要连接生产环境" },
+    });
+  });
+
+  it.each([40, 80, 120] as const)("gives approval content and choices stable gutters at %s columns", (width) => {
+    const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
+    panel.openApproval({
+      action: { kind: "process", category: "destructive", risk: "high", target: "rm -rf build/output" },
+      category: "destructive",
+      policy: "Standard",
+      requiredPolicy: "Auto",
+    });
+
+    const lines = panel.render(width, 16, plainTheme(), DEFAULT_USAGE);
+    const plain = lines.map(stripAnsi);
+    expect(lines.every((line) => visibleWidth(line) === width)).toBe(true);
+    expect(plain[1]).toContain("Standard");
+    expect(plain[2]).toContain("destructive");
+    expect(plain.join("\n")).toContain("切换到 Auto 并执行");
+    expect(plain.some((line) => /^│\s{4,}› 允许本次/.test(line))).toBe(true);
+  });
+
+  it.each(["Safe", "Standard", "YOLO", "Auto"] as const)(
+    "renders %s as an eight-cell centered Policy badge above the category",
+    (policy) => {
+      const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
+      panel.openApproval({
+        action: { kind: "network", category: "ssh", target: "ssh build-host" },
+        category: "ssh",
+        policy,
+        ...(policy === "Auto" ? {} : { requiredPolicy: "Auto" as const }),
+      });
+      const lines = panel.render(80, 16, plainTheme({ colorLevel: 3, truecolor: true }), DEFAULT_USAGE);
+      const badgeLine = lines[1] ?? "";
+      const expectedBackground = {
+        Safe: "rgb(36,74,49)",
+        Standard: "rgb(84,69,31)",
+        YOLO: "rgb(90,53,28)",
+        Auto: "rgb(85,39,43)",
+      }[policy];
+      const backgroundCells = sgrCells(badgeLine).filter((cell) => cell.background === expectedBackground);
+      expect(backgroundCells).toHaveLength(8);
+      expect(cellsForText(badgeLine, policy).every((cell) => cell.background === expectedBackground)).toBe(true);
+      expect(stripAnsi(lines[2] ?? "")).toContain("ssh");
+    },
+  );
+
+  it("edits Effort explicitly instead of cycling and immediately persisting", () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    panel.openEffort("medium", ["off", "low", "medium", "high", "xhigh", "max"]);
+    expect(text(panel)).toContain("✓ Medium");
+    panel.handleInput(DOWN);
+    expect(panel.handleInput(ENTER)).toEqual({ type: "effort", effort: "high" });
+  });
+
+  it("keeps Global and Project settings drafts separate until Ctrl+S applies", () => {
+    const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
+    panel.setSettingsLayers({
+      global: { ...DEFAULT_SETTINGS, scope: "global", reducedMotion: false },
+      project: { ...DEFAULT_SETTINGS, scope: "project", reducedMotion: true },
+      projectInherited: false,
+    });
+    panel.open("settings");
+    expect(text(panel)).toContain("减少动效  关");
+    panel.handleInput(DOWN);
+    expect(panel.handleInput(ENTER)).toBeUndefined();
+    expect(text(panel)).toContain("未应用");
+    expect(panel.handleInput("\u001b")).toEqual({ type: "close" });
+
+    panel.open("settings");
+    expect(text(panel)).toContain("减少动效  关");
+    panel.handleInput("\t");
+    expect(text(panel)).toContain("减少动效  开");
+    panel.handleInput(DOWN);
+    panel.handleInput(ENTER);
+    expect(panel.handleInput("\u0013")).toMatchObject({
+      type: "settings",
+      settings: { scope: "project", reducedMotion: false },
+    });
+  });
+
+  it("keeps completed-tool collapse low-emphasis, enabled by default, and explicitly applicable", () => {
+    const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
+    panel.open("settings");
+    expect(text(panel, 80, 18)).toContain("完成后收起工具  开");
+    for (let index = 0; index < 4; index += 1) panel.handleInput(DOWN);
+    panel.handleInput(ENTER);
+    expect(text(panel, 80, 18)).toContain("完成后收起工具  关");
+    expect(panel.handleInput("\u0013")).toMatchObject({
+      type: "settings",
+      settings: { collapseTools: false },
+    });
+  });
+
+  it("cycles the thinking display through hidden, collapsed, and expanded before Apply", () => {
+    const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global", thinkingDisplay: "hidden" });
+    panel.open("settings");
+    panel.handleInput(DOWN);
+    panel.handleInput(DOWN);
+    expect(text(panel, 80, 18)).toContain("thinking 显示模式  隐藏");
+    panel.handleInput(ENTER);
+    expect(text(panel, 80, 18)).toContain("thinking 显示模式  折叠");
+    panel.handleInput(ENTER);
+    expect(text(panel, 80, 18)).toContain("thinking 显示模式  展开");
+    panel.handleInput(ENTER);
+    expect(text(panel, 80, 18)).toContain("thinking 显示模式  隐藏");
+    expect(panel.handleInput("\u0013")).toMatchObject({
+      type: "settings",
+      settings: { thinkingDisplay: "hidden" },
+    });
+  });
+
   it("renders the fresh plan as one compact empty-state row without demo content", () => {
     const panel = new PanelController(DEFAULT_SETTINGS);
     const lines = panel.render(80, 14, plainTheme(), DEFAULT_USAGE).map(stripAnsi);
@@ -169,14 +320,14 @@ describe("panel controller", () => {
   it("completes single, multi, ranking and free-text questions through final review", () => {
     const panel = new PanelController(DEFAULT_SETTINGS);
     panel.openQuestions(QUESTIONS);
-    expect(text(panel)).toContain("第 1/4");
+    expect(text(panel)).toContain("Question 1 / 4");
     panel.handleInput(ENTER);
-    expect(text(panel)).toContain("第 2/4");
+    expect(text(panel)).toContain("Question 2 / 4");
     panel.handleInput(SPACE);
     panel.handleInput(DOWN);
     panel.handleInput(SPACE);
     panel.handleInput(ENTER);
-    expect(text(panel)).toContain("第 3/4");
+    expect(text(panel)).toContain("Question 3 / 4");
     panel.handleInput(ENTER);
     panel.handleInput("必须保留流式稳定性");
     panel.handleInput(ENTER);

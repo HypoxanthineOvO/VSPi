@@ -16,7 +16,7 @@ import { plainTheme } from "./helpers.js";
 
 interface MediaRenderOptions {
   inspectedId?: string;
-  showThinking?: boolean;
+  thinkingDisplay?: "hidden" | "collapsed" | "expanded";
   wrapCode?: boolean;
 }
 
@@ -37,6 +37,8 @@ type TranscriptContract = (
 type TestableApp = {
   messages: TranscriptMessage[];
   submit(raw: string): Promise<void>;
+  applyThinkingDisplay(mode: AppSettings["thinkingDisplay"]): void;
+  withThinkingDisplayDefault(message: TranscriptMessage): TranscriptMessage;
 };
 
 const renderMarkdownContract = renderMarkdown as MarkdownContract;
@@ -165,7 +167,11 @@ describe("M5 Markdown and streaming rendering", () => {
     expectWidthSafe(wrapped, 40);
     expect(wrapped).not.toEqual(noWrap);
     expect(wrapped.length).toBeGreaterThan(noWrap.length);
-    expect(plain(wrapped).join("").replaceAll(/\s/g, "")).toContain(token.replaceAll(/\s/g, ""));
+    expect(
+      plain(wrapped)
+        .join("")
+        .replaceAll(/[│|\s]/g, ""),
+    ).toContain(token.replaceAll(/\s/g, ""));
   });
 
   it("rerenders a partial fence to complete Markdown without reflow at 40/80/120 columns", () => {
@@ -219,9 +225,9 @@ describe("M5 Markdown and streaming rendering", () => {
 });
 
 describe("M5 thinking visibility and persistence", () => {
-  it("hides thinking immediately while Inspect keeps stable ids and per-entry expansion", async () => {
+  it("keeps a hidden thinking record while Inspect retains stable ids and per-entry expansion", async () => {
     const { app } = await createApp(
-      { ...DEFAULT_SETTINGS, bridgeEnabled: false, showThinking: false, wrapCode: true },
+      { ...DEFAULT_SETTINGS, bridgeEnabled: false, thinkingDisplay: "hidden", wrapCode: true },
       true,
     );
     const testable = app as unknown as TestableApp;
@@ -230,9 +236,10 @@ describe("M5 thinking visibility and persistence", () => {
         id: "thinking-entry",
         role: "assistant",
         kind: "thinking",
-        effort: "高",
+        effort: "high",
         text: "PRIVATE_THINKING_DETAIL",
         collapsed: true,
+        streaming: false,
       },
       {
         id: "tool-entry",
@@ -247,13 +254,16 @@ describe("M5 thinking visibility and persistence", () => {
     );
 
     const hidden = plain(app.render(80)).join("\n");
-    expect(hidden).not.toContain("思考");
+    expect(hidden).toContain("◇ 思考 · 已隐藏");
     expect(hidden).not.toContain("PRIVATE_THINKING_DETAIL");
 
     app.handleInput("\t");
     app.handleInput("\u001b[C");
+    app.handleInput("\u001b[C");
     expect(plain(app.render(80)).join("\n")).toContain("PRIVATE_TOOL_DETAIL");
 
+    app.handleInput("\u001b[D");
+    app.handleInput("\u001b[D");
     app.handleInput("\u001b[A");
     app.handleInput("\u001b[C");
     const inspectedThinking = plain(app.render(80)).join("\n");
@@ -262,25 +272,55 @@ describe("M5 thinking visibility and persistence", () => {
     await app.dispose();
   });
 
-  it("persists showThinking and wrapCode across global and trusted-project reloads", async () => {
+  it("persists thinkingDisplay and wrapCode across global and trusted-project reloads", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-m5-settings-project-"));
     const home = await mkdtemp(join(tmpdir(), "vspi-m5-settings-home-"));
-    await saveSettings(cwd, { ...DEFAULT_SETTINGS, scope: "global", showThinking: false, wrapCode: true }, home);
+    await saveSettings(cwd, { ...DEFAULT_SETTINGS, scope: "global", thinkingDisplay: "hidden", wrapCode: true }, home);
 
-    expect(await loadSettings(cwd, home)).toMatchObject({ showThinking: false, wrapCode: true });
+    expect(await loadSettings(cwd, home)).toMatchObject({ thinkingDisplay: "hidden", wrapCode: true });
 
-    await saveSettings(cwd, { ...DEFAULT_SETTINGS, scope: "project", showThinking: true, wrapCode: false }, home, {
-      trustedProject: true,
-    });
+    await saveSettings(
+      cwd,
+      { ...DEFAULT_SETTINGS, scope: "project", thinkingDisplay: "expanded", wrapCode: false },
+      home,
+      { trustedProject: true },
+    );
     expect(await loadSettings(cwd, home, { trustedProject: true })).toMatchObject({
       scope: "project",
-      showThinking: true,
+      thinkingDisplay: "expanded",
       wrapCode: false,
     });
     expect(await loadSettings(cwd, home, { trustedProject: false })).toMatchObject({
       scope: "global",
-      showThinking: false,
+      thinkingDisplay: "hidden",
       wrapCode: true,
     });
+  });
+
+  it("applies a changed thinking mode to existing and future messages immediately", async () => {
+    const { app } = await createApp({ ...DEFAULT_SETTINGS, bridgeEnabled: false, thinkingDisplay: "expanded" }, true);
+    const testable = app as unknown as TestableApp;
+    const thinking: TranscriptMessage = {
+      id: "existing-thinking",
+      role: "assistant",
+      kind: "thinking",
+      effort: "medium",
+      text: "VISIBLE_AFTER_APPLY",
+      collapsed: true,
+      streaming: false,
+    };
+    testable.messages.push(thinking);
+
+    testable.applyThinkingDisplay("expanded");
+    expect(testable.messages[0]).toMatchObject({ collapsed: false });
+    expect(plain(app.render(80)).join("\n")).toContain("VISIBLE_AFTER_APPLY");
+
+    testable.applyThinkingDisplay("collapsed");
+    expect(testable.messages[0]).toMatchObject({ collapsed: true });
+    expect(plain(app.render(80)).join("\n")).not.toContain("VISIBLE_AFTER_APPLY");
+    expect(testable.withThinkingDisplayDefault({ ...thinking, id: "future-thinking" })).toMatchObject({
+      collapsed: false,
+    });
+    await app.dispose();
   });
 });

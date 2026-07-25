@@ -24,7 +24,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   scope: "project",
   theme: "VSPi Dark",
   reducedMotion: false,
-  showThinking: true,
+  thinkingDisplay: "collapsed",
   wrapCode: false,
+  collapseTools: true,
   bridgeEnabled: true,
 };

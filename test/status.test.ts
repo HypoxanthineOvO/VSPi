@@ -12,7 +12,7 @@ function input() {
     cwd: LONG_CWD,
     usage: DEFAULT_USAGE,
     modelLabel: "DeepSeek / DeepSeek V3.2",
-    effort: "高" as const,
+    effort: "high" as const,
     busy: true,
     mode: "Inspect",
   };
@@ -64,6 +64,24 @@ describe("status rendering", () => {
     for (const label of LABELS) expect(rendered).toContain(label);
     expect(stripAnsi(lines[1] ?? "")).toMatch(/^\//);
     expect(rendered).not.toMatch(/\bPath\b/);
+  });
+
+  it("renders a visible working indicator and queue count at wide and compact widths", () => {
+    for (const width of [40, 80, 120]) {
+      const lines = renderStatusLines(
+        { ...input(), working: { indicator: "◐", steering: 2, followUp: 1 } },
+        width,
+        plainTheme(),
+      );
+      const rendered = lines.map(stripAnsi).join("\n");
+      expectExactWidths(lines, width);
+      if (width < 60) expect(rendered).toContain("W◐3");
+      else {
+        expect(rendered).toContain("Working ◐");
+        expect(rendered).toContain("插入 2");
+        expect(rendered).toContain("后续 1");
+      }
+    }
   });
 
   it("styles labels locally with more than one truecolor ANSI treatment", () => {

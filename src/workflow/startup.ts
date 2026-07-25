@@ -5,11 +5,18 @@ import type { WorkflowAdapter } from "./types.js";
 export async function createStartupWorkflowAdapter(input: {
   enabled: boolean;
   workspace: string;
+  disabledReason?: "not-enabled" | "recovery";
   env?: NodeJS.ProcessEnv;
   loadCore?: typeof loadWorkflowCore;
 }): Promise<WorkflowAdapter> {
   if (!input.enabled) {
-    return staticWorkflowAdapter({ status: "disabled", diagnostic: "Recovery 已禁用 Workflow Adapter" });
+    return staticWorkflowAdapter({
+      status: "disabled",
+      diagnostic:
+        input.disabledReason === "recovery"
+          ? "Recovery 已禁用 Workflow Adapter"
+          : "Workflow 未开启；使用 --workflow 启用只读集成",
+    });
   }
   try {
     const options = workflowLoaderOptionsFromEnv(input.env);

@@ -14,12 +14,14 @@ export interface InteractionState {
   cancellable?: boolean;
   retryable?: boolean;
   expandable?: boolean;
+  inspectDepth?: "node" | "tool";
   providerEditing?: boolean;
   providerActionMenu?: boolean;
   providerField?: 0 | 1 | 2;
   providerTextPresent?: boolean;
   policyYolo?: boolean;
   questionMode?: "choice" | "ranking" | "freeText" | "review";
+  approvalReasonEditing?: boolean;
 }
 
 export interface InteractionDefinition {
@@ -128,8 +130,8 @@ const actions: InteractionDefinition[] = [
     context: "plan",
     keys: ["Shift+Tab"],
     keyValues: [Key.shift("tab")],
-    handler: "togglePlanFocus",
-    hint: "Shift+Tab 切换焦点",
+    handler: "cycleWorkspaceFocus",
+    hint: "Shift+Tab 下一个区域",
   }),
   keyAction({
     id: "panel.commands.move",
@@ -208,7 +210,7 @@ const actions: InteractionDefinition[] = [
     handler: "closePanel",
     hint: "Esc 关闭",
   }),
-  ...(["models", "settings", "theme", "policy"] as const).map((context) =>
+  ...(["models", "settings", "theme", "policy", "effort", "approval", "tools"] as const).map((context) =>
     keyAction({
       id: `panel.${context}.move`,
       surface: "panel",
@@ -227,6 +229,24 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.tab],
     handler: "switchModelView",
     hint: "Tab 切换视图",
+  }),
+  keyAction({
+    id: "panel.effort.select",
+    surface: "panel",
+    context: "effort",
+    keys: ["Enter"],
+    keyValues: [Key.enter],
+    handler: "selectEffort",
+    hint: "Enter 应用",
+  }),
+  inputAction({
+    id: "panel.approval.select",
+    surface: "panel",
+    context: "approval",
+    keys: ["Enter", "Text", "Backspace"],
+    handler: "selectApproval",
+    matcher: () => true,
+    hint: (state) => (state.approvalReasonEditing ? "Enter 拒绝并提交理由" : "Enter 选择"),
   }),
   keyAction({
     id: "panel.models.detail",
@@ -373,6 +393,15 @@ const actions: InteractionDefinition[] = [
     hint: "Enter 修改",
   }),
   keyAction({
+    id: "panel.settings.apply",
+    surface: "panel",
+    context: "settings",
+    keys: ["Ctrl+S"],
+    keyValues: [Key.ctrl("s")],
+    handler: "applySettings",
+    hint: "Ctrl+S 应用",
+  }),
+  keyAction({
     id: "panel.theme.select",
     surface: "panel",
     context: "theme",
@@ -409,16 +438,17 @@ const actions: InteractionDefinition[] = [
       return "↑↓ 选择  Space 多选  Tab 直接回答  Enter 确认  ←→ 切题  Shift+S 跳过";
     },
   }),
-  ...(["models", "settings", "usage", "theme", "question", "policy"] as const).map((context) =>
-    keyAction({
-      id: `panel.${context}.close`,
-      surface: "panel",
-      context,
-      keys: ["Escape"],
-      keyValues: [Key.escape],
-      handler: "closePanel",
-      hint: "Esc 关闭",
-    }),
+  ...(["models", "settings", "usage", "theme", "question", "approval", "effort", "policy", "tools"] as const).map(
+    (context) =>
+      keyAction({
+        id: `panel.${context}.close`,
+        surface: "panel",
+        context,
+        keys: ["Escape"],
+        keyValues: [Key.escape],
+        handler: "closePanel",
+        hint: "Esc 关闭",
+      }),
   ),
   keyAction({
     id: "composer.cancel",
@@ -427,6 +457,15 @@ const actions: InteractionDefinition[] = [
     keys: ["Ctrl+C"],
     keyValues: [Key.ctrl("c")],
     handler: "cancelOrExit",
+  }),
+  keyAction({
+    id: "composer.interrupt",
+    surface: "composer",
+    context: "main",
+    keys: ["Escape"],
+    keyValues: [Key.escape],
+    handler: "interruptGeneration",
+    enabled: (state) => state.busy === true,
   }),
   keyAction({
     id: "composer.paste-image",
@@ -468,7 +507,8 @@ const actions: InteractionDefinition[] = [
     context: "main",
     keys: ["Shift+Tab"],
     keyValues: [Key.shift("tab")],
-    handler: "togglePlanFocus",
+    handler: "cycleWorkspaceFocus",
+    hint: "Shift+Tab 下一个区域",
   }),
   inputAction({
     id: "composer.edit",
@@ -570,10 +610,19 @@ const actions: InteractionDefinition[] = [
     id: "inspect.close",
     surface: "inspect",
     context: "transcript",
-    keys: ["Escape", "Tab"],
-    keyValues: [Key.escape, Key.tab],
+    keys: ["Escape"],
+    keyValues: [Key.escape],
     handler: "closeInspect",
-    hint: "Esc 关闭",
+    hint: "Esc 返回输入",
+  }),
+  keyAction({
+    id: "inspect.focus",
+    surface: "inspect",
+    context: "transcript",
+    keys: ["Shift+Tab"],
+    keyValues: [Key.shift("tab")],
+    handler: "cycleWorkspaceFocus",
+    hint: "Shift+Tab 进入 Plan",
   }),
   keyAction({
     id: "inspect.move",
@@ -593,7 +642,7 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.left, Key.right, Key.enter],
     handler: "toggleInspectItem",
     enabled: (state) => state.hasItems === true && state.expandable !== false,
-    hint: "←→ 折叠/展开",
+    hint: (state) => (state.inspectDepth === "tool" ? "Enter/→ 展开  ← 收回/返回" : "Enter/→ 进入/展开  ← 收回"),
   }),
 ];
 

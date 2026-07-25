@@ -15,17 +15,33 @@ export interface SettingsTrustContext {
   trustedProject: boolean;
 }
 
+export interface SettingsLayers {
+  global: AppSettings;
+  project?: AppSettings;
+  projectInherited: boolean;
+}
+
 const THEME_VALUES = new Set<AppSettings["theme"]>(["VSPi Dark", "VSPi Light", "Terminal"]);
+const THINKING_DISPLAY_VALUES = new Set<AppSettings["thinkingDisplay"]>(["hidden", "collapsed", "expanded"]);
 
 function normalizeSettings(input: unknown, fallback: AppSettings): AppSettings {
   if (!input || typeof input !== "object") return { ...fallback };
-  const value = input as Partial<AppSettings>;
+  const value = input as Partial<AppSettings> & { showThinking?: unknown };
+  const thinkingDisplay =
+    value.thinkingDisplay && THINKING_DISPLAY_VALUES.has(value.thinkingDisplay)
+      ? value.thinkingDisplay
+      : typeof value.showThinking === "boolean"
+        ? value.showThinking
+          ? "collapsed"
+          : "hidden"
+        : fallback.thinkingDisplay;
   return {
     scope: value.scope === "global" || value.scope === "project" ? value.scope : fallback.scope,
     theme: value.theme && THEME_VALUES.has(value.theme) ? value.theme : fallback.theme,
     reducedMotion: typeof value.reducedMotion === "boolean" ? value.reducedMotion : fallback.reducedMotion,
-    showThinking: typeof value.showThinking === "boolean" ? value.showThinking : fallback.showThinking,
+    thinkingDisplay,
     wrapCode: typeof value.wrapCode === "boolean" ? value.wrapCode : fallback.wrapCode,
+    collapseTools: typeof value.collapseTools === "boolean" ? value.collapseTools : fallback.collapseTools,
     bridgeEnabled: typeof value.bridgeEnabled === "boolean" ? value.bridgeEnabled : fallback.bridgeEnabled,
   };
 }
@@ -57,6 +73,23 @@ export async function loadSettings(
   if (!trust.trustedProject) return global;
   await inspectProjectPath(cwd, "settings.json");
   return normalizeSettings(await readOptional(paths.project), { ...global, scope: "project" });
+}
+
+export async function loadSettingsLayers(
+  cwd: string,
+  home = homedir(),
+  trust: SettingsTrustContext = { trustedProject: false },
+): Promise<SettingsLayers> {
+  const paths = settingsPaths(cwd, home);
+  const global = normalizeSettings(await readOptional(paths.global), { ...DEFAULT_SETTINGS, scope: "global" });
+  if (!trust.trustedProject) return { global, projectInherited: false };
+  await inspectProjectPath(cwd, "settings.json");
+  const rawProject = await readOptional(paths.project);
+  return {
+    global,
+    project: normalizeSettings(rawProject, { ...global, scope: "project" }),
+    projectInherited: rawProject === undefined,
+  };
 }
 
 export async function saveSettings(

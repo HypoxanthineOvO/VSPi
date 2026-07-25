@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { modelEffortLevels } from "../src/domain/effort.js";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/domain/fixtures.js";
 import { formatProviderName } from "../src/domain/providers.js";
 import type { ProviderOption } from "../src/domain/types.js";
@@ -26,6 +27,17 @@ describe("builtin providers", () => {
     expect(JSON.stringify(BUILTIN_PROVIDERS)).not.toMatch(/"(api[-_]?key|secret|password|credential)"/i);
   });
 
+  it("declares the native GPT effort map for every bundled VSPLab model", () => {
+    const models = BUILTIN_PROVIDERS.find((item) => item.id === "vsplab")?.models ?? [];
+    const efforts = Object.fromEntries(models.map((model) => [model.id, modelEffortLevels(model)]));
+
+    expect(efforts["gpt-5.4"]).toEqual(["off", "minimal", "low", "medium", "high", "xhigh"]);
+    expect(efforts["gpt-5.5"]).toEqual(["off", "low", "medium", "high", "xhigh"]);
+    for (const id of ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]) {
+      expect(efforts[id]).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+    }
+  });
+
   it("orders the provider panel by priority then label", () => {
     const panel = new PanelController(DEFAULT_SETTINGS);
     panel.setProviders([
@@ -47,6 +59,8 @@ describe("builtin providers", () => {
     expect(formatProviderName("kimi-coding")).toBe("Kimi Coding");
     expect(formatProviderName("xiaomi")).toBe("Xiaomi");
     expect(formatProviderName("zai")).toBe("Zai");
+    expect(formatProviderName("openai-codex")).toBe("OpenAI Codex");
+    expect(formatProviderName("azure-openai-responses")).toBe("Azure OpenAI");
   });
 
   it("keeps priority ids aligned with the pi catalog naming", () => {

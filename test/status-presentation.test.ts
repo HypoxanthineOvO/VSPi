@@ -20,7 +20,7 @@ function statusInput(overrides: Partial<StatusLineInput> = {}): StatusLineInput 
     cwd: "/workspace/vspi",
     usage: ACTIVE_USAGE,
     modelLabel: "OpenAI / GPT-5.4",
-    effort: "高",
+    effort: "high",
     busy: true,
     mode: "Inspect",
     ...overrides,

@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PiBackend } from "../src/backend/pi-backend.js";
+import { stripAnsi } from "../src/ui/ansi.js";
 import { loadStartupSecurityModule } from "./m4-contract.js";
 
 const execFile = promisify(execFileCallback);
@@ -29,20 +30,20 @@ afterEach(() => {
 });
 
 describe("M4 recovery startup boundary", () => {
-  it("forces Standard Sandboxed and disables project authority/resources while retaining a global-only scope", async () => {
+  it("forces Standard Host approval and disables project authority/resources while retaining a global-only scope", async () => {
     const module = await loadStartupSecurityModule();
     expect(module, "M4 must expose a read-only startup security snapshot").toBeDefined();
     if (!module) return;
     expect(
       module.resolveStartupSecurity({
-        argv: ["--recovery", "--policy", "YOLO", "--trust-project"],
+        argv: ["--recovery", "--workflow", "--policy", "YOLO", "--trust-project"],
         globalPolicy: "Auto",
         projectPolicy: "YOLO",
       }),
     ).toEqual({
       recovery: true,
       policy: "Standard",
-      boundary: "Sandboxed",
+      boundary: "Host",
       trustedProject: false,
       resourceScope: "global-only",
       projectSettings: false,
@@ -89,9 +90,10 @@ describe("M4 recovery startup boundary", () => {
       },
     );
     const output = `${stdout}\n${stderr}`;
-    expect(output).toMatch(/Recovery|恢复模式/i);
-    expect(output).toContain("Policy Standard · Sandboxed");
-    expect(output).not.toContain("Policy YOLO");
+    const plainOutput = stripAnsi(output);
+    expect(plainOutput).toMatch(/Recovery|恢复模式/i);
+    expect(plainOutput).toContain("Policy Standard · Host");
+    expect(plainOutput).not.toContain("Policy YOLO");
     await expect(access(sentinel)).rejects.toThrow();
   });
 

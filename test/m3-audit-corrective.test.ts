@@ -116,11 +116,11 @@ describe("M3 audit corrective production boundaries", () => {
 
     const defaults = createRuntimeDefaultsService({ cwd, home, trustedProject: true });
     const loaded = await defaults.load();
-    expect.soft(loaded.value).toEqual({ effort: "中" });
+    expect.soft(loaded.value).toEqual({ effort: "medium" });
     expect.soft(loaded.diagnostics.join(" ")).toMatch(/symlink|符号链接|scope|边界/i);
     let defaultsWriteError = "";
     try {
-      await defaults.save("project", { effort: "高" });
+      await defaults.save("project", { effort: "high" });
     } catch (error) {
       defaultsWriteError = error instanceof Error ? error.message : String(error);
     }

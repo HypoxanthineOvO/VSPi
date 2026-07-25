@@ -2,13 +2,21 @@ import { resolve } from "node:path";
 import {
   createBashToolDefinition,
   createEditToolDefinition,
+  createFindToolDefinition,
+  createGrepToolDefinition,
+  createLsToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { ExecutionPolicyService, PolicyAction, PolicyExecutionResult } from "./execution-policy.js";
+import type { Static, TSchema } from "typebox";
+import type { ExecutionPolicyService, PolicyAction } from "./execution-policy.js";
 
 type PolicyToolOverrides = {
   read: ReturnType<typeof createReadToolDefinition>;
+  ls: ReturnType<typeof createLsToolDefinition>;
+  find: ReturnType<typeof createFindToolDefinition>;
+  grep: ReturnType<typeof createGrepToolDefinition>;
   bash: ReturnType<typeof createBashToolDefinition>;
   edit: ReturnType<typeof createEditToolDefinition>;
   write: ReturnType<typeof createWriteToolDefinition>;
@@ -16,134 +24,150 @@ type PolicyToolOverrides = {
 
 export function createPolicyToolOverrides(options: {
   workspace: string;
-  executionPolicy: Pick<ExecutionPolicyService, "execute">;
+  executionPolicy: Pick<ExecutionPolicyService, "evaluate">;
 }): PolicyToolOverrides {
   const workspace = resolve(options.workspace);
   const native = {
     read: createReadToolDefinition(workspace),
+    ls: createLsToolDefinition(workspace),
+    find: createFindToolDefinition(workspace),
+    grep: createGrepToolDefinition(workspace),
     bash: createBashToolDefinition(workspace),
     edit: createEditToolDefinition(workspace),
     write: createWriteToolDefinition(workspace),
   };
 
-  const read: PolicyToolOverrides["read"] = {
-    ...native.read,
-    async execute(_toolCallId, input, signal) {
-      const value = input as { path: string; offset?: number; limit?: number };
-      const path = resolve(workspace, value.path);
-      const result = await options.executionPolicy.execute({
-        action: { kind: "file-read", target: path },
-        command: process.execPath,
-        args: ["-e", READ_SCRIPT, path, String(value.offset ?? ""), String(value.limit ?? "")],
-        cwd: workspace,
-        ...(signal ? { signal } : {}),
-      });
-      return toolResult(result, `Read ${value.path}`);
-    },
-  };
-
-  const write: PolicyToolOverrides["write"] = {
-    ...native.write,
-    async execute(_toolCallId, input, signal) {
-      const value = input as { path: string; content: string };
-      const path = resolve(workspace, value.path);
-      const result = await options.executionPolicy.execute({
-        action: { kind: "file-write", target: path },
-        command: process.execPath,
-        args: ["-e", WRITE_SCRIPT, path],
-        cwd: workspace,
-        env: { VSPI_TOOL_CONTENT: value.content },
-        ...(signal ? { signal } : {}),
-      });
-      return toolResult(result, `Successfully wrote ${value.path}`);
-    },
-  };
-
-  const edit: PolicyToolOverrides["edit"] = {
-    ...native.edit,
-    async execute(_toolCallId, input, signal) {
-      const value = input as { path: string; edits: Array<{ oldText: string; newText: string }> };
-      const path = resolve(workspace, value.path);
-      const result = await options.executionPolicy.execute({
-        action: { kind: "file-write", target: path, operation: "edit" },
-        command: process.execPath,
-        args: ["-e", EDIT_SCRIPT, path],
-        cwd: workspace,
-        env: { VSPI_TOOL_EDITS: JSON.stringify(value.edits) },
-        ...(signal ? { signal } : {}),
-      });
-      return toolResult(result, `Successfully edited ${value.path}`);
-    },
-  };
-
-  const bash: PolicyToolOverrides["bash"] = {
-    ...native.bash,
-    async execute(_toolCallId, input, signal, onUpdate) {
-      const value = input as { command: string; timeout?: number };
-      const action = classifyBash(value.command);
-      const result = await options.executionPolicy.execute({
-        action,
-        command: "/bin/bash",
-        args: ["-lc", value.command],
-        cwd: workspace,
-        ...(signal ? { signal } : {}),
-        ...(value.timeout !== undefined ? { timeoutMs: value.timeout } : {}),
-      });
-      const output = toolResult(result, "(no output)");
-      onUpdate?.(output);
-      return output;
-    },
-  };
-
-  return { read, bash, edit, write };
-}
-
-function classifyBash(command: string): PolicyAction {
-  const url = command.match(/https?:\/\/[^\s'"`|;]+/i)?.[0];
-  if (url) return { kind: "network", target: url };
-  const highRisk = /\b(?:sudo|mkfs|mount|umount|chown|chmod|kill|pkill|git\s+push)\b|\brm\s+-[^\n]*r/i.test(command);
-  return { kind: "process", target: bounded(command), risk: highRisk ? "high" : "low" };
-}
-
-function toolResult(result: PolicyExecutionResult, fallback: string) {
-  if (!result.started || result.exitCode !== 0) {
-    throw new Error([result.decision.reason, result.stderr].filter(Boolean).join("\n"));
-  }
   return {
-    content: [{ type: "text" as const, text: result.stdout || fallback }],
-    details: undefined,
+    read: guard(native.read, (input) => ({
+      kind: "file-read",
+      target: resolve(workspace, (input as { path: string }).path),
+      category: "file-read",
+      operation: "read",
+    })),
+    ls: guard(native.ls, (input) => ({
+      kind: "file-read",
+      target: resolve(workspace, (input as { path?: string }).path ?? "."),
+      category: "file-read",
+      operation: "list",
+    })),
+    find: guard(native.find, (input) => ({
+      kind: "file-read",
+      target: resolve(workspace, (input as { path?: string }).path ?? "."),
+      category: "file-read",
+      operation: "find",
+    })),
+    grep: guard(native.grep, (input) => ({
+      kind: "file-read",
+      target: resolve(workspace, (input as { path?: string }).path ?? "."),
+      category: "file-read",
+      operation: "grep",
+    })),
+    bash: guard(native.bash, (input) => classifyBash((input as { command: string }).command)),
+    edit: guard(native.edit, (input) => ({
+      kind: "file-write",
+      target: resolve(workspace, (input as { path: string }).path),
+      category: "file-write",
+      operation: "edit",
+    })),
+    write: guard(native.write, (input) => ({
+      kind: "file-write",
+      target: resolve(workspace, (input as { path: string }).path),
+      category: "file-write",
+      operation: "write",
+    })),
   };
+
+  function guard<TParams extends TSchema, TDetails, TState>(
+    tool: ToolDefinition<TParams, TDetails, TState>,
+    actionFor: (input: Static<TParams>) => PolicyAction,
+  ): ToolDefinition<TParams, TDetails, TState> {
+    return {
+      ...tool,
+      async execute(toolCallId, input, signal, onUpdate, context) {
+        const decision = await options.executionPolicy.evaluate(actionFor(input), signal);
+        if (!decision.allowed) throw new Error(decision.reason);
+        return tool.execute(toolCallId, input, signal, onUpdate, context);
+      },
+    };
+  }
 }
 
-function bounded(value: string): string {
-  return Array.from(value).slice(0, 160).join("");
+export function classifyBash(command: string): PolicyAction {
+  const bounded = Array.from(command).slice(0, 240).join("");
+  if (/\b(?:rm|rmdir|unlink|shred)\b|\bfind\b[^\n]*(?:-delete|-exec\s+rm)\b/i.test(command)) {
+    return { kind: "process", target: bounded, risk: "high", category: "destructive", operation: "bash" };
+  }
+  if (/\b(?:docker|podman|kubectl|containerd|systemctl|service)\b/i.test(command)) {
+    const system = /\b(?:systemctl|service)\b/i.test(command);
+    return {
+      kind: "process",
+      target: bounded,
+      risk: "high",
+      category: system ? "system" : "container",
+      operation: "bash",
+    };
+  }
+  if (/\b(?:sudo|su|shutdown|reboot|poweroff|halt|mkfs|mount|umount|kill|pkill|killall)\b/i.test(command)) {
+    return { kind: "process", target: bounded, risk: "high", category: "system", operation: "bash" };
+  }
+  if (/\bssh\b|\bscp\b|\brsync\b[^\n]*:/i.test(command)) {
+    return { kind: "network", target: bounded, risk: "medium", category: "ssh", operation: "bash" };
+  }
+  if (/\bgit\s+(?:add|commit|push|pull|merge|rebase|reset|checkout|switch|tag|stash|clean)\b/i.test(command)) {
+    return { kind: "process", target: bounded, risk: "medium", category: "git-write", operation: "bash" };
+  }
+  if (
+    /\b(?:curl|wget|http|https|npm\s+(?:install|publish)|pnpm\s+(?:add|install|publish)|yarn\s+add)\b/i.test(command)
+  ) {
+    return { kind: "network", target: bounded, risk: "medium", category: "network", operation: "bash" };
+  }
+  if (looksReadOnly(command)) {
+    return { kind: "process", target: bounded, risk: "low", category: "bash-read", operation: "read" };
+  }
+  return { kind: "process", target: bounded, risk: "low", category: "process", operation: "bash" };
 }
 
-const READ_SCRIPT = String.raw`
-const fs = require("node:fs");
-const path = process.argv[1];
-const offset = Number(process.argv[2] || 1);
-const limit = process.argv[3] ? Number(process.argv[3]) : undefined;
-const buffer = fs.readFileSync(path);
-if (!limit && offset <= 1) process.stdout.write(buffer);
-else {
-  const lines = buffer.toString("utf8").split("\n");
-  process.stdout.write(lines.slice(Math.max(0, offset - 1), limit ? Math.max(0, offset - 1) + limit : undefined).join("\n"));
-}`;
-
-const WRITE_SCRIPT = `
-require("node:fs").writeFileSync(process.argv[1], process.env.VSPI_TOOL_CONTENT || "");
-process.stdout.write("write ok");`;
-
-const EDIT_SCRIPT = `
-const fs = require("node:fs");
-const path = process.argv[1];
-const edits = JSON.parse(process.env.VSPI_TOOL_EDITS || "[]");
-let content = fs.readFileSync(path, "utf8");
-for (const edit of edits) {
-  const first = content.indexOf(edit.oldText);
-  if (first < 0 || content.indexOf(edit.oldText, first + edit.oldText.length) >= 0) throw new Error("oldText must match exactly once");
-  content = content.slice(0, first) + edit.newText + content.slice(first + edit.oldText.length);
+function looksReadOnly(command: string): boolean {
+  if (/[>|]\s*(?:tee\b|[^|])/u.test(command) || /(?:^|\s)>>?\s*\S/u.test(command)) return false;
+  const segments = command
+    .split(/(?:&&|\|\||;|\n)/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return (
+    segments.length > 0 &&
+    segments.every((segment) => {
+      const executable = segment.match(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:command\s+)?([\w./+-]+)/)?.[1];
+      return (
+        executable !== undefined &&
+        [
+          "cat",
+          "head",
+          "tail",
+          "sed",
+          "awk",
+          "grep",
+          "rg",
+          "find",
+          "fd",
+          "ls",
+          "pwd",
+          "stat",
+          "wc",
+          "file",
+          "which",
+          "whereis",
+          "type",
+          "env",
+          "printenv",
+          "git",
+          "npm",
+          "pnpm",
+          "yarn",
+          "node",
+          "tsx",
+          "tsc",
+        ].includes(executable.replace(/^.*\//, ""))
+      );
+    })
+  );
 }
-fs.writeFileSync(path, content);
-process.stdout.write("edit ok");`;

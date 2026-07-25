@@ -6,6 +6,7 @@ import type { ChatBackend, ChatBackendEvents, SendOptions } from "../src/backend
 import { DEFAULT_SETTINGS } from "../src/domain/fixtures.js";
 import type { Attachment, ModelOption, Question, SessionOption, TranscriptMessage } from "../src/domain/types.js";
 import type { StoredPlan } from "../src/plans/types.js";
+import { createInteractiveApprovalBroker } from "../src/policy/startup-runtime.js";
 import { stripAnsi } from "../src/ui/ansi.js";
 import { matchesInteraction } from "../src/ui/interactions.js";
 import type { PanelController, PanelEvent } from "../src/ui/panels.js";
@@ -16,11 +17,17 @@ type TestableApp = {
   applyPanelEvent(event: PanelEvent): Promise<void>;
   messages: TranscriptMessage[];
   busy: boolean;
+  queueState: { steering: number; followUp: number };
+  workingFrame: number;
+  workspaceFocus: "composer" | "transcript" | "plan";
   panelFocused: boolean;
   panels: PanelController;
   planSnapshot?: StoredPlan;
   preview?: unknown;
   inspectIndex?: number;
+  inspectNodeId?: string;
+  inspectToolId?: string;
+  inspectDepth: "node" | "tool";
   renameAttachmentId?: string;
   renameInput: string;
   notice?: { text: string; tone: string };
@@ -65,7 +72,7 @@ const MODEL: ModelOption = {
   brand: "openai",
   label: "Model X",
   vision: false,
-  efforts: ["低", "中", "高"],
+  efforts: ["low", "medium", "high"],
   price: { inputUsdPerMillion: 0, outputUsdPerMillion: 0 },
 };
 
@@ -140,15 +147,67 @@ async function flush(): Promise<void> {
 }
 
 describe("busy submission guard", () => {
-  it("keeps the draft and blocks Enter and Alt+Enter while a generation is busy", async () => {
+  it("uses Escape to cancel active generation without replacing the session, transcript, or current draft", async () => {
     const ref: { events?: ChatBackendEvents } = {};
     let releaseSend: (() => void) | undefined;
-    const send = vi.fn(async (_text: string, _options: SendOptions) => {
+    const cancel = vi.fn(async () => {});
+    const send = vi.fn(async () => {
       ref.events?.onBusy(true);
       await new Promise<void>((resolve) => {
         releaseSend = resolve;
       });
       ref.events?.onBusy(false);
+    });
+    const newSession = vi.fn(async () => {});
+    const app = await createApp(backendWith(ref, { send, cancel, newSession }));
+    const testable = app as unknown as TestableApp;
+    try {
+      const active = testable.submit("ESC_RESTORE");
+      await flush();
+      expect(testable.busy).toBe(true);
+      ref.events?.onMessage({
+        id: "partial",
+        role: "assistant",
+        kind: "text",
+        text: "PARTIAL_OUTPUT",
+        streaming: true,
+      });
+      app.composer.setText("UNSENT_DRAFT");
+      app.handleInput("\u001b");
+      await flush();
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(newSession).not.toHaveBeenCalled();
+      expect(app.composer.getText()).toBe("UNSENT_DRAFT");
+      expect(testable.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ role: "user", text: "ESC_RESTORE" }),
+          expect.objectContaining({ id: "partial", text: "PARTIAL_OUTPUT" }),
+        ]),
+      );
+      releaseSend?.();
+      await active;
+    } finally {
+      releaseSend?.();
+      await app.dispose();
+    }
+  });
+
+  it("accepts Enter as steer and Alt+Enter as follow-up while a generation is busy", async () => {
+    const ref: { events?: ChatBackendEvents } = {};
+    let releaseSend: (() => void) | undefined;
+    const send = vi.fn(async (_text: string, options: SendOptions) => {
+      if (send.mock.calls.length === 1) {
+        ref.events?.onBusy(true);
+        await new Promise<void>((resolve) => {
+          releaseSend = resolve;
+        });
+        ref.events?.onBusy(false);
+        return { status: "completed" as const };
+      }
+      return {
+        status: "queued" as const,
+        delivery: options.behavior === "followUp" ? ("followUp" as const) : ("steer" as const),
+      };
     });
     const app = await createApp(backendWith(ref, { send }));
     const testable = app as unknown as TestableApp;
@@ -159,26 +218,25 @@ describe("busy submission guard", () => {
 
       app.composer.setText("SECOND_DRAFT");
       app.handleInput("\r");
-      expect(app.composer.getText()).toBe("SECOND_DRAFT");
-      expect(send).toHaveBeenCalledTimes(1);
-      expect(testable.notice?.text).toContain("生成中");
+      await flush();
+      expect(app.composer.getText()).toBe("");
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(send.mock.calls[1]?.[1]?.behavior).toBe("prompt");
+      expect(testable.notice?.text).toContain("下一次模型调用前");
+      expect(testable.messages.at(-1)).toMatchObject({ text: "SECOND_DRAFT", delivery: "steer" });
 
+      app.composer.setText("THIRD_FOLLOW_UP");
       app.handleInput("\x1b\r");
-      expect(app.composer.getText()).toBe("SECOND_DRAFT");
-      expect(send).toHaveBeenCalledTimes(1);
+      await flush();
+      expect(app.composer.getText()).toBe("");
+      expect(send).toHaveBeenCalledTimes(3);
+      expect(send.mock.calls[2]?.[1]?.behavior).toBe("followUp");
+      expect(testable.messages.at(-1)).toMatchObject({ text: "THIRD_FOLLOW_UP", delivery: "followUp" });
 
       releaseSend?.();
       await first;
       await flush();
       expect(testable.busy).toBe(false);
-
-      app.handleInput("\r");
-      await flush();
-      expect(send).toHaveBeenCalledTimes(2);
-      expect(send.mock.calls[1]?.[0]).toBe("SECOND_DRAFT");
-      expect(send.mock.calls[1]?.[1]?.behavior).toBe("prompt");
-      releaseSend?.();
-      await flush();
     } finally {
       releaseSend?.();
       await app.dispose();
@@ -211,6 +269,70 @@ describe("busy submission guard", () => {
       expect(send.mock.calls[2]?.[1]?.behavior).toBe("prompt");
     } finally {
       await app.dispose();
+    }
+  });
+
+  it("restores native queued messages to the current editor when Escape aborts", async () => {
+    const ref: { events?: ChatBackendEvents } = {};
+    let releaseSend: (() => void) | undefined;
+    const send = vi.fn(async (_text: string, options: SendOptions) => {
+      if (send.mock.calls.length === 1) {
+        ref.events?.onBusy(true);
+        await new Promise<void>((resolve) => {
+          releaseSend = resolve;
+        });
+        ref.events?.onBusy(false);
+        return { status: "completed" as const };
+      }
+      return {
+        status: "queued" as const,
+        delivery: options.behavior === "followUp" ? ("followUp" as const) : ("steer" as const),
+      };
+    });
+    const cancel = vi.fn(async () => ({ queuedMessages: ["QUEUED_CORRECTION"] }));
+    const app = await createApp(backendWith(ref, { send, cancel }));
+    const testable = app as unknown as TestableApp;
+    try {
+      const active = testable.submit("PRIMARY_TASK");
+      await flush();
+      app.composer.setText("QUEUED_CORRECTION");
+      app.handleInput("\r");
+      await flush();
+      app.composer.setText("CURRENT_DRAFT");
+
+      app.handleInput("\u001b");
+      await flush();
+      expect(app.composer.getText()).toBe("QUEUED_CORRECTION\n\nCURRENT_DRAFT");
+      expect(testable.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ text: "PRIMARY_TASK" }),
+          expect.objectContaining({ text: "QUEUED_CORRECTION", delivery: "cancelled" }),
+        ]),
+      );
+      releaseSend?.();
+      await active;
+    } finally {
+      releaseSend?.();
+      await app.dispose();
+    }
+  });
+
+  it("animates Working and renders native queue counts while busy", async () => {
+    vi.useFakeTimers();
+    const ref: { events?: ChatBackendEvents } = {};
+    const app = await createApp(backendWith(ref));
+    const testable = app as unknown as TestableApp;
+    try {
+      ref.events?.onQueueUpdate?.({ steering: 2, followUp: 1 });
+      ref.events?.onBusy(true);
+      expect(testable.workingFrame).toBe(0);
+      expect(app.render(120).map(stripAnsi).join("\n")).toContain("▌ Working ⠋ · 插入 2 · 后续 1");
+      vi.advanceTimersByTime(240);
+      expect(testable.workingFrame).toBe(1);
+      expect(app.render(120).map(stripAnsi).join("\n")).toContain("Working ⠙");
+    } finally {
+      await app.dispose();
+      vi.useRealTimers();
     }
   });
 });
@@ -278,6 +400,22 @@ describe("command panel close", () => {
 });
 
 describe("Plan router question", () => {
+  it("exits the Question overlay before a later Escape can cancel generation", async () => {
+    const ref: { events?: ChatBackendEvents } = {};
+    const app = await createApp(backendWith(ref));
+    const testable = app as unknown as TestableApp;
+    try {
+      const pending = ref.events?.onQuestion?.([{ id: "reason", title: "Reason", prompt: "Why?", kind: "freeText" }]);
+      expect(testable.panels.kind).toBe("question");
+      app.handleInput("draft reason");
+      app.handleInput("\u001b");
+      await expect(pending).rejects.toThrow(/cancel/i);
+      expect(testable.panels.kind).toBe("plan");
+    } finally {
+      await app.dispose();
+    }
+  });
+
   it("resumes the routed submission after the question is answered", async () => {
     const route = vi.fn(async () => ({ kind: "question" as const, questions: ROUTE_QUESTIONS }));
     const send = vi.fn(async (_text: string, _options: SendOptions) => {});
@@ -316,6 +454,28 @@ describe("Plan router question", () => {
       app.handleInput("\x1b");
       await flush();
       expect(app.composer.getText()).toBe("设计并实现一个完全无关的计费系统");
+      expect(testable.panels.kind).toBe("plan");
+    } finally {
+      await app.dispose();
+    }
+  });
+});
+
+describe("tool approval overlay", () => {
+  it("returns a structured denial when Escape closes the approval panel", async () => {
+    const broker = createInteractiveApprovalBroker();
+    const app = await createApp(backendWith({}), fakeAttachments(), { approvalBroker: broker });
+    const testable = app as unknown as TestableApp;
+    try {
+      const pending = broker.request({
+        action: { kind: "network", category: "ssh", target: "ssh build-host" },
+        category: "ssh",
+        policy: "Standard",
+        requiredPolicy: "YOLO",
+      });
+      expect(testable.panels.kind).toBe("approval");
+      app.handleInput("\u001b");
+      await expect(pending).resolves.toEqual({ type: "deny", reason: "Approval cancelled by user" });
       expect(testable.panels.kind).toBe("plan");
     } finally {
       await app.dispose();
@@ -413,6 +573,95 @@ describe("rename and inspect Ctrl+C semantics", () => {
     }
   });
 
+  it("cycles Composer, Transcript, and Plan while keeping two-level transcript selection stable", async () => {
+    const ref: { events?: ChatBackendEvents } = {};
+    const app = await createApp(backendWith(ref));
+    const testable = app as unknown as TestableApp;
+    try {
+      ref.events?.onMessage({ id: "user", role: "user", kind: "text", text: "inspect" });
+      ref.events?.onMessage({
+        id: "thinking",
+        role: "assistant",
+        kind: "thinking",
+        effort: "high",
+        text: "reasoning",
+        collapsed: true,
+      });
+      ref.events?.onMessage({
+        id: "tool-1",
+        role: "assistant",
+        kind: "tool",
+        groupId: "turn-1",
+        name: "read",
+        summary: "package.json",
+        status: "success",
+        output: "first output",
+        expanded: false,
+      });
+      ref.events?.onMessage({
+        id: "tool-2",
+        role: "assistant",
+        kind: "tool",
+        groupId: "turn-1",
+        name: "bash",
+        summary: "npm test",
+        status: "success",
+        output: "second output",
+        expanded: false,
+      });
+      ref.events?.onMessage({ id: "answer", role: "assistant", kind: "text", text: "done" });
+
+      app.handleInput("\x1b[Z");
+      expect(testable.workspaceFocus).toBe("transcript");
+      expect(testable.inspectNodeId).toBe("answer");
+
+      app.handleInput("\x1b[A");
+      expect(testable.inspectNodeId).toBe("tool-group:turn-1");
+      app.handleInput("\r");
+      expect(testable.inspectDepth).toBe("tool");
+      expect(testable.inspectToolId).toBe("tool-1");
+      app.handleInput("\x1b[B");
+      expect(testable.inspectToolId).toBe("tool-2");
+      app.handleInput("\x1b[C");
+      expect(testable.messages.find((message) => message.id === "tool-2")).toMatchObject({ expanded: true });
+      expect(app.render(80).map(stripAnsi).join("\n")).toContain("second output");
+      app.handleInput("\x1b[D");
+      expect(testable.messages.find((message) => message.id === "tool-2")).toMatchObject({ expanded: false });
+      expect(testable.inspectDepth).toBe("tool");
+      app.handleInput("\x1b[D");
+      expect(testable.inspectDepth).toBe("node");
+
+      ref.events?.onMessage({ id: "later", role: "assistant", kind: "text", text: "later" });
+      expect(testable.inspectNodeId).toBe("tool-group:turn-1");
+      app.handleInput("\x1b[A");
+      expect(testable.inspectNodeId).toBe("thinking");
+      app.handleInput("\x1b[C");
+      expect(testable.messages.find((message) => message.id === "thinking")).toMatchObject({ collapsed: false });
+      app.handleInput("\x1b[D");
+      expect(testable.messages.find((message) => message.id === "thinking")).toMatchObject({ collapsed: true });
+
+      app.handleInput("\x1b[Z");
+      expect(testable.workspaceFocus).toBe("plan");
+      app.handleInput("\x1b[Z");
+      expect(testable.workspaceFocus).toBe("composer");
+    } finally {
+      await app.dispose();
+    }
+  });
+
+  it("skips an empty Transcript in the Shift+Tab focus cycle", async () => {
+    const app = await createApp(backendWith({}));
+    const testable = app as unknown as TestableApp;
+    try {
+      app.handleInput("\x1b[Z");
+      expect(testable.workspaceFocus).toBe("plan");
+      app.handleInput("\x1b[Z");
+      expect(testable.workspaceFocus).toBe("composer");
+    } finally {
+      await app.dispose();
+    }
+  });
+
   it("lets Ctrl+C exit from Inspect instead of swallowing it", async () => {
     const ref: { events?: ChatBackendEvents } = {};
     const onExit = vi.fn();
@@ -452,6 +701,7 @@ describe("Plan focus and hints", () => {
       await flush();
       await testable.submit("/plan");
       expect(testable.panelFocused).toBe(true);
+      expect(testable.workspaceFocus).toBe("plan");
       const focusedHint = app
         .render(80)
         .map(stripAnsi)
@@ -461,6 +711,7 @@ describe("Plan focus and hints", () => {
 
       app.handleInput("\x1b[Z");
       expect(testable.panelFocused).toBe(false);
+      expect(testable.workspaceFocus).toBe("composer");
       const unfocusedHint = app
         .render(80)
         .map(stripAnsi)

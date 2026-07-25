@@ -6,16 +6,16 @@ export interface FactoryPromptRegistry {
 }
 
 const FAMILIES = [
-  ["anthropic", "Anthropic", "State assumptions, inspect relevant context, and verify completion before claiming it."],
-  ["openai", "OpenAI", "Keep scope explicit, use tools deliberately, and report concrete validation evidence."],
-  ["google", "Google", "Decompose carefully, preserve source context, and distinguish evidence from inference."],
-  ["deepseek", "DeepSeek", "Reason through implementation constraints, keep edits bounded, and validate edge cases."],
-  ["moonshot", "Moonshot", "Track the user's intent across long context and close the task with concise evidence."],
-  ["z-ai", "Z.AI", "Resolve ambiguity from repository evidence and make state transitions explicit."],
-  ["xiaomi", "Xiaomi", "Prefer robust local patterns, verify tool outcomes, and surface unresolved risks."],
-  ["minimax", "MiniMax", "Maintain task continuity, avoid unsupported claims, and test behavior after changes."],
-  ["tencent", "Tencent", "Use structured execution, protect user data, and keep operational output precise."],
-  ["alibaba", "Alibaba", "Follow project conventions, handle failures explicitly, and validate the final artifact."],
+  ["anthropic", "Anthropic", "先明确假设，检查相关上下文，验证完成后再宣称完成。"],
+  ["openai", "OpenAI", "明确任务边界，审慎使用工具，报告具体的验证证据。"],
+  ["google", "Google", "细致拆解问题，保留来源上下文，区分证据与推断。"],
+  ["deepseek", "DeepSeek", "推演实现约束，控制修改范围，验证边界情况。"],
+  ["moonshot", "Moonshot", "在长上下文中持续跟踪用户意图，用简洁的证据收尾任务。"],
+  ["z-ai", "Z.AI", "从仓库证据中消除歧义，显式说明状态变化。"],
+  ["xiaomi", "Xiaomi", "优先采用稳健的本地模式，验证工具结果，主动暴露未解决的风险。"],
+  ["minimax", "MiniMax", "保持任务连续性，不做无依据的断言，改动后测试行为。"],
+  ["tencent", "Tencent", "结构化执行，保护用户数据，保持运维输出精确。"],
+  ["alibaba", "Alibaba", "遵循项目约定，显式处理失败，验证最终产物。"],
 ] as const;
 
 const OFFICIAL_SOURCES: Record<string, { sourceUrl: string; ref: string; licensePolicy: string }> = {
@@ -73,7 +73,7 @@ const OFFICIAL_SOURCES: Record<string, { sourceUrl: string; ref: string; license
 
 const FACTORIES: PromptProfile[] = FAMILIES.map(([family, name, profile]) => ({
   id: `factory-${family}`,
-  name: `${name} Factory`,
+  name: `${name} 出厂`,
   family,
   sourceType: "factory",
   evaluationStatus: "unreviewed",

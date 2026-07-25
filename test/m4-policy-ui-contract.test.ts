@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { ACTION_REGISTRY } from "../src/domain/commands.js";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/domain/fixtures.js";
+import type { PolicySnapshot } from "../src/policy/execution-policy.js";
 import { stripAnsi } from "../src/ui/ansi.js";
 import { PanelController } from "../src/ui/panels.js";
 import { plainTheme } from "./helpers.js";
-import type { PolicySnapshot } from "./m4-contract.js";
 
 interface PolicyPanel {
   setPolicySnapshot(snapshot: PolicySnapshot): void;
@@ -25,30 +25,29 @@ describe("M4 Policy TUI contract", () => {
     expect(command?.disabledReason).toBeUndefined();
   });
 
-  it("renders truthful levels/hints and requires an explicit YOLO warning action", () => {
+  it("renders all approval levels as Host and makes Auto the no-prompt level", () => {
     const panel = new PanelController(DEFAULT_SETTINGS) as unknown as PolicyPanel;
     expect(panel.setPolicySnapshot, "Policy panel requires a runtime snapshot input").toBeTypeOf("function");
     if (typeof panel.setPolicySnapshot !== "function") return;
-    panel.setPolicySnapshot({ policy: "Standard", boundary: "Sandboxed", sandboxed: true, recovery: false });
+    panel.setPolicySnapshot({
+      policy: "Standard",
+      boundary: "Host",
+      sandboxed: false,
+      recovery: false,
+      sessionAllowlist: [],
+    });
     panel.open("policy");
     const initial = panel.render(80, 16, plainTheme(), DEFAULT_USAGE).map(stripAnsi).join("\n");
-    expect(initial).toMatch(/Safe[\s\S]*Standard[\s\S]*Auto[\s\S]*YOLO/);
-    expect(initial).toMatch(/Standard[\s\S]{0,80}Sandboxed/);
-    expect(initial).toMatch(/YOLO[\s\S]{0,80}Host/);
+    expect(initial).toMatch(/Safe[\s\S]*Standard[\s\S]*YOLO[\s\S]*Auto/);
+    expect(initial).not.toContain("Sandboxed");
+    expect(initial.match(/Host/g)?.length).toBeGreaterThanOrEqual(4);
     expect(stripAnsi(panel.renderHint(80, plainTheme()))).toMatch(/Enter.*(?:切换|选择)/i);
 
-    let warning = "";
-    for (let index = 0; index < 4; index += 1) {
-      warning = panel.render(80, 16, plainTheme(), DEFAULT_USAGE).map(stripAnsi).join("\n");
-      if (/YOLO[\s\S]{0,160}(?:高风险|不可跳过|明确确认)/i.test(warning)) break;
-      panel.handleInput("\u001b[B");
-    }
-    expect(warning).toMatch(/YOLO[\s\S]{0,160}(?:Host|风险|绕过|sandbox|确认)/i);
-    expect(stripAnsi(panel.renderHint(80, plainTheme()))).toMatch(/Enter.*(?:确认|切换).*YOLO|YOLO.*确认/i);
+    for (let index = 0; index < 2; index += 1) panel.handleInput("\u001b[B");
     expect(panel.handleInput("\r")).toMatchObject({
       type: "policyChange",
-      policy: "YOLO",
-      requiresAcknowledgement: true,
+      policy: "Auto",
+      requiresAcknowledgement: false,
     });
   });
 });
