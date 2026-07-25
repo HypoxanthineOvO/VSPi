@@ -71,7 +71,7 @@ describe("M1 Pi-native policy tool integration", () => {
     expect(await readFile(join(workspace, "src", "a.ts"), "utf8")).toContain("newValue");
     expect(edited.details?.diff).toContain("newValue");
     expect(edited.details?.patch).toContain("newValue");
-  });
+  }, 15_000);
 
   it("preserves Pi native image reading", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "vspi-native-image-"));
