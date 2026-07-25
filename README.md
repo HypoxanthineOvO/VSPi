@@ -4,19 +4,15 @@ VSPi v0.2.0 是基于 `@earendil-works/pi-tui` 与 `@earendil-works/pi-coding-ag
 
 ## 安装
 
-从公开 GitLab 仓库安装固定的 `v0.2.0` 版本：
+从 GitLab Release 的预构建包安装固定的 `v0.2.0` 版本：
 
 ```bash
-# HTTPS
-npm install -g 'git+https://gitlab.vsplab.cn/heyx/vspi.git#v0.2.0'
-
-# 已配置 SSH key 时也可使用 SSH
-npm install -g 'git+ssh://git@gitlab.vsplab.cn/heyx/vspi.git#v0.2.0'
+npm install -g 'https://gitlab.vsplab.cn/heyx/vspi/-/releases/v0.2.0/downloads/vspi-0.2.0.tgz'
 
 vspi --version
 ```
 
-固定 Tag 可以避免默认分支后续更新改变已安装版本。Workflow 默认关闭；需要只读 Workflow Plan 时使用 `vspi --workflow`。
+Release 包已经包含编译后的 `dist`，目标机器不需要 TypeScript 或源码构建环境。固定版本地址可以避免默认分支后续更新改变已安装版本。Workflow 默认关闭；需要只读 Workflow Plan 时使用 `vspi --workflow`。
 
 ## 环境与启动
 

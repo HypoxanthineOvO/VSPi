@@ -29,8 +29,9 @@ describe("M9 npm package artifact", () => {
     const sourcePackage = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8")) as {
       scripts?: Record<string, string>;
     };
-    expect(sourcePackage.scripts?.prepare).toBe("npm run build");
-    expect(sourcePackage.scripts?.prepack).toBeUndefined();
+    expect(sourcePackage.scripts?.prepare).toBeUndefined();
+    expect(sourcePackage.scripts?.prepack).toBe("npm run build");
+    expect(sourcePackage.scripts?.pretest).toBe("npm run build");
 
     const dry = parsePack((await npm(["pack", "--dry-run", "--json", "--ignore-scripts"], ROOT)).stdout);
     const dryPaths = dry.files.map((entry) => entry.path);
@@ -86,10 +87,12 @@ describe("M9 npm package artifact", () => {
     ) as {
       bin?: Record<string, string>;
       private?: boolean;
+      scripts?: Record<string, string>;
       version?: string;
     };
     expect(installedPackage.bin).toEqual({ vspi: "dist/index.js" });
     expect(installedPackage.version).toBe("0.2.0");
     expect(installedPackage.private).not.toBe(true);
+    expect(installedPackage.scripts?.prepare).toBeUndefined();
   }, 150_000);
 });

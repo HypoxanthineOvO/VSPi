@@ -1,0 +1,49 @@
+image: node:22-bookworm-slim
+
+workflow:
+  rules:
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - when: never
+
+default:
+  interruptible: true
+  tags:
+    - latex-runner
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - .npm/
+
+variables:
+  npm_config_cache: "$CI_PROJECT_DIR/.npm"
+
+stages:
+  - verify
+
+verify:
+  stage: verify
+  before_script:
+    - node --version
+    - npm --version
+    - npm ci --ignore-scripts --no-audit --no-fund
+  script:
+    - npm run check
+    - npm test
+    - git diff --check
+    - test "$(node dist/index.js --version)" = "$(node -p "require('./package.json').version")"
+    - npm pack
+    - export TARBALL="vspi-$(node -p "require('./package.json').version").tgz"
+    - test -f "$TARBALL"
+    - mkdir .package-smoke
+    - npm install --prefix .package-smoke --ignore-scripts --no-audit --no-fund "./$TARBALL"
+    - test "$(.package-smoke/node_modules/.bin/vspi --version)" = "$(node -p "require('./package.json').version")"
+  artifacts:
+    when: always
+    paths:
+      - vspi-*.tgz
+    expire_in: 1 week
