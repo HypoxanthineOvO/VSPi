@@ -26,6 +26,12 @@ function parsePack(stdout: string): PackDescription {
 
 describe("M9 npm package artifact", () => {
   it("dry-runs and creates a minimal tarball with the declared bin and release docs", async () => {
+    const sourcePackage = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+    expect(sourcePackage.scripts?.prepare).toBe("npm run build");
+    expect(sourcePackage.scripts?.prepack).toBeUndefined();
+
     const dry = parsePack((await npm(["pack", "--dry-run", "--json", "--ignore-scripts"], ROOT)).stdout);
     const dryPaths = dry.files.map((entry) => entry.path);
     expect(dryPaths).toEqual(expect.arrayContaining(["package.json", "README.md", "Docs/tui-v1.md", "dist/index.js"]));
