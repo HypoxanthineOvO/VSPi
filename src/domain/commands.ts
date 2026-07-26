@@ -11,6 +11,7 @@ export type ActionHandler =
   | "newSession"
   | "sessions"
   | "externalImport"
+  | "skills"
   | "compact"
   | "update"
   | "plan"
@@ -71,6 +72,15 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
     description: "导入 Codex 或 Claude Code 历史会话",
     group: "VSPi",
     handler: "externalImport",
+    availability: "enabled",
+  },
+  {
+    id: "skills",
+    aliases: ["skill"],
+    label: "/skills",
+    description: "管理、安装与导入 Skill",
+    group: "VSPi",
+    handler: "skills",
     availability: "enabled",
   },
   {

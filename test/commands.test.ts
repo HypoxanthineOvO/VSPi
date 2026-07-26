@@ -8,6 +8,7 @@ describe("command catalog", () => {
       "/new",
       "/sessions",
       "/import",
+      "/skills",
       "/compact",
       "/update",
       "/model",
@@ -26,6 +27,7 @@ describe("command catalog", () => {
       "/quit",
     ]);
     expect(resolveCommand("/resume")?.id).toBe("sessions");
+    expect(resolveCommand("/skill")?.id).toBe("skills");
     expect(resolveCommand("/session")?.id).toBe("sessions");
     expect(resolveCommand("/provider")?.id).toBe("providers");
     expect(resolveCommand("/workflow")).toBeUndefined();

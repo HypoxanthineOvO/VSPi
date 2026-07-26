@@ -4,6 +4,7 @@ import type { LocalPlanBackend } from "../plans/types.js";
 import type { ExecutionPolicyService } from "../policy/execution-policy.js";
 import type { ModelIdentity, ResolvedPromptProfile } from "../prompts/types.js";
 import type { ExternalSessionSource } from "../sessions/external-history.js";
+import type { SkillScope } from "../skills/types.js";
 import { FixtureBackend } from "./fixture-backend.js";
 import { PiBackend } from "./pi-backend.js";
 import type {
@@ -119,6 +120,30 @@ export class AdaptiveBackend implements ChatBackend {
   async importExternalSession(id: string, expectedFingerprint: string): Promise<void> {
     if (!this.active.importExternalSession) throw new Error("当前后端不支持外部会话导入");
     await this.active.importExternalSession(id, expectedFingerprint);
+  }
+
+  async listSkills() {
+    return this.active.listSkills?.() ?? { items: [], issues: [], projectTrusted: false };
+  }
+
+  async installSkill(source: string, scope: SkillScope, enable: boolean) {
+    if (!this.active.installSkill) throw new Error("当前后端不支持 Skill 安装");
+    return this.active.installSkill(source, scope, enable);
+  }
+
+  async setSkillEnabled(id: string, enabled: boolean, scope?: SkillScope): Promise<void> {
+    if (!this.active.setSkillEnabled) throw new Error("当前后端不支持 Skill 启停");
+    await this.active.setSkillEnabled(id, enabled, scope);
+  }
+
+  async updateSkill(id: string): Promise<void> {
+    if (!this.active.updateSkill) throw new Error("当前后端不支持 Skill 更新");
+    await this.active.updateSkill(id);
+  }
+
+  async removeSkill(id: string): Promise<void> {
+    if (!this.active.removeSkill) throw new Error("当前后端不支持 Skill 移除");
+    await this.active.removeSkill(id);
   }
 
   getPlanBinding() {

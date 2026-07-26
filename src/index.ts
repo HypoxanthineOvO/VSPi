@@ -278,11 +278,13 @@ function startupSessionMode(): {
     ...(argv[0] === "init" ? { openOnStart: "providers" as const } : {}),
     ...(argv[0] === "import"
       ? { initialCommand: ["/import", argv[1]].filter(Boolean).join(" ") }
-      : argv[0] === "login"
-        ? { initialCommand: ["/login", argv[1]].filter(Boolean).join(" ") }
-        : argv[0] === "logout"
-          ? { initialCommand: ["/logout", argv[1]].filter(Boolean).join(" ") }
-          : {}),
+      : argv[0] === "skills" || argv[0] === "skill"
+        ? { initialCommand: "/skills" }
+        : argv[0] === "login"
+          ? { initialCommand: ["/login", argv[1]].filter(Boolean).join(" ") }
+          : argv[0] === "logout"
+            ? { initialCommand: ["/logout", argv[1]].filter(Boolean).join(" ") }
+            : {}),
   };
 }
 
@@ -298,6 +300,7 @@ function printHelp(): void {
   vspi resume              启动后进入会话选择器
   vspi import [codex|claude]
                             导入外部 Agent 的历史会话
+  vspi skills               管理、安装与导入 Skill
   vspi run "<prompt>"      非交互模式：执行单个 prompt，结果输出到 stdout
   vspi bridge              启动附件 Bridge（SSH 粘贴图片）
   vspi update              检查并安装最新稳定版本

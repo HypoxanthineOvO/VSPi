@@ -50,6 +50,8 @@ import type {
   ResolvedPromptProfile,
 } from "../prompts/types.js";
 import type { ExternalSessionSource } from "../sessions/external-history.js";
+import { normalizeSkillInstallSource } from "../skills/service.js";
+import type { SkillCatalogItem, SkillScope } from "../skills/types.js";
 import { renderActivityRail, renderQueuedMessage } from "../ui/activity.js";
 import { padLine } from "../ui/ansi.js";
 import { AuthDialog } from "../ui/auth-dialog.js";
@@ -1008,6 +1010,16 @@ export class VspiApp implements Component, Focusable {
       } catch (error) {
         this.showNotice(`外部会话读取失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
       }
+    } else if (action.handler === "skills") {
+      try {
+        if (!this.backend.listSkills) throw new Error("当前后端不支持 Skill 管理");
+        this.showNotice("正在读取 Pi、Codex 与 Claude Code Skill…", "info");
+        this.requestRender();
+        this.panels.setSkillCatalog(await this.backend.listSkills());
+        this.panels.open("skills");
+      } catch (error) {
+        this.showNotice(`Skill 读取失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+      }
     } else if (action.handler === "settings" || action.handler === "thinkingSettings") {
       try {
         const layers = await loadSettingsLayers(this.options.cwd, undefined, {
@@ -1248,6 +1260,49 @@ export class VspiApp implements Component, Focusable {
         if (error instanceof Error && error.name === "AbortError") return;
         this.showNotice(`会话导入失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
       }
+    } else if (event.type === "skillInstall") {
+      try {
+        if (!this.backend.installSkill || !this.backend.listSkills) throw new Error("当前后端不支持 Skill 安装");
+        const source = normalizeSkillInstallSource(event.source);
+        const [answered] = await this.requestQuestions([
+          {
+            id: "skill-install",
+            title: "安装 Skill",
+            prompt: `${source}\nScope ${event.scope === "project" ? "Project" : "Global"}。只加载包内 Skill，extension、prompt 与 theme 保持禁用。`,
+            kind: "singleChoice",
+            options: [
+              { id: "install-enable", label: "安装并启用", description: "保存 Pi 原生包记录并加载发现的 Skill" },
+              { id: "install-only", label: "仅安装", description: "保存包记录，但暂不加载任何 Skill" },
+              { id: "cancel", label: "取消", description: "不安装、不修改设置" },
+            ],
+          },
+        ]);
+        if (answered?.answer !== "install-enable" && answered?.answer !== "install-only") {
+          this.panels.open("skills");
+          return;
+        }
+        this.showNotice("正在安装 Skill 包…", "info");
+        const result = await this.backend.installSkill(source, event.scope, answered.answer === "install-enable");
+        this.panels.setSkillCatalog(await this.backend.listSkills());
+        this.panels.open("skills");
+        this.showNotice(`${result.enabled ? "已安装并启用" : "已安装"} ${result.skills.length} 个 Skill`, "success");
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") return;
+        this.panels.open("skills");
+        this.showNotice(`Skill 安装失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+      }
+    } else if (event.type === "skillAgentSearch") {
+      this.panels.close();
+      this.focusComposer();
+      await this.submit(
+        `请搜索并筛选可靠的 Agent Skill，找到明确的 Git 或 npm 来源后，使用 skill_manage 工具向我提议安装。需求：${event.query}`,
+      );
+    } else if (event.type === "skillToggle") {
+      await this.applySkillToggle(event.skill, event.enabled);
+    } else if (event.type === "skillUpdate") {
+      await this.applySkillMutation("update", event.skill);
+    } else if (event.type === "skillRemove") {
+      await this.applySkillMutation("remove", event.skill);
     } else if (event.type === "settings") {
       try {
         const path = await saveSettings(this.options.cwd, event.settings, undefined, {
@@ -1663,6 +1718,107 @@ export class VspiApp implements Component, Focusable {
     } catch (error) {
       this.showNotice(`Local Plan 更新失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
       await this.refreshPlanSnapshot(this.sessionEpoch);
+    }
+  }
+
+  private async applySkillToggle(skill: SkillCatalogItem, enabled: boolean): Promise<void> {
+    try {
+      if (!this.backend.setSkillEnabled || !this.backend.listSkills) {
+        throw new Error("当前后端不支持 Skill 启停");
+      }
+      let scope: SkillScope | undefined;
+      if (enabled && (skill.source === "codex" || skill.source === "claude") && !skill.installed) {
+        const options = [
+          { id: "user", label: "Global 启用", description: "登记原路径到 Pi 全局 Skill 设置" },
+          ...(this.backend.isProjectTrusted?.()
+            ? [{ id: "project", label: "Project 启用", description: "仅在当前可信项目中登记" }]
+            : []),
+          { id: "cancel", label: "取消", description: "不修改 Skill 配置" },
+        ];
+        const [answered] = await this.requestQuestions([
+          {
+            id: "skill-enable",
+            title: "启用 Skill",
+            prompt: `${skill.name}\n${skill.sourceLabel} · 原路径登记，不复制源文件。`,
+            kind: "singleChoice",
+            options,
+          },
+        ]);
+        if (answered?.answer !== "user" && answered?.answer !== "project") {
+          this.panels.open("skills");
+          return;
+        }
+        scope = answered.answer;
+      } else {
+        const [answered] = await this.requestQuestions([
+          {
+            id: enabled ? "skill-enable" : "skill-disable",
+            title: enabled ? "启用 Skill" : "停用 Skill",
+            prompt: `${skill.name}\n${skill.sourceLabel} · ${skill.scope}`,
+            kind: "singleChoice",
+            options: [
+              {
+                id: "confirm",
+                label: enabled ? "启用" : "停用",
+                description: enabled ? "加入当前 VSPi Skill 目录" : "保留源文件或安装包，仅停止加载",
+              },
+              { id: "cancel", label: "取消", description: "不修改 Skill 配置" },
+            ],
+          },
+        ]);
+        if (answered?.answer !== "confirm") {
+          this.panels.open("skills");
+          return;
+        }
+      }
+      await this.backend.setSkillEnabled(skill.id, enabled, scope);
+      this.panels.setSkillCatalog(await this.backend.listSkills());
+      this.panels.open("skills");
+      this.showNotice(`${skill.name} 已${enabled ? "启用" : "停用"}`, "success");
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") return;
+      this.panels.open("skills");
+      this.showNotice(`Skill 操作失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+    }
+  }
+
+  private async applySkillMutation(action: "update" | "remove", skill: SkillCatalogItem): Promise<void> {
+    try {
+      if (!this.backend.listSkills || (action === "update" ? !this.backend.updateSkill : !this.backend.removeSkill)) {
+        throw new Error("当前后端不支持 Skill 管理");
+      }
+      const [answered] = await this.requestQuestions([
+        {
+          id: `skill-${action}`,
+          title: action === "update" ? "更新 Skill" : "移除 Skill",
+          prompt: `${skill.name}\n${skill.sourceLabel} · ${skill.scope}${action === "remove" && skill.packageSource ? "\n将移除该受管包提供的全部 Skill。" : ""}`,
+          kind: "singleChoice",
+          options: [
+            {
+              id: "confirm",
+              label: action === "update" ? "更新" : "移除",
+              description: action === "update" ? "从已记录的包来源获取更新" : "删除受管包或解除外部路径登记",
+            },
+            { id: "cancel", label: "取消", description: "不修改 Skill 配置" },
+          ],
+        },
+      ]);
+      if (answered?.answer !== "confirm") {
+        this.panels.open("skills");
+        return;
+      }
+      if (action === "update") await this.backend.updateSkill?.(skill.id);
+      else await this.backend.removeSkill?.(skill.id);
+      this.panels.setSkillCatalog(await this.backend.listSkills());
+      this.panels.open("skills");
+      this.showNotice(`${skill.name} 已${action === "update" ? "更新" : "移除"}`, "success");
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") return;
+      this.panels.open("skills");
+      this.showNotice(
+        `Skill ${action === "update" ? "更新" : "移除"}失败：${error instanceof Error ? error.message : "未知错误"}`,
+        "error",
+      );
     }
   }
 

@@ -1,7 +1,7 @@
 export type ToolCapabilityStatus = "native" | "available" | "not-connected" | "deferred";
 
 export interface ToolCapability {
-  id: "files" | "git" | "ssh" | "images" | "browser" | "mcp" | "pty";
+  id: "files" | "git" | "ssh" | "images" | "skills" | "browser" | "mcp" | "pty";
   label: string;
   status: ToolCapabilityStatus;
   route: string;
@@ -36,6 +36,13 @@ export const TOOL_CAPABILITIES: readonly ToolCapability[] = [
     status: "available",
     route: "Pi read image content + VSPi attachments",
     boundary: "verified file handle and attachment session",
+  },
+  {
+    id: "skills",
+    label: "Skills",
+    status: "available",
+    route: "Pi ResourceLoader + skill_list / skill_manage",
+    boundary: "Question confirmation before every mutation",
   },
   {
     id: "browser",

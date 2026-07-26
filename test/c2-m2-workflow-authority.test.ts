@@ -17,6 +17,8 @@ describe("C2 M2 single Workflow authority", () => {
     expect(source).toMatch(/getPlanBinding\(\)[\s\S]{0,120}!this\.options\.planBackend/);
     expect(source).toMatch(/bindPlan\([^)]*\)[\s\S]{0,180}Local Plan compatibility is not enabled/);
     expect(source).not.toMatch(/createPlanToolDefinitions/);
-    expect(source).toMatch(/tools:\s*\["read", "ls", "find", "grep", "bash", "edit", "write", "question"\]/);
+    const activeTools = /tools:\s*\[([^\]]+)\]/.exec(source)?.[1] ?? "";
+    expect(activeTools).toContain('"question"');
+    expect(activeTools).not.toMatch(/"plan_[^"]+"/);
   });
 });

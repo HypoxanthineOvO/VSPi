@@ -17,6 +17,7 @@ import type {
   ExternalSessionSource,
   ExternalSessionSummary,
 } from "../sessions/external-history.js";
+import type { SkillCatalogSnapshot, SkillInstallResult, SkillManager, SkillScope } from "../skills/types.js";
 
 export interface RuntimeModelOption extends ModelOption {
   provider: string;
@@ -135,6 +136,11 @@ export interface ChatBackend {
   }): Promise<ExternalSessionSummary[]>;
   previewExternalSession?(id: string): Promise<ExternalSessionPreview>;
   importExternalSession?(id: string, expectedFingerprint: string): Promise<void>;
+  listSkills?(): Promise<SkillCatalogSnapshot>;
+  installSkill?(source: string, scope: SkillScope, enable: boolean): Promise<SkillInstallResult>;
+  setSkillEnabled?(id: string, enabled: boolean, scope?: SkillScope): Promise<void>;
+  updateSkill?(id: string): Promise<void>;
+  removeSkill?(id: string): Promise<void>;
   getPlanBinding?(): PlanBinding | undefined;
   bindPlan?(planId: string | undefined): Promise<void>;
   getEffectivePromptSegments?(): EffectivePromptSegment[];
@@ -154,3 +160,5 @@ export interface ChatBackend {
   logoutProvider?(providerId: string): Promise<void>;
   dispose(): Promise<void>;
 }
+
+export type { SkillManager };
