@@ -28,13 +28,14 @@ export class AuthDialog implements ProviderAuthInteraction {
   notify(event: ProviderAuthEvent): void {
     if (event.type === "device_code") {
       this.messages = [
-        { text: event.verificationUri, tone: "focus" },
+        { text: terminalHyperlink(event.verificationUri), tone: "focus" },
         { text: `设备码  ${event.userCode}`, tone: "warning" },
-        { text: "请在浏览器中完成授权，VSPi 正在等待结果。", tone: "muted" },
+        { text: "请打开链接完成授权；设备码会自动轮询，不需要粘贴回调地址。", tone: "muted" },
+        { text: "VSPi 正在等待授权结果…", tone: "muted" },
       ];
     } else if (event.type === "auth_url") {
       this.messages = [
-        { text: event.url, tone: "focus" },
+        { text: terminalHyperlink(event.url), tone: "focus" },
         ...(event.instructions ? [{ text: event.instructions, tone: "warning" as const }] : []),
       ];
     } else if (event.type === "info") {
@@ -166,5 +167,15 @@ export class AuthDialog implements ProviderAuthInteraction {
 
   private clearPromptAbort(pending: PendingPrompt): void {
     if (pending.abort && pending.prompt.signal) pending.prompt.signal.removeEventListener("abort", pending.abort);
+  }
+}
+
+function terminalHyperlink(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return value;
+    return `\u001b]8;;${url.href}\u0007${value}\u001b]8;;\u0007`;
+  } catch {
+    return value;
   }
 }

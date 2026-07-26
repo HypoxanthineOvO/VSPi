@@ -28,9 +28,10 @@ import type { EffectivePromptSegment } from "../prompts/effective-prompt.js";
 import { createPromptProfileExtension } from "../prompts/pi-prompt-profile-extension.js";
 import type { ModelIdentity, ResolvedPromptProfile } from "../prompts/types.js";
 import { BUILTIN_PROVIDERS } from "../providers/builtins.js";
-import { createProviderConfigService, normalizeProviderApi, type ProviderRecord } from "../providers/config-service.js";
+import { createProviderConfigService } from "../providers/config-service.js";
 import { isVisibleRuntimeModel } from "../providers/model-visibility.js";
 import { type ProviderProtocol, runProtocolProbe } from "../providers/protocol-probe.js";
+import { normalizeProjectProvider, registerBuiltinProviders } from "../providers/runtime-registration.js";
 import { createQuestionToolDefinition } from "../questions/tool.js";
 import type {
   CancelResult,
@@ -659,9 +660,7 @@ export class PiRuntimeBackend implements ChatBackend {
             }
           : {}),
       });
-      for (const builtin of BUILTIN_PROVIDERS) {
-        services.modelRuntime.registerProvider(builtin.id, normalizeBuiltinProvider(builtin) as never);
-      }
+      registerBuiltinProviders(services.modelRuntime, BUILTIN_PROVIDERS);
       if (projectTrusted) {
         const projectConfig = createProviderConfigService({ cwd, agentDir, trustedProject: true, builtins: [] });
         const overlay = await projectConfig.loadProjectOverlay();
@@ -1206,89 +1205,6 @@ function toProbeProtocol(api: string | undefined): ProviderProtocol | undefined 
     return api;
   }
   return undefined;
-}
-
-/**
- * 内置 Provider 注册到 Pi ModelRuntime。apiKey 使用 `$<ID>_API_KEY` 环境变量引用
- * （Pi resolve-config-value 模板语法），VSPi 不接触也不保存真实 credential。
- */
-function normalizeBuiltinProvider(provider: ProviderRecord) {
-  const envVar = `${provider.id.replace(/[^a-z0-9]/gi, "_").toUpperCase()}_API_KEY`;
-  const api = provider.protocol
-    ? normalizeProviderApi(provider.protocol, "provider.protocol")
-    : provider.api
-      ? normalizeProviderApi(provider.api, "provider.api")
-      : "openai-completions";
-  return {
-    name: provider.name,
-    ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
-    apiKey: `$${envVar}`,
-    models: provider.models.map((model) => ({
-      id: model.id,
-      name: model.name,
-      ...(api ? { api } : {}),
-      reasoning: model.reasoning ?? false,
-      ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
-      input: normalizeModelInput(model.input),
-      cost: model.cost ?? {
-        input: model.inputUsdPerMillion ?? 0,
-        output: model.outputUsdPerMillion ?? 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-      },
-      contextWindow: model.contextWindow ?? 128_000,
-      maxTokens: model.maxTokens ?? 8_192,
-    })),
-  };
-}
-
-function normalizeProjectProvider(
-  provider: import("../providers/config-service.js").ProviderLayer,
-  inheritedModels: readonly RuntimeModel[] = [],
-) {
-  const api = provider.protocol
-    ? normalizeProviderApi(provider.protocol, "provider.protocol")
-    : provider.api
-      ? normalizeProviderApi(provider.api, "provider.api")
-      : provider.models
-        ? "openai-completions"
-        : undefined;
-  const models = provider.models ?? (api ? inheritedModels : undefined);
-  return {
-    ...(provider.name ? { name: provider.name } : {}),
-    ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
-    ...(api ? { api } : {}),
-    ...(provider.headers ? { headers: provider.headers } : {}),
-    ...(models
-      ? {
-          models: models.map((model) => ({
-            id: model.id,
-            name: model.name,
-            ...(api ? { api } : model.api ? { api: normalizeProviderApi(model.api, "model.api") } : {}),
-            ...(provider.models && model.baseUrl ? { baseUrl: model.baseUrl } : {}),
-            reasoning: model.reasoning ?? false,
-            ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
-            input: normalizeModelInput(model.input),
-            cost: model.cost ?? {
-              input: model.inputUsdPerMillion ?? 0,
-              output: model.outputUsdPerMillion ?? 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-            },
-            contextWindow: model.contextWindow ?? 128_000,
-            maxTokens: model.maxTokens ?? 8_192,
-            ...(model.headers ? { headers: model.headers } : {}),
-          })),
-        }
-      : {}),
-  };
-}
-
-function normalizeModelInput(input: string[] | undefined): Array<"text" | "image"> {
-  const normalized = (input ?? ["text"]).filter(
-    (item): item is "text" | "image" => item === "text" || item === "image",
-  );
-  return normalized.includes("text") ? normalized : ["text", ...normalized];
 }
 
 function normalizeContent(content: unknown): Array<Record<string, unknown> & { type: string }> {

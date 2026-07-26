@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { chmod, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import {
   assertProjectEntrySafe,
   inspectProjectPath,
@@ -69,6 +69,13 @@ export interface ProviderLayer {
   protocol?: string;
   headers?: Record<string, string>;
   models?: ProviderModelRecord[];
+}
+
+export interface GlobalProviderInput {
+  name: string;
+  baseUrl: string;
+  protocol: SupportedProviderApi;
+  models: ProviderModelRecord[];
 }
 
 export type SupportedProviderApi =
@@ -240,6 +247,75 @@ export function createProviderConfigService(options: ProviderConfigServiceOption
     });
   }
 
+  async function saveGlobalProvider(id: string, value: GlobalProviderInput): Promise<{ hash: string; path: string }> {
+    if (!/^[a-z0-9][a-z0-9._-]*$/u.test(id)) throw new Error("Provider ID 只能包含小写字母、数字、点、横线和下划线");
+    const name = requiredString(value.name, `${id}.name`).trim();
+    const baseUrl = validateBaseUrl(value.baseUrl, `${id}.baseUrl`);
+    const api = normalizeProviderApi(value.protocol, `${id}.protocol`);
+    const models = parseModels(value.models, false, id);
+    if (models.length === 0) throw new Error("自定义 Provider 至少需要一个模型");
+
+    return withGlobalLock(async () => {
+      const existing = await readLayer(globalPath, "global");
+      if (existing.damaged) throw new Error("global models.json 已损坏；拒绝覆盖，请先人工修复 JSON");
+      const root = existing.value === undefined ? {} : existing.value;
+      if (!isRecord(root)) throw new Error("global models.json 根节点必须是 object");
+      const existingProviders = root.providers;
+      if (existingProviders !== undefined && !isRecord(existingProviders)) {
+        throw new Error("global models.json 的 providers 必须是 object");
+      }
+      const next = {
+        ...root,
+        providers: {
+          ...(existingProviders ?? {}),
+          [id]: {
+            ...(isRecord(existingProviders?.[id]) ? existingProviders[id] : {}),
+            name,
+            baseUrl,
+            api,
+            models: models.map((model) => serializeGlobalModel(model, api)),
+          },
+        },
+      };
+      await atomicWriteGlobal(next);
+      return { hash: (await loadCatalog()).hash, path: globalPath };
+    });
+  }
+
+  async function atomicWriteGlobal(value: unknown): Promise<void> {
+    await mkdir(dirname(globalPath), { recursive: true, mode: 0o700 });
+    const temporary = `${globalPath}.${process.pid}-${randomUUID()}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(sortValue(value), null, 2)}\n`, { mode: 0o600, flag: "wx" });
+    await chmod(temporary, 0o600);
+    try {
+      await rename(temporary, globalPath);
+      await chmod(globalPath, 0o600);
+    } catch (error) {
+      await unlink(temporary).catch(() => undefined);
+      throw new Error(`Provider config atomic rename failed: ${errorMessage(error)}`, { cause: error });
+    }
+  }
+
+  async function withGlobalLock<T>(operation: () => Promise<T>): Promise<T> {
+    await mkdir(dirname(globalPath), { recursive: true, mode: 0o700 });
+    const lockPath = `${globalPath}.lock`;
+    let handle: Awaited<ReturnType<typeof open>>;
+    try {
+      handle = await open(lockPath, "wx", 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new Error("Provider config conflict: global writer lock exists");
+      }
+      throw error;
+    }
+    try {
+      return await operation();
+    } finally {
+      await handle.close().catch(() => undefined);
+      await unlink(lockPath).catch(() => undefined);
+    }
+  }
+
   async function withProjectLock<T>(operation: () => Promise<T>): Promise<T> {
     const scope = await prepareProjectPath(options.cwd, "models.json");
     await chmod(scope.projectDir, 0o700);
@@ -270,7 +346,14 @@ export function createProviderConfigService(options: ProviderConfigServiceOption
     return project.value === undefined ? undefined : parseOverlay(project.value, true);
   }
 
-  return { loadCatalog, loadProjectOverlay, saveProjectOverlay, saveProjectProvider, validateProjectOverlay };
+  return {
+    loadCatalog,
+    loadProjectOverlay,
+    saveGlobalProvider,
+    saveProjectOverlay,
+    saveProjectProvider,
+    validateProjectOverlay,
+  };
 }
 
 function parseOverlay(value: unknown, project: boolean): ProviderOverlay {
@@ -357,6 +440,32 @@ function parseModels(value: unknown, project: boolean, providerId: string): Prov
     if (input.headers !== undefined) model.headers = parseHeaders(input.headers, project);
     return model;
   });
+}
+
+function serializeGlobalModel(model: ProviderModelRecord, api: SupportedProviderApi): Record<string, unknown> {
+  const cost =
+    model.cost ??
+    (model.inputUsdPerMillion !== undefined || model.outputUsdPerMillion !== undefined
+      ? {
+          input: model.inputUsdPerMillion ?? 0,
+          output: model.outputUsdPerMillion ?? 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        }
+      : undefined);
+  return {
+    id: model.id,
+    name: model.name,
+    api,
+    ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
+    ...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
+    ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+    ...(model.input ? { input: model.input } : {}),
+    ...(cost ? { cost } : {}),
+    ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+    ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
+    ...(model.headers ? { headers: model.headers } : {}),
+  };
 }
 
 function parseThinkingLevelMap(
