@@ -1,0 +1,50 @@
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import process from "node:process";
+
+function fail(message) {
+  throw new Error(`package verification failed: ${message}`);
+}
+
+const metadataPath = resolve(process.argv[2] ?? "");
+if (!process.argv[2]) fail("expected the npm pack JSON path");
+
+const projectPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
+const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+if (!Array.isArray(metadata) || metadata.length !== 1) fail("npm pack must produce exactly one package");
+
+const packed = metadata[0];
+const expectedFilename = `${projectPackage.name}-${projectPackage.version}.tgz`;
+if (packed.name !== projectPackage.name) fail(`unexpected package name ${packed.name}`);
+if (packed.version !== projectPackage.version) fail(`unexpected package version ${packed.version}`);
+if (packed.filename !== expectedFilename) fail(`unexpected filename ${packed.filename}`);
+
+const tarball = resolve(dirname(metadataPath), packed.filename);
+const packedPackage = JSON.parse(
+  execFileSync("tar", ["-xOf", tarball, "package/package.json"], { encoding: "utf8" }),
+);
+if (packedPackage.name !== projectPackage.name || packedPackage.version !== projectPackage.version) {
+  fail("packed package.json identity differs from the repository metadata");
+}
+if (packedPackage.bin?.vspi !== "dist/index.js") fail("packed CLI entry point is invalid");
+if (Object.hasOwn(packedPackage.scripts ?? {}, "prepare")) fail("packed package must not define prepare");
+
+const files = new Map((packed.files ?? []).map((file) => [file.path, file]));
+for (const required of ["package.json", "README.md", "dist/index.js", "dist/index.d.ts"]) {
+  if (!files.has(required)) fail(`required file is missing: ${required}`);
+}
+if ((files.get("dist/index.js")?.mode & 0o111) === 0) fail("dist/index.js is not executable");
+
+const allowed = /^(?:package\.json|README\.md|dist\/|Docs\/tui-v1\.md$|Docs\/harness\/)/;
+for (const path of files.keys()) {
+  if (!allowed.test(path)) fail(`unexpected file in package: ${path}`);
+  if (/^(?:src|test|node_modules|\.git)(?:\/|$)/.test(path)) fail(`private source leaked: ${path}`);
+}
+
+const tag = process.env.CI_COMMIT_TAG;
+if (tag && tag !== `v${projectPackage.version}`) {
+  fail(`tag ${tag} does not match package version v${projectPackage.version}`);
+}
+
+console.log(`verified ${packed.filename} (${files.size} files)`);
