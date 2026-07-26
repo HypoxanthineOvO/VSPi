@@ -31,6 +31,7 @@ import {
 } from "../policy/execution-policy.js";
 import { redactPrompt } from "../prompts/effective-prompt.js";
 import { BRAND_PRIORITY, providerPriorityIndex } from "../providers/builtins.js";
+import type { ExternalSessionSource, ExternalSessionSummary } from "../sessions/external-history.js";
 import { TOOL_CAPABILITIES, type ToolCapabilityStatus } from "../tools/capability-catalog.js";
 import type { WorkflowSnapshot } from "../workflow/types.js";
 import {
@@ -59,6 +60,7 @@ export type PanelKind =
   | "models"
   | "providers"
   | "sessions"
+  | "externalImport"
   | "settings"
   | "usage"
   | "theme"
@@ -83,6 +85,7 @@ export type PanelEvent =
     }
   | { type: "session"; session: SessionOption }
   | { type: "fork"; session: SessionOption }
+  | { type: "externalImport"; session: ExternalSessionSummary }
   | { type: "settings"; settings: AppSettings }
   | { type: "effort"; effort: EffortLevel }
   | { type: "approval"; response: ApprovalResponse }
@@ -223,6 +226,16 @@ function centerText(text: string, width: number): string {
   return `${" ".repeat(left)}${clipped}${" ".repeat(spacing - left)}`;
 }
 
+function formatExternalDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? "--/--" : date.toISOString().slice(5, 10).replace("-", "/");
+}
+
+function formatExternalTimestamp(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? "未知" : date.toISOString().slice(0, 16).replace("T", " ");
+}
+
 function tabLine(tabs: string[], selected: number, width: number, theme: VspiTheme): string {
   const line = tabs
     .map((tab, index) => (index === selected ? theme.selected(` ${tab} `) : theme.muted(` ${tab} `)))
@@ -274,6 +287,9 @@ export class PanelController {
   private modelGroups: ModelGroup[] = [];
   private providers: ProviderOption[] = [];
   private sessions: SessionOption[] = [];
+  private externalSessions: ExternalSessionSummary[] = [];
+  private externalImportSource: ExternalSessionSource = "codex";
+  private externalImportSearch = "";
   private providerEditing = false;
   private providerActionMenu = false;
   private activeProviderId: string | undefined;
@@ -391,6 +407,14 @@ export class PanelController {
   setSessions(sessions: SessionOption[]): void {
     this.sessions = sessions.length > 0 ? [...sessions] : [];
     clampSelection(this.state, this.sessions.length);
+  }
+
+  setExternalSessions(sessions: ExternalSessionSummary[], source: ExternalSessionSource = "codex"): void {
+    this.externalSessions = structuredClone(sessions);
+    this.externalImportSource = source;
+    this.externalImportSearch = "";
+    this.state.selected = 0;
+    this.state.scroll = 0;
   }
 
   setModels(
@@ -564,6 +588,7 @@ export class PanelController {
     if (this.kind === "models") return this.handleModels(data);
     if (this.kind === "providers") return this.handleProviders(data);
     if (this.kind === "sessions") return this.handleSessions(data, interaction.handler);
+    if (this.kind === "externalImport") return this.handleExternalImport(data, interaction.handler);
     if (this.kind === "settings") return this.handleSettings(data);
     if (this.kind === "theme") return this.handleTheme(data);
     if (this.kind === "question") return this.handleQuestion(data);
@@ -589,6 +614,8 @@ export class PanelController {
     else if (this.kind === "models") [title, body] = ["Model", this.renderModels(bodyWidth, theme)];
     else if (this.kind === "providers") [title, body] = ["Provider", this.renderProviders(bodyWidth, theme)];
     else if (this.kind === "sessions") [title, body] = ["Sessions", this.renderSessions(bodyWidth, theme)];
+    else if (this.kind === "externalImport")
+      [title, body] = ["导入会话", this.renderExternalImport(bodyWidth, bodyRows, theme)];
     else if (this.kind === "settings") [title, body] = ["Settings", this.renderSettings(bodyWidth, theme)];
     else if (this.kind === "usage") [title, body] = ["Usage", this.renderUsage(bodyWidth, usage)];
     else if (this.kind === "theme") [title, body] = ["Theme", this.renderTheme(bodyWidth, theme)];
@@ -665,6 +692,7 @@ export class PanelController {
     const state: InteractionState = { narrowModel: !usesWideModelLayout(this.lastBodyWidth) };
     if (this.kind === "plan") state.hasItems = this.visiblePlanItems().length > 0;
     else if (this.kind === "sessions") state.hasItems = this.sessions.length > 0;
+    else if (this.kind === "externalImport") state.hasItems = this.filteredExternalSessions().length > 0;
     else if (this.kind === "commands") {
       const matches = commandMatches(this.commandQuery);
       const selected = matches[this.state.selected];
@@ -856,6 +884,33 @@ export class PanelController {
     if (!session) return;
     if (handler === "openSession") return { type: "session", session };
     if (handler === "forkSession") return { type: "fork", session };
+    return undefined;
+  }
+
+  private handleExternalImport(data: string, handler: string): PanelEvent | undefined {
+    if (handler === "switchImportSource") {
+      this.externalImportSource = this.externalImportSource === "codex" ? "claude" : "codex";
+      this.state.selected = 0;
+      this.state.scroll = 0;
+      return;
+    }
+    if (handler === "editImportSearch") {
+      if (panelKey(data, Key.backspace))
+        this.externalImportSearch = Array.from(this.externalImportSearch).slice(0, -1).join("");
+      else {
+        const value = printable(data);
+        if (value) this.externalImportSearch += value;
+      }
+      this.state.selected = 0;
+      this.state.scroll = 0;
+      return;
+    }
+    const sessions = this.filteredExternalSessions();
+    if (handler === "moveSelection" && this.move(data, sessions.length)) return;
+    if (handler === "importExternalSession") {
+      const session = sessions[this.state.selected];
+      return session ? { type: "externalImport", session } : undefined;
+    }
     return undefined;
   }
 
@@ -1489,6 +1544,90 @@ export class PanelController {
         theme,
       );
     });
+  }
+
+  private renderExternalImport(width: number, rows: number, theme: VspiTheme): string[] {
+    const codexCount = this.externalSessions.filter((session) => session.source === "codex").length;
+    const claudeCount = this.externalSessions.filter((session) => session.source === "claude").length;
+    const tabs = tabLine(
+      [`Codex  ${codexCount}`, `Claude Code  ${claudeCount}`],
+      this.externalImportSource === "codex" ? 0 : 1,
+      width,
+      theme,
+    );
+    const query = this.externalImportSearch || theme.muted("输入标题或路径");
+    const search = padLine(`  ${theme.muted("搜索  ")}${query}${theme.inverse(" ")}`, width);
+    const contentRows = Math.max(1, rows - 2);
+    const sessions = this.filteredExternalSessions();
+    clampSelection(this.state, sessions.length);
+    if (width < 58) return [tabs, search, ...this.externalImportList(sessions, width, contentRows, theme)];
+
+    const listWidth = Math.max(28, Math.floor(width * 0.57));
+    const detailWidth = Math.max(1, width - listWidth - 1);
+    const list = this.externalImportList(sessions, listWidth, contentRows, theme);
+    const detail = this.externalImportDetail(sessions[this.state.selected], detailWidth, contentRows, theme);
+    return [
+      tabs,
+      search,
+      ...Array.from({ length: contentRows }, (_, index) => {
+        const left = list[index] ?? padLine("", listWidth);
+        const right = detail[index] ?? padLine("", detailWidth);
+        return `${left}${theme.muted("│")}${right}`;
+      }),
+    ];
+  }
+
+  private externalImportList(
+    sessions: ExternalSessionSummary[],
+    width: number,
+    rows: number,
+    theme: VspiTheme,
+  ): string[] {
+    if (sessions.length === 0) return [theme.muted(padLine("没有匹配的历史会话", width))];
+    const start = Math.max(
+      0,
+      Math.min(this.state.selected - Math.floor(rows / 2), Math.max(0, sessions.length - rows)),
+    );
+    return Array.from({ length: rows }, (_, row) => {
+      const index = start + row;
+      const session = sessions[index];
+      if (!session) return padLine("", width);
+      return selectedLine(
+        alignRight(session.title, formatExternalDate(session.updatedAt), Math.max(1, width - 2)),
+        index === this.state.selected,
+        width,
+        theme,
+      );
+    });
+  }
+
+  private externalImportDetail(
+    session: ExternalSessionSummary | undefined,
+    width: number,
+    rows: number,
+    theme: VspiTheme,
+  ): string[] {
+    if (!session) return Array.from({ length: rows }, () => padLine("", width));
+    const source = session.source === "codex" ? "Codex" : "Claude Code";
+    const detail = [
+      theme.bold(truncateToWidth(session.title, width, "…")),
+      `${theme.muted("来源  ")}${source}${session.archived ? theme.muted(" · 已归档") : ""}`,
+      `${theme.muted("时间  ")}${formatExternalTimestamp(session.updatedAt)}`,
+      `${theme.muted("路径  ")}${truncateStart(session.cwd ?? "将在预览时读取", Math.max(1, width - 6))}`,
+      "",
+      theme.muted("Enter 读取完整可见记录并确认"),
+      theme.muted("原始历史始终保持不变"),
+    ];
+    return Array.from({ length: rows }, (_, index) => padLine(detail[index] ?? "", width));
+  }
+
+  private filteredExternalSessions(): ExternalSessionSummary[] {
+    const query = this.externalImportSearch.trim().toLocaleLowerCase();
+    return this.externalSessions.filter(
+      (session) =>
+        session.source === this.externalImportSource &&
+        (!query || `${session.title}\n${session.cwd ?? ""}`.toLocaleLowerCase().includes(query)),
+    );
   }
 
   private settingRows(): Array<{

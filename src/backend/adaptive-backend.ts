@@ -3,6 +3,7 @@ import type { EffortLevel, ModelGroup, ProviderOption, SessionOption } from "../
 import type { LocalPlanBackend } from "../plans/types.js";
 import type { ExecutionPolicyService } from "../policy/execution-policy.js";
 import type { ModelIdentity, ResolvedPromptProfile } from "../prompts/types.js";
+import type { ExternalSessionSource } from "../sessions/external-history.js";
 import { FixtureBackend } from "./fixture-backend.js";
 import { PiBackend } from "./pi-backend.js";
 import type {
@@ -104,6 +105,20 @@ export class AdaptiveBackend implements ChatBackend {
   async forkSession(id: string): Promise<void> {
     if (!this.active.forkSession) throw new Error("当前后端不支持会话分支");
     await this.active.forkSession(id);
+  }
+
+  async listExternalSessions(options?: { source?: ExternalSessionSource; query?: string; limit?: number }) {
+    return this.active.listExternalSessions?.(options) ?? [];
+  }
+
+  async previewExternalSession(id: string) {
+    if (!this.active.previewExternalSession) throw new Error("当前后端不支持外部会话预览");
+    return this.active.previewExternalSession(id);
+  }
+
+  async importExternalSession(id: string, expectedFingerprint: string): Promise<void> {
+    if (!this.active.importExternalSession) throw new Error("当前后端不支持外部会话导入");
+    await this.active.importExternalSession(id, expectedFingerprint);
   }
 
   getPlanBinding() {

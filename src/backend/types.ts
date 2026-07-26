@@ -12,6 +12,11 @@ import type {
 } from "../domain/types.js";
 import type { PlanBinding } from "../plans/types.js";
 import type { EffectivePromptSegment } from "../prompts/effective-prompt.js";
+import type {
+  ExternalSessionPreview,
+  ExternalSessionSource,
+  ExternalSessionSummary,
+} from "../sessions/external-history.js";
 
 export interface RuntimeModelOption extends ModelOption {
   provider: string;
@@ -77,7 +82,7 @@ export interface ChatQueueState {
   followUp: number;
 }
 
-export type SessionResetReason = "startup" | "new" | "resume" | "fork";
+export type SessionResetReason = "startup" | "new" | "resume" | "fork" | "import";
 
 export interface SessionReset {
   id: string;
@@ -123,6 +128,13 @@ export interface ChatBackend {
   listSessions(): Promise<SessionOption[]>;
   switchSession(id: string): Promise<void>;
   forkSession?(id: string): Promise<void>;
+  listExternalSessions?(options?: {
+    source?: ExternalSessionSource;
+    query?: string;
+    limit?: number;
+  }): Promise<ExternalSessionSummary[]>;
+  previewExternalSession?(id: string): Promise<ExternalSessionPreview>;
+  importExternalSession?(id: string, expectedFingerprint: string): Promise<void>;
   getPlanBinding?(): PlanBinding | undefined;
   bindPlan?(planId: string | undefined): Promise<void>;
   getEffectivePromptSegments?(): EffectivePromptSegment[];

@@ -49,7 +49,7 @@ Plan 背景       #182529
 │                                                                              │
 │ Model  OpenAI / GPT-5.4                                                      │
 │ Backend Pi                                                                   │
-│ Policy Standard · Host                                                 v0.2.5│
+│ Policy Standard · Host                                                 v0.2.6│
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -136,14 +136,14 @@ Model 以外层 60 列为 breakpoint：小于 60 列是窄屏列表/详情布局
 v0.2 的生产命令清单是：
 
 ```text
-/new       /sessions   /compact    /model      /providers
+/new       /sessions   /import     /compact    /model      /providers
 /update    /plan       /prompt     /thinking   /effort     /tools
 /policy    /usage      /settings   /theme      /quit
 ```
 
 手动 `/compact` 提供 Pi Native、Execution Continuity、Research Decisions 与 Custom 四种 profile。
 未绑定 Local Plan 默认 Pi Native，绑定 Plan 默认 Execution Continuity；`/compact --list` 可检查当前选择范围。
-v0.2.5 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
+v0.2.6 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
 
 `/plan`、`/prompt`、`/tools` 与 `/policy` 均由 Action Registry 接入真实生产工作区。无 Workflow 时 Plan 保持 VSPi 本地界面；显式启用后才只读投影 Workflow Delivery。Prompt 提供 Factory/Fork、分层规则、导入导出与 Effective Prompt；Tools 只读展示当前能力、路由与失败边界。
 
@@ -185,7 +185,9 @@ composer 正文空态为一行，随内容增长，最多显示 10 行；之后�
 
 ## 底部工作区
 
-Plan、Commands、Model、Provider、Sessions、Settings、Usage、Theme、Question、Tools 和图片预览占用同一位置，不互相嵌套；后续面板也不得创建 nested modal。
+Plan、Commands、Model、Provider、Sessions、历史导入、Settings、Usage、Theme、Question、Tools 和图片预览占用同一位置，不互相嵌套；后续面板也不得创建 nested modal。
+
+历史导入面板使用 Codex / Claude Code 水平 Tab、标题/路径搜索与固定列表/详情布局；窄终端降级为单列。两类来源均补充发现未索引的用户主会话，同时排除 Codex subagent rollout 与 Claude Code `agent-*` 记录。Enter 先流式解析完整可见记录，再由 Question 显示对话、工具与 token 估算并确认。解析以预览开始时的字节长度为边界，只接受边界内的完整 JSONL 行；确认后可见指纹变化必须重新预览。导入始终创建新 Pi Session，不改写 Codex/Claude 源文件，不携带隐藏 thinking、system/developer prompt、凭据、权限或内部控制记录。工具参数与输出作为可见历史保留，常见凭据在落盘前脱敏。超过当前上下文 80% 只警告，不静默截断。
 
 M3 已将 Model 接到 Pi ModelRuntime 真相源。Model 有“选择模型 / 模型组”两个横向 Tab。外层 60 列及以上固定为左侧模型/模型组列表、右侧详情/角色，内部使用一个稳定的 `│` 分隔；上下移动只替换右侧内容，行数不变。CNY/人民币价格仅出现在单模型右侧详情，模型组右侧不出现 `¥`，并且`不显示汇率参考行`。Enter 只提出选择；必须等待 `session.setModel()` 成功后才更新勾选、Model、vision、Context 和 Profile model identity。
 
