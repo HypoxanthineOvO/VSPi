@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { ProcessTerminal, type Terminal, TUI } from "@earendil-works/pi-tui";
+import { runAuthSetup } from "./app/auth-setup.js";
 import { shutdownInteractiveSession, startUiAfterSplash } from "./app/startup.js";
 import { VspiApp } from "./app/vspi-app.js";
 import { AttachmentBridge } from "./attachments/bridge.js";
@@ -58,7 +59,7 @@ async function renderOnce(): Promise<void> {
   const settings = await loadSettings(workspace, undefined, { trustedProject: security.trustedProject });
   const detected = { ...detectTerminalCapabilities(), reducedMotion: true, ssh: false };
   const capabilities = applySettingsToCapabilities(detected, settings);
-  const theme = createTheme(capabilities);
+  const theme = createTheme(capabilities, settings.theme);
   const attachments = new AttachmentService(randomUUID(), capabilities, theme);
   const promptProfileService = createPromptProfileService({
     cwd: workspace,
@@ -91,7 +92,7 @@ async function renderOnce(): Promise<void> {
         builtins: BUILTIN_PROVIDERS,
       }),
     runtimeDefaultsFactory: (trustedProject) => createRuntimeDefaultsService({ cwd: workspace, trustedProject }),
-    workflowAdapter,
+    ...(security.workflowAdapter ? { workflowAdapter } : {}),
     promptProfiles: promptProfileService,
     onExit() {},
   });
@@ -126,7 +127,7 @@ async function interactive(): Promise<void> {
   const tui = new TUI(terminal, true);
   const settings = await loadSettings(workspace, undefined, { trustedProject: security.trustedProject });
   const capabilities = applySettingsToCapabilities(detectTerminalCapabilities(), settings);
-  const theme = createTheme(capabilities);
+  const theme = createTheme(capabilities, settings.theme);
   let closing = false;
   const mode = resolveBackendMode();
   const promptProfileService = createPromptProfileService({
@@ -162,7 +163,7 @@ async function interactive(): Promise<void> {
         builtins: BUILTIN_PROVIDERS,
       }),
     runtimeDefaultsFactory: (trustedProject) => createRuntimeDefaultsService({ cwd: workspace, trustedProject }),
-    workflowAdapter,
+    ...(security.workflowAdapter ? { workflowAdapter } : {}),
     promptProfiles: promptProfileService,
     ...(sessionMode.openOnStart ? { openOnStart: sessionMode.openOnStart } : {}),
     onExit: () => void shutdown(),
@@ -190,7 +191,10 @@ async function interactive(): Promise<void> {
         await app.start();
         return app.startupStatus();
       },
-      startTui: () => app.getActiveTui().start(),
+      startTui: async () => {
+        app.getActiveTui().start();
+        if (sessionMode.initialCommand) await app.runStartupCommand(sessionMode.initialCommand);
+      },
     });
   } catch (error) {
     await shutdown();
@@ -255,11 +259,21 @@ async function bridge(): Promise<void> {
 }
 
 /** 启动会话语义：默认新会话；`vspi continue` 续接最近会话；`vspi resume` 打开会话选择器。 */
-function startupSessionMode(): { continueRecent: boolean; openOnStart?: "sessions" } {
+function startupSessionMode(): {
+  continueRecent: boolean;
+  openOnStart?: "sessions" | "providers";
+  initialCommand?: string;
+} {
   const argv = process.argv.slice(2);
   return {
     continueRecent: argv[0] === "continue",
     ...(argv[0] === "resume" ? { openOnStart: "sessions" as const } : {}),
+    ...(argv[0] === "init" ? { openOnStart: "providers" as const } : {}),
+    ...(argv[0] === "login"
+      ? { initialCommand: ["/login", argv[1]].filter(Boolean).join(" ") }
+      : argv[0] === "logout"
+        ? { initialCommand: ["/logout", argv[1]].filter(Boolean).join(" ") }
+        : {}),
   };
 }
 
@@ -268,6 +282,9 @@ function printHelp(): void {
 
 用法：
   vspi                     启动新会话（交互 TUI）
+  vspi init                打开首次配置与 Provider 登录
+  vspi login [provider]    登录订阅账号或保存 API Key
+  vspi logout [provider]   移除 Pi 保存的 Provider 凭据
   vspi continue            续接最近的会话
   vspi resume              启动后进入会话选择器
   vspi run "<prompt>"      非交互模式：执行单个 prompt，结果输出到 stdout
@@ -285,7 +302,7 @@ function printHelp(): void {
 环境变量：
   VSPi_BACKEND=pi|fixture  选择后端（fixture 等价 VSPi_FIXTURE=1，完全离线）
   VSPI_WORKFLOW_*          --workflow 所需的完整 bundle identity（详见 README）
-  Provider API key 经环境变量注入（如 VSPLAB_API_KEY、DEEPSEEK_API_KEY），VSPi 不保存密钥
+  Provider 凭据可用 vspi login 配置，或通过环境变量注入
 `);
 }
 
@@ -341,7 +358,14 @@ async function runOnce(prompt: string): Promise<void> {
 const entry = process.argv[2];
 if (entry === "bridge") await bridge();
 else if (entry === "run") await runOnce(process.argv.slice(3).join(" "));
-else if (entry === "--help" || entry === "-h") printHelp();
+else if (entry === "init" || entry === "login" || entry === "logout") {
+  const settings = await loadSettings(process.cwd());
+  await runAuthSetup({
+    mode: entry === "logout" ? "logout" : "login",
+    settings,
+    ...(process.argv[3] ? { providerRef: process.argv[3] } : {}),
+  });
+} else if (entry === "--help" || entry === "-h") printHelp();
 else if (entry === "--version" || entry === "-v") process.stdout.write(`${VSPI_VERSION}\n`);
 else if (process.argv.includes("--render-once")) await renderOnce();
 else await interactive();

@@ -71,6 +71,68 @@ function fakeSession(provider = "test", name = "Vision Model", options: FakeSess
 }
 
 describe("pi backend adapter", () => {
+  it("projects Pi authentication methods and delegates login/logout without handling secrets", async () => {
+    const fake = fakeSession("kimi-coding", "Kimi K3");
+    const models = [
+      {
+        id: "k3",
+        name: "Kimi K3",
+        provider: "kimi-coding",
+        input: ["text"],
+        contextWindow: 262_144,
+      },
+    ];
+    const login = vi.fn(async () => ({ type: "oauth" }));
+    const logout = vi.fn(async () => {});
+    const modelRuntime = {
+      getAvailable: vi.fn(async () => models),
+      getProviders: () => [
+        {
+          id: "kimi-coding",
+          name: "Kimi For Coding",
+          auth: {
+            oauth: { name: "Kimi Code (subscription)", loginLabel: "Sign in with Kimi Code" },
+            apiKey: { name: "Kimi API key", login: () => undefined },
+          },
+          getModels: () => models,
+        },
+      ],
+      getProviderAuthStatus: () => ({ configured: true, source: "stored" }),
+      listCredentials: vi.fn(async () => [{ providerId: "kimi-coding", type: "oauth" as const }]),
+      login,
+      logout,
+    };
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-pi-auth-")),
+      sessionFactory: async () => ({ session: fake.session }),
+      modelRuntime,
+    } as never);
+    await backend.start({
+      onMessage: vi.fn(),
+      onMessageUpdate: vi.fn(),
+      onBusy: vi.fn(),
+      onUsage: vi.fn(),
+      onNotice: vi.fn(),
+    });
+
+    await expect(backend.getProviderOptions()).resolves.toEqual([
+      expect.objectContaining({
+        id: "kimi-coding",
+        storedCredential: "oauth",
+        authMethods: [
+          { type: "oauth", label: "Sign in with Kimi Code" },
+          { type: "api_key", label: "Kimi API key" },
+        ],
+      }),
+    ]);
+    const interaction = { prompt: vi.fn(), notify: vi.fn() };
+    await backend.loginProvider("kimi-coding", "oauth", interaction as never);
+    expect(login).toHaveBeenCalledWith("kimi-coding", "oauth", interaction);
+    await backend.logoutProvider("kimi-coding");
+    expect(logout).toHaveBeenCalledWith("kimi-coding");
+    await backend.dispose();
+  });
+
   it("uses the current model's native thinking levels for Effort", async () => {
     const fake = fakeSession("openai", "Extended Reasoning", {
       thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],

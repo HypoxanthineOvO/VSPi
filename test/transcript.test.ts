@@ -106,15 +106,15 @@ describe("transcript rendering", () => {
     expect(stripAnsi(transcript.slice(userLines.length + 1).join("\n"))).toContain("◆ Answer");
   });
 
-  it("marks steering, follow-up, and cancelled queued messages inside the user surface", () => {
+  it("keeps pending delivery status separate from user text", () => {
     const messages: TranscriptMessage[] = [
       { ...userMessage("steer"), id: "steer", delivery: "steer" },
       { ...userMessage("follow"), id: "follow", delivery: "followUp" },
       { ...userMessage("cancelled"), id: "cancelled", delivery: "cancelled" },
     ];
     const rendered = renderTranscript(messages, 80, plainTheme()).map(stripAnsi).join("\n");
-    expect(rendered).toContain("已插入下一次调用");
-    expect(rendered).toContain("任务完成后继续");
+    expect(rendered).toContain("等待插入下一次调用");
+    expect(rendered).toContain("等待当前任务完成");
     expect(rendered).toContain("队列已取消");
   });
 

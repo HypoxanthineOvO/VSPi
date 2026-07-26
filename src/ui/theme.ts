@@ -1,6 +1,7 @@
 import type { MarkdownTheme } from "@earendil-works/pi-tui";
 import { Chalk } from "chalk";
 import hljs from "highlight.js";
+import type { AppSettings } from "../domain/types.js";
 import type { TerminalCapabilities } from "./capabilities.js";
 
 export const PALETTE = {
@@ -29,6 +30,25 @@ export const PALETTE = {
   activityBackground: "#182529",
   noticeBackground: "#252B2F",
   border: "#465058",
+} as const;
+
+const LIGHT_PALETTE = {
+  text: "#202428",
+  muted: "#626A72",
+  thinkingText: "#4F5962",
+  focus: "#087E8B",
+  blue: "#2459A9",
+  success: "#26753A",
+  warning: "#8A5A00",
+  error: "#B3261E",
+  border: "#A7ADB3",
+  selectionBackground: "#DDEDEF",
+  planBackground: "#EEF5F5",
+  codeBackground: "#EEF0F2",
+  userBackground: "#E9ECEF",
+  activityBackground: "#EEF5F5",
+  noticeBackground: "#ECEFF1",
+  userText: "#202428",
 } as const;
 
 export interface VspiTheme {
@@ -115,27 +135,37 @@ function syntaxLines(
   return output.join("").split("\n");
 }
 
-export function createTheme(capabilities: TerminalCapabilities): VspiTheme {
+export function createTheme(capabilities: TerminalCapabilities, mode: AppSettings["theme"] = "VSPi Dark"): VspiTheme {
   const chalk = new Chalk({ level: capabilities.colorLevel });
+  const terminalMode = mode === "Terminal";
+  const palette = mode === "VSPi Light" ? LIGHT_PALETTE : PALETTE;
   const color = (hex: string, ansi256: number): Styler =>
-    capabilities.truecolor ? chalk.hex(hex) : capabilities.colorLevel >= 2 ? chalk.ansi256(ansi256) : chalk.white;
+    terminalMode
+      ? (value) => value
+      : capabilities.truecolor
+        ? chalk.hex(hex)
+        : capabilities.colorLevel >= 2
+          ? chalk.ansi256(ansi256)
+          : (value) => value;
   const bg = (hex: string, ansi256: number): Styler =>
-    capabilities.truecolor
-      ? chalk.bgHex(hex)
-      : capabilities.colorLevel >= 2
-        ? chalk.bgAnsi256(ansi256)
-        : (value) => value;
+    terminalMode
+      ? (value) => value
+      : capabilities.truecolor
+        ? chalk.bgHex(hex)
+        : capabilities.colorLevel >= 2
+          ? chalk.bgAnsi256(ansi256)
+          : (value) => value;
 
-  const text = color(PALETTE.text, 255);
-  const muted = color(PALETTE.muted, 246);
-  const thinking = color(PALETTE.thinkingText, 249);
-  const focus = color(PALETTE.focus, 80);
-  const blue = color(PALETTE.blue, 111);
-  const success = color(PALETTE.success, 114);
-  const warning = color(PALETTE.warning, 179);
-  const error = color(PALETTE.error, 210);
-  const border = color(PALETTE.border, 240);
-  const selectionBg = bg(PALETTE.selectionBackground, 237);
+  const text = color(palette.text, 255);
+  const muted = terminalMode ? chalk.dim : color(palette.muted, 246);
+  const thinking = terminalMode ? chalk.dim : color(palette.thinkingText, 249);
+  const focus = terminalMode ? chalk.cyan : color(palette.focus, 80);
+  const blue = terminalMode ? chalk.blue : color(palette.blue, 111);
+  const success = terminalMode ? chalk.green : color(palette.success, 114);
+  const warning = terminalMode ? chalk.yellow : color(palette.warning, 179);
+  const error = terminalMode ? chalk.red : color(palette.error, 210);
+  const border = terminalMode ? chalk.dim : color(palette.border, 240);
+  const selectionBg = terminalMode ? chalk.inverse : bg(palette.selectionBackground, 237);
   const policyBadges = {
     Safe: (value: string) => bg(PALETTE.safeBadgeBackground, 22)(color(PALETTE.safeBadgeText, 120)(chalk.bold(value))),
     Standard: (value: string) =>
@@ -143,21 +173,21 @@ export function createTheme(capabilities: TerminalCapabilities): VspiTheme {
     YOLO: (value: string) => bg(PALETTE.yoloBadgeBackground, 94)(color(PALETTE.yoloBadgeText, 215)(chalk.bold(value))),
     Auto: (value: string) => bg(PALETTE.autoBadgeBackground, 52)(color(PALETTE.autoBadgeText, 217)(chalk.bold(value))),
   } as const;
-  const planBg = bg(PALETTE.planBackground, 235);
-  const codeBg = bg(PALETTE.codeBackground, 236);
-  const userBg = bg(PALETTE.userBackground, 236);
-  const activityBg = bg(PALETTE.activityBackground, 235);
-  const noticeBg = bg(PALETTE.noticeBackground, 236);
-  const userText = color(PALETTE.userText, 255);
-  const code = (value: string) => codeBg(warning(value));
+  const planBg = bg(palette.planBackground, 235);
+  const codeBg = bg(palette.codeBackground, 236);
+  const userBg = bg(palette.userBackground, 236);
+  const activityBg = bg(palette.activityBackground, 235);
+  const noticeBg = bg(palette.noticeBackground, 236);
+  const userText = color(palette.userText, 255);
+  const code = (value: string) => (terminalMode ? chalk.underline(warning(value)) : codeBg(warning(value)));
   const codeBlock = (value: string) => codeBg(text(value));
 
   const syntaxStyles: Record<string, Styler> = {
-    keyword: focus,
-    string: success,
-    number: warning,
+    keyword: terminalMode ? chalk.magenta : focus,
+    string: terminalMode ? chalk.green : success,
+    number: terminalMode ? chalk.yellow : warning,
     literal: warning,
-    comment: muted,
+    comment: terminalMode ? chalk.dim : muted,
     title: blue,
     function: blue,
     variable: text,

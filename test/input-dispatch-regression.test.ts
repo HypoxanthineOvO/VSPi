@@ -224,6 +224,8 @@ describe("busy submission guard", () => {
       expect(send.mock.calls[1]?.[1]?.behavior).toBe("prompt");
       expect(testable.notice?.text).toContain("下一次模型调用前");
       expect(testable.messages.at(-1)).toMatchObject({ text: "SECOND_DRAFT", delivery: "steer" });
+      ref.events?.onQueueUpdate?.({ steering: 1, followUp: 0 });
+      expect(app.render(100).map(stripAnsi).join("\n")).toContain("等待插入下一次调用");
 
       app.composer.setText("THIRD_FOLLOW_UP");
       app.handleInput("\x1b\r");
@@ -232,6 +234,17 @@ describe("busy submission guard", () => {
       expect(send).toHaveBeenCalledTimes(3);
       expect(send.mock.calls[2]?.[1]?.behavior).toBe("followUp");
       expect(testable.messages.at(-1)).toMatchObject({ text: "THIRD_FOLLOW_UP", delivery: "followUp" });
+      ref.events?.onQueueUpdate?.({ steering: 1, followUp: 1 });
+
+      ref.events?.onQueueUpdate?.({ steering: 0, followUp: 1 });
+      expect(
+        testable.messages.find((message) => message.kind === "text" && message.text === "SECOND_DRAFT"),
+      ).not.toHaveProperty("delivery");
+      ref.events?.onQueueUpdate?.({ steering: 0, followUp: 0 });
+      expect(
+        testable.messages.find((message) => message.kind === "text" && message.text === "THIRD_FOLLOW_UP"),
+      ).not.toHaveProperty("delivery");
+      expect(app.render(100).map(stripAnsi).join("\n")).not.toMatch(/等待插入|等待当前任务完成/);
 
       releaseSend?.();
       await first;

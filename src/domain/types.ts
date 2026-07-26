@@ -109,6 +109,13 @@ export interface ProviderOption {
   detail: string;
   baseUrl?: string;
   custom?: boolean;
+  authMethods?: ProviderAuthMethod[];
+  storedCredential?: "api_key" | "oauth";
+}
+
+export interface ProviderAuthMethod {
+  type: "api_key" | "oauth";
+  label: string;
 }
 
 export interface PlanItem {

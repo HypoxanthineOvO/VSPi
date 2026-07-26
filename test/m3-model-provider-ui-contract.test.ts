@@ -59,8 +59,8 @@ describe("M3 real ModelRuntime and Pi Session mutation", () => {
     const fake = fakeSession();
     const models = [
       {
-        id: "vision-model",
-        name: "Vision Model",
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
         provider: "anthropic",
         input: ["text", "image"],
         contextWindow: 200_000,
@@ -89,20 +89,20 @@ describe("M3 real ModelRuntime and Pi Session mutation", () => {
     });
 
     expect(await backend.getModelOptions()).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "vision-model" })]),
+      expect.arrayContaining([expect.objectContaining({ id: "claude-sonnet-5" })]),
     );
-    expect(await backend.selectModel("anthropic", "vision-model")).toMatchObject({
-      modelId: "vision-model",
+    expect(await backend.selectModel("anthropic", "claude-sonnet-5")).toMatchObject({
+      modelId: "claude-sonnet-5",
       vision: true,
       contextWindow: 200_000,
-      profileModelId: "vision-model",
+      profileModelId: "claude-sonnet-5",
     });
     expect(fake.setModel).toHaveBeenCalledOnce();
     await backend.setEffort("high");
     expect(fake.setThinkingLevel).toHaveBeenLastCalledWith("high");
 
     await expect(backend.selectModel("google", "broken-model")).rejects.toThrow("model switch failure sentinel");
-    expect(backend.modelId).toBe("vision-model");
+    expect(backend.modelId).toBe("claude-sonnet-5");
     expect(backend.supportsVision).toBe(true);
     await backend.dispose();
   });

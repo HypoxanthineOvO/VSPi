@@ -97,7 +97,8 @@ describe("M1 new-session scrollback contract", () => {
         const scrollback = stripAnsi(writes.join(""));
         expect(backend.newSession).toHaveBeenCalledOnce();
         expect(cleared).not.toContain("OLD_TRANSCRIPT_SENTINEL");
-        expect(cleared).toContain("当前计划为空");
+        expect(cleared).toContain("Plan");
+        expect(cleared).not.toMatch(/Workflow|当前计划为空/);
         for (const line of LOGO) expect(scrollback).toContain(line);
         expect(scrollback).toContain("VSPi");
         expect(scrollback).toContain("M1 Session Fixture");

@@ -384,7 +384,8 @@ describe("M6 Local Plan workspace projection", () => {
     const panel = new PanelController(DEFAULT_SETTINGS);
     setSnapshot(panel, undefined);
     const rendered = planRender(panel, 80);
-    expect(rendered).toContain("当前计划为空");
+    expect(rendered).toContain("Plan");
+    expect(rendered).not.toMatch(/Workflow|当前计划为空/);
     expect(rendered).not.toContain(PLAN.title);
     expect(rendered).not.toContain("更新计划");
   });

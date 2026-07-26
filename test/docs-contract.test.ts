@@ -89,7 +89,7 @@ function expectMarkedToken(token: string, expected: ReadonlyArray<MarkedSpan["ki
 }
 
 function expectSharedFacts(content: string, artifact: string): void {
-  expect.soft(content, `${artifact}: fresh Plan empty state`).toContain("当前计划为空");
+  expect.soft(content, `${artifact}: fresh Plan surface`).toContain("╭ Plan ");
   expect.soft(content, `${artifact}: examples are not preset`).toContain("交互示例");
   expect
     .soft(content, `${artifact}: default dynamic interface is empty`)
@@ -400,7 +400,7 @@ describe("delivered TUI documentation contract", () => {
     expect(splash).not.toMatch(/\bMode\b|\bAuto\b/);
     expect(splash).toMatch(/v\d+\.\d+\.\d+/);
 
-    const main = blocks.find((block) => block.includes("当前计划为空"));
+    const main = blocks.find((block) => block.includes("╭ Plan "));
     expect(main, "Docs main mock must show the fresh empty Plan").toBeDefined();
     const mainLines = main?.split("\n") ?? [];
     const planBottom = mainLines.findIndex((line) => line.startsWith("╰"));

@@ -91,7 +91,7 @@ describe("M9 npm package artifact", () => {
       version?: string;
     };
     expect(installedPackage.bin).toEqual({ vspi: "dist/index.js" });
-    expect(installedPackage.version).toBe("0.2.0");
+    expect(installedPackage.version).toBe("0.2.1");
     expect(installedPackage.private).not.toBe(true);
     expect(installedPackage.scripts?.prepare).toBeUndefined();
   }, 150_000);

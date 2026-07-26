@@ -28,6 +28,33 @@ export interface ModelSelectionResult {
 
 export type ProviderProbeMode = "check-config" | "test-connection" | "minimal-generation";
 
+export type ProviderAuthPrompt =
+  | { type: "text" | "secret" | "manual_code"; message: string; placeholder?: string; signal?: AbortSignal }
+  | {
+      type: "select";
+      message: string;
+      options: readonly { id: string; label: string; description?: string }[];
+      signal?: AbortSignal;
+    };
+
+export type ProviderAuthEvent =
+  | { type: "info"; message: string; links?: readonly { url: string; label?: string }[] }
+  | { type: "auth_url"; url: string; instructions?: string }
+  | {
+      type: "device_code";
+      userCode: string;
+      verificationUri: string;
+      intervalSeconds?: number;
+      expiresInSeconds?: number;
+    }
+  | { type: "progress"; message: string };
+
+export interface ProviderAuthInteraction {
+  signal?: AbortSignal;
+  prompt(prompt: ProviderAuthPrompt): Promise<string>;
+  notify(event: ProviderAuthEvent): void;
+}
+
 export interface ChatBackendEvents {
   onMessage: (message: TranscriptMessage) => void;
   onMessageUpdate: (id: string, patch: Partial<TranscriptMessage>) => void;
@@ -108,5 +135,7 @@ export interface ChatBackend {
     mode: ProviderProbeMode,
     confirmCost?: () => Promise<boolean>,
   ): Promise<{ ok: boolean; diagnostic: string }>;
+  loginProvider?(providerId: string, type: "api_key" | "oauth", interaction: ProviderAuthInteraction): Promise<void>;
+  logoutProvider?(providerId: string): Promise<void>;
   dispose(): Promise<void>;
 }

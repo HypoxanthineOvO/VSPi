@@ -33,7 +33,8 @@ describe("M1 state-aware interaction hints", () => {
     const panel = new PanelController(DEFAULT_SETTINGS);
     const before = panelText(panel);
 
-    expect(before).toContain("当前计划为空");
+    expect(before).toContain("Plan");
+    expect(before).not.toMatch(/Workflow|当前计划为空/);
     for (const input of ["\u001b[A", "\u001b[B", "\u001b[D", "\u001b[C", "\r"]) {
       expect(panel.handleInput(input)).toBeUndefined();
     }

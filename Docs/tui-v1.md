@@ -49,15 +49,15 @@ Plan 背景       #182529
 │                                                                              │
 │ Model  OpenAI / GPT-5.4                                                      │
 │ Backend Pi                                                                   │
-│ Policy Standard · Host                                                 v0.2.0│
+│ Policy Standard · Host                                                 v0.2.1│
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
 ## 主界面
 
 ```text
-╭ 当前计划 ────────────────────────────────────────────────────────────────────╮
-│当前计划为空                                                                  │
+╭ Plan ────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 Shift+Tab 下一个区域
 ╭──────────────────────────────────────────────────────────────────────────────╮
@@ -67,7 +67,9 @@ Model OpenAI / GPT-5.4  Effort High                     Context 50K / 128K 39% 
 /workspace/vspi · Policy Standard · Host            Token ↑12k ↓3.0k  Cost ¥1.01
 ```
 
-80 列普通 Status 区固定为两行：第一行语义固定为 `Model / Effort / Context`；第二行直接从路径值开始，再显示 `Policy / Token / Cost`，不显示 `Path` 标题。Backend 不进入动态行，只存在于永久 Splash 和诊断信息。五个字段标签与字段值、以及无标题路径值分别着色；80/120 列的路径 flex 区从右侧保留完整 Policy/Boundary suffix，只有 Model 与路径变量值可截断。默认的新会话动态界面为空，不加载或预置对话、工具消息，Plan 只显示 `当前计划为空`；`Shift+Tab` 在 Composer、Transcript、Plan 间循环，Transcript 为空时直接跳到 Plan。后文出现的消息、工具与 active telemetry 均为“交互示例”，不是启动内容。显式离线入口 `VSPi_FIXTURE=1` 或 `VSPi_BACKEND=fixture` 的真实模型标签是 `Offline Fixture`，但不作为主界面的模型示例；正常启动若 Pi 模型配置缺失或损坏会显示 setup error，不会静默切换到 Fixture。
+80 列普通 Status 区固定为两行：第一行语义固定为 `Model / Effort / Context`；第二行直接从路径值开始，再显示 `Policy / Token / Cost`，不显示 `Path` 标题。Backend 不进入动态行，只存在于永久 Splash 和诊断信息。五个字段标签与字段值、以及无标题路径值分别着色；80/120 列的路径 flex 区从右侧保留完整 Policy/Boundary suffix，只有 Model 与路径变量值可截断。默认的新会话动态界面为空，不加载或预置对话、工具消息；空 Plan 只保留标题与留白，不显示 Workflow 缺失或初始化提示。`Shift+Tab` 在 Composer、Transcript、Plan 间循环，Transcript 为空时直接跳到 Plan。后文出现的消息、工具与 active telemetry 均为“交互示例”，不是启动内容。显式离线入口 `VSPi_FIXTURE=1` 或 `VSPi_BACKEND=fixture` 的真实模型标签是 `Offline Fixture`，但不作为主界面的模型示例；正常启动若 Pi 模型配置缺失或损坏会显示 setup error，不会静默切换到 Fixture。
+
+自更新不属于 v0.2.1 的生产表面，留待后续版本。
 
 主界面末端的顺序固定为 Plan bottom → contextual hint → 运行时 Working 活动带（仅 active 时）→ composer → 两行 status。hint 位于面板框外；Working 是独立的全宽状态层，不挤入 Effort 或其他 telemetry 字段，也不会抢 composer 焦点。
 
@@ -141,11 +143,11 @@ v0.2 的生产命令清单是：
 
 手动 `/compact` 提供 Pi Native、Execution Continuity、Research Decisions 与 Custom 四种 profile。
 未绑定 Local Plan 默认 Pi Native，绑定 Plan 默认 Execution Continuity；`/compact --list` 可检查当前选择范围。
-v0.2.0 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
+v0.2.1 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
 
-`/plan`（alias `/workflow`）、`/prompt`、`/tools` 与 `/policy` 均由 Action Registry 接入真实生产工作区。Plan 只在显式 `--workflow` 下只读投影 Workflow Delivery；Prompt 提供 Factory/Fork、分层规则、导入导出与 Effective Prompt；Tools 只读展示当前能力、路由与失败边界；自更新不属于 v0.2.0 的生产表面。
+`/plan`、`/prompt`、`/tools` 与 `/policy` 均由 Action Registry 接入真实生产工作区。无 Workflow 时 Plan 保持 VSPi 本地界面；显式启用后才只读投影 Workflow Delivery。Prompt 提供 Factory/Fork、分层规则、导入导出与 Effective Prompt；Tools 只读展示当前能力、路由与失败边界。
 
-以下用户消息与 Tool 内容都是交互示例，不是新会话预置内容。用户消息不显示名字，使用焦点色竖标与至少三行的全宽深色表面：正文背景为 `#202428`、前景为 `#F4F7FA`，短消息也保留上下留白，不绘制额外 frame。40 列、80 列和 120 列下硬换行、长单词和附件摘要保持宽度安全；Inspect 只改变选择态，不改变消息尺寸。Unicode 形状为：
+以下用户消息与 Tool 内容都是交互示例，不是新会话预置内容。用户消息不显示名字，使用焦点色竖标与至少三行的全宽表面；Dark 使用 `#202428`/`#F4F7FA`，Light 使用浅色表面，默认 Terminal 不写死前景或背景。短消息也保留上下留白，不绘制额外 frame。40 列、80 列和 120 列下硬换行、长单词和附件摘要保持宽度安全；Inspect 只改变选择态，不改变消息尺寸。Unicode 形状为：
 
 ```text
 
@@ -157,7 +159,7 @@ v0.2.0 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动
 
 ## Composer
 
-composer 正文空态为一行，随内容增长，最多显示 10 行；之后内部滚动，框线显示上下隐藏量。`Shift+Enter/Ctrl+J` 换行。空闲时 `Enter` 启动新 prompt；工作中 `Enter` 使用 Pi 原生 Steer 队列，在当前工具批次结束后、下一次模型调用前送达。`Alt+Enter` 使用 Follow-up 队列，在 Agent 完全 idle 后送达。排队成功会立即清空 composer、写入带交付标记的全宽用户消息，并由 `queue_update` 更新状态栏数量。中文 IME 光标由 pi-tui hardware cursor marker 定位。
+composer 正文空态为一行，随内容增长，最多显示 10 行；之后内部滚动，框线显示上下隐藏量。`Shift+Enter/Ctrl+J` 换行。空闲时 `Enter` 启动新 prompt；工作中 `Enter` 使用 Pi 原生 Steer 队列，在当前工具批次结束后、下一次模型调用前送达。`Alt+Enter` 使用 Follow-up 队列，在 Agent 完全 idle 后送达。排队成功会立即清空 composer，用户消息暂时使用较弱表面，投递状态放在正文之外；`queue_update` 表示消息已被消费后清除状态，消息恢复普通显示。中文 IME 光标由 pi-tui hardware cursor marker 定位。
 
 附件节点有三态：光标在左侧、整块选中、光标在右侧。选中时状态行替换为：
 
@@ -198,7 +200,7 @@ M3 已将 Model 接到 Pi ModelRuntime 真相源。Model 有“选择模型 / �
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
-外层小于 60 列（包括 40 列紧急窄屏）默认只显示列表且不显示价格，`Right` 切为详情视图，`Left` 回到列表；`Tab` 切换模型/模型组并重置为列表。Enter 在两种视图中都选择当前项。Provider 在 80 列同样使用左列表/右详情。所有 Provider 的 Enter 只打开 action menu；编辑只收集名称、Base URL 和协议，不收集 secret，`Ctrl+S` 是唯一保存键。离线 check-config、显式 test-connection、二次费用确认后的 minimal-generation 是三个不同动作。
+外层小于 60 列（包括 40 列紧急窄屏）默认只显示列表且不显示价格，`Right` 切为详情视图，`Left` 回到列表；`Tab` 切换模型/模型组并重置为列表。Enter 在两种视图中都选择当前项。Provider 在 80 列同样使用左列表/右详情。Provider action menu 按 Pi 元数据增加订阅登录、API Key 和移除凭据；API Key 在独立认证层中遮蔽输入，Esc abort，Secret 不进入 transcript、notice 或诊断。Provider URL/协议编辑仍不收集 secret，`Ctrl+S` 是唯一保存键。离线 check-config、显式 test-connection、二次费用确认后的 minimal-generation 是三个不同动作。
 
 Provider catalog 的优先级是 built-in < Pi global < trusted project。默认启动显式构造 `SettingsManager(..., { projectTrusted: false })`，不会采用 SDK 的默认 trust；只有 `--trust-project` 才把 trust 绑定到启动时 workspace realpath，其他 cwd 不继承，也不存在环境变量自动信任入口。无 flag 时 project Provider overlay/resources 与 VSPi `.vspi/settings.json` 不读不注册，Provider、project settings 与 project runtime-defaults save 都拒绝；global settings 不受影响。
 
@@ -223,7 +225,7 @@ Pi 的最终 active registry 使用原生 `read/ls/find/grep/bash/edit/write` To
 
 `/tools` 是宿主侧只读能力目录，不进入模型上下文。Files/Search 复用 Pi 原生工具；Git 和 SSH 复用 Pi Bash，但分别使用 `git-write` 与 `ssh` 审批类别；图片由 Pi 原生 image read 和 VSPi attachment session 共同提供。Browser 与 MCP 显示 `Not connected` 且不注册占位 ToolDefinition；Persistent PTY 显示 `Deferred`，当前只承诺一次性 Bash。每项同时显示状态、执行路由和独立失败边界；Up/Down 移动，Esc 返回，40/80/120 列均不得溢出。
 
-Workflow 采用默认关闭、显式 `--workflow` 启用的可选只读 Provider，并且是生产 `/plan` 与 `/workflow` 的唯一权威来源。默认启动不读取 Workflow 环境变量或项目状态；显式开启后，正常 `renderOnce`、interactive 与 `run` 入口也不构造 Local Plan storage、router 或 capsule。Core 未配置或读取失败时 Plan 显示有界不可用状态，不回退到另一套 Plan。Adapter 只调用 Delivery `resume` 形成 workspace 级投影，拒绝 Receipt-bearing mutation，也不创建或写入 Workstream。因此当前 Session 的 new、switch、fork、resume 不携带 Workflow 写绑定；历史 Local Plan entry 在没有显式兼容 storage 时保持惰性，不影响 compaction、fork、UI 或模型工具。
+Workflow 采用默认关闭、显式 `--workflow` 启用的可选只读 Provider。默认启动不读取 Workflow 环境变量或项目状态，Plan 保持 VSPi 自己的干净界面；显式开启后才投影 Delivery。Core 未配置或读取失败时 Plan 显示有界不可用状态。Adapter 只调用 Delivery `resume` 形成 workspace 级投影并拒绝 Receipt-bearing mutation。
 
 Question、审批、Effort、Settings、预览和 Inspect 共享底部工作区。Esc 先退出当前界面；回到主界面后再次按 Esc 才中断当前生成或工具，且不会新建 Session、重启 TUI 或退出进程。Agent 从首次提交到 primary prompt 与 Steer/Follow-up 队列全部耗尽期间，在 composer 上方持续显示独立的动态 `Working` 活动带；宽屏分别显示两类队列数量，40 列显示动态符号和总数。取消只 abort 当前运行：Session identity、已发送用户消息、partial thinking/text/tool 和当前 composer 草稿全部保留，running Tool 进入 cancelled；尚未送达的原生队列由 `clearQueue` 取回并放回 composer。取消栅栏持续到下一次主动 send：旧 generation 的 retry、文本以及 Tool 的 start、update、end 事件均被丢弃，agent end 只负责恢复 idle；Pi Bash 的 AbortSignal 同时终止运行中的子进程组。
 
@@ -231,7 +233,7 @@ Question、审批、Effort、Settings、预览和 Inspect 共享底部工作区�
 
 `--recovery` 在任何 `--policy`/`--trust-project`/`--workflow` 之前生效，固定 `Standard · Host`、拒绝需提升审批的工具、`trustedProject:false`、`global-only`。VSPi project Policy/settings/Provider/defaults 不读取；Pi services 同时使用 `noExtensions/noSkills/noPromptTemplates/noThemes/noContextFiles`。Splash 和状态区显示 Recovery，不能从 Policy Panel 切走。
 
-Workflow bootstrap 使用 TypeScript adapter 包裹同进程 ESM JavaScript Core。只有显式 `--workflow` 才进入 loader；loader 以绝对安装根、原始 portable archive、accepted source commit、archive SHA-256、bundle manifest SHA-256 与 runtime manifest SHA-256 为一组不可拆分的 identity 输入。import 前验证 release descriptor、manifest identity、全部声明 Core 文件和 materialized runtime dependency 字节，要求 bundle manifest 绑定 descriptor/Core root export，并拒绝 `node_modules` 未声明文件或 symlink；import 后检查 `createDeliveryStore`、`createWorkstreamStore`、`compileVspiIntegrationContract`、`parseVspiIntegrationContract`、`verifyPortableBundle` 和 Host Contract v1。`/plan` 与 `/workflow` 在 M1 只读展示真实 foreground Delivery、revision、status、plan hash 与 Milestone；`/hw:init`、`/hw:resume`、`/hw:accept` 等 Receipt-bearing 生命周期命令不注册到 VSPi，authority 一律 deny。Recovery 在 loader/env discovery 之前分叉，永不读取或导入 Workflow bundle。
+Workflow bootstrap 使用 TypeScript adapter 包裹同进程 ESM JavaScript Core。只有显式 `--workflow` 才进入 loader；loader 以绝对安装根、原始 portable archive、accepted source commit、archive SHA-256、bundle manifest SHA-256 与 runtime manifest SHA-256 为一组不可拆分的 identity 输入。import 前验证 release descriptor、manifest identity、全部声明 Core 文件和 materialized runtime dependency 字节，要求 bundle manifest 绑定 descriptor/Core root export，并拒绝 `node_modules` 未声明文件或 symlink；import 后检查 required exports。显式启用后，`/plan` 只读展示真实 foreground Delivery、revision、status、plan hash 与 Milestone；`/hw:init`、`/hw:resume`、`/hw:accept` 等 Receipt-bearing 生命周期命令不注册到 VSPi，authority 一律 deny。Recovery 在 loader/env discovery 之前分叉，永不读取或导入 Workflow bundle。
 
 边界必须按字面理解：当前 Policy 不是 OS sandbox，SSH、容器和远程系统也不在隔离边界内。深层命令解析、小模型审批、远程目标约束和系统级 containment 是后续安全加固。
 

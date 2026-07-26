@@ -155,7 +155,8 @@ describe("M1 production action contract", () => {
       const rendered = app.render(80).map(stripAnsi).join("\n");
 
       expect(rendered).not.toContain("未知命令：/plan");
-      expect(rendered).toContain("当前计划为空");
+      expect(rendered).toContain("Plan");
+      expect(rendered).not.toMatch(/Workflow|当前计划为空/);
       expect(rendered).not.toMatch(/暂未|尚未|未接入|不可用|后续里程碑|disabled/i);
       expect(backend.send).not.toHaveBeenCalled();
       expect(backend.compact).not.toHaveBeenCalled();
