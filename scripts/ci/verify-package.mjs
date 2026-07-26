@@ -21,9 +21,7 @@ if (packed.version !== projectPackage.version) fail(`unexpected package version 
 if (packed.filename !== expectedFilename) fail(`unexpected filename ${packed.filename}`);
 
 const tarball = resolve(dirname(metadataPath), packed.filename);
-const packedPackage = JSON.parse(
-  execFileSync("tar", ["-xOf", tarball, "package/package.json"], { encoding: "utf8" }),
-);
+const packedPackage = JSON.parse(execFileSync("tar", ["-xOf", tarball, "package/package.json"], { encoding: "utf8" }));
 if (packedPackage.name !== projectPackage.name || packedPackage.version !== projectPackage.version) {
   fail("packed package.json identity differs from the repository metadata");
 }

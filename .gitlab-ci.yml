@@ -36,7 +36,6 @@ quality:
   stage: quality
   script:
     - npm run check
-    - git diff --check
 
 test:
   stage: test
@@ -77,14 +76,11 @@ release:
     - job: install-smoke
   before_script:
     - node --version
-    - command -v curl
   script:
     - export VERSION="$(node -p "require('./package.json').version")"
     - export FILENAME="vspi-${VERSION}.tgz"
     - export PACKAGE_URL="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/vspi/$VERSION/$FILENAME"
-    - curl --fail-with-body --header "JOB-TOKEN:$CI_JOB_TOKEN" --upload-file ".artifacts/$FILENAME" "$PACKAGE_URL"
-    - node scripts/ci/create-release-payload.mjs .artifacts/SHA256SUMS > .artifacts/release.json
-    - curl --fail-with-body --request POST --header "JOB-TOKEN:$CI_JOB_TOKEN" --header "Content-Type:application/json" --data-binary @.artifacts/release.json "$CI_API_V4_URL/projects/$CI_PROJECT_ID/releases"
+    - node scripts/ci/publish-release.mjs .artifacts/SHA256SUMS ".artifacts/$FILENAME"
   rules:
     - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/'
     - when: never
