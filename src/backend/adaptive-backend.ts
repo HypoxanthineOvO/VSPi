@@ -70,6 +70,10 @@ export class AdaptiveBackend implements ChatBackend {
     return this.active.supportsVision;
   }
 
+  isSessionReady(): boolean {
+    return this.active.isSessionReady?.() ?? true;
+  }
+
   async start(events: ChatBackendEvents): Promise<void> {
     await this.active.start(events);
   }

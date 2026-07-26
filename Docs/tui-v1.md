@@ -49,7 +49,7 @@ Plan 背景       #182529
 │                                                                              │
 │ Model  OpenAI / GPT-5.4                                                      │
 │ Backend Pi                                                                   │
-│ Policy Standard · Host                                                 v0.2.7│
+│ Policy Standard · Host                                                 v0.3.0│
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -133,7 +133,7 @@ Command 响应式规则：40 列使用“身份行 + 描述/source 行”的两�
 
 Model 以外层 60 列为 breakpoint：小于 60 列是窄屏列表/详情布局，hint 显示 `←→ 详情`，Right 进入详情、Left 返回；外层 60 列及以上是宽屏双栏，左侧列表、右侧详情，hint 不宣告无效的左右切换。
 
-v0.2 的生产命令清单是：
+v0.3 的生产命令清单是：
 
 ```text
 /new       /sessions   /import     /skills     /compact    /model      /providers
@@ -143,7 +143,7 @@ v0.2 的生产命令清单是：
 
 手动 `/compact` 提供 Pi Native、Execution Continuity、Research Decisions 与 Custom 四种 profile。
 未绑定 Local Plan 默认 Pi Native，绑定 Plan 默认 Execution Continuity；`/compact --list` 可检查当前选择范围。
-v0.2.7 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
+v0.3.0 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
 
 `/plan`、`/prompt`、`/tools` 与 `/policy` 均由 Action Registry 接入真实生产工作区。无 Workflow 时 Plan 保持 VSPi 本地界面；显式启用后才只读投影 Workflow Delivery。Prompt 提供 Factory/Fork、分层规则、导入导出与 Effective Prompt；Tools 只读展示当前能力、路由与失败边界。
 
@@ -233,7 +233,7 @@ Workflow 采用默认关闭、显式 `--workflow` 启用的可选只读 Provider
 
 Question、审批、Effort、Settings、预览和 Inspect 共享底部工作区。Esc 先退出当前界面；回到主界面后再次按 Esc 才中断当前生成或工具，且不会新建 Session、重启 TUI 或退出进程。Agent 从首次提交到 primary prompt 与 Steer/Follow-up 队列全部耗尽期间，在 composer 上方持续显示无背景的动态 `Working`；尚未送达的消息另用一行弱化内容和 `↪` 表示，不进入 Transcript 或 Inspect。取消只 abort 当前运行：Session identity、已发送用户消息、partial thinking/text/tool 和当前 composer 草稿全部保留，running Tool 进入 cancelled；尚未送达的原生队列由 `clearQueue` 按顺序取回，合并为新的普通 prompt 并立即继续执行，当前未提交草稿保持不变。取消栅栏持续到新的 prompt 主动 send：旧 generation 的 retry、文本以及 Tool 的 start、update、end 事件均被丢弃，agent end 只负责恢复 idle；Pi Bash 的 AbortSignal 同时终止运行中的子进程组。
 
-同服务器的 Session 使用独占 lease、heartbeat 和 Unix control socket 保证单写者。Sessions 面板将其他 owner 标为“使用中”，并提供延迟接管、安全分支和取消；延迟接管必须等待 generation、tool、compaction 与原生队列全部 idle，不得 abort 旧任务。交接期间旧 TUI 拒绝普通新输入，但仍允许已经弹出的 Question/Approval 完成；新 owner 获得 lease 后必须从磁盘重新打开 Session。占用中分支只能复制最后一个完整 assistant 回复及其之前的稳定历史。退出不保留后台任务；resume 只恢复落盘内容，最后一条为 user 或 aborted assistant 时显示中断标记，不自动重试。该机制只承诺同服务器，跨服务器共享存储留待后续版本。
+同服务器的 Session 使用独占 lease、heartbeat 和 `0600` Unix control socket 保证单写者与单一可交互前台。Sessions 面板将其他 owner 标为“使用中”，并提供前台迁移、安全分支和取消。迁移不得序列化或重建 Pi 的 live JavaScript 工具栈：旧进程保留真实 Agent 执行栈，新 TUI 在 lease acquisition 完成前先启动为等待态，只允许处理 socket 转发的 Question/Approval；旧 TUI 从接受请求起锁定全部输入。已经 pending 或迁移后出现的 Question/Approval 都在新 TUI 弹出，回答回传并解析到旧进程原 Promise。旧进程必须等 generation、tool、compaction 与原生队列全部 idle，且不得调用 Agent abort；落盘后显示已移交并退出。新进程随后获得 lease、重新打开最终 Session 并恢复完整 Transcript、工具状态和普通输入。多个等待进程中只有被接受者可以回答；接管方在安全点前断开时旧 TUI 解除移交锁并恢复 pending 交互。占用中分支只能复制最后一个完整 assistant 回复及其之前的稳定历史。普通退出不保留后台任务；resume 只恢复落盘内容，最后一条为 user 或 aborted assistant 时显示中断标记，不自动重试。该机制只承诺同服务器，跨服务器共享存储留待后续版本。
 
 保存结果与短时状态临时替换固定 contextual hint 行，约 3.5 秒后恢复；出现和消失前后总布局高度不变，不创建 overlay，也不改变 composer 焦点。
 

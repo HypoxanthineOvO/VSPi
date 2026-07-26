@@ -6,12 +6,15 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
 const CHILD_SOURCE = `
-import { PiBackend } from './dist/backend/pi-backend.js';
+import { PiBackend } from './src/backend/pi-backend.ts';
 
 const role = process.env.ROLE;
+const interactionKind = process.env.INTERACTION_KIND || '';
 const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 let abortCalls = 0;
 let managerSeen;
+let finishInteraction;
+const interactionFinished = new Promise(resolve => { finishInteraction = resolve; });
 function summary(manager) {
   return manager.getBranch().filter(entry => entry.type === 'message').map(entry =>
     typeof entry.message.content === 'string' ? entry.message.content : entry.message.model
@@ -31,7 +34,8 @@ function session(manager) {
     getAvailableThinkingLevels() { return ['off', 'medium', 'high']; },
     async prompt(text) {
       manager.appendMessage({ role: 'user', content: text, timestamp: Date.now() });
-      await new Promise(resolve => setTimeout(resolve, 450));
+      if (interactionKind) await interactionFinished;
+      else await new Promise(resolve => setTimeout(resolve, 450));
       manager.appendMessage({ role: 'assistant', content: [], api: 'openai-completions', provider: 'fixture', model: role, usage, stopReason: 'stop', timestamp: Date.now() });
     },
     async steer() {},
@@ -57,9 +61,31 @@ const backend = new PiBackend({
     return { session: session(manager) };
   },
 });
+let markReady;
+const ready = new Promise(resolve => { markReady = resolve; });
 const events = {
   onMessage() {}, onMessageUpdate() {}, onBusy() {}, onUsage() {},
   onNotice(message) { process.send({ type: 'notice', role, message }); },
+  onSessionReady() { markReady(); },
+  onSessionWait(waiting) { if (waiting) process.send({ type: 'waiting', role }); },
+  async onHandoffInteraction(interaction) {
+    process.send({ type: 'interaction', role, interaction });
+    if (interaction.kind === 'question') {
+      return { kind: 'question', questions: interaction.questions.map(question => ({ ...question, answer: 'continue' })) };
+    }
+    return { kind: 'approval', response: { type: 'allow-once' } };
+  },
+  onHandoffPending(relay) {
+    if (!interactionKind) return;
+    const interaction = interactionKind === 'question'
+      ? { kind: 'question', questions: [{ id: 'handoff-question', title: 'Continue', prompt: 'Continue the tool?', kind: 'singleChoice', options: [{ id: 'continue', label: 'Continue' }] }] }
+      : { kind: 'approval', request: { action: { kind: 'file-write', target: '/tmp/result' }, category: 'file-write', policy: 'Safe', requiredPolicy: 'Standard' } };
+    void relay.request(interaction).then(response => {
+      managerSeen.appendCustomEntry('vspi.handoff-test', { interactionKind, response });
+      process.send({ type: 'interaction-response', role, interaction: response });
+      finishInteraction();
+    });
+  },
   onTakeover() {
     process.send({ type: 'takeover', role, abortCalls });
     void backend.dispose().then(() => {
@@ -75,6 +101,10 @@ if (role === 'A') {
   await pending;
   process.send({ type: 'completed', role, abortCalls, branch: summary(managerSeen) });
 } else {
+  if (!backend.isSessionReady()) {
+    process.send({ type: 'ui-started', role });
+    await ready;
+  }
   process.send({ type: 'acquired', role, abortCalls, branch: summary(managerSeen) });
   await backend.dispose();
   process.send({ type: 'disposed', role, abortCalls });
@@ -82,7 +112,14 @@ if (role === 'A') {
 }
 `;
 
-type ChildMessage = { type: string; role: string; abortCalls?: number; branch?: string[]; message?: string };
+type ChildMessage = {
+  type: string;
+  role: string;
+  abortCalls?: number;
+  branch?: string[];
+  message?: string;
+  interaction?: unknown;
+};
 
 describe("same-host Session handoff", () => {
   it("lets the old process finish its active turn before the new process acquires the same thread", async () => {
@@ -135,14 +172,69 @@ describe("same-host Session handoff", () => {
         .filter((entry) => entry.type === "message"),
     ).toHaveLength(4);
   }, 15_000);
+
+  for (const interactionKind of ["question", "approval"] as const) {
+    it(`moves a pending ${interactionKind} to the new TUI without aborting or losing the active turn`, async () => {
+      const root = await mkdtemp(join(tmpdir(), `vspi-handoff-${interactionKind}-`));
+      const workspace = join(root, "workspace");
+      const agentDir = join(root, "agent");
+      const sessionDir = join(root, "sessions");
+      const base = SessionManager.create(workspace, sessionDir);
+      base.appendMessage({ role: "user", content: "BASE_USER", timestamp: Date.now() });
+      base.appendMessage({
+        role: "assistant",
+        content: [],
+        api: "openai-completions",
+        provider: "fixture",
+        model: "BASE",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+
+      const messages: Array<ChildMessage & { at: number }> = [];
+      const first = startChild("A", { workspace, agentDir, sessionDir }, messages, interactionKind);
+      await waitFor(messages, (message) => message.role === "A" && message.type === "running");
+      const second = startChild("B", { workspace, agentDir, sessionDir }, messages, interactionKind);
+      await waitFor(messages, (message) => message.role === "B" && message.type === "interaction");
+      await Promise.all([waitForExit(first), waitForExit(second)]);
+
+      const uiStarted = messages.find((message) => message.role === "B" && message.type === "ui-started");
+      const response = messages.find((message) => message.role === "A" && message.type === "interaction-response");
+      const oldDisposed = messages.find((message) => message.role === "A" && message.type === "disposed");
+      const acquired = messages.find((message) => message.role === "B" && message.type === "acquired");
+      expect(uiStarted).toBeDefined();
+      expect(response?.interaction).toEqual(
+        interactionKind === "question"
+          ? expect.objectContaining({ kind: "question" })
+          : { kind: "approval", response: { type: "allow-once" } },
+      );
+      expect(messages.find((message) => message.role === "A" && message.type === "completed")?.abortCalls).toBe(0);
+      expect(oldDisposed?.abortCalls).toBe(0);
+      expect(acquired?.at).toBeGreaterThanOrEqual(oldDisposed?.at ?? Number.POSITIVE_INFINITY);
+      expect(acquired?.branch).toEqual(["BASE_USER", "BASE", "A_USER", "A"]);
+
+      const entries = SessionManager.open(base.getSessionFile() ?? "").getBranch();
+      expect(entries.some((entry) => entry.type === "custom" && entry.customType === "vspi.handoff-test")).toBe(true);
+      expect(entries.filter((entry) => entry.type === "message")).toHaveLength(4);
+    }, 15_000);
+  }
 });
 
 function startChild(
   role: string,
   paths: { workspace: string; agentDir: string; sessionDir: string },
   messages: Array<ChildMessage & { at: number }>,
+  interactionKind = "",
 ): ChildProcess {
-  const child = spawn(process.execPath, ["--input-type=module", "-e", CHILD_SOURCE], {
+  const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", CHILD_SOURCE], {
     cwd: process.cwd(),
     env: {
       ...process.env,
@@ -150,6 +242,7 @@ function startChild(
       WORKSPACE: paths.workspace,
       AGENT_DIR: paths.agentDir,
       SESSION_DIR: paths.sessionDir,
+      INTERACTION_KIND: interactionKind,
     },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });

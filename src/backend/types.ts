@@ -11,6 +11,7 @@ import type {
   UsageSnapshot,
 } from "../domain/types.js";
 import type { PlanBinding } from "../plans/types.js";
+import type { ApprovalRequest, ApprovalResponse } from "../policy/execution-policy.js";
 import type { EffectivePromptSegment } from "../prompts/effective-prompt.js";
 import type {
   ExternalSessionPreview,
@@ -61,6 +62,18 @@ export interface ProviderAuthInteraction {
   notify(event: ProviderAuthEvent): void;
 }
 
+export type SessionHandoffInteraction =
+  | { kind: "question"; questions: Question[] }
+  | { kind: "approval"; request: ApprovalRequest };
+
+export type SessionHandoffResponse =
+  | { kind: "question"; questions: Question[] }
+  | { kind: "approval"; response: ApprovalResponse };
+
+export interface SessionHandoffRelay {
+  request(interaction: SessionHandoffInteraction): Promise<SessionHandoffResponse>;
+}
+
 export interface ChatBackendEvents {
   onMessage: (message: TranscriptMessage) => void;
   onMessageUpdate: (id: string, patch: Partial<TranscriptMessage>) => void;
@@ -74,7 +87,14 @@ export interface ChatBackendEvents {
   onPlanBindingChange?: (binding: PlanBinding | undefined) => void;
   onEffectivePrompt?: (segments: EffectivePromptSegment[]) => void;
   onSessionWait?: (waiting: boolean) => void;
-  onHandoffPending?: () => void;
+  onSessionReady?: () => void;
+  onSessionError?: (error: Error) => void;
+  onHandoffInteraction?: (
+    interaction: SessionHandoffInteraction,
+    signal?: AbortSignal,
+  ) => Promise<SessionHandoffResponse>;
+  onHandoffPending?: (relay: SessionHandoffRelay) => void;
+  onHandoffCancelled?: () => void;
   onTakeover?: () => void;
 }
 
@@ -117,6 +137,7 @@ export interface ChatBackend {
   readonly modelId: string;
   readonly modelProvider?: string | undefined;
   readonly supportsVision: boolean;
+  isSessionReady?(): boolean;
   start(events: ChatBackendEvents): Promise<void>;
   // Existing extension backends may not report a result; VSPi backends return SendResult.
   // biome-ignore lint/suspicious/noConfusingVoidType: void preserves the public backend compatibility contract.

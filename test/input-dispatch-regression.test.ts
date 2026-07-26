@@ -2,7 +2,7 @@ import type { TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { VspiApp, type VspiAppOptions } from "../src/app/vspi-app.js";
 import type { AttachmentService } from "../src/attachments/service.js";
-import type { ChatBackend, ChatBackendEvents, SendOptions } from "../src/backend/types.js";
+import type { ChatBackend, ChatBackendEvents, SendOptions, SessionHandoffResponse } from "../src/backend/types.js";
 import { DEFAULT_SETTINGS } from "../src/domain/fixtures.js";
 import type { Attachment, ModelOption, Question, SessionOption, TranscriptMessage } from "../src/domain/types.js";
 import type { StoredPlan } from "../src/plans/types.js";
@@ -145,6 +145,176 @@ async function flush(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
 }
+
+describe("same-Session foreground handoff", () => {
+  it("starts the waiting TUI before lease acquisition and initializes runtime controls only after readiness", async () => {
+    const ref: { events?: ChatBackendEvents } = {};
+    let ready = false;
+    const getModelOptions = vi.fn(async () => []);
+    const backend = backendWith(ref, {
+      isSessionReady: () => ready,
+      getModelOptions,
+      start: vi.fn(async (events: ChatBackendEvents) => {
+        ref.events = events;
+        events.onSessionWait?.(true);
+      }),
+    });
+    const onExit = vi.fn();
+    const app = await createApp(backend, fakeAttachments(), { onExit });
+    try {
+      expect(getModelOptions).not.toHaveBeenCalled();
+      app.handleInput("x");
+      expect(app.composer.getText()).toBe("");
+      app.handleInput("\u0003");
+      expect(onExit).toHaveBeenCalledOnce();
+
+      ready = true;
+      ref.events?.onSessionReset?.({ id: "acquired-session", reason: "resume" });
+      ref.events?.onSessionReady?.();
+      await flush();
+      expect(getModelOptions).toHaveBeenCalledOnce();
+    } finally {
+      await app.dispose();
+    }
+  });
+
+  it("moves an already-open Question off the old TUI and resolves its original Promise from the new TUI", async () => {
+    const oldRef: { events?: ChatBackendEvents } = {};
+    const oldApp = await createApp(backendWith(oldRef));
+    let receiveResponse!: (value: SessionHandoffResponse) => void;
+    const request = vi.fn(
+      async () =>
+        new Promise<SessionHandoffResponse>((resolvePromise) => {
+          receiveResponse = resolvePromise;
+        }),
+    );
+    const question: Question = {
+      id: "handoff-question",
+      title: "Continue",
+      prompt: "Continue the active tool?",
+      kind: "singleChoice",
+      options: [{ id: "continue", label: "Continue" }],
+    };
+    const questions = [question];
+    try {
+      const original = oldRef.events?.onQuestion?.(questions);
+      expect((oldApp as unknown as TestableApp).panels.kind).toBe("question");
+      oldRef.events?.onHandoffPending?.({ request });
+      await flush();
+      expect(request).toHaveBeenCalledWith({ kind: "question", questions });
+      expect((oldApp as unknown as TestableApp).panels.kind).not.toBe("question");
+      oldApp.handleInput("x");
+      expect(oldApp.composer.getText()).toBe("");
+
+      receiveResponse({
+        kind: "question",
+        questions: [{ ...question, answer: "continue" }],
+      });
+      await expect(original).resolves.toEqual([{ ...question, answer: "continue" }]);
+    } finally {
+      await oldApp.dispose();
+    }
+  });
+
+  it("shows relayed Question and Approval only on the waiting TUI", async () => {
+    const ref: { events?: ChatBackendEvents } = {};
+    const approvalBroker = createInteractiveApprovalBroker();
+    const app = await createApp(backendWith(ref), fakeAttachments(), { approvalBroker });
+    const testable = app as unknown as TestableApp;
+    try {
+      ref.events?.onSessionWait?.(true);
+      const question = {
+        id: "relayed-question",
+        title: "Choose",
+        prompt: "Pick one",
+        kind: "singleChoice" as const,
+        options: [{ id: "yes", label: "Yes" }],
+      };
+      const pendingQuestion = ref.events?.onHandoffInteraction?.({ kind: "question", questions: [question] });
+      await flush();
+      expect(testable.panels.kind).toBe("question");
+      await testable.applyPanelEvent({ type: "questions", questions: [{ ...question, answer: "yes" }] });
+      await expect(pendingQuestion).resolves.toEqual({
+        kind: "question",
+        questions: [{ ...question, answer: "yes" }],
+      });
+
+      const approvalRequest = {
+        action: { kind: "file-write" as const, target: "/tmp/result" },
+        category: "file-write" as const,
+        policy: "Safe" as const,
+        requiredPolicy: "Standard" as const,
+      };
+      const pendingApproval = ref.events?.onHandoffInteraction?.({ kind: "approval", request: approvalRequest });
+      await flush();
+      expect(testable.panels.kind).toBe("approval");
+      await testable.applyPanelEvent({ type: "approval", response: { type: "allow-once" } });
+      await expect(pendingApproval).resolves.toEqual({
+        kind: "approval",
+        response: { type: "allow-once" },
+      });
+    } finally {
+      await app.dispose();
+    }
+  });
+
+  it("routes an Approval created after handoff begins directly to the new TUI", async () => {
+    const ref: { events?: ChatBackendEvents } = {};
+    const approvalBroker = createInteractiveApprovalBroker();
+    const app = await createApp(backendWith(ref), fakeAttachments(), { approvalBroker });
+    const request = vi.fn(async () => ({ kind: "approval" as const, response: { type: "allow-once" as const } }));
+    const approvalRequest = {
+      action: { kind: "file-write" as const, target: "/tmp/result" },
+      category: "file-write" as const,
+      policy: "Safe" as const,
+      requiredPolicy: "Standard" as const,
+    };
+    try {
+      ref.events?.onHandoffPending?.({ request });
+      const response = approvalBroker.request(approvalRequest);
+      await expect(response).resolves.toEqual({ type: "allow-once" });
+      expect(request).toHaveBeenCalledWith({ kind: "approval", request: approvalRequest });
+      expect((app as unknown as TestableApp).panels.kind).not.toBe("approval");
+    } finally {
+      await app.dispose();
+    }
+  });
+
+  it("restores the old Question panel if the new TUI disconnects before handoff completes", async () => {
+    const ref: { events?: ChatBackendEvents } = {};
+    const app = await createApp(backendWith(ref));
+    const question: Question = {
+      id: "retry-question",
+      title: "Retry",
+      prompt: "Answer locally after disconnect",
+      kind: "singleChoice",
+      options: [{ id: "continue", label: "Continue" }],
+    };
+    let rejectRelay!: (error: Error) => void;
+    const request = vi.fn(
+      async () =>
+        new Promise<SessionHandoffResponse>((_resolvePromise, rejectPromise) => {
+          rejectRelay = rejectPromise;
+        }),
+    );
+    try {
+      const original = ref.events?.onQuestion?.([question]);
+      ref.events?.onHandoffPending?.({ request });
+      await flush();
+      rejectRelay(new Error("Session handoff channel closed"));
+      ref.events?.onHandoffCancelled?.();
+      await flush();
+      expect((app as unknown as TestableApp).panels.kind).toBe("question");
+      await (app as unknown as TestableApp).applyPanelEvent({
+        type: "questions",
+        questions: [{ ...question, answer: "continue" }],
+      });
+      await expect(original).resolves.toEqual([{ ...question, answer: "continue" }]);
+    } finally {
+      await app.dispose();
+    }
+  });
+});
 
 describe("busy submission guard", () => {
   it("uses Escape to cancel active generation without replacing the session, transcript, or current draft", async () => {

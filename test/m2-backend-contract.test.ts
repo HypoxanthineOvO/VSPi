@@ -14,6 +14,7 @@ import { FixtureBackend } from "../src/backend/fixture-backend.js";
 import { PiBackend } from "../src/backend/pi-backend.js";
 import type { ChatBackendEvents } from "../src/backend/types.js";
 import type { TranscriptMessage } from "../src/domain/types.js";
+import type { SessionHandoffChannel } from "../src/sessions/lease.js";
 
 function emptyStats(sessionId = "session-id"): SessionStats {
   return {
@@ -291,7 +292,15 @@ describe("M2 Pi history hydration", () => {
 
     const pending = backend.send("不要中断的任务", { attachments: [], effort: "high", behavior: "prompt" });
     await new Promise((resolve) => setImmediate(resolve));
-    (backend as unknown as { requestDeferredHandoff(): void }).requestDeferredHandoff();
+    const channel: SessionHandoffChannel = {
+      closed: new Promise(() => {}),
+      request: vi.fn(async () => ({})),
+    };
+    (
+      backend as unknown as {
+        requestDeferredHandoff(channel: SessionHandoffChannel): void;
+      }
+    ).requestDeferredHandoff(channel);
 
     expect(fake.session.abort).not.toHaveBeenCalled();
     expect(onTakeover).not.toHaveBeenCalled();

@@ -7,6 +7,9 @@ import type {
   ModelSelectionResult,
   NewSessionOptions,
   RuntimeModelOption,
+  SessionHandoffInteraction,
+  SessionHandoffRelay,
+  SessionHandoffResponse,
 } from "../backend/types.js";
 import { loadSettingsLayers, saveSettings } from "../config/settings.js";
 import { COMPACTION_PROFILES, type CompactOptions } from "../continuity/compaction-profiles.js";
@@ -163,12 +166,16 @@ interface ActiveSubmission {
 }
 
 interface PendingQuestion {
+  questions: Question[];
+  relaying: boolean;
   resolve(questions: Question[]): void;
   reject(error: Error): void;
   cleanup(): void;
 }
 
 interface PendingApproval {
+  request: ApprovalRequest;
+  relaying: boolean;
   resolve(response: ApprovalResponse): void;
   reject(error: Error): void;
   cleanup(): void;
@@ -206,7 +213,12 @@ export class VspiApp implements Component, Focusable {
   private submissionId = 0;
   private activeSubmission: ActiveSubmission | undefined;
   private disposing = false;
+  private sessionWaiting = false;
   private sessionHandoffPending = false;
+  private sessionHandoffRelay: SessionHandoffRelay | undefined;
+  private startupShellReady = false;
+  private backendSessionReady = false;
+  private runtimeSurfacePromise: Promise<void> | undefined;
   private sessionEpoch = 0;
   private sessionTransition = false;
   private pendingRouteSubmission: { raw: string } | undefined;
@@ -309,20 +321,38 @@ export class VspiApp implements Component, Focusable {
           if (this.panels.kind === "prompt") void this.refreshPromptPanel();
         },
         onSessionWait: (waiting) => {
+          this.sessionWaiting = waiting;
           this.setRunActive(waiting);
         },
-        onHandoffPending: () => {
-          this.sessionHandoffPending = true;
-          this.showNotice("Session 将在当前任务和队列完成后交接；此终端不再接收新输入", "info");
+        onSessionReady: () => {
+          this.backendSessionReady = true;
+          if (this.startupShellReady)
+            void this.initializeRuntimeSurface().catch((error) => this.handleRuntimeError(error));
         },
+        onSessionError: (error) => this.handleRuntimeError(error),
+        onHandoffInteraction: (interaction, signal) => this.answerHandoffInteraction(interaction, signal),
+        onHandoffPending: (relay) => this.beginSessionHandoff(relay),
+        onHandoffCancelled: () => this.cancelSessionHandoff(),
         onTakeover: () => {
-          this.showNotice("当前任务已完成，Session 已交接到另一终端", "info");
-          this.options.onExit();
+          this.messages.push({
+            id: `session-handoff:${Date.now()}`,
+            role: "assistant",
+            kind: "session",
+            text: "Session 已移交到新终端；此终端已退出。",
+          });
+          this.showNotice("Session 已移交；当前终端退出", "info");
+          this.requestRender(true);
+          setImmediate(() => this.options.onExit());
         },
-        onSessionInvalidating: () => this.cancelPendingQuestion("Question cancelled because the session changed"),
+        onSessionInvalidating: () => {
+          this.cancelPendingQuestion("Question cancelled because the session changed");
+          this.cancelPendingApproval("Approval cancelled because the session changed");
+        },
         onSessionReset: (session) => {
           this.sessionTransition = false;
+          this.sessionWaiting = false;
           this.sessionHandoffPending = false;
+          this.sessionHandoffRelay = undefined;
           this.attachmentSessionId = session.id;
           this.modelLabel = this.backend.modelLabel;
           this.currentModelIdentity = this.backend.modelProvider
@@ -334,6 +364,48 @@ export class VspiApp implements Component, Focusable {
           if (this.renderReady) void this.switchAttachmentSession(session.id, epoch);
         },
       });
+      await this.options.attachments.start(
+        {
+          onAttachment: (attachment, ownership) => {
+            if (
+              ownership &&
+              (ownership.sessionId !== this.attachmentSessionId ||
+                ownership.generation !== this.options.attachments.sessionGeneration)
+            ) {
+              return;
+            }
+            this.composer.addAttachment(attachment);
+          },
+          onNotice: (text, tone) => this.showNotice(text, tone),
+        },
+        this.options.settings.bridgeEnabled,
+      );
+      this.renderReady = true;
+      this.startupShellReady = true;
+      this.backendSessionReady = this.backend.isSessionReady?.() ?? true;
+      if (this.backendSessionReady) await this.initializeRuntimeSurface();
+      await this.refreshPlanSnapshot(this.sessionEpoch);
+      await this.refreshWorkflowSnapshot();
+      if (this.options.openOnStart === "sessions") {
+        try {
+          this.panels.setSessions(await this.backend.listSessions());
+          this.panels.open("sessions");
+        } catch (error) {
+          this.showNotice(`会话读取失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+        }
+      } else if (this.options.openOnStart === "providers") {
+        this.panels.open("providers");
+        this.showNotice("选择 Provider 后可登录订阅账号或配置 API Key", "info");
+      }
+    } catch (error) {
+      this.renderReady = false;
+      throw error;
+    }
+  }
+
+  private initializeRuntimeSurface(): Promise<void> {
+    if (this.runtimeSurfacePromise) return this.runtimeSurfacePromise;
+    this.runtimeSurfacePromise = (async () => {
       this.modelLabel = this.backend.modelLabel;
       const [models, groups, runtimeProviders] = await Promise.all([
         this.backend.getModelOptions?.() ?? [],
@@ -354,51 +426,27 @@ export class VspiApp implements Component, Focusable {
       });
       this.providerOptions = structuredClone(providers);
       this.panels.setProviders(providers);
-      if (catalog && catalog.diagnostics.length > 0)
+      if (catalog && catalog.diagnostics.length > 0) {
         this.showNotice(catalog.diagnostics[0] ?? "Provider 配置诊断", "warning");
+      }
       this.currentModelIdentity = backendModelIdentity;
       this.runtimeDefaults = this.options.runtimeDefaultsFactory?.(this.backend.isProjectTrusted?.() ?? false);
       await this.applyRuntimeDefaults();
       if (this.attachmentSessionId) await this.switchAttachmentSession(this.attachmentSessionId, this.sessionEpoch);
-      await this.options.attachments.start(
-        {
-          onAttachment: (attachment, ownership) => {
-            if (
-              ownership &&
-              (ownership.sessionId !== this.attachmentSessionId ||
-                ownership.generation !== this.options.attachments.sessionGeneration)
-            ) {
-              return;
-            }
-            this.composer.addAttachment(attachment);
-          },
-          onNotice: (text, tone) => this.showNotice(text, tone),
-        },
-        this.options.settings.bridgeEnabled,
-      );
       if (this.startupRuntimeDefaultsDiagnostic) {
         const diagnostic = this.startupRuntimeDefaultsDiagnostic;
         this.startupRuntimeDefaultsDiagnostic = undefined;
         this.showNotice(diagnostic, "warning");
       }
-      this.renderReady = true;
-      await this.refreshPlanSnapshot(this.sessionEpoch);
-      await this.refreshWorkflowSnapshot();
-      if (this.options.openOnStart === "sessions") {
-        try {
-          this.panels.setSessions(await this.backend.listSessions());
-          this.panels.open("sessions");
-        } catch (error) {
-          this.showNotice(`会话读取失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
-        }
-      } else if (this.options.openOnStart === "providers") {
-        this.panels.open("providers");
-        this.showNotice("选择 Provider 后可登录订阅账号或配置 API Key", "info");
-      }
-    } catch (error) {
-      this.renderReady = false;
-      throw error;
-    }
+      this.requestRender();
+    })();
+    return this.runtimeSurfacePromise;
+  }
+
+  private handleRuntimeError(error: unknown): void {
+    this.sessionWaiting = false;
+    this.setRunActive(false);
+    this.showNotice(`Session 接管失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
   }
 
   async dispose(): Promise<void> {
@@ -434,8 +482,16 @@ export class VspiApp implements Component, Focusable {
   }
 
   handleInput(data: string): void {
-    if (this.sessionHandoffPending && !this.pendingQuestion && !this.pendingApproval) {
-      this.showNotice("正在等待安全点交接到另一终端", "info");
+    if (this.sessionHandoffPending) {
+      this.showNotice("Session 正在移交；请在新终端继续", "info");
+      return;
+    }
+    if (this.sessionWaiting && !this.pendingQuestion && !this.pendingApproval && matchesKey(data, Key.ctrl("c"))) {
+      this.options.onExit();
+      return;
+    }
+    if (this.sessionWaiting && !this.pendingQuestion && !this.pendingApproval) {
+      this.showNotice("正在接管 Session；仅迁移中的 Question 或 Approval 可操作", "info");
       return;
     }
     if (this.authDialog) {
@@ -1836,11 +1892,14 @@ export class VspiApp implements Component, Focusable {
       };
       signal?.addEventListener("abort", abort, { once: true });
       this.pendingQuestion = {
+        questions: structuredClone(questions),
+        relaying: false,
         resolve,
         reject,
         cleanup: () => signal?.removeEventListener("abort", abort),
       };
-      this.panels.openQuestions(questions);
+      if (this.sessionHandoffRelay) void this.relayPendingQuestion(this.pendingQuestion);
+      else this.panels.openQuestions(questions);
       this.requestRender();
       if (signal?.aborted) abort();
     });
@@ -1890,11 +1949,14 @@ export class VspiApp implements Component, Focusable {
       };
       signal?.addEventListener("abort", abort, { once: true });
       this.pendingApproval = {
+        request: structuredClone(request),
+        relaying: false,
         resolve,
         reject,
         cleanup: () => signal?.removeEventListener("abort", abort),
       };
-      this.panels.openApproval(request);
+      if (this.sessionHandoffRelay) void this.relayPendingApproval(this.pendingApproval);
+      else this.panels.openApproval(request);
       this.requestRender();
       if (signal?.aborted) abort();
     });
@@ -1909,6 +1971,96 @@ export class VspiApp implements Component, Focusable {
     const error = new Error(message);
     error.name = "AbortError";
     pending.reject(error);
+  }
+
+  private beginSessionHandoff(relay: SessionHandoffRelay): void {
+    if (this.sessionHandoffPending) return;
+    this.sessionHandoffPending = true;
+    this.sessionHandoffRelay = relay;
+    if (this.panels.kind === "question" || this.panels.kind === "approval") this.panels.close();
+    if (this.pendingQuestion) void this.relayPendingQuestion(this.pendingQuestion);
+    if (this.pendingApproval) void this.relayPendingApproval(this.pendingApproval);
+    this.showNotice("Session 正在移交到新终端；当前任务会无损完成，此终端不再接收输入", "info");
+    this.requestRender();
+  }
+
+  private cancelSessionHandoff(): void {
+    if (!this.sessionHandoffPending) return;
+    this.sessionHandoffPending = false;
+    this.sessionHandoffRelay = undefined;
+    if (this.pendingQuestion) {
+      this.pendingQuestion.relaying = false;
+      this.panels.openQuestions(this.pendingQuestion.questions);
+    } else if (this.pendingApproval) {
+      this.pendingApproval.relaying = false;
+      this.panels.openApproval(this.pendingApproval.request);
+    }
+    this.showNotice("新终端已断开；Session 仍由当前终端继续", "warning");
+    this.requestRender();
+  }
+
+  private async relayPendingQuestion(pending: PendingQuestion): Promise<void> {
+    const relay = this.sessionHandoffRelay;
+    if (!relay || pending.relaying) return;
+    pending.relaying = true;
+    try {
+      const response = await relay.request({ kind: "question", questions: structuredClone(pending.questions) });
+      if (response.kind !== "question") throw new Error("Session handoff returned the wrong interaction type");
+      if (this.pendingQuestion !== pending) return;
+      this.pendingQuestion = undefined;
+      pending.cleanup();
+      pending.resolve(response.questions);
+    } catch (error) {
+      if (this.pendingQuestion !== pending) return;
+      await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+      if (!this.sessionHandoffPending) {
+        pending.relaying = false;
+        this.panels.openQuestions(pending.questions);
+        this.requestRender();
+        return;
+      }
+      this.pendingQuestion = undefined;
+      pending.cleanup();
+      pending.reject(error instanceof Error ? error : new Error("Session handoff Question failed"));
+    }
+  }
+
+  private async relayPendingApproval(pending: PendingApproval): Promise<void> {
+    const relay = this.sessionHandoffRelay;
+    if (!relay || pending.relaying) return;
+    pending.relaying = true;
+    try {
+      const response = await relay.request({ kind: "approval", request: structuredClone(pending.request) });
+      if (response.kind !== "approval") throw new Error("Session handoff returned the wrong interaction type");
+      if (this.pendingApproval !== pending) return;
+      this.pendingApproval = undefined;
+      pending.cleanup();
+      pending.resolve(response.response);
+    } catch (error) {
+      if (this.pendingApproval !== pending) return;
+      await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+      if (!this.sessionHandoffPending) {
+        pending.relaying = false;
+        this.panels.openApproval(pending.request);
+        this.requestRender();
+        return;
+      }
+      this.pendingApproval = undefined;
+      pending.cleanup();
+      pending.reject(error instanceof Error ? error : new Error("Session handoff Approval failed"));
+    }
+  }
+
+  private async answerHandoffInteraction(
+    interaction: SessionHandoffInteraction,
+    signal?: AbortSignal,
+  ): Promise<SessionHandoffResponse> {
+    if (interaction.kind === "question") {
+      const questions = await this.requestQuestions(interaction.questions, signal);
+      return { kind: "question", questions };
+    }
+    const response = await this.requestApproval(interaction.request, signal);
+    return { kind: "approval", response };
   }
 
   private async runProviderProbe(
