@@ -17,7 +17,7 @@ stages:
 
 default:
   image:
-    name: node:22.22.0-bookworm-slim@sha256:dd9d21971ec4395903fa6143c2b9267d048ae01ca6d3ea96f16cb30df6187d94
+    name: gitlab.vsplab.cn:5050/heyx/vspi/ci-node:22.22.0-2@sha256:ed82f600a93b35f8b68d8e403c36ce5f832538df8a676cce83454679b2aee1a9
   tags:
     - vspi-docker
   interruptible: true
