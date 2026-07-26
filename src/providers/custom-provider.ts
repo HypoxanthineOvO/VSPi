@@ -21,15 +21,27 @@ export function customProviderId(name: string, baseUrl: string): string {
 
 export async function discoverProviderModels(
   draft: CustomProviderDraft,
-  options: { signal?: AbortSignal; fetch?: typeof fetch } = {},
+  options: { signal?: AbortSignal; fetch?: typeof fetch; timeoutMs?: number } = {},
 ): Promise<ProviderModelRecord[]> {
   const fetcher = options.fetch ?? fetch;
   const endpoint = modelListEndpoint(draft.baseUrl);
-  const response = await fetcher(endpoint, {
-    headers: discoveryHeaders(draft.protocol, draft.apiKey),
-    redirect: "error",
-    ...(options.signal ? { signal: options.signal } : {}),
-  });
+  const timeoutMs = options.timeoutMs ?? 5_000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("模型列表请求超时必须大于 0");
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+  let response: Response;
+  try {
+    response = await fetcher(endpoint, {
+      headers: discoveryHeaders(draft.protocol, draft.apiKey),
+      redirect: "error",
+      signal,
+    });
+  } catch (error) {
+    if (timeoutSignal.aborted && !options.signal?.aborted) {
+      throw new Error(`模型列表请求超时（${Math.ceil(timeoutMs / 1_000)} 秒）`);
+    }
+    throw error;
+  }
   if (!response.ok) throw new Error(`模型列表请求失败（HTTP ${response.status}）`);
   const body: unknown = await response.json();
   const entries = modelEntries(body);

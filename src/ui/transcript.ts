@@ -133,6 +133,8 @@ export function renderTranscriptMessage(
       );
   } else if (message.kind === "tool") {
     return renderToolGroup([message], width, theme, options);
+  } else if (message.kind === "session") {
+    lines = [theme.muted(`◇ ${message.text}`)];
   } else {
     const symbol =
       message.status === "success"

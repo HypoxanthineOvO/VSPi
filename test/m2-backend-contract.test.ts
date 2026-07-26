@@ -124,6 +124,30 @@ describe("M2 truthful backend selection", () => {
 });
 
 describe("M2 Pi history hydration", () => {
+  it("marks an interrupted resumed turn without retrying the final user message", async () => {
+    const interrupted = {
+      role: "user",
+      content: [{ type: "text", text: "LAST_UNFINISHED_REQUEST" }],
+      timestamp: Date.now(),
+    };
+    const fake = fakePiSession([interrupted]);
+    const recorder = eventRecorder();
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-m2-interrupted-resume-")),
+      continueRecent: true,
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+
+    await backend.start(recorder.events);
+
+    expect(recorder.messages).toEqual([
+      expect.objectContaining({ kind: "text", role: "user", text: "LAST_UNFINISHED_REQUEST" }),
+      expect.objectContaining({ kind: "session", text: expect.stringContaining("未自动重试") }),
+    ]);
+    expect(fake.session.prompt).not.toHaveBeenCalled();
+    await backend.dispose();
+  });
+
   it("hydrates the restored transcript before start resolves and does not duplicate it on later events", async () => {
     const priorUser = {
       role: "user",
@@ -245,6 +269,40 @@ describe("M2 Pi history hydration", () => {
     expect(busy).toHaveBeenLastCalledWith(true);
     fake.emit({ type: "queue_update", steering: [], followUp: [] } as AgentSessionEvent);
     expect(busy).toHaveBeenLastCalledWith(false);
+    await backend.dispose();
+  });
+
+  it("defers Session takeover until the active generation reaches idle without aborting it", async () => {
+    let releasePrompt: (() => void) | undefined;
+    const fake = fakePiSession([], {
+      prompt: () =>
+        new Promise<void>((resolve) => {
+          releasePrompt = resolve;
+        }),
+    });
+    const recorder = eventRecorder();
+    const onTakeover = vi.fn();
+    recorder.events.onTakeover = onTakeover;
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-m2-deferred-handoff-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+    await backend.start(recorder.events);
+
+    const pending = backend.send("不要中断的任务", { attachments: [], effort: "high", behavior: "prompt" });
+    await new Promise((resolve) => setImmediate(resolve));
+    (backend as unknown as { requestDeferredHandoff(): void }).requestDeferredHandoff();
+
+    expect(fake.session.abort).not.toHaveBeenCalled();
+    expect(onTakeover).not.toHaveBeenCalled();
+    await expect(
+      backend.send("接管后不应进入旧 runtime", { attachments: [], effort: "high", behavior: "prompt" }),
+    ).rejects.toThrow("Session 正在交接");
+
+    releasePrompt?.();
+    await pending;
+    expect(fake.session.abort).not.toHaveBeenCalled();
+    expect(onTakeover).toHaveBeenCalledOnce();
     await backend.dispose();
   });
 

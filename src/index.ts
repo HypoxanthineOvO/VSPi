@@ -173,12 +173,18 @@ async function interactive(): Promise<void> {
   const shutdown = async () => {
     if (closing) return;
     closing = true;
+    process.removeListener("SIGTERM", terminate);
+    process.removeListener("SIGHUP", terminate);
     await shutdownInteractiveSession({
       disposeApp: () => app.dispose(),
       tui: app.getActiveTui(),
       drainInput: () => terminal.drainInput(),
     });
   };
+
+  const terminate = () => void shutdown();
+  process.once("SIGTERM", terminate);
+  process.once("SIGHUP", terminate);
 
   tui.addChild(app);
   tui.setFocus(app);

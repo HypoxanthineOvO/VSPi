@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { BUILTIN_PROVIDERS } from "../src/providers/builtins.js";
 import { createProviderConfigService } from "../src/providers/config-service.js";
 import { customProviderId, discoverProviderModels, modelsFromManualInput } from "../src/providers/custom-provider.js";
+import { loginProviderWithoutModelNetwork, oauthAvailableInCurrentTerminal } from "../src/providers/login.js";
 import { registerBuiltinProviders } from "../src/providers/runtime-registration.js";
 import { AuthDialog } from "../src/ui/auth-dialog.js";
 
@@ -51,6 +52,54 @@ describe("provider onboarding", () => {
       customProviderId("Relay", "https://two.example/v1"),
     );
     expect(modelsFromManualInput("model-a, model-b，model-a").map((model) => model.id)).toEqual(["model-a", "model-b"]);
+  });
+
+  it("bounds custom model discovery instead of leaving init waiting indefinitely", async () => {
+    const fetcher = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        }),
+    );
+
+    await expect(
+      discoverProviderModels(
+        {
+          name: "Slow Relay",
+          baseUrl: "https://slow.example/v1",
+          apiKey: "sk-secret",
+          protocol: "openai-responses",
+        },
+        { fetch: fetcher as typeof fetch, timeoutMs: 10 },
+      ),
+    ).rejects.toThrow("模型列表请求超时（1 秒）");
+  });
+
+  it("persists login without allowing Pi to start a blocking network catalog refresh", async () => {
+    const originalRefresh = vi.fn(async (_options?: { allowNetwork?: boolean }) => ({
+      aborted: false,
+      errors: new Map(),
+    }));
+    const runtime = {
+      refresh: originalRefresh,
+      login: vi.fn(async function (this: { refresh: typeof originalRefresh }) {
+        await this.refresh({ allowNetwork: true });
+        return { type: "api_key" as const, key: "sk-saved" };
+      }),
+    };
+    const interaction = new AuthDialog("VSPLab", vi.fn(), vi.fn(), "配置");
+
+    await loginProviderWithoutModelNetwork(runtime as unknown as ModelRuntime, "vsplab", "api_key", interaction);
+
+    expect(originalRefresh).toHaveBeenCalledWith({ allowNetwork: false });
+    expect(runtime.refresh).toBe(originalRefresh);
+  });
+
+  it("hides the callback-only OpenRouter OAuth method in SSH sessions", () => {
+    vi.stubEnv("SSH_TTY", "/dev/pts/3");
+    expect(oauthAvailableInCurrentTerminal("openrouter")).toBe(false);
+    expect(oauthAvailableInCurrentTerminal("kimi-coding")).toBe(true);
+    expect(oauthAvailableInCurrentTerminal("openai-codex")).toBe(true);
   });
 
   it("atomically saves a global custom provider while keeping its API key in Pi auth storage", async () => {

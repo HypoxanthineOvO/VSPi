@@ -1,6 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../src/ui/ansi.js";
 import { AuthDialog } from "../src/ui/auth-dialog.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 import { plainTheme } from "./helpers.js";
 
 describe("provider authentication dialog", () => {
@@ -41,6 +46,31 @@ describe("provider authentication dialog", () => {
     await expect(result).resolves.toBe("https://api.example.com/v1");
   });
 
+  it("accepts a browser redirect URL pasted back into a remote manual-code prompt", async () => {
+    const dialog = new AuthDialog("Anthropic", vi.fn(), vi.fn());
+    const result = dialog.prompt({ type: "manual_code", message: "粘贴最终跳转 URL" });
+    const redirect = "http://localhost:54545/callback?code=remote-code&state=expected";
+    dialog.handleInput(`\u001b[200~${redirect}\u001b[201~\r`);
+    await expect(result).resolves.toBe(redirect);
+  });
+
+  it("prefers device-code login when VSPi is running through SSH", async () => {
+    vi.stubEnv("SSH_CONNECTION", "10.0.0.1 50000 10.0.0.2 22");
+    const dialog = new AuthDialog("OpenAI Codex", vi.fn(), vi.fn());
+    const result = dialog.prompt({
+      type: "select",
+      message: "选择登录方式",
+      options: [
+        { id: "browser", label: "Browser login" },
+        { id: "device_code", label: "Device code login" },
+      ],
+    });
+
+    expect(dialog.render(80, plainTheme()).map(stripAnsi).join("\n")).toContain("Device code login · SSH 推荐");
+    dialog.handleInput("\r");
+    await expect(result).resolves.toBe("device_code");
+  });
+
   it("aborts the whole login flow on Escape", async () => {
     const cancelled = vi.fn();
     const dialog = new AuthDialog("Kimi For Coding", vi.fn(), cancelled);
@@ -63,7 +93,7 @@ describe("provider authentication dialog", () => {
     expect(raw).toContain("\u001b]8;;https://auth.kimi.com/device\u0007");
     expect(rendered).toContain("https://auth.kimi.com/device");
     expect(rendered).toContain("ABCD-EFGH");
-    expect(rendered).toContain("设备码会自动轮询");
+    expect(rendered).toContain("远程终端会自动轮询");
     expect(rendered).toContain("正在等待授权结果");
   });
 });

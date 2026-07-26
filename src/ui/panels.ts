@@ -1477,10 +1477,11 @@ export class PanelController {
     return this.sessions.map((session, index) => {
       const branch = session.branchDepth > 0 ? `${theme.muted("└─")} ` : "";
       const current = session.current ? theme.success("● ") : "  ";
+      const status = session.owner ? theme.warning("使用中") : session.relativeTime;
       return selectedLine(
         alignRight(
           `${"  ".repeat(session.branchDepth)}${branch}${current}${session.label}`,
-          session.relativeTime,
+          status,
           Math.max(1, width - 2),
         ),
         index === this.state.selected,

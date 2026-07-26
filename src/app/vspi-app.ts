@@ -25,6 +25,7 @@ import type {
   EffortLevel,
   ProviderOption,
   Question,
+  SessionOption,
   TranscriptMessage,
   UsageSnapshot,
 } from "../domain/types.js";
@@ -147,7 +148,7 @@ interface ProviderConfigUi {
 
 type NoticeTone = "info" | "success" | "warning" | "error";
 
-const WORKING_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+const WORKING_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"] as const;
 
 interface ActiveSubmission {
   id: number;
@@ -201,6 +202,8 @@ export class VspiApp implements Component, Focusable {
   private renderReady = false;
   private submissionId = 0;
   private activeSubmission: ActiveSubmission | undefined;
+  private disposing = false;
+  private sessionHandoffPending = false;
   private sessionEpoch = 0;
   private sessionTransition = false;
   private pendingRouteSubmission: { raw: string } | undefined;
@@ -302,9 +305,21 @@ export class VspiApp implements Component, Focusable {
           this.effectivePromptSegments = structuredClone(segments);
           if (this.panels.kind === "prompt") void this.refreshPromptPanel();
         },
+        onSessionWait: (waiting) => {
+          this.setRunActive(waiting);
+        },
+        onHandoffPending: () => {
+          this.sessionHandoffPending = true;
+          this.showNotice("Session 将在当前任务和队列完成后交接；此终端不再接收新输入", "info");
+        },
+        onTakeover: () => {
+          this.showNotice("当前任务已完成，Session 已交接到另一终端", "info");
+          this.options.onExit();
+        },
         onSessionInvalidating: () => this.cancelPendingQuestion("Question cancelled because the session changed"),
         onSessionReset: (session) => {
           this.sessionTransition = false;
+          this.sessionHandoffPending = false;
           this.attachmentSessionId = session.id;
           this.modelLabel = this.backend.modelLabel;
           this.currentModelIdentity = this.backend.modelProvider
@@ -384,6 +399,8 @@ export class VspiApp implements Component, Focusable {
   }
 
   async dispose(): Promise<void> {
+    if (this.disposing) return;
+    this.disposing = true;
     this.renderReady = false;
     this.authDialog?.cancel();
     this.authDialog = undefined;
@@ -394,6 +411,9 @@ export class VspiApp implements Component, Focusable {
     this.cancelPendingApproval("Approval cancelled because VSPi is closing");
     this.options.approvalBroker?.setHandler(undefined);
     try {
+      if (this.activityActive()) {
+        await waitForShutdownCancellation(this.backend.cancel().catch(() => undefined));
+      }
       await this.options.attachments.dispose();
     } finally {
       await this.backend.dispose();
@@ -411,6 +431,10 @@ export class VspiApp implements Component, Focusable {
   }
 
   handleInput(data: string): void {
+    if (this.sessionHandoffPending && !this.pendingQuestion && !this.pendingApproval) {
+      this.showNotice("正在等待安全点交接到另一终端", "info");
+      return;
+    }
     if (this.authDialog) {
       this.authDialog.handleInput(data);
       return;
@@ -1130,6 +1154,25 @@ export class VspiApp implements Component, Focusable {
         this.showNotice(`Provider 配置未保存：${error instanceof Error ? error.message : "未知错误"}`, "error");
       }
     } else if (event.type === "session") {
+      if (event.session.owner) {
+        try {
+          const action = await this.confirmSessionCollision(event.session);
+          if (action === "cancel") {
+            this.panels.setSessions(await this.backend.listSessions());
+            this.panels.open("sessions");
+            return;
+          }
+          if (action === "fork") {
+            if (!this.backend.forkSession) throw new Error("当前后端不支持会话分支");
+            await this.backend.forkSession(event.session.id);
+            this.panels.close();
+            return;
+          }
+        } catch (error) {
+          this.showNotice(`Session 操作失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+          return;
+        }
+      }
       const epoch = this.sessionEpoch;
       this.sessionTransition = true;
       try {
@@ -1311,6 +1354,7 @@ export class VspiApp implements Component, Focusable {
         if (this.authDialog === dialog) this.authDialog = undefined;
         this.showNotice("登录已取消", "info");
       },
+      type === "oauth" ? "登录" : "配置",
     );
     this.authDialog = dialog;
     this.requestRender();
@@ -1591,6 +1635,25 @@ export class VspiApp implements Component, Focusable {
       this.requestRender();
       if (signal?.aborted) abort();
     });
+  }
+
+  private async confirmSessionCollision(session: SessionOption): Promise<"takeover" | "fork" | "cancel"> {
+    const owner = session.owner;
+    if (!owner) return "takeover";
+    const [answered] = await this.requestQuestions([
+      {
+        id: `session-owner:${session.id}`,
+        title: "Session 正在使用",
+        prompt: `${owner.hostname} · PID ${owner.pid} 正在运行这个 Session。接管会等待当前任务和队列完成，不会中断。`,
+        kind: "singleChoice",
+        options: [
+          { id: "takeover", label: "接管此会话", description: "默认；等待安全点后继续同一线程" },
+          { id: "fork", label: "创建分支", description: "保留当前 owner，创建独立 Session" },
+          { id: "cancel", label: "取消", description: "返回 Sessions，不改变任何进程" },
+        ],
+      },
+    ]);
+    return answered?.answer === "fork" ? "fork" : answered?.answer === "cancel" ? "cancel" : "takeover";
   }
 
   private cancelPendingQuestion(message: string): void {
@@ -2215,4 +2278,19 @@ function findPromptRuleScope(
   if (snapshot.project?.rules.some((rule) => rule.id === ruleId)) return "project";
   if (snapshot.global.rules.some((rule) => rule.id === ruleId)) return "global";
   return undefined;
+}
+
+async function waitForShutdownCancellation(cancellation: Promise<unknown>, timeoutMs = 5_000): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      cancellation,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

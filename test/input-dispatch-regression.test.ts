@@ -372,11 +372,11 @@ describe("busy submission guard", () => {
       ref.events?.onBusy(true);
       expect(testable.workingFrame).toBe(0);
       const firstFrame = app.render(120).map(stripAnsi).join("\n");
-      expect(firstFrame).toContain("Working ⠋");
+      expect(firstFrame).toContain("Working ⣾");
       expect(firstFrame).not.toMatch(/▌ Working|插入 2|后续 1|队列 3/);
       vi.advanceTimersByTime(240);
       expect(testable.workingFrame).toBe(1);
-      expect(app.render(120).map(stripAnsi).join("\n")).toContain("Working ⠙");
+      expect(app.render(120).map(stripAnsi).join("\n")).toContain("Working ⣽");
     } finally {
       await app.dispose();
       vi.useRealTimers();

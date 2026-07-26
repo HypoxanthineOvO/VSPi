@@ -1,13 +1,13 @@
 # VSPi
 
-VSPi v0.2.4 是基于 `@earendil-works/pi-tui` 与 `@earendil-works/pi-coding-agent` 的自定义中文 TUI。当前实现已接入统一动作目录、真实 Session runtime、Provider/Model/Effort 真相源、执行 Policy、Question tool、图片附件、安全自更新，以及可配置的 thinking/Markdown 渲染与可选只读 Workflow 投影。
+VSPi v0.2.5 是基于 `@earendil-works/pi-tui` 与 `@earendil-works/pi-coding-agent` 的自定义中文 TUI。当前实现已接入统一动作目录、真实 Session runtime、Provider/Model/Effort 真相源、执行 Policy、Question tool、图片附件、安全自更新，以及可配置的 thinking/Markdown 渲染与可选只读 Workflow 投影。
 
 ## 安装
 
-从 GitLab Release 的预构建包安装固定的 `v0.2.4` 版本：
+从 GitLab Release 的预构建包安装固定的 `v0.2.5` 版本：
 
 ```bash
-npm install -g 'https://gitlab.vsplab.cn/heyx/vspi/-/releases/v0.2.4/downloads/vspi-0.2.4.tgz'
+npm install -g 'https://gitlab.vsplab.cn/heyx/vspi/-/releases/v0.2.5/downloads/vspi-0.2.5.tgz'
 
 vspi --version
 ```
@@ -123,7 +123,7 @@ Status 的短模型样例左右锚是：80 列第一行 `Model 0 / Effort 24 / C
 
 `/compact` 在未绑定 Local Plan 时默认使用 Pi Native，绑定 Plan 时默认使用 Execution Continuity。
 使用 `/compact --list` 检查四种手动 profile；也可显式选择 `native`、`continuity`、`research`，
-或使用 `/compact custom <instructions>`。v0.2.4 的自动 threshold/overflow 压缩仍保持 Pi Native；
+或使用 `/compact custom <instructions>`。v0.2.5 的自动 threshold/overflow 压缩仍保持 Pi Native；
 统一配置自动压缩 profile 留待后续版本。
 
 退出候选显示为 `quit (exit)`。canonical `/new` 的 alias 是 `/clear`；`/sessions` 的 aliases 是 `/session` 与 `/resume`；`/providers` 的 alias 是 `/provider`；canonical `/quit` 的 aliases（别名）是 `/exit` 和 `/q`，候选行会明确显示 `别名（/exit） → /quit`。`/thinking`、`/login` 与 `/logout` 是 canonical 命令。插件/扩展命令保留 package `source` 来源，而内置命令显示 Built-in。
@@ -152,6 +152,8 @@ Agent 从首次提交到真正 idle 期间，在 composer 上方持续显示无�
 Question、Approval、Inspect、Preview 与普通面板打开时，Esc 先关闭当前交互层；回到主 composer 后再次按 Esc 才中断运行。保存结果和短时状态临时替换固定 contextual hint 行，约 3.5 秒后恢复；不创建 overlay、不改变布局高度，也不抢占 composer 焦点。
 
 Model、Provider、Sessions、Settings、Usage、Theme 和 Question 共用底部工作区，不叠加多层弹窗。VSPi 自有 `question` 通过 Pi ToolDefinition 接口注册，支持单选、多选、排序和填空；模型发起调用后会等待用户在动态 Question 工作区完成最终检查。`Left/Right` 切题，`Up/Down` 选择，`Ctrl/Alt+Up/Down` 调整排序，`Tab` 直接回答，`Shift+S` 跳过，`Enter` 确认或提交。取消、Session replacement 与应用退出都会以 `AbortError` 终止 pending Question，不把 prompt、选项说明、路径或 secret 样式文本写回 tool result。
+
+同一台服务器上的每个 Pi Session 只允许一个 VSPi 写入者。Sessions 面板把其他进程持有的会话标为“使用中”，选择后可等待安全点接管、从最后一个完整回复创建分支或取消；接管不会 abort 旧任务，旧终端会先完成当前 generation、工具、压缩与原生消息队列，再释放 Session，新终端随后从磁盘重新打开同一条线性历史。`vspi continue` 是显式续接操作，遇到占用时自动采用同样的延迟接管。空闲退出会结束前台进程；忙碌退出先请求取消，最多等待 5 秒再清理，不在后台继续运行。恢复只加载已落盘内容，不重连旧请求、不自动重试；检测到未完成轮次时会显示恢复标记。锁只保证同服务器进程，跨服务器共享目录不在 v0.2.5 的支持范围内。
 
 每个已接入工作区都有 contextual hint。hint 位于面板 frame外，并直接位于 composer上方；Command 的完整提示是 `↑↓ 选择  Tab 补全  Enter 执行  Esc 关闭`。Plan、Provider、Sessions、Settings、Usage、Theme、Question 和 Model 按当前真实可用动作生成提示；未来工作区接入前不得宣告无效键位。
 
@@ -199,7 +201,7 @@ npm run dev -- --recovery
 
 ## Workflow Adapter Bootstrap
 
-VSPi `0.2.4` 的 Workflow bootstrap 只读投影 Hypo-Workflow Plan，并且默认关闭。只有显式传入 `--workflow` 才会读取 Workflow bundle identity、加载 Core 并访问 workspace Delivery；默认启动不会读取 Workflow 环境变量或项目状态。Plan 标题在展示层把 slug 分隔符转换为空格、把版本段转换为点号并首字母大写，持久 ID 完全不变；标题、Workflow 元数据、分隔线和里程碑列表形成独立层次。Adapter 是 TypeScript host boundary，加载同一 Node.js 进程中的 ESM JavaScript Core；`.pipeline` 文件只能由 Core API 读写，VSPi 不直接解析或修改 authority YAML/JSON。
+VSPi `0.2.5` 的 Workflow bootstrap 只读投影 Hypo-Workflow Plan，并且默认关闭。只有显式传入 `--workflow` 才会读取 Workflow bundle identity、加载 Core 并访问 workspace Delivery；默认启动不会读取 Workflow 环境变量或项目状态。Plan 标题在展示层把 slug 分隔符转换为空格、把版本段转换为点号并首字母大写，持久 ID 完全不变；标题、Workflow 元数据、分隔线和里程碑列表形成独立层次。Adapter 是 TypeScript host boundary，加载同一 Node.js 进程中的 ESM JavaScript Core；`.pipeline` 文件只能由 Core API 读写，VSPi 不直接解析或修改 authority YAML/JSON。
 
 Workflow 集成选择“可选、只读 Provider”，而不是无 Workflow 或深度写入集成：
 
@@ -225,7 +227,7 @@ vspi --workflow
 
 Loader 在 import 前验证 archive digest、bundle/runtime manifest digest、release descriptor、source commit、全部 Core 文件与 runtime dependency 字节；manifest 必须绑定 descriptor 与 Core root export，`node_modules` 不允许未声明文件或 symlink。import 后再验证 required root exports 与 Host Contract v1。未传 `--workflow` 时界面不出现 Workflow 状态；显式开启后若配置缺失、安装过旧、sibling release、损坏或版本不兼容，`/plan` 显示有界诊断，所有 Workflow authority 请求默认拒绝，普通聊天仍可用。`--recovery` 在读取上述环境变量之前就禁用 Adapter，因此即使这些值恶意或损坏也不会触发 bundle discovery、import 或项目 Workflow 读取。
 
-0.2.4 不在 VSPi 内注册 `/hw:init`、`/hw:resume`、`/hw:accept` 等 Receipt-bearing 生命周期命令；这些命令继续由 Hypo-Workflow 自身提供。VSPi 只通过 `/plan` 展示可选的只读投影。
+0.2.5 不在 VSPi 内注册 `/hw:init`、`/hw:resume`、`/hw:accept` 等 Receipt-bearing 生命周期命令；这些命令继续由 Hypo-Workflow 自身提供。VSPi 只通过 `/plan` 展示可选的只读投影。
 
 当前 Policy 不是 OS sandbox，也不把 SSH、容器或远程系统包装成隔离边界。更细的命令解析、小模型审批、远程目标约束和系统级 containment 属于后续安全加固，不阻塞本轮可用性。
 
