@@ -21,9 +21,21 @@ import { createReviewReminderExtension, createReviewTracker } from "../continuit
 import { FX } from "../domain/defaults.js";
 import { modelEffortLevels, normalizeEffortLevel } from "../domain/effort.js";
 import { formatProviderName } from "../domain/providers.js";
-import type { EffortLevel, ProviderOption, SessionOption, ThinkingMessage, ToolMessage } from "../domain/types.js";
+import type {
+  EffortLevel,
+  ProviderOption,
+  Question,
+  SessionOption,
+  ThinkingMessage,
+  ToolMessage,
+} from "../domain/types.js";
 import type { LocalPlanBackend, PlanBinding } from "../plans/types.js";
-import { createExecutionPolicyService, type ExecutionPolicyService } from "../policy/execution-policy.js";
+import {
+  type ApprovalRequest,
+  type ApprovalResponse,
+  createExecutionPolicyService,
+  type ExecutionPolicyService,
+} from "../policy/execution-policy.js";
 import { createPolicyToolOverrides } from "../policy/pi-policy-tools.js";
 import type { EffectivePromptSegment } from "../prompts/effective-prompt.js";
 import { createPromptProfileExtension } from "../prompts/pi-prompt-profile-extension.js";
@@ -46,7 +58,9 @@ import {
   type AcquiredSessionLease,
   acquireSessionLease,
   readSessionLease,
+  type SessionHandoffChannel,
   type SessionLease,
+  type SessionHandoffInteraction as WireSessionHandoffInteraction,
 } from "../sessions/lease.js";
 import { PiSkillManager } from "../skills/service.js";
 import { createSkillToolDefinitions } from "../skills/tools.js";
@@ -62,6 +76,9 @@ import type {
   RuntimeModelOption,
   SendOptions,
   SendResult,
+  SessionHandoffInteraction,
+  SessionHandoffRelay,
+  SessionHandoffResponse,
   SessionResetReason,
 } from "./types.js";
 
@@ -224,6 +241,8 @@ export class PiRuntimeBackend implements ChatBackend {
   private handoffRequested = false;
   private handoffFinalizing = false;
   private leaseLifecycleReady = false;
+  private disposed = false;
+  private delayedStartup: Promise<void> | undefined;
   private readonly leaseAbortController = new AbortController();
   private readonly externalSessions: Pick<ExternalSessionCatalog, "list" | "preview">;
   private skillManager: SkillManager | undefined;
@@ -262,19 +281,61 @@ export class PiRuntimeBackend implements ChatBackend {
     return this.session?.model?.input.includes("image") ?? false;
   }
 
+  isSessionReady(): boolean {
+    return this.runtime !== undefined && this.leaseLifecycleReady;
+  }
+
   async start(events: ChatBackendEvents): Promise<void> {
     this.events = events;
-    let manager = this.options.continueRecent
+    const manager = this.options.continueRecent
       ? SessionManager.continueRecent(this.options.cwd, this.options.sessionDir)
       : SessionManager.create(this.options.cwd, this.options.sessionDir);
-    const acquired = await this.acquireLease(manager.getSessionFile());
-    if (acquired?.waited && manager.getSessionFile()) manager = SessionManager.open(manager.getSessionFile() ?? "");
+    let announceWait!: () => void;
+    const waiting = new Promise<void>((resolvePromise) => {
+      announceWait = resolvePromise;
+    });
+    const acquisition = this.acquireLease(manager.getSessionFile(), announceWait, false);
+    const outcome = await Promise.race([
+      acquisition.then((acquired) => ({ type: "acquired" as const, acquired })),
+      waiting.then(() => ({ type: "waiting" as const })),
+    ]);
+    if (outcome.type === "waiting") {
+      this.delayedStartup = acquisition
+        .then((acquired) => this.finishStartup(manager, acquired))
+        .catch((error: unknown) => {
+          if (this.disposed || this.leaseAbortController.signal.aborted) return;
+          const normalized = error instanceof Error ? error : new Error("Session 接管失败");
+          this.events?.onSessionWait?.(false);
+          this.events?.onSessionError?.(normalized);
+        });
+      return;
+    }
+    await this.finishStartup(manager, outcome.acquired);
+  }
+
+  private async finishStartup(manager: SessionManager, acquired: AcquiredSessionLease | undefined): Promise<void> {
+    if (this.disposed) {
+      await acquired?.lease.release();
+      return;
+    }
+    let activeManager = manager;
+    if (acquired?.waited && manager.getSessionFile())
+      activeManager = SessionManager.open(manager.getSessionFile() ?? "");
     this.sessionLease = acquired?.lease;
     try {
-      this.runtime = await this.createRuntime(manager);
+      const runtime = await this.createRuntime(activeManager);
+      if (this.disposed) {
+        await runtime.dispose();
+        await this.sessionLease?.release();
+        this.sessionLease = undefined;
+        return;
+      }
+      this.runtime = runtime;
       this.trackRuntimeInvalidation(this.runtime);
       this.bindCurrentSession(this.options.continueRecent ? "resume" : "startup");
       this.leaseLifecycleReady = true;
+      this.events?.onSessionWait?.(false);
+      this.events?.onSessionReady?.();
       this.maybeFinalizeHandoff();
     } catch (error) {
       await this.failRuntime(false);
@@ -784,6 +845,7 @@ export class PiRuntimeBackend implements ChatBackend {
   }
 
   async dispose(): Promise<void> {
+    this.disposed = true;
     this.leaseLifecycleReady = false;
     this.leaseAbortController.abort();
     this.events?.onSessionInvalidating?.();
@@ -796,6 +858,7 @@ export class PiRuntimeBackend implements ChatBackend {
       await this.sessionLease?.release();
       this.sessionLease = undefined;
     }
+    await this.delayedStartup?.catch(() => undefined);
   }
 
   private async createRuntime(manager: SessionManager): Promise<RuntimeOwner> {
@@ -1058,7 +1121,11 @@ export class PiRuntimeBackend implements ChatBackend {
     this.maybeFinalizeHandoff();
   }
 
-  private async acquireLease(sessionFile: string | undefined): Promise<AcquiredSessionLease | undefined> {
+  private async acquireLease(
+    sessionFile: string | undefined,
+    onFirstWait?: () => void,
+    clearWaiting = true,
+  ): Promise<AcquiredSessionLease | undefined> {
     if (!sessionFile || !(this.options.sessionLeases ?? !this.options.sessionFactory)) return undefined;
     let waiting = false;
     try {
@@ -1066,26 +1133,50 @@ export class PiRuntimeBackend implements ChatBackend {
         agentDir: this.options.agentDir ?? getAgentDir(),
         signal: this.leaseAbortController.signal,
         onWait: (owner) => {
+          const firstWait = !waiting;
           waiting = true;
           this.events?.onSessionWait?.(true);
+          if (firstWait) onFirstWait?.();
           this.events?.onNotice(
             `Session 正在 ${owner.hostname} 的 PID ${owner.pid} 运行；当前任务完成后将自动接管`,
             "info",
           );
         },
-        onTakeover: () => this.requestDeferredHandoff(),
+        onTakeover: (channel) => this.requestDeferredHandoff(channel),
+        onInteraction: (interaction, signal) => this.handleHandoffInteraction(interaction, signal),
       });
     } finally {
-      if (waiting) this.events?.onSessionWait?.(false);
+      if (waiting && clearWaiting) this.events?.onSessionWait?.(false);
     }
   }
 
-  private requestDeferredHandoff(): void {
+  private requestDeferredHandoff(channel: SessionHandoffChannel): void {
     if (this.handoffRequested) return;
     this.handoffRequested = true;
-    this.events?.onHandoffPending?.();
+    const relay: SessionHandoffRelay = {
+      request: async (interaction) => {
+        const value = await channel.request(encodeHandoffInteraction(interaction));
+        return decodeHandoffResponse(value);
+      },
+    };
+    this.events?.onHandoffPending?.(relay);
+    void channel.closed.then(() => {
+      if (!this.handoffRequested || this.handoffFinalizing) return;
+      this.handoffRequested = false;
+      this.events?.onHandoffCancelled?.();
+      this.events?.onNotice("新终端已断开；Session 继续由当前终端持有", "warning");
+    });
     this.events?.onNotice("另一终端正在等待接管；当前任务和队列会继续到安全点", "info");
     this.maybeFinalizeHandoff();
+  }
+
+  private async handleHandoffInteraction(
+    interaction: WireSessionHandoffInteraction,
+    signal?: AbortSignal,
+  ): Promise<SessionHandoffResponse> {
+    const handler = this.events?.onHandoffInteraction;
+    if (!handler) throw new Error("Session handoff interaction UI is unavailable");
+    return handler(decodeHandoffInteraction(interaction), signal);
   }
 
   private maybeFinalizeHandoff(): void {
@@ -1479,6 +1570,119 @@ function providerSummaries(models: readonly RuntimeModel[]): Array<{
     name: id,
     getModels: () => providerModels,
   }));
+}
+
+function encodeHandoffInteraction(interaction: SessionHandoffInteraction): WireSessionHandoffInteraction {
+  return interaction.kind === "question"
+    ? { kind: "question", payload: interaction.questions }
+    : { kind: "approval", payload: interaction.request };
+}
+
+function decodeHandoffInteraction(interaction: WireSessionHandoffInteraction): SessionHandoffInteraction {
+  if (interaction.kind === "question" && isQuestionList(interaction.payload)) {
+    return { kind: "question", questions: interaction.payload };
+  }
+  if (interaction.kind === "approval" && isApprovalRequest(interaction.payload)) {
+    return { kind: "approval", request: interaction.payload };
+  }
+  throw new Error("Session handoff interaction payload is invalid");
+}
+
+function decodeHandoffResponse(value: unknown): SessionHandoffResponse {
+  if (!isObject(value)) throw new Error("Session handoff response is invalid");
+  if (value.kind === "question" && isQuestionList(value.questions)) {
+    return { kind: "question", questions: value.questions };
+  }
+  if (value.kind === "approval" && isApprovalResponse(value.response)) {
+    return { kind: "approval", response: value.response };
+  }
+  throw new Error("Session handoff response is invalid");
+}
+
+function isQuestionList(value: unknown): value is Question[] {
+  return Array.isArray(value) && value.every(isQuestion);
+}
+
+function isQuestion(value: unknown): value is Question {
+  if (!isObject(value)) return false;
+  if (
+    typeof value.id !== "string" ||
+    typeof value.title !== "string" ||
+    typeof value.prompt !== "string" ||
+    !["singleChoice", "multiChoice", "ranking", "freeText"].includes(String(value.kind))
+  ) {
+    return false;
+  }
+  if (
+    value.options !== undefined &&
+    (!Array.isArray(value.options) ||
+      !value.options.every(
+        (option) =>
+          isObject(option) &&
+          typeof option.id === "string" &&
+          typeof option.label === "string" &&
+          (option.description === undefined || typeof option.description === "string"),
+      ))
+  ) {
+    return false;
+  }
+  if (
+    value.answer !== undefined &&
+    typeof value.answer !== "string" &&
+    (!Array.isArray(value.answer) || !value.answer.every((answer) => typeof answer === "string"))
+  ) {
+    return false;
+  }
+  return value.skipped === undefined || typeof value.skipped === "boolean";
+}
+
+function isApprovalRequest(value: unknown): value is ApprovalRequest {
+  return (
+    isObject(value) &&
+    isObject(value.action) &&
+    ["file-read", "file-write", "process", "network", "shared", "workflow-authority"].includes(
+      String(value.action.kind),
+    ) &&
+    (value.action.target === undefined || typeof value.action.target === "string") &&
+    (value.action.risk === undefined || ["low", "medium", "high"].includes(String(value.action.risk))) &&
+    (value.action.operation === undefined || typeof value.action.operation === "string") &&
+    (value.action.category === undefined || isApprovalCategory(value.action.category)) &&
+    isApprovalCategory(value.category) &&
+    isPolicyLevel(value.policy) &&
+    (value.requiredPolicy === undefined || isPolicyLevel(value.requiredPolicy))
+  );
+}
+
+function isApprovalResponse(value: unknown): value is ApprovalResponse {
+  if (!isObject(value)) return false;
+  if (value.type === "allow-once") return true;
+  if (value.type === "allow-session") return value.category === undefined || isApprovalCategory(value.category);
+  if (value.type === "elevate") return value.level === undefined || isPolicyLevel(value.level);
+  return value.type === "deny" && (value.reason === undefined || typeof value.reason === "string");
+}
+
+function isApprovalCategory(value: unknown): boolean {
+  return [
+    "file-read",
+    "file-write",
+    "bash-read",
+    "process",
+    "network",
+    "ssh",
+    "git-write",
+    "destructive",
+    "container",
+    "system",
+    "shared",
+  ].includes(String(value));
+}
+
+function isPolicyLevel(value: unknown): boolean {
+  return ["Safe", "Standard", "YOLO", "Auto"].includes(String(value));
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function protocolLabel(api: string | undefined): string {

@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 const HEARTBEAT_MS = 2_000;
 const CONNECT_TIMEOUT_MS = 2_000;
 const WAIT_POLL_MS = 200;
+const MAX_CONTROL_BYTES = 1024 * 1024;
 
 export interface SessionLeaseOwner {
   pid: number;
@@ -21,8 +22,19 @@ export interface SessionLeaseOwner {
 export interface SessionLeaseAcquireOptions {
   agentDir: string;
   signal?: AbortSignal;
-  onTakeover: () => Promise<void> | void;
+  onTakeover: (channel: SessionHandoffChannel) => Promise<void> | void;
   onWait?: (owner: SessionLeaseOwner) => void;
+  onInteraction?: (interaction: SessionHandoffInteraction, signal?: AbortSignal) => Promise<unknown>;
+}
+
+export interface SessionHandoffInteraction {
+  kind: "question" | "approval";
+  payload: unknown;
+}
+
+export interface SessionHandoffChannel {
+  readonly closed: Promise<void>;
+  request(interaction: SessionHandoffInteraction): Promise<unknown>;
 }
 
 export interface AcquiredSessionLease {
@@ -82,6 +94,7 @@ export async function acquireSessionLease(
   const socketPath = join(directory, `${identity}-${process.pid}-${token.slice(0, 8)}.sock`);
   let takeoverStarted = false;
   let lease: SessionLease | undefined;
+  const socketsBeforeLease = new Set<Socket>();
   const owner: StoredLeaseOwner = {
     schemaVersion: 1,
     pid: process.pid,
@@ -92,23 +105,48 @@ export async function acquireSessionLease(
     token,
   };
   const server = createServer((socket) => {
-    lease?.track(socket);
+    if (lease) lease.track(socket);
+    else {
+      socketsBeforeLease.add(socket);
+      socket.once("close", () => socketsBeforeLease.delete(socket));
+    }
     let input = "";
+    let channel: SocketHandoffChannel | undefined;
     socket.setEncoding("utf8");
     socket.on("data", (chunk) => {
       input += chunk;
-      if (!input.includes("\n")) return;
-      const request = parseTakeoverRequest(input);
-      if (!request || request.token !== token) {
-        socket.end(`${JSON.stringify({ status: "rejected" })}\n`);
+      if (Buffer.byteLength(input, "utf8") > MAX_CONTROL_BYTES) {
+        socket.destroy(new Error("Session handoff control message is too large"));
         return;
       }
-      socket.end(`${JSON.stringify({ status: "accepted" })}\n`);
-      if (takeoverStarted) return;
-      takeoverStarted = true;
-      void Promise.resolve(options.onTakeover()).catch(() => {
-        takeoverStarted = false;
-      });
+      while (input.includes("\n")) {
+        const end = input.indexOf("\n");
+        const line = input.slice(0, end);
+        input = input.slice(end + 1);
+        if (channel) {
+          channel.handle(line);
+          continue;
+        }
+        const request = parseTakeoverRequest(line);
+        if (!request || request.token !== token) {
+          socket.end(`${JSON.stringify({ status: "rejected" })}\n`);
+          return;
+        }
+        if (takeoverStarted) {
+          socket.end(`${JSON.stringify({ status: "waiting" })}\n`);
+          return;
+        }
+        takeoverStarted = true;
+        channel = new SocketHandoffChannel(socket);
+        void channel.closed.then(() => {
+          takeoverStarted = false;
+        });
+        socket.write(`${JSON.stringify({ status: "accepted" })}\n`);
+        void Promise.resolve(options.onTakeover(channel)).catch(() => {
+          takeoverStarted = false;
+          channel?.close(new Error("Session owner failed to prepare handoff"));
+        });
+      }
     });
   });
   await listenUnix(server, socketPath);
@@ -127,6 +165,8 @@ export async function acquireSessionLease(
           await handle.close();
         }
         lease = new SessionLease(sessionPath, leasePath, owner, server);
+        for (const socket of socketsBeforeLease) lease.track(socket);
+        socketsBeforeLease.clear();
         return { lease, waited };
       } catch (error) {
         if (!hasCode(error, "EEXIST")) throw error;
@@ -151,7 +191,7 @@ export async function acquireSessionLease(
         requestedOwnerToken = existing.token;
         options.onWait?.(existing);
         try {
-          await requestTakeover(existing, options.signal);
+          await requestTakeover(existing, options.signal, options.onInteraction);
         } catch (error) {
           await waitForPoll(options.signal);
           const current = await readLeaseOwner(leasePath);
@@ -213,11 +253,18 @@ async function ownerIsAlive(owner: SessionLeaseOwner): Promise<boolean> {
   }
 }
 
-async function requestTakeover(owner: SessionLeaseOwner, signal?: AbortSignal): Promise<void> {
+async function requestTakeover(
+  owner: SessionLeaseOwner,
+  signal?: AbortSignal,
+  onInteraction?: SessionLeaseAcquireOptions["onInteraction"],
+): Promise<void> {
   throwIfAborted(signal);
   await new Promise<void>((resolvePromise, rejectPromise) => {
     const socket = createConnection(owner.socketPath);
     let settled = false;
+    let accepted = false;
+    let input = "";
+    const interactionControllers = new Set<AbortController>();
     const timer = setTimeout(() => {
       socket.destroy();
       rejectPromise(new Error("Session owner 未响应接管请求"));
@@ -227,7 +274,6 @@ async function requestTakeover(owner: SessionLeaseOwner, signal?: AbortSignal): 
       rejectPromise(new Error("Session 接管已取消"));
     };
     signal?.addEventListener("abort", onAbort, { once: true });
-    let response = "";
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
@@ -239,19 +285,65 @@ async function requestTakeover(owner: SessionLeaseOwner, signal?: AbortSignal): 
     socket.setEncoding("utf8");
     socket.once("connect", () => socket.write(`${JSON.stringify({ type: "takeover", token: owner.token })}\n`));
     socket.on("data", (chunk) => {
-      response += chunk;
-      if (!response.includes("\n")) return;
-      try {
-        const parsed = JSON.parse(response.split("\n", 1)[0] ?? "") as { status?: string };
-        if (parsed.status === "accepted") finish();
-        else finish(new Error("Session owner 拒绝了接管请求"));
-      } catch {
-        finish(new Error("Session owner 返回了无效响应"));
-      } finally {
-        socket.end();
+      input += chunk;
+      if (Buffer.byteLength(input, "utf8") > MAX_CONTROL_BYTES) {
+        socket.destroy(new Error("Session handoff control message is too large"));
+        return;
+      }
+      while (input.includes("\n")) {
+        const end = input.indexOf("\n");
+        const line = input.slice(0, end);
+        input = input.slice(end + 1);
+        if (!accepted) {
+          try {
+            const parsed = JSON.parse(line) as { status?: string };
+            if (parsed.status === "accepted") {
+              accepted = true;
+              clearTimeout(timer);
+            } else if (parsed.status === "waiting") {
+              finish();
+              socket.end();
+            } else {
+              finish(new Error("Session owner 拒绝了接管请求"));
+              socket.end();
+            }
+          } catch {
+            finish(new Error("Session owner 返回了无效响应"));
+            socket.end();
+          }
+          continue;
+        }
+        const request = parseInteractionRequest(line);
+        if (!request) {
+          socket.destroy(new Error("Session owner 返回了无效交互请求"));
+          return;
+        }
+        const controller = new AbortController();
+        interactionControllers.add(controller);
+        const interaction = onInteraction
+          ? onInteraction(request.interaction, controller.signal)
+          : Promise.reject(new Error("Session handoff interaction UI is unavailable"));
+        void Promise.resolve(interaction)
+          .then(
+            (value) => writeControl(socket, { type: "interaction_response", id: request.id, ok: true, value }),
+            (error: unknown) =>
+              writeControl(socket, {
+                type: "interaction_response",
+                id: request.id,
+                ok: false,
+                error: error instanceof Error ? error.message : "Handoff interaction failed",
+              }),
+          )
+          .finally(() => interactionControllers.delete(controller));
       }
     });
-    socket.once("error", (error) => finish(error));
+    socket.once("close", () => {
+      for (const controller of interactionControllers) controller.abort();
+      if (accepted) finish();
+    });
+    socket.once("error", (error) => {
+      finish(error);
+    });
   });
 }
 
@@ -277,11 +369,95 @@ async function removeIfOwned(path: string, token: string): Promise<void> {
 
 function parseTakeoverRequest(input: string): { token: string } | undefined {
   try {
-    const parsed = JSON.parse(input.split("\n", 1)[0] ?? "") as { type?: unknown; token?: unknown };
+    const parsed = JSON.parse(input) as { type?: unknown; token?: unknown };
     return parsed.type === "takeover" && typeof parsed.token === "string" ? { token: parsed.token } : undefined;
   } catch {
     return undefined;
   }
+}
+
+class SocketHandoffChannel implements SessionHandoffChannel {
+  private readonly pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
+  private resolveClosed!: () => void;
+  readonly closed = new Promise<void>((resolvePromise) => {
+    this.resolveClosed = resolvePromise;
+  });
+  private sequence = 0;
+
+  constructor(private readonly socket: Socket) {
+    socket.once("close", () => this.close(new Error("Session handoff channel closed")));
+    socket.once("error", (error) => this.close(error));
+  }
+
+  request(interaction: SessionHandoffInteraction): Promise<unknown> {
+    if (this.socket.destroyed) return Promise.reject(new Error("Session handoff channel is unavailable"));
+    const id = `${process.pid}-${++this.sequence}`;
+    return new Promise((resolvePromise, rejectPromise) => {
+      this.pending.set(id, { resolve: resolvePromise, reject: rejectPromise });
+      writeControl(this.socket, { type: "interaction", id, interaction });
+    });
+  }
+
+  handle(line: string): void {
+    const response = parseInteractionResponse(line);
+    if (!response) {
+      this.close(new Error("Session handoff response is invalid"));
+      return;
+    }
+    const pending = this.pending.get(response.id);
+    if (!pending) return;
+    this.pending.delete(response.id);
+    if (response.ok) pending.resolve(response.value);
+    else pending.reject(new Error(response.error ?? "Session handoff interaction failed"));
+  }
+
+  close(error: Error): void {
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+    this.resolveClosed();
+    if (!this.socket.destroyed) this.socket.destroy();
+  }
+}
+
+function parseInteractionRequest(line: string): { id: string; interaction: SessionHandoffInteraction } | undefined {
+  try {
+    const value = JSON.parse(line) as { type?: unknown; id?: unknown; interaction?: unknown };
+    if (value.type !== "interaction" || typeof value.id !== "string" || !isHandoffInteraction(value.interaction)) {
+      return undefined;
+    }
+    return { id: value.id, interaction: value.interaction };
+  } catch {
+    return undefined;
+  }
+}
+
+function parseInteractionResponse(
+  line: string,
+): { id: string; ok: boolean; value?: unknown; error?: string } | undefined {
+  try {
+    const value = JSON.parse(line) as { type?: unknown; id?: unknown; ok?: unknown; value?: unknown; error?: unknown };
+    if (value.type !== "interaction_response" || typeof value.id !== "string" || typeof value.ok !== "boolean") {
+      return undefined;
+    }
+    return {
+      id: value.id,
+      ok: value.ok,
+      ...(value.value !== undefined ? { value: value.value } : {}),
+      ...(typeof value.error === "string" ? { error: value.error } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function isHandoffInteraction(value: unknown): value is SessionHandoffInteraction {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const interaction = value as { kind?: unknown; payload?: unknown };
+  return (interaction.kind === "question" || interaction.kind === "approval") && "payload" in interaction;
+}
+
+function writeControl(socket: Socket, value: unknown): void {
+  if (!socket.destroyed) socket.write(`${JSON.stringify(value)}\n`);
 }
 
 function isStoredOwner(value: unknown): value is StoredLeaseOwner {
