@@ -1896,13 +1896,13 @@ export class VspiApp implements Component, Focusable {
     const submission = this.activeSubmission;
     if (submission) submission.cancelled = true;
     this.clearingQueue = true;
+    let queuedMessages: string[] = [];
     try {
       const result = await this.backend.cancel();
-      const queuedMessages = result?.queuedMessages ?? [];
-      if (queuedMessages.length > 0) this.restoreCancelledQueue(queuedMessages);
+      queuedMessages = result?.queuedMessages ?? [];
       this.showNotice(
         queuedMessages.length > 0
-          ? `已中断当前运行，并将 ${queuedMessages.length} 条排队消息放回输入框`
+          ? `已中断当前运行，正在处理 ${queuedMessages.length} 条排队消息`
           : "已中断当前运行；Session、消息和部分输出已保留",
         "info",
       );
@@ -1916,6 +1916,7 @@ export class VspiApp implements Component, Focusable {
         this.setBusy(false);
       }
     }
+    if (queuedMessages.length > 0) this.startInterruptedQueue(queuedMessages);
   }
 
   private settleQueuedMessages(delivery: "steer" | "followUp", count: number): void {
@@ -1980,30 +1981,72 @@ export class VspiApp implements Component, Focusable {
     this.setBusy(false);
   }
 
-  private restoreCancelledQueue(queuedMessages: string[]): void {
+  private startInterruptedQueue(queuedMessages: string[]): void {
     const restoredAttachments: Attachment[] = [];
+    const consumedMessageIds = new Set<string>();
     for (const queued of queuedMessages) {
-      const message = [...this.messages]
-        .reverse()
-        .find(
-          (candidate) =>
-            candidate.kind === "text" &&
-            candidate.role === "user" &&
-            (candidate.delivery === "steer" || candidate.delivery === "followUp") &&
-            queued.startsWith(candidate.text),
-        );
+      const message = this.messages.find(
+        (candidate) =>
+          candidate.kind === "text" &&
+          candidate.role === "user" &&
+          (candidate.delivery === "steer" || candidate.delivery === "followUp") &&
+          !consumedMessageIds.has(candidate.id) &&
+          queued === candidate.text,
+      );
       if (message?.kind === "text") {
-        message.delivery = "cancelled";
+        consumedMessageIds.add(message.id);
         restoredAttachments.push(...(message.attachments ?? []));
       }
     }
-    const currentDraft = this.composer.getText().trim();
-    const attachments = [...restoredAttachments, ...this.composer.attachments].filter(
+    this.messages = this.messages.filter((message) => !consumedMessageIds.has(message.id));
+    const attachments = restoredAttachments.filter(
       (attachment, index, all) => all.findIndex((candidate) => candidate.id === attachment.id) === index,
     );
-    this.composer.restoreDraft([...queuedMessages, currentDraft].filter(Boolean).join("\n\n"), attachments);
     this.queueState = { steering: 0, followUp: 0 };
     this.syncActivityPresentation();
+    void this.sendInterruptedQueue(queuedMessages.join("\n\n"), attachments);
+  }
+
+  private async sendInterruptedQueue(text: string, attachments: Attachment[]): Promise<void> {
+    const transcriptLength = this.messages.length;
+    const messageId = randomUUID();
+    this.messages.push({ id: messageId, role: "user", kind: "text", text, attachments });
+    const submission: ActiveSubmission = {
+      id: ++this.submissionId,
+      raw: text,
+      attachments,
+      transcriptLength,
+      cancelled: false,
+      restored: false,
+    };
+    this.activeSubmission = submission;
+    this.setRunActive(true);
+    this.requestRender();
+    try {
+      const result = await this.backend.send(text, { attachments, effort: this.effort, behavior: "prompt" });
+      if (submission.cancelled || result?.status === "cancelled") {
+        this.finalizeCancelledSubmission(submission);
+        return;
+      }
+      this.modelLabel = this.backend.modelLabel;
+      this.composer.editor.addToHistory(text);
+    } catch (error) {
+      if (submission.cancelled) {
+        this.finalizeCancelledSubmission(submission);
+        return;
+      }
+      this.setBusy(false);
+      this.messages.splice(transcriptLength);
+      const currentDraft = this.composer.getText().trim();
+      const restoredAttachments = [...attachments, ...this.composer.attachments].filter(
+        (attachment, index, all) => all.findIndex((candidate) => candidate.id === attachment.id) === index,
+      );
+      this.composer.restoreDraft([text, currentDraft].filter(Boolean).join("\n\n"), restoredAttachments);
+      this.showNotice(error instanceof Error ? error.message : "排队消息重新发送失败", "error");
+    } finally {
+      if (this.activeSubmission?.id === submission.id) this.activeSubmission = undefined;
+      if (!submission.cancelled) this.setRunActive(false);
+    }
   }
 
   private async removeAttachment(id: string): Promise<void> {

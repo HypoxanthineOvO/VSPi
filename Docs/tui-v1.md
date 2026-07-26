@@ -227,7 +227,7 @@ Pi 的最终 active registry 使用原生 `read/ls/find/grep/bash/edit/write` To
 
 Workflow 采用默认关闭、显式 `--workflow` 启用的可选只读 Provider。默认启动不读取 Workflow 环境变量或项目状态，Plan 保持 VSPi 自己的干净界面；显式开启后才投影 Delivery。Core 未配置或读取失败时 Plan 显示有界不可用状态。Adapter 只调用 Delivery `resume` 形成 workspace 级投影并拒绝 Receipt-bearing mutation。
 
-Question、审批、Effort、Settings、预览和 Inspect 共享底部工作区。Esc 先退出当前界面；回到主界面后再次按 Esc 才中断当前生成或工具，且不会新建 Session、重启 TUI 或退出进程。Agent 从首次提交到 primary prompt 与 Steer/Follow-up 队列全部耗尽期间，在 composer 上方持续显示无背景的动态 `Working`；尚未送达的消息另用一行弱化内容和 `↪` 表示，不进入 Transcript 或 Inspect。取消只 abort 当前运行：Session identity、已发送用户消息、partial thinking/text/tool 和当前 composer 草稿全部保留，running Tool 进入 cancelled；尚未送达的原生队列由 `clearQueue` 取回并放回 composer。取消栅栏持续到下一次主动 send：旧 generation 的 retry、文本以及 Tool 的 start、update、end 事件均被丢弃，agent end 只负责恢复 idle；Pi Bash 的 AbortSignal 同时终止运行中的子进程组。
+Question、审批、Effort、Settings、预览和 Inspect 共享底部工作区。Esc 先退出当前界面；回到主界面后再次按 Esc 才中断当前生成或工具，且不会新建 Session、重启 TUI 或退出进程。Agent 从首次提交到 primary prompt 与 Steer/Follow-up 队列全部耗尽期间，在 composer 上方持续显示无背景的动态 `Working`；尚未送达的消息另用一行弱化内容和 `↪` 表示，不进入 Transcript 或 Inspect。取消只 abort 当前运行：Session identity、已发送用户消息、partial thinking/text/tool 和当前 composer 草稿全部保留，running Tool 进入 cancelled；尚未送达的原生队列由 `clearQueue` 按顺序取回，合并为新的普通 prompt 并立即继续执行，当前未提交草稿保持不变。取消栅栏持续到新的 prompt 主动 send：旧 generation 的 retry、文本以及 Tool 的 start、update、end 事件均被丢弃，agent end 只负责恢复 idle；Pi Bash 的 AbortSignal 同时终止运行中的子进程组。
 
 保存结果与短时状态临时替换固定 contextual hint 行，约 3.5 秒后恢复；出现和消失前后总布局高度不变，不创建 overlay，也不改变 composer 焦点。
 

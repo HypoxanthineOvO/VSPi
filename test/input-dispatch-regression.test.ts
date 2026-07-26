@@ -289,9 +289,10 @@ describe("busy submission guard", () => {
     }
   });
 
-  it("restores native queued messages to the current editor when Escape aborts", async () => {
+  it("interrupts the active run and immediately continues with native queued messages", async () => {
     const ref: { events?: ChatBackendEvents } = {};
     let releaseSend: (() => void) | undefined;
+    let releaseResumed: (() => void) | undefined;
     const send = vi.fn(async (_text: string, options: SendOptions) => {
       if (send.mock.calls.length === 1) {
         ref.events?.onBusy(true);
@@ -301,12 +302,24 @@ describe("busy submission guard", () => {
         ref.events?.onBusy(false);
         return { status: "completed" as const };
       }
+      if (send.mock.calls.length === 4) {
+        ref.events?.onBusy(true);
+        await new Promise<void>((resolve) => {
+          releaseResumed = resolve;
+        });
+        ref.events?.onBusy(false);
+        return { status: "completed" as const };
+      }
       return {
         status: "queued" as const,
         delivery: options.behavior === "followUp" ? ("followUp" as const) : ("steer" as const),
       };
     });
-    const cancel = vi.fn(async () => ({ queuedMessages: ["QUEUED_CORRECTION"] }));
+    const cancel = vi.fn(async () => {
+      releaseSend?.();
+      ref.events?.onBusy(false);
+      return { queuedMessages: ["QUEUED_CORRECTION", "QUEUED_FOLLOW_UP"] };
+    });
     const app = await createApp(backendWith(ref, { send, cancel }));
     const testable = app as unknown as TestableApp;
     try {
@@ -315,21 +328,36 @@ describe("busy submission guard", () => {
       app.composer.setText("QUEUED_CORRECTION");
       app.handleInput("\r");
       await flush();
+      app.composer.setText("QUEUED_FOLLOW_UP");
+      app.handleInput("\x1b\r");
+      await flush();
       app.composer.setText("CURRENT_DRAFT");
 
       app.handleInput("\u001b");
       await flush();
-      expect(app.composer.getText()).toBe("QUEUED_CORRECTION\n\nCURRENT_DRAFT");
-      expect(testable.messages).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ text: "PRIMARY_TASK" }),
-          expect.objectContaining({ text: "QUEUED_CORRECTION", delivery: "cancelled" }),
-        ]),
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(send).toHaveBeenCalledTimes(4);
+      expect(send.mock.calls[3]?.[0]).toBe("QUEUED_CORRECTION\n\nQUEUED_FOLLOW_UP");
+      expect(send.mock.calls[3]?.[1]?.behavior).toBe("prompt");
+      expect(app.composer.getText()).toBe("CURRENT_DRAFT");
+      expect(
+        testable.messages.filter(
+          (message) => message.kind === "text" && message.text === "QUEUED_CORRECTION\n\nQUEUED_FOLLOW_UP",
+        ),
+      ).toEqual([expect.not.objectContaining({ delivery: expect.anything() })]);
+      expect(testable.messages.some((message) => message.kind === "text" && message.text === "QUEUED_CORRECTION")).toBe(
+        false,
       );
-      releaseSend?.();
+      expect(testable.messages.some((message) => message.kind === "text" && message.text === "QUEUED_FOLLOW_UP")).toBe(
+        false,
+      );
+      expect(testable.notice?.text).toContain("正在处理 2 条排队消息");
       await active;
+      releaseResumed?.();
+      await flush();
     } finally {
       releaseSend?.();
+      releaseResumed?.();
       await app.dispose();
     }
   });

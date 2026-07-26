@@ -147,7 +147,7 @@ Transcript 是按后端事件只追加的瀑布时间线。工具前文本、Too
 - `Alt+Enter` 将消息作为 Follow-up 提交；工作中会等 Agent 完全空闲后送达。
 - `Esc` 在主界面中断当前运行，`Ctrl+C` 保留同样的直接中断；空闲时 `Ctrl+C` 退出。
 
-Agent 从首次提交到真正 idle 期间，在 composer 上方持续显示无背景、无竖线的动态 `Working` 状态。尚未送达的用户消息不进入 Transcript 或 Inspect，而是在 Working 下方显示一行弱化内容和右侧 `↪`；`queue_update` 表明消息已被消费后，它立即进入普通用户消息瀑布流，不留下投递标记。ESC 只 abort 当前运行，不创建或切换 Session，不删除已经发送的用户消息、partial thinking/text/tool，也不覆盖输入框中的未提交草稿；运行中的 Tool 收束为 cancelled。尚未送达的 Pi 原生队列会被取消并放回输入框，对应 Transcript 项标记为“队列已取消”。
+Agent 从首次提交到真正 idle 期间，在 composer 上方持续显示无背景、无竖线的动态 `Working` 状态。尚未送达的用户消息不进入 Transcript 或 Inspect，而是在 Working 下方显示一行弱化内容和右侧 `↪`；`queue_update` 表明消息已被消费后，它立即进入普通用户消息瀑布流，不留下投递标记。ESC 只 abort 当前运行，不创建或切换 Session，不删除已经发送的用户消息、partial thinking/text/tool，也不覆盖输入框中的未提交草稿；运行中的 Tool 收束为 cancelled。如果原生 Steer/Follow-up 队列尚有消息，VSPi 会按原顺序取回并立即作为新的 prompt 继续执行，不会停在输入框等待用户再次 Enter。
 
 Question、Approval、Inspect、Preview 与普通面板打开时，Esc 先关闭当前交互层；回到主 composer 后再次按 Esc 才中断运行。保存结果和短时状态临时替换固定 contextual hint 行，约 3.5 秒后恢复；不创建 overlay、不改变布局高度，也不抢占 composer 焦点。
 
