@@ -80,7 +80,15 @@ describe("CI release publisher", () => {
       expect(release).toMatchObject({
         name: "VSPi 1.2.3",
         tag_name: "v1.2.3",
-        assets: { links: [{ name: "vspi-1.2.3.tgz", link_type: "package" }] },
+        assets: {
+          links: [
+            {
+              name: "vspi-1.2.3.tgz",
+              direct_asset_path: "/vspi-1.2.3.tgz",
+              link_type: "package",
+            },
+          ],
+        },
       });
       expect(release.description).toContain(sha256);
     } finally {

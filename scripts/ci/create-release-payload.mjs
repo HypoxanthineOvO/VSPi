@@ -32,7 +32,9 @@ export function createReleasePayload(checksumPath, env = process.env) {
     name: `VSPi ${version}`,
     tag_name: tag,
     description,
-    assets: { links: [{ name: filename, url: packageUrl, link_type: "package" }] },
+    assets: {
+      links: [{ name: filename, url: packageUrl, direct_asset_path: `/${filename}`, link_type: "package" }],
+    },
   };
 }
 
