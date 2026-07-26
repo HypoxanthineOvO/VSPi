@@ -23,6 +23,7 @@ import type {
   AppSettings,
   Attachment,
   EffortLevel,
+  ProviderOption,
   Question,
   TranscriptMessage,
   UsageSnapshot,
@@ -49,6 +50,7 @@ import type {
 } from "../prompts/types.js";
 import { renderActivityRail } from "../ui/activity.js";
 import { padLine } from "../ui/ansi.js";
+import { AuthDialog } from "../ui/auth-dialog.js";
 import { Composer } from "../ui/composer.js";
 import {
   type InteractionState,
@@ -78,7 +80,7 @@ export interface VspiAppOptions {
   planTaskRouter?: PlanTaskRouter;
   workflowAdapter?: WorkflowAdapter;
   promptProfiles?: PromptProfileUi;
-  openOnStart?: "sessions";
+  openOnStart?: "sessions" | "providers";
   onExit: () => void;
 }
 
@@ -172,6 +174,7 @@ export class VspiApp implements Component, Focusable {
   private busy = false;
   private runActive = false;
   private queueState: ChatQueueState = { steering: 0, followUp: 0 };
+  private clearingQueue = false;
   private workingFrame = 0;
   private workingTimer: NodeJS.Timeout | undefined;
   private workspaceFocus: "composer" | "transcript" | "plan" = "composer";
@@ -200,6 +203,8 @@ export class VspiApp implements Component, Focusable {
   private startupRuntimeDefaultsDiagnostic: string | undefined;
   private currentModelIdentity: { provider: string; id: string } | undefined;
   private modelOptions: RuntimeModelOption[] = [];
+  private providerOptions: ProviderOption[] = [];
+  private authDialog: AuthDialog | undefined;
   private readonly executionPolicy: ExecutionPolicyUi;
   private readonly yoloAcknowledgementBroker: YoloAcknowledgementBroker;
   private pendingQuestion: PendingQuestion | undefined;
@@ -270,6 +275,10 @@ export class VspiApp implements Component, Focusable {
         },
         onQueueUpdate: (queue) => {
           if (this.sessionTransition) return;
+          if (!this.clearingQueue) {
+            this.settleQueuedMessages("steer", Math.max(0, this.queueState.steering - queue.steering));
+            this.settleQueuedMessages("followUp", Math.max(0, this.queueState.followUp - queue.followUp));
+          }
           this.queueState = { ...queue };
           this.syncActivityPresentation();
           this.requestRender();
@@ -318,6 +327,7 @@ export class VspiApp implements Component, Focusable {
         const source = catalog?.providers.find((item) => item.id === provider.id)?.source ?? "builtin";
         return { ...provider, detail: `${source} · ${provider.detail}` };
       });
+      this.providerOptions = structuredClone(providers);
       this.panels.setProviders(providers);
       if (catalog && catalog.diagnostics.length > 0)
         this.showNotice(catalog.diagnostics[0] ?? "Provider 配置诊断", "warning");
@@ -356,6 +366,9 @@ export class VspiApp implements Component, Focusable {
         } catch (error) {
           this.showNotice(`会话读取失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
         }
+      } else if (this.options.openOnStart === "providers") {
+        this.panels.open("providers");
+        this.showNotice("选择 Provider 后可登录订阅账号或配置 API Key", "info");
       }
     } catch (error) {
       this.renderReady = false;
@@ -365,6 +378,8 @@ export class VspiApp implements Component, Focusable {
 
   async dispose(): Promise<void> {
     this.renderReady = false;
+    this.authDialog?.cancel();
+    this.authDialog = undefined;
     this.yoloAcknowledgementBroker.cancel();
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
     if (this.workingTimer) clearInterval(this.workingTimer);
@@ -382,7 +397,17 @@ export class VspiApp implements Component, Focusable {
     return this.tui;
   }
 
+  async runStartupCommand(raw: string): Promise<void> {
+    const command = resolveCommand(raw);
+    if (!command) throw new Error(`未知启动命令：${raw}`);
+    await this.executeCommand(command, raw);
+  }
+
   handleInput(data: string): void {
+    if (this.authDialog) {
+      this.authDialog.handleInput(data);
+      return;
+    }
     if (this.renameAttachmentId) {
       this.handleRenameInput(data);
       return;
@@ -527,6 +552,7 @@ export class VspiApp implements Component, Focusable {
   }
 
   render(width: number): string[] {
+    if (this.authDialog) return this.authDialog.render(width, this.theme);
     const transcriptFocused = this.workspaceFocus === "transcript";
     const output = renderTranscript(this.messages, width, this.theme, {
       ...(transcriptFocused && this.inspectNodeId ? { selectedNodeId: this.inspectNodeId } : {}),
@@ -878,6 +904,14 @@ export class VspiApp implements Component, Focusable {
       }
       return;
     }
+    if (action.handler === "login") {
+      await this.openLogin(raw);
+      return;
+    }
+    if (action.handler === "logout") {
+      await this.openLogout(raw);
+      return;
+    }
     if (action.handler === "models") this.panels.open("models");
     else if (action.handler === "providers") this.panels.open("providers");
     else if (action.handler === "tools") this.panels.open("tools");
@@ -1024,7 +1058,12 @@ export class VspiApp implements Component, Focusable {
     } else if (event.type === "providerActions") {
       // Panel owns the local action-menu state; opening it performs no I/O.
     } else if (event.type === "providerAction") {
-      if (event.action === "edit") {
+      if (event.action.startsWith("login:")) {
+        const type = event.action.slice("login:".length);
+        if (type === "oauth" || type === "api_key") await this.startProviderLogin(event.provider, type);
+      } else if (event.action === "logout") {
+        await this.removeProviderCredential(event.provider);
+      } else if (event.action === "edit") {
         // Panel has already entered its local, secret-free editor.
       } else if (event.action === "check-config") {
         await this.runProviderProbe(event.provider.id, "check-config");
@@ -1169,6 +1208,116 @@ export class VspiApp implements Component, Focusable {
       this.showNotice(event.text, event.tone);
     }
     this.requestRender();
+  }
+
+  private async openLogin(raw: string): Promise<void> {
+    const providerRef = raw.trim().split(/\s+/, 2)[1];
+    if (!providerRef) {
+      this.panels.open("providers");
+      this.showNotice("选择 Provider 后打开登录操作", "info");
+      this.requestRender();
+      return;
+    }
+    const provider = this.findProvider(providerRef);
+    if (!provider) {
+      this.showNotice(`未找到 Provider：${providerRef}`, "error");
+      return;
+    }
+    const method = provider.authMethods?.find((candidate) => candidate.type === "oauth") ?? provider.authMethods?.[0];
+    if (!method) {
+      this.showNotice(`${provider.label} 没有可交互配置的认证方式`, "warning");
+      return;
+    }
+    await this.startProviderLogin(provider, method.type);
+  }
+
+  private async openLogout(raw: string): Promise<void> {
+    const providerRef = raw.trim().split(/\s+/, 2)[1];
+    if (!providerRef) {
+      this.panels.open("providers");
+      this.showNotice("带有已保存凭据的 Provider 会显示“移除凭据”操作", "info");
+      this.requestRender();
+      return;
+    }
+    const provider = this.findProvider(providerRef);
+    if (!provider) {
+      this.showNotice(`未找到 Provider：${providerRef}`, "error");
+      return;
+    }
+    await this.removeProviderCredential(provider);
+  }
+
+  private findProvider(reference: string): ProviderOption | undefined {
+    const normalized = reference.trim().toLowerCase();
+    return this.providerOptions.find(
+      (provider) => provider.id.toLowerCase() === normalized || provider.label.toLowerCase() === normalized,
+    );
+  }
+
+  private async startProviderLogin(provider: ProviderOption, type: "api_key" | "oauth"): Promise<void> {
+    if (!this.backend.loginProvider) {
+      this.showNotice("当前后端不支持 Provider 登录", "error");
+      return;
+    }
+    let cancelled = false;
+    const dialog = new AuthDialog(
+      provider.label,
+      () => this.requestRender(),
+      () => {
+        cancelled = true;
+        if (this.authDialog === dialog) this.authDialog = undefined;
+        this.showNotice("登录已取消", "info");
+      },
+    );
+    this.authDialog = dialog;
+    this.requestRender();
+    try {
+      await this.backend.loginProvider(provider.id, type, dialog);
+      if (cancelled || dialog.signal.aborted) return;
+      this.authDialog = undefined;
+      await this.refreshRuntimeCatalog();
+      this.panels.open("providers");
+      this.panels.selectProvider(provider.id);
+      this.showNotice(
+        type === "oauth" ? `${provider.label} 账号已连接` : `${provider.label} API Key 已保存`,
+        "success",
+      );
+    } catch (error) {
+      if (cancelled || dialog.signal.aborted) return;
+      this.authDialog = undefined;
+      this.showNotice(`登录失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+    } finally {
+      this.requestRender();
+    }
+  }
+
+  private async removeProviderCredential(provider: ProviderOption): Promise<void> {
+    if (!provider.storedCredential) {
+      this.showNotice(`${provider.label} 没有由 VSPi/Pi 保存的凭据；环境变量不会被移除`, "warning");
+      return;
+    }
+    try {
+      if (!this.backend.logoutProvider) throw new Error("当前后端不支持移除 Provider 凭据");
+      await this.backend.logoutProvider(provider.id);
+      await this.refreshRuntimeCatalog();
+      this.panels.open("providers");
+      this.panels.selectProvider(provider.id);
+      this.showNotice(`${provider.label} 的已保存凭据已移除；环境变量和 models.json 未改变`, "success");
+    } catch (error) {
+      this.showNotice(`移除凭据失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+    }
+  }
+
+  private async refreshRuntimeCatalog(): Promise<void> {
+    const [models, groups, providers] = await Promise.all([
+      this.backend.getModelOptions?.() ?? [],
+      this.backend.getModelGroups?.() ?? [],
+      this.backend.getProviderOptions?.() ?? [],
+    ]);
+    this.modelOptions = structuredClone(models);
+    this.providerOptions = structuredClone(providers);
+    this.panels.setModels(models, groups, this.currentModelIdentity);
+    this.panels.setProviders(providers);
   }
 
   private async refreshPlanSnapshot(epoch: number): Promise<void> {
@@ -1703,6 +1852,7 @@ export class VspiApp implements Component, Focusable {
   private async cancelGeneration(): Promise<void> {
     const submission = this.activeSubmission;
     if (submission) submission.cancelled = true;
+    this.clearingQueue = true;
     try {
       const result = await this.backend.cancel();
       const queuedMessages = result?.queuedMessages ?? [];
@@ -1716,10 +1866,22 @@ export class VspiApp implements Component, Focusable {
     } catch (error) {
       this.showNotice(`取消生成失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
     } finally {
+      this.clearingQueue = false;
       if (submission) this.finalizeCancelledSubmission(submission);
       else {
         this.setRunActive(false);
         this.setBusy(false);
+      }
+    }
+  }
+
+  private settleQueuedMessages(delivery: "steer" | "followUp", count: number): void {
+    if (count < 1) return;
+    for (const message of this.messages) {
+      if (count < 1) break;
+      if (message.kind === "text" && message.role === "user" && message.delivery === delivery) {
+        delete message.delivery;
+        count -= 1;
       }
     }
   }

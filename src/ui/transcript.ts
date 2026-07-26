@@ -52,8 +52,8 @@ function attachmentSummary(message: Extract<TranscriptMessage, { kind: "text" }>
 }
 
 function deliverySummary(message: Extract<TranscriptMessage, { kind: "text" }>): string {
-  if (message.delivery === "steer") return "〔已插入下一次调用〕";
-  if (message.delivery === "followUp") return "〔任务完成后继续〕";
+  if (message.delivery === "steer") return "等待插入下一次调用";
+  if (message.delivery === "followUp") return "等待当前任务完成";
   if (message.delivery === "cancelled") return "〔队列已取消〕";
   return "";
 }
@@ -74,12 +74,18 @@ export function renderTranscriptMessage(
   const selected = options.selectedNodeId === message.id || options.inspectedId === message.id;
   let lines: string[];
   if (message.kind === "text" && message.role === "user") {
-    const content = [message.text, ...attachmentSummary(message), deliverySummary(message)].filter(Boolean).join(" ");
+    const content = [message.text, ...attachmentSummary(message)].filter(Boolean).join(" ");
     const contentLines = wrapUserContent(content, Math.max(1, width - 4));
+    const pending = message.delivery === "steer" || message.delivery === "followUp";
+    const surface = pending ? theme.noticeSurface : theme.userSurface;
+    const status = deliverySummary(message);
     lines = [
-      theme.userSurface(padLine("", width)),
-      ...contentLines.map((line) => theme.userSurface(padLine(`${theme.focus("▌")}  ${line || " "}`, width))),
-      theme.userSurface(padLine("", width)),
+      surface(padLine("", width)),
+      ...contentLines.map((line) =>
+        surface(padLine(`${theme.focus("▌")}  ${pending ? theme.muted(line || " ") : line || " "}`, width)),
+      ),
+      ...(status ? [surface(padLine(`   ${theme.muted(status)}`, width))] : []),
+      surface(padLine("", width)),
     ];
   } else if (message.kind === "text") {
     const markdown = renderMarkdown(message.text, Math.max(1, width - 2), theme, {

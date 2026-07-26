@@ -10,6 +10,8 @@ describe("command catalog", () => {
       "/compact",
       "/model",
       "/providers",
+      "/login",
+      "/logout",
       "/plan",
       "/prompt",
       "/thinking",
@@ -24,7 +26,7 @@ describe("command catalog", () => {
     expect(resolveCommand("/resume")?.id).toBe("sessions");
     expect(resolveCommand("/session")?.id).toBe("sessions");
     expect(resolveCommand("/provider")?.id).toBe("providers");
-    expect(resolveCommand("/workflow")?.id).toBe("plan");
+    expect(resolveCommand("/workflow")).toBeUndefined();
     expect(resolveCommand("/thinking")?.id).toBe("thinking");
     expect(resolveCommand("/capabilities")?.id).toBe("tools");
     expect(resolveCommand("/q")?.id).toBe("quit");

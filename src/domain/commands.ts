@@ -14,6 +14,8 @@ export type ActionHandler =
   | "plan"
   | "models"
   | "providers"
+  | "login"
+  | "logout"
   | "prompt"
   | "settings"
   | "thinkingSettings"
@@ -88,10 +90,28 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
     availability: "enabled",
   },
   {
+    id: "login",
+    aliases: [],
+    label: "/login",
+    description: "登录 Provider 账号或配置 API Key",
+    group: "VSPi",
+    handler: "login",
+    availability: "enabled",
+  },
+  {
+    id: "logout",
+    aliases: [],
+    label: "/logout",
+    description: "移除已保存的 Provider 凭据",
+    group: "VSPi",
+    handler: "logout",
+    availability: "enabled",
+  },
+  {
     id: "plan",
-    aliases: ["workflow"],
+    aliases: [],
     label: "/plan",
-    description: "查看 Workflow Plan",
+    description: "查看当前计划",
     group: "VSPi",
     handler: "plan",
     availability: "enabled",

@@ -16,7 +16,7 @@ const PI_STATUS = {
   boundary: "Host" as const,
   version: "9.8.7-test",
 };
-const DYNAMIC_MARKERS = ["当前计划为空", "输入消息", PI_STATUS.model] as const;
+const DYNAMIC_MARKERS = ["╭ Plan ", "输入消息", PI_STATUS.model] as const;
 const LOGO = [
   "██╗   ██╗███████╗██████╗ ██╗",
   "██║   ██║██╔════╝██╔══██╗██║",
@@ -490,7 +490,7 @@ async function exerciseSessionReset(command: "/new" | "/clear"): Promise<void> {
   const plain = rows.join("\n");
   const firstLogoRows = rows.map((line, index) => (line.includes(LOGO[0]) ? index : -1)).filter((index) => index >= 0);
   const secondSplashStart = firstLogoRows[1] ?? -1;
-  const freshPlanRow = rows.findIndex((line, index) => index > secondSplashStart && line.includes("当前计划为空"));
+  const freshPlanRow = rows.findIndex((line, index) => index > secondSplashStart && line.includes("╭ Plan "));
   const secondSplash = rows.slice(Math.max(0, secondSplashStart - 3), freshPlanRow).join("\n");
 
   expect(backend.newSessionCalls).toHaveBeenCalledOnce();
@@ -504,7 +504,7 @@ async function exerciseSessionReset(command: "/new" | "/clear"): Promise<void> {
   expect(secondSplash).toMatch(/╭─+╮[\s\S]*╰─+╯/);
   expect(secondSplash).not.toContain("\u001b");
   expect(rows.slice(secondSplashStart - 2, freshPlanRow).every((line) => visibleWidth(line) === 80)).toBe(true);
-  expect(plain.match(/当前计划为空/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+  expect(plain.match(/╭ Plan /g)?.length ?? 0).toBeGreaterThanOrEqual(2);
 
   await app.dispose();
   tui.stop();

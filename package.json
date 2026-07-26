@@ -1,6 +1,6 @@
 {
   "name": "vspi",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A Chinese terminal UI for Pi coding agents with optional read-only Hypo-Workflow integration.",
   "homepage": "https://gitlab.vsplab.cn/heyx/vspi",
   "repository": {
@@ -44,8 +44,8 @@
     "tui"
   ],
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.82.0",
-    "@earendil-works/pi-tui": "0.82.0",
+    "@earendil-works/pi-coding-agent": "0.82.1",
+    "@earendil-works/pi-tui": "0.82.1",
     "chalk": "5.6.2",
     "highlight.js": "10.7.3",
     "marked": "18.0.5",

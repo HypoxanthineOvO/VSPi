@@ -29,6 +29,7 @@ import { createPromptProfileExtension } from "../prompts/pi-prompt-profile-exten
 import type { ModelIdentity, ResolvedPromptProfile } from "../prompts/types.js";
 import { BUILTIN_PROVIDERS } from "../providers/builtins.js";
 import { createProviderConfigService, normalizeProviderApi, type ProviderRecord } from "../providers/config-service.js";
+import { isVisibleRuntimeModel } from "../providers/model-visibility.js";
 import { type ProviderProtocol, runProtocolProbe } from "../providers/protocol-probe.js";
 import { createQuestionToolDefinition } from "../questions/tool.js";
 import type {
@@ -37,6 +38,7 @@ import type {
   ChatBackendEvents,
   ModelSelectionResult,
   NewSessionOptions,
+  ProviderAuthInteraction,
   ProviderProbeMode,
   RuntimeModelOption,
   SendOptions,
@@ -94,10 +96,17 @@ interface ModelRuntimeView {
     id: string;
     name: string;
     baseUrl?: string;
+    auth?: {
+      apiKey?: { name: string; login?: unknown };
+      oauth?: { name: string; loginLabel?: string };
+    };
     getModels(): readonly RuntimeModel[];
   }>;
   getProviderAuthStatus?(providerId: string): { configured: boolean; source?: string; label?: string };
   getAuth?(model: RuntimeModel): Promise<{ auth: { apiKey?: string; baseUrl?: string }; source?: string } | undefined>;
+  listCredentials?(): Promise<readonly { providerId: string; type: "api_key" | "oauth" }[]>;
+  login?(providerId: string, type: "api_key" | "oauth", interaction: ProviderAuthInteraction): Promise<unknown>;
+  logout?(providerId: string): Promise<void>;
 }
 
 class InjectedRuntime implements RuntimeOwner {
@@ -371,7 +380,7 @@ export class PiRuntimeBackend implements ChatBackend {
 
   async getModelOptions(): Promise<RuntimeModelOption[]> {
     const models = await this.requireModelRuntime().getAvailable();
-    return models.map((model) => ({
+    return models.filter(isVisibleRuntimeModel).map((model) => ({
       id: model.id,
       provider: model.provider,
       brand: formatProviderName(model.provider),
@@ -388,21 +397,56 @@ export class PiRuntimeBackend implements ChatBackend {
 
   async getProviderOptions(): Promise<ProviderOption[]> {
     const runtime = this.requireModelRuntime();
-    const available = await runtime.getAvailable();
+    const [available, credentials] = await Promise.all([
+      runtime.getAvailable(),
+      runtime.listCredentials?.() ?? Promise.resolve([]),
+    ]);
+    const stored = new Map(credentials.map((credential) => [credential.providerId, credential.type]));
     const providers = runtime.getProviders?.() ?? providerSummaries(available);
     return providers.map((provider) => {
       const auth = runtime.getProviderAuthStatus?.(provider.id);
-      const count = available.filter((model) => model.provider === provider.id).length;
+      const storedCredential = stored.get(provider.id);
+      const count = available.filter((model) => model.provider === provider.id && isVisibleRuntimeModel(model)).length;
       const configured = auth?.configured ?? count > 0;
       return {
         id: provider.id,
         label: formatProviderName(provider.name || provider.id),
         protocol: protocolLabel(provider.getModels()[0]?.api),
         status: configured ? "已配置" : "未配置",
-        detail: `${count} 个可用模型 · ${authSourceLabel(auth?.source)}`,
+        detail: `${count} 个展示模型 · ${authSourceLabel(auth?.source)}`,
+        authMethods: [
+          ...(provider.auth?.oauth
+            ? [
+                {
+                  type: "oauth" as const,
+                  label: provider.auth.oauth.loginLabel ?? provider.auth.oauth.name,
+                },
+              ]
+            : []),
+          ...(provider.auth?.apiKey?.login ? [{ type: "api_key" as const, label: provider.auth.apiKey.name }] : []),
+        ],
+        ...(storedCredential ? { storedCredential } : {}),
         ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
       };
     });
+  }
+
+  async loginProvider(
+    providerId: string,
+    type: "api_key" | "oauth",
+    interaction: ProviderAuthInteraction,
+  ): Promise<void> {
+    const runtime = this.requireModelRuntime();
+    if (!runtime.login) throw new Error("当前 Pi runtime 不支持交互式登录");
+    await runtime.login(providerId, type, interaction);
+    await runtime.getAvailable(providerId);
+  }
+
+  async logoutProvider(providerId: string): Promise<void> {
+    const runtime = this.requireModelRuntime();
+    if (!runtime.logout) throw new Error("当前 Pi runtime 不支持移除凭据");
+    await runtime.logout(providerId);
+    await runtime.getAvailable(providerId);
   }
 
   isProjectTrusted(): boolean {
@@ -1117,9 +1161,16 @@ function safeAttachmentAlias(value: string): string {
   return normalized || "image";
 }
 
-function providerSummaries(
-  models: readonly RuntimeModel[],
-): Array<{ id: string; name: string; baseUrl?: string; getModels(): readonly RuntimeModel[] }> {
+function providerSummaries(models: readonly RuntimeModel[]): Array<{
+  id: string;
+  name: string;
+  baseUrl?: string;
+  auth?: {
+    apiKey?: { name: string; login?: unknown };
+    oauth?: { name: string; loginLabel?: string };
+  };
+  getModels(): readonly RuntimeModel[];
+}> {
   const providers = new Map<string, RuntimeModel[]>();
   for (const model of models) providers.set(model.provider, [...(providers.get(model.provider) ?? []), model]);
   return [...providers].map(([id, providerModels]) => ({

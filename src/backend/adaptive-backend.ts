@@ -10,6 +10,7 @@ import type {
   ChatBackendEvents,
   ModelSelectionResult,
   NewSessionOptions,
+  ProviderAuthInteraction,
   ProviderProbeMode,
   RuntimeModelOption,
   SendOptions,
@@ -155,6 +156,20 @@ export class AdaptiveBackend implements ChatBackend {
   ): Promise<{ ok: boolean; diagnostic: string }> {
     if (!this.active.runProviderProbe) return { ok: false, diagnostic: "当前后端不支持 Provider probe" };
     return this.active.runProviderProbe(providerId, mode, confirmCost);
+  }
+
+  async loginProvider(
+    providerId: string,
+    type: "api_key" | "oauth",
+    interaction: ProviderAuthInteraction,
+  ): Promise<void> {
+    if (!this.active.loginProvider) throw new Error("当前后端不支持 Provider 登录");
+    await this.active.loginProvider(providerId, type, interaction);
+  }
+
+  async logoutProvider(providerId: string): Promise<void> {
+    if (!this.active.logoutProvider) throw new Error("当前后端不支持移除 Provider 凭据");
+    await this.active.logoutProvider(providerId);
   }
 
   async dispose(): Promise<void> {

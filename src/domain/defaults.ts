@@ -22,7 +22,7 @@ export const DEFAULT_USAGE: UsageSnapshot = {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   scope: "project",
-  theme: "VSPi Dark",
+  theme: "Terminal",
   reducedMotion: false,
   thinkingDisplay: "collapsed",
   wrapCode: false,

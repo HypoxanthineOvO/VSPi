@@ -21,7 +21,12 @@ interface EditorCursorAccess {
 function commandPanel(query: string, width: number, colorLevel: 0 | 2 | 3 = 0): string[] {
   const panel = new PanelController(DEFAULT_SETTINGS);
   panel.setCommandQuery(query);
-  return panel.render(width, 18, plainTheme({ colorLevel, truecolor: colorLevel === 3 }), DEFAULT_USAGE);
+  return panel.render(
+    width,
+    COMMANDS.length + 5,
+    plainTheme({ colorLevel, truecolor: colorLevel === 3 }),
+    DEFAULT_USAGE,
+  );
 }
 
 const DOWN = "\u001b[B";

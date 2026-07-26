@@ -208,7 +208,7 @@ describe("panel controller", () => {
       .filter(Boolean);
 
     expect.soft(lines).toHaveLength(3);
-    expect.soft(body).toEqual(["当前计划为空"]);
+    expect.soft(body).toEqual([]);
     expect.soft(rendered).not.toContain("›");
     expect.soft(rendered).not.toContain("TUI v1");
     expect.soft(rendered).not.toContain("2 / 5");
@@ -223,7 +223,7 @@ describe("panel controller", () => {
     const rendered = text(panel);
     expect(rendered).toContain("VSPi");
     expect(rendered).toContain("Built-in");
-    expect(rendered).toContain("查看 Workflow Plan");
+    expect(rendered).toContain("查看当前计划");
     expect(rendered).not.toContain("暂未接入");
     expect(rendered).not.toContain("@vspi/fixtures");
   });

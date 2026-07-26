@@ -278,7 +278,7 @@ export class PanelController {
   private providerActionMenu = false;
   private activeProviderId: string | undefined;
   private providerCostConfirmation = false;
-  private readonly providerActions = ["edit", "check-config", "test-connection", "minimal-generation"];
+  private providerActions: string[] = [];
   private providerField = 0;
   private providerDraft = { label: "", baseUrl: "https://", protocol: "OpenAI compatible" };
   private planItems: PlanItem[] = [];
@@ -438,6 +438,13 @@ export class PanelController {
     clampSelection(this.state, this.providers.length);
   }
 
+  selectProvider(providerId: string): ProviderOption | undefined {
+    const index = this.providers.findIndex((provider) => provider.id === providerId);
+    if (index < 0) return undefined;
+    this.state.selected = index;
+    return this.providers[index];
+  }
+
   setPlanItems(items: PlanItem[]): void {
     this.planSnapshot = undefined;
     this.planItems = structuredClone(items);
@@ -590,7 +597,7 @@ export class PanelController {
     else if (this.kind === "effort") [title, body] = ["Effort", this.renderEffort(bodyWidth, theme)];
     else if (this.kind === "tools") [title, body] = ["Tools", this.renderTools(bodyWidth, theme)];
     else if (this.kind === "policy") [title, body] = ["Policy", this.renderPolicy(bodyWidth, theme)];
-    else [title, body] = ["当前计划", this.renderPlan(bodyWidth, theme, planFocused)];
+    else [title, body] = ["Plan", this.renderPlan(bodyWidth, theme, planFocused)];
 
     let footer: string | undefined;
     if (body.length > bodyRows) {
@@ -823,6 +830,14 @@ export class PanelController {
         baseUrl: provider.baseUrl ?? "https://",
         protocol: provider.protocol,
       };
+      this.providerActions = [
+        ...(provider.authMethods ?? []).map((method) => `login:${method.type}`),
+        ...(provider.storedCredential ? ["logout"] : []),
+        "edit",
+        "check-config",
+        "test-connection",
+        "minimal-generation",
+      ];
       this.providerActionMenu = true;
       this.providerCostConfirmation = false;
       this.state.selected = 0;
@@ -1392,6 +1407,9 @@ export class PanelController {
     }
     if (this.providerActionMenu) {
       const labels: Record<string, string> = {
+        "login:oauth": "登录订阅账号",
+        "login:api_key": "配置 API Key",
+        logout: "移除已保存的凭据",
         edit: "编辑本地配置",
         "check-config": "检查配置（离线）",
         "test-connection": "测试连接（网络）",
@@ -1647,7 +1665,7 @@ export class PanelController {
   private renderPlan(width: number, theme: VspiTheme, focused: boolean): string[] {
     if (this.workflowSnapshot) return this.renderWorkflowPlan(width, theme, focused);
     const items = this.visiblePlanItems();
-    if (items.length === 0) return [theme.muted(padLine("当前计划为空", width))];
+    if (items.length === 0) return [padLine("", width)];
     const snapshot = this.planSnapshot;
     const complete = this.planItems.filter((item) => item.status === "done").length;
     const lines = snapshot
