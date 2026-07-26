@@ -19,8 +19,8 @@ export class FixtureBackend implements ChatBackend {
   readonly modelProvider = "fixture";
   readonly supportsVision = true;
   private events?: ChatBackendEvents;
-  private cancelled = false;
   private running = false;
+  private generation = 0;
   private steeringQueue: Array<{ text: string; options: SendOptions }> = [];
   private followUpQueue: Array<{ text: string; options: SendOptions }> = [];
   private sessionId: string = randomUUID();
@@ -40,21 +40,24 @@ export class FixtureBackend implements ChatBackend {
       this.publishQueue();
       return { status: "queued", delivery };
     }
-    this.cancelled = false;
     this.running = true;
+    const generation = ++this.generation;
     this.events.onBusy(true);
     let current: { text: string; options: SendOptions } | undefined = { text, options };
-    while (current && !this.cancelled) {
-      await this.emitResponse(current.text, current.options);
+    while (current && generation === this.generation) {
+      await this.emitResponse(current.text, current.options, generation);
       current = this.steeringQueue.shift() ?? this.followUpQueue.shift();
       this.publishQueue();
     }
-    this.running = false;
-    this.events.onBusy(false);
-    return { status: this.cancelled ? "cancelled" : "completed" };
+    const cancelled = generation !== this.generation;
+    if (!cancelled) {
+      this.running = false;
+      this.events.onBusy(false);
+    }
+    return { status: cancelled ? "cancelled" : "completed" };
   }
 
-  private async emitResponse(text: string, options: SendOptions): Promise<void> {
+  private async emitResponse(text: string, options: SendOptions, generation: number): Promise<void> {
     if (!this.events) return;
     const id = randomUUID();
     const attachmentNote =
@@ -75,7 +78,7 @@ export class FixtureBackend implements ChatBackend {
     ].join("\n");
     const message: TextMessage = { id, role: "assistant", kind: "text", text: "", streaming: true };
     this.events.onMessage(message);
-    for (let offset = 0; offset < response.length && !this.cancelled; offset += 12) {
+    for (let offset = 0; offset < response.length && generation === this.generation; offset += 12) {
       message.text = response.slice(0, offset + 12);
       this.events.onMessageUpdate(id, { text: message.text, streaming: true });
       await new Promise((resolve) => setTimeout(resolve, 12));
@@ -87,7 +90,7 @@ export class FixtureBackend implements ChatBackend {
     const queuedMessages = [...this.steeringQueue, ...this.followUpQueue].map((item) => item.text);
     this.steeringQueue = [];
     this.followUpQueue = [];
-    this.cancelled = true;
+    this.generation += 1;
     this.running = false;
     this.publishQueue();
     this.events?.onBusy(false);
@@ -184,6 +187,7 @@ export class FixtureBackend implements ChatBackend {
   }
 
   async dispose(): Promise<void> {
-    this.cancelled = true;
+    this.generation += 1;
+    this.running = false;
   }
 }
