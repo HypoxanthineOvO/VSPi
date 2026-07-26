@@ -49,7 +49,7 @@ Plan 背景       #182529
 │                                                                              │
 │ Model  OpenAI / GPT-5.4                                                      │
 │ Backend Pi                                                                   │
-│ Policy Standard · Host                                                 v0.2.3│
+│ Policy Standard · Host                                                 v0.2.4│
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -143,7 +143,7 @@ v0.2 的生产命令清单是：
 
 手动 `/compact` 提供 Pi Native、Execution Continuity、Research Decisions 与 Custom 四种 profile。
 未绑定 Local Plan 默认 Pi Native，绑定 Plan 默认 Execution Continuity；`/compact --list` 可检查当前选择范围。
-v0.2.3 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
+v0.2.4 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
 
 `/plan`、`/prompt`、`/tools` 与 `/policy` 均由 Action Registry 接入真实生产工作区。无 Workflow 时 Plan 保持 VSPi 本地界面；显式启用后才只读投影 Workflow Delivery。Prompt 提供 Factory/Fork、分层规则、导入导出与 Effective Prompt；Tools 只读展示当前能力、路由与失败边界。
 

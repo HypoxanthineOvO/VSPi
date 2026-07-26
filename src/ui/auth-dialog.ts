@@ -10,12 +10,17 @@ type PendingPrompt = {
   abort?: () => void;
 };
 
+// biome-ignore lint/suspicious/noControlCharactersInRegex: CSI-u encodes pasted control bytes with ESC.
+const CSI_U_CONTROL = /\u001b\[(\d+);5u/g;
+
 export class AuthDialog implements ProviderAuthInteraction {
   readonly controller = new AbortController();
   readonly signal = this.controller.signal;
   private messages: Array<{ text: string; tone: "text" | "muted" | "focus" | "warning" }> = [];
   private pending: PendingPrompt | undefined;
   private input = "";
+  private pasteBuffer = "";
+  private inBracketedPaste = false;
   private selected = 0;
   private cancelled = false;
 
@@ -53,7 +58,7 @@ export class AuthDialog implements ProviderAuthInteraction {
   prompt(prompt: ProviderAuthPrompt): Promise<string> {
     if (this.cancelled || this.signal.aborted) return Promise.reject(new Error("Login cancelled"));
     this.rejectPending(new Error("Authentication prompt replaced"));
-    this.input = "";
+    this.resetInput();
     this.selected = 0;
     return new Promise((resolve, reject) => {
       const pending: PendingPrompt = { prompt, resolve, reject };
@@ -78,11 +83,12 @@ export class AuthDialog implements ProviderAuthInteraction {
   }
 
   handleInput(data: string): void {
+    const prompt = this.pending?.prompt;
+    if (prompt && prompt.type !== "select" && this.handleBracketedPaste(data)) return;
     if (matchesKey(data, Key.escape)) {
       this.cancel();
       return;
     }
-    const prompt = this.pending?.prompt;
     if (!prompt) return;
     if (prompt.type === "select") {
       if (matchesKey(data, Key.up)) this.selected = Math.max(0, this.selected - 1);
@@ -150,7 +156,7 @@ export class AuthDialog implements ProviderAuthInteraction {
     if (!pending) return;
     this.clearPromptAbort(pending);
     this.pending = undefined;
-    this.input = "";
+    this.resetInput();
     pending.resolve(value);
     this.requestRender();
   }
@@ -160,7 +166,7 @@ export class AuthDialog implements ProviderAuthInteraction {
     if (!pending) return;
     this.clearPromptAbort(pending);
     this.pending = undefined;
-    this.input = "";
+    this.resetInput();
     pending.reject(error);
     this.requestRender();
   }
@@ -168,6 +174,54 @@ export class AuthDialog implements ProviderAuthInteraction {
   private clearPromptAbort(pending: PendingPrompt): void {
     if (pending.abort && pending.prompt.signal) pending.prompt.signal.removeEventListener("abort", pending.abort);
   }
+
+  private handleBracketedPaste(data: string): boolean {
+    const startMarker = "\u001b[200~";
+    const endMarker = "\u001b[201~";
+    if (data.includes(startMarker)) {
+      this.inBracketedPaste = true;
+      this.pasteBuffer = "";
+      data = data.replace(startMarker, "");
+    }
+    if (!this.inBracketedPaste) return false;
+
+    this.pasteBuffer += data;
+    const endIndex = this.pasteBuffer.indexOf(endMarker);
+    if (endIndex < 0) {
+      this.requestRender();
+      return true;
+    }
+
+    const pasted = sanitizeSingleLinePaste(this.pasteBuffer.slice(0, endIndex));
+    if (pasted) this.input += pasted;
+    const remaining = this.pasteBuffer.slice(endIndex + endMarker.length);
+    this.pasteBuffer = "";
+    this.inBracketedPaste = false;
+    this.requestRender();
+    if (remaining) this.handleInput(remaining);
+    return true;
+  }
+
+  private resetInput(): void {
+    this.input = "";
+    this.pasteBuffer = "";
+    this.inBracketedPaste = false;
+  }
+}
+
+function sanitizeSingleLinePaste(value: string): string {
+  const decoded = value.replace(CSI_U_CONTROL, (match, code: string) => {
+    const codePoint = Number(code);
+    if (codePoint >= 97 && codePoint <= 122) return String.fromCharCode(codePoint - 96);
+    if (codePoint >= 65 && codePoint <= 90) return String.fromCharCode(codePoint - 64);
+    return match;
+  });
+  return Array.from(decoded.replace(/\r\n|\r|\n/g, "").replaceAll("\t", "    "))
+    .filter((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint >= 32 && codePoint !== 127;
+    })
+    .join("");
 }
 
 function terminalHyperlink(value: string): string {
