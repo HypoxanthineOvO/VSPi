@@ -20,7 +20,7 @@ Registry 脚本会备份 `/etc/gitlab/gitlab.rb` 和已有的 Registry Nginx 站
 
 Merge Request 和分支 Pipeline 包含四个独立关卡：
 
-- `quality`：TypeScript、Biome 和空白字符检查。
+- `quality`：TypeScript 与 Biome 检查。
 - `test`：限制并发的确定性 Vitest 测试。
 - `package`：只构建一个 npm tarball，验证包内容并生成 SHA-256。
 - `install-smoke`：在干净目录中按正常生命周期安装同一个 tarball，并执行 CLI。
