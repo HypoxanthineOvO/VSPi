@@ -39,6 +39,7 @@ quality:
 
 test:
   stage: test
+  needs: []
   script:
     - npm test -- --maxWorkers=4
 
