@@ -225,7 +225,11 @@ describe("busy submission guard", () => {
       expect(testable.notice?.text).toContain("下一次模型调用前");
       expect(testable.messages.at(-1)).toMatchObject({ text: "SECOND_DRAFT", delivery: "steer" });
       ref.events?.onQueueUpdate?.({ steering: 1, followUp: 0 });
-      expect(app.render(100).map(stripAnsi).join("\n")).toContain("等待插入下一次调用");
+      const queued = app.render(100).map(stripAnsi).join("\n");
+      expect(queued).toContain("SECOND_DRAFT");
+      expect(queued).toContain("↪");
+      expect(queued.indexOf("Working")).toBeLessThan(queued.indexOf("SECOND_DRAFT"));
+      expect(queued).not.toMatch(/等待插入|等待当前任务完成/);
 
       app.composer.setText("THIRD_FOLLOW_UP");
       app.handleInput("\x1b\r");
@@ -330,7 +334,7 @@ describe("busy submission guard", () => {
     }
   });
 
-  it("animates Working and renders native queue counts while busy", async () => {
+  it("animates a quiet Working row without duplicating native queue counts", async () => {
     vi.useFakeTimers();
     const ref: { events?: ChatBackendEvents } = {};
     const app = await createApp(backendWith(ref));
@@ -339,7 +343,9 @@ describe("busy submission guard", () => {
       ref.events?.onQueueUpdate?.({ steering: 2, followUp: 1 });
       ref.events?.onBusy(true);
       expect(testable.workingFrame).toBe(0);
-      expect(app.render(120).map(stripAnsi).join("\n")).toContain("▌ Working ⠋ · 插入 2 · 后续 1");
+      const firstFrame = app.render(120).map(stripAnsi).join("\n");
+      expect(firstFrame).toContain("Working ⠋");
+      expect(firstFrame).not.toMatch(/▌ Working|插入 2|后续 1|队列 3/);
       vi.advanceTimersByTime(240);
       expect(testable.workingFrame).toBe(1);
       expect(app.render(120).map(stripAnsi).join("\n")).toContain("Working ⠙");

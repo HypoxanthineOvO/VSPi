@@ -55,7 +55,13 @@ function fakeBackend(): ChatBackend & {
   };
 }
 
-async function createApp() {
+async function createApp(
+  selfUpdate?: (currentVersion: string) => Promise<{
+    status: "up-to-date" | "updated";
+    currentVersion: string;
+    latestVersion: string;
+  }>,
+) {
   const backend = fakeBackend();
   const onExit = vi.fn();
   const app = new VspiApp(fakeTui(), plainTheme(), backend, {
@@ -63,6 +69,7 @@ async function createApp() {
     settings: { ...DEFAULT_SETTINGS, bridgeEnabled: false },
     attachments: fakeAttachments(),
     renderOnce: true,
+    ...(selfUpdate ? { selfUpdate } : {}),
     onExit,
   });
   await app.start();
@@ -79,7 +86,7 @@ async function flush(): Promise<void> {
 }
 
 describe("M1 production action contract", () => {
-  it("publishes every canonical command and removes deferred Update/Demo entries", () => {
+  it("publishes every canonical command and removes deferred Demo entries", () => {
     const productionLabels = COMMANDS.filter((command) => command.group === "VSPi").map((command) => command.label);
 
     expect(productionLabels).toEqual(
@@ -87,6 +94,7 @@ describe("M1 production action contract", () => {
         "/new",
         "/sessions",
         "/compact",
+        "/update",
         "/model",
         "/providers",
         "/plan",
@@ -101,10 +109,29 @@ describe("M1 production action contract", () => {
       ]),
     );
     expect(COMMANDS.map((command) => command.label)).not.toEqual(
-      expect.arrayContaining(["/update", "/demo-question", "/demo-tool"]),
+      expect.arrayContaining(["/demo-question", "/demo-tool"]),
     );
     expect(resolveCommand("/thinking")?.id).toBe("thinking");
     expect(resolveCommand("/effort")?.id).toBe("effort");
+  });
+
+  it("executes /update through the injected production update boundary", async () => {
+    const selfUpdate = vi.fn(async (currentVersion: string) => ({
+      status: "updated" as const,
+      currentVersion,
+      latestVersion: "9.9.9",
+    }));
+    const { app, backend } = await createApp(selfUpdate);
+    try {
+      await app.runStartupCommand("/update");
+      const rendered = app.render(80).map(stripAnsi).join("\n");
+
+      expect(selfUpdate).toHaveBeenCalledOnce();
+      expect(rendered).toContain("已更新到 VSPi 9.9.9，重启后生效");
+      expect(backend.send).not.toHaveBeenCalled();
+    } finally {
+      await app.dispose();
+    }
   });
 
   it("resolves the approved aliases to their canonical actions", () => {

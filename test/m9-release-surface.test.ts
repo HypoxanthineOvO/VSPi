@@ -23,22 +23,23 @@ async function joinedSources(paths: string[]): Promise<string> {
 }
 
 describe("M9 production release surface", () => {
-  it("contains no deferred Update implementation or demo Question/Tool/Provider surface", async () => {
+  it("contains a real Update implementation and no demo Question/Tool/Provider surface", async () => {
     const production = await joinedSources(await filesBelow(join(ROOT, "src"), ".ts"));
 
-    expect(production).not.toMatch(/\/update\b/);
+    expect(production).toMatch(/\/update\b/);
     expect(production).not.toMatch(/(?:Demo|演示)\s*(?:Question|Tool|Provider)/i);
-    expect(production).not.toMatch(/from\s+["'][^"']*\/update\//);
+    expect(production).toMatch(/from\s+["'][^"']*\/update\/self-update/);
     expect(production).not.toMatch(/\bFixtureUpdateBackend\b|\bUpdateBackend\b|\bUpdateSnapshot\b/);
     expect(production).not.toMatch(/import\s*\{[^}]*\bQUESTIONS\b[^}]*\}\s*from\s*["'][^"']*fixtures/);
   });
 
   it("keeps the production command catalog truthful and fully wired", () => {
-    for (const command of ["/update", "/demo-question", "/demo-tool", "/demo-provider"]) {
+    expect(resolveCommand("/update")).toMatchObject({ id: "update" });
+    for (const command of ["/demo-question", "/demo-tool", "/demo-provider"]) {
       expect(resolveCommand(command), `${command} must not resolve`).toBeUndefined();
     }
 
-    for (const id of ["plan", "prompt", "policy"]) {
+    for (const id of ["update", "plan", "prompt", "policy"]) {
       expect(
         ACTION_REGISTRY.find((action) => action.id === id),
         `${id} was delivered before M9`,
@@ -55,7 +56,7 @@ describe("M9 production release surface", () => {
   it("does not advertise removed surfaces or imply fixture fallback in release documentation", async () => {
     const docs = await joinedSources([join(ROOT, "README.md"), ...(await filesBelow(join(ROOT, "Docs"), ".md"))]);
 
-    expect(docs).not.toMatch(/\/update\b/);
+    expect(docs).toMatch(/\/update\b/);
     expect(docs).not.toMatch(/(?:Demo|演示)\s*(?:Question|Tool|Provider)/i);
     expect(docs).toMatch(/VSPi_FIXTURE=1/);
     expect(docs).toMatch(/不(?:会|会静默)?(?:回退|切换)(?:.{0,40})Fixture/i);

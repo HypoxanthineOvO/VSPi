@@ -8,6 +8,7 @@ describe("command catalog", () => {
       "/new",
       "/sessions",
       "/compact",
+      "/update",
       "/model",
       "/providers",
       "/login",
@@ -30,7 +31,7 @@ describe("command catalog", () => {
     expect(resolveCommand("/thinking")?.id).toBe("thinking");
     expect(resolveCommand("/capabilities")?.id).toBe("tools");
     expect(resolveCommand("/q")?.id).toBe("quit");
-    expect(resolveCommand("/update")).toBeUndefined();
+    expect(resolveCommand("/update")?.id).toBe("update");
     expect(resolveCommand("/demo-question")).toBeUndefined();
     expect(resolveCommand("/demo-tool")).toBeUndefined();
   });
@@ -38,7 +39,7 @@ describe("command catalog", () => {
   it("fuzzy filters production commands without restoring removed fixture entries", () => {
     expect(filterCommands("/mo")[0]?.id).toBe("model");
     expect(filterCommands("question")).toEqual([]);
-    expect(filterCommands("update")).toEqual([]);
+    expect(filterCommands("update").map((command) => command.id)).toEqual(["update"]);
   });
 
   it("fails closed when two commands register the same exact alias", () => {

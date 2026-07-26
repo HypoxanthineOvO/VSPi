@@ -122,7 +122,7 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.left, Key.right, Key.enter],
     handler: "togglePlanItem",
     enabled: hasItems,
-    hint: "←→ 折叠/展开  Enter 操作",
+    hint: "← 收起  → 展开  Enter 操作",
   }),
   keyAction({
     id: "panel.plan.focus",

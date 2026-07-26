@@ -20,11 +20,25 @@ export interface TranscriptNode {
   messageIndexes: number[];
 }
 
+export function isQueuedTranscriptMessage(
+  message: TranscriptMessage,
+): message is Extract<TranscriptMessage, { kind: "text" }> & { delivery: "steer" | "followUp" } {
+  return (
+    message.kind === "text" &&
+    message.role === "user" &&
+    (message.delivery === "steer" || message.delivery === "followUp")
+  );
+}
+
 export function buildTranscriptNodes(messages: TranscriptMessage[]): TranscriptNode[] {
   const nodes: TranscriptNode[] = [];
   for (let index = 0; index < messages.length; ) {
     const message = messages[index];
     if (!message) break;
+    if (isQueuedTranscriptMessage(message)) {
+      index += 1;
+      continue;
+    }
     if (message.kind !== "tool") {
       nodes.push({ id: message.id, kind: "message", messageIndexes: [index] });
       index += 1;
@@ -52,8 +66,6 @@ function attachmentSummary(message: Extract<TranscriptMessage, { kind: "text" }>
 }
 
 function deliverySummary(message: Extract<TranscriptMessage, { kind: "text" }>): string {
-  if (message.delivery === "steer") return "等待插入下一次调用";
-  if (message.delivery === "followUp") return "等待当前任务完成";
   if (message.delivery === "cancelled") return "〔队列已取消〕";
   return "";
 }
@@ -71,27 +83,24 @@ export function renderTranscriptMessage(
   theme: VspiTheme,
   options: TranscriptRenderOptions = {},
 ): string[] {
+  if (isQueuedTranscriptMessage(message)) return [];
   const selected = options.selectedNodeId === message.id || options.inspectedId === message.id;
   let lines: string[];
   if (message.kind === "text" && message.role === "user") {
     const content = [message.text, ...attachmentSummary(message)].filter(Boolean).join(" ");
     const contentLines = wrapUserContent(content, Math.max(1, width - 4));
-    const pending = message.delivery === "steer" || message.delivery === "followUp";
-    const surface = pending ? theme.noticeSurface : theme.userSurface;
     const status = deliverySummary(message);
     lines = [
-      surface(padLine("", width)),
-      ...contentLines.map((line) =>
-        surface(padLine(`${theme.focus("▌")}  ${pending ? theme.muted(line || " ") : line || " "}`, width)),
-      ),
-      ...(status ? [surface(padLine(`   ${theme.muted(status)}`, width))] : []),
-      surface(padLine("", width)),
+      theme.userSurface(padLine("", width)),
+      ...contentLines.map((line) => theme.userSurface(padLine(`${theme.focus("▌")}  ${line || " "}`, width))),
+      ...(status ? [theme.userSurface(padLine(`   ${theme.muted(status)}`, width))] : []),
+      theme.userSurface(padLine("", width)),
     ];
   } else if (message.kind === "text") {
     const markdown = renderMarkdown(message.text, Math.max(1, width - 2), theme, {
       ...(options.wrapCode !== undefined ? { wrapCode: options.wrapCode } : {}),
     });
-    lines = markdown.map((line, index) => `${index === 0 ? theme.focus("◆ ") : "  "}${line}`);
+    lines = markdown.map((line, index) => `${index === 0 ? `${theme.muted("•")} ` : "  "}${line}`);
     if (message.streaming && lines.length > 0) {
       // 满宽行先把内容截到 width-1，再追加光标，避免后续 padLine 把光标切掉。
       const last = lines[lines.length - 1] ?? "";
@@ -171,7 +180,7 @@ export function renderTranscript(
   options: TranscriptRenderOptions = {},
 ): string[] {
   const output: string[] = [];
-  const visible = messages;
+  const visible = messages.filter((message) => !isQueuedTranscriptMessage(message));
   for (let index = 0; index < visible.length; ) {
     const message = visible[index];
     if (!message) break;

@@ -398,17 +398,19 @@ describe("M6 Local Plan workspace projection", () => {
     for (const text of [
       PLAN.title,
       PLAN.goal,
-      PLAN.background ?? "",
-      ...PLAN.challenges,
       "Runtime integration",
       "Persist session binding",
       "Restore after reload",
       "Plan workspace",
-      "API review is pending",
-      PLAN.nextAction ?? "",
+      "Awaiting API review",
     ]) {
       expect(rendered).toContain(text);
     }
+    expect(rendered).not.toContain(PLAN.background ?? "");
+    for (const challenge of PLAN.challenges) expect(rendered).not.toContain(challenge);
+    expect(rendered).not.toContain(PLAN.nextAction ?? "");
+    expect(rendered).toContain("╰─ ● Persist session binding");
+    expect(rendered).not.toMatch(/[▸▾]/);
     expect(rendered).toMatch(/(focus|焦点)[^\n]*Persist session binding|Persist session binding[^\n]*(focus|焦点)/i);
     expect(rendered.indexOf("Runtime integration")).toBeLessThan(rendered.indexOf("Persist session binding"));
     expect(rendered.indexOf("Persist session binding")).toBeLessThan(rendered.indexOf("Restore after reload"));
@@ -444,28 +446,26 @@ describe("M6 Local Plan workspace projection", () => {
     setSnapshot(panel, compactPlan);
     const rendered = planRender(panel, 40, 32);
 
-    for (const text of [
-      "Ship safely",
-      "Keep sessions",
-      "Branches",
-      "Runtime",
-      "Binding",
-      "Reload",
-      "Review",
-      "Run tests",
-    ])
-      expect(rendered).toContain(text);
-    const ordered = [
-      "Ship safely",
-      "Keep sessions",
-      "Branches",
-      "Runtime",
-      "Binding",
-      "Reload",
-      "Review",
-      "Run tests",
-    ].map((text) => rendered.indexOf(text));
+    for (const text of ["Ship safely", "Runtime", "Binding", "Reload"]) expect(rendered).toContain(text);
+    for (const text of ["Keep sessions", "Branches", "Review", "Run tests"]) expect(rendered).not.toContain(text);
+    const ordered = ["Ship safely", "Runtime", "Binding", "Reload"].map((text) => rendered.indexOf(text));
     expect(ordered.every((position, index) => index === 0 || position > (ordered[index - 1] ?? -1))).toBe(true);
+  });
+
+  it("collapses the whole Plan to one titled row and restores the nested tree", () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    setSnapshot(panel, PLAN);
+
+    panel.handleInput(Key.left);
+    const collapsed = planRender(panel, 80).split("\n");
+    expect(collapsed).toHaveLength(1);
+    expect(collapsed[0]).toContain("Plan · Release readiness");
+    expect(collapsed[0]).not.toContain("Runtime integration");
+
+    panel.handleInput(Key.right);
+    const expanded = planRender(panel, 80);
+    expect(expanded).toContain("Runtime integration");
+    expect(expanded).toContain("╰─ ● Persist session binding");
   });
 });
 

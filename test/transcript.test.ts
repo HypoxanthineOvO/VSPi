@@ -103,19 +103,21 @@ describe("transcript rendering", () => {
     const userLines = renderTranscriptMessage(user, 60, plainTheme());
     const transcript = renderTranscript([user, assistant], 60, plainTheme());
     expect(transcript[userLines.length]).toBe("");
-    expect(stripAnsi(transcript.slice(userLines.length + 1).join("\n"))).toContain("◆ Answer");
+    expect(stripAnsi(transcript.slice(userLines.length + 1).join("\n"))).toContain("• Answer");
   });
 
-  it("keeps pending delivery status separate from user text", () => {
+  it("keeps queued deliveries out of the waterfall and Inspect nodes until consumed", () => {
     const messages: TranscriptMessage[] = [
       { ...userMessage("steer"), id: "steer", delivery: "steer" },
       { ...userMessage("follow"), id: "follow", delivery: "followUp" },
       { ...userMessage("cancelled"), id: "cancelled", delivery: "cancelled" },
     ];
     const rendered = renderTranscript(messages, 80, plainTheme()).map(stripAnsi).join("\n");
-    expect(rendered).toContain("等待插入下一次调用");
-    expect(rendered).toContain("等待当前任务完成");
+    expect(rendered).not.toContain("steer");
+    expect(rendered).not.toContain("follow");
+    expect(rendered).not.toContain("等待");
     expect(rendered).toContain("队列已取消");
+    expect(buildTranscriptNodes(messages).map((node) => node.id)).toEqual(["cancelled"]);
   });
 
   it("renders expanded edit tools as width-safe diffs", () => {
@@ -292,7 +294,7 @@ describe("transcript rendering", () => {
       streaming: true,
     };
     const rendered = renderTranscript([streaming], 80, plainTheme(), { thinkingDisplay: "hidden" }).map(stripAnsi);
-    expect(rendered).toEqual(["◇ 思考中 · Effort X-High"]);
+    expect(rendered).toEqual(["◇ 思考中 · Effort Xhigh"]);
     expect(rendered.join("\n")).not.toContain("LIVE_PRIVATE_BODY");
   });
 

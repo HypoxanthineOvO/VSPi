@@ -49,7 +49,7 @@ Plan 背景       #182529
 │                                                                              │
 │ Model  OpenAI / GPT-5.4                                                      │
 │ Backend Pi                                                                   │
-│ Policy Standard · Host                                                 v0.2.1│
+│ Policy Standard · Host                                                 v0.2.2│
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -69,7 +69,7 @@ Model OpenAI / GPT-5.4  Effort High                     Context 50K / 128K 39% 
 
 80 列普通 Status 区固定为两行：第一行语义固定为 `Model / Effort / Context`；第二行直接从路径值开始，再显示 `Policy / Token / Cost`，不显示 `Path` 标题。Backend 不进入动态行，只存在于永久 Splash 和诊断信息。五个字段标签与字段值、以及无标题路径值分别着色；80/120 列的路径 flex 区从右侧保留完整 Policy/Boundary suffix，只有 Model 与路径变量值可截断。默认的新会话动态界面为空，不加载或预置对话、工具消息；空 Plan 只保留标题与留白，不显示 Workflow 缺失或初始化提示。`Shift+Tab` 在 Composer、Transcript、Plan 间循环，Transcript 为空时直接跳到 Plan。后文出现的消息、工具与 active telemetry 均为“交互示例”，不是启动内容。显式离线入口 `VSPi_FIXTURE=1` 或 `VSPi_BACKEND=fixture` 的真实模型标签是 `Offline Fixture`，但不作为主界面的模型示例；正常启动若 Pi 模型配置缺失或损坏会显示 setup error，不会静默切换到 Fixture。
 
-自更新不属于 v0.2.1 的生产表面，留待后续版本。
+自更新由 `/update` 与 `vspi update` 共同提供；只接受 VSPi 公共 GitLab 项目的稳定 SemVer Release，并在 npm 全局安装前校验固定资产地址和 SHA-256。
 
 主界面末端的顺序固定为 Plan bottom → contextual hint → 运行时 Working 活动带（仅 active 时）→ composer → 两行 status。hint 位于面板框外；Working 是独立的全宽状态层，不挤入 Effort 或其他 telemetry 字段，也不会抢 composer 焦点。
 
@@ -137,13 +137,13 @@ v0.2 的生产命令清单是：
 
 ```text
 /new       /sessions   /compact    /model      /providers
-/plan      /prompt     /thinking   /effort     /tools
+/update    /plan       /prompt     /thinking   /effort     /tools
 /policy    /usage      /settings   /theme      /quit
 ```
 
 手动 `/compact` 提供 Pi Native、Execution Continuity、Research Decisions 与 Custom 四种 profile。
 未绑定 Local Plan 默认 Pi Native，绑定 Plan 默认 Execution Continuity；`/compact --list` 可检查当前选择范围。
-v0.2.1 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
+v0.2.2 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
 
 `/plan`、`/prompt`、`/tools` 与 `/policy` 均由 Action Registry 接入真实生产工作区。无 Workflow 时 Plan 保持 VSPi 本地界面；显式启用后才只读投影 Workflow Delivery。Prompt 提供 Factory/Fork、分层规则、导入导出与 Effective Prompt；Tools 只读展示当前能力、路由与失败边界。
 
@@ -155,7 +155,7 @@ v0.2.1 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动
 
 ```
 
-回答只用 `◆` 标记开始。Transcript 按后端事件只追加：工具前文本、Tool、Tool result 与工具后回答各有唯一节点，相同 `contentIndex` 不得复用节点 ID。thinking 默认折叠且保留原始英文；`thinkingDisplay` 提供隐藏、折叠、展开三态：隐藏只收起正文，活跃时显示“思考中”，完成后仍保留最简思考记录；折叠保留 Effort/耗时标题；展开直接显示正文。Inspect 始终使用稳定 message id，并可查看当前单条 thinking/tool 详情。同一批 Tool 使用一个 `工具调用` 组头；每项把状态符号、固定宽度名称列和弱化动作摘要放在一行，摘要从同一列开始，运行/失败文字位于摘要末尾；中间项使用 `├─`，末项使用 `└─`。只要组内存在 queued/running 项，就实时展示完整树；全部进入 success/error/cancelled 后，`collapseTools=true` 将其收束为包含总数和失败/取消计数的一行摘要。Settings 的“完成后收起工具”默认开启，关闭后完整树持续显示；Inspect/Enter 临时恢复完整顺序，edit 输出继续使用行号、增删色与窄屏换行。Markdown 标题使用内容蓝色前景和字重，不增加背景块。Sub Agent 只展示模型、effort、任务和状态。
+回答只用弱化的 `•` 标记开始。Transcript 按后端事件只追加：工具前文本、Tool、Tool result 与工具后回答各有唯一节点，相同 `contentIndex` 不得复用节点 ID。thinking 默认折叠且保留原始英文；`thinkingDisplay` 提供隐藏、折叠、展开三态：隐藏只收起正文，活跃时显示“思考中”，完成后仍保留最简思考记录；折叠保留 Effort/耗时标题；展开直接显示正文。Inspect 始终使用稳定 message id，并可查看当前单条 thinking/tool 详情。同一批 Tool 使用一个 `工具调用` 组头；每项把状态符号、固定宽度名称列和弱化动作摘要放在一行，摘要从同一列开始，运行/失败文字位于摘要末尾；中间项使用 `├─`，末项使用 `└─`。只要组内存在 queued/running 项，就实时展示完整树；全部进入 success/error/cancelled 后，`collapseTools=true` 将其收束为包含总数和失败/取消计数的一行摘要。Settings 的“完成后收起工具”默认开启，关闭后完整树持续显示；Inspect/Enter 临时恢复完整顺序，edit 输出继续使用行号、增删色与窄屏换行。Markdown 标题使用内容蓝色前景和字重，不增加背景块。Sub Agent 只展示模型、effort、任务和状态。
 
 ## Composer
 
@@ -227,7 +227,7 @@ Pi 的最终 active registry 使用原生 `read/ls/find/grep/bash/edit/write` To
 
 Workflow 采用默认关闭、显式 `--workflow` 启用的可选只读 Provider。默认启动不读取 Workflow 环境变量或项目状态，Plan 保持 VSPi 自己的干净界面；显式开启后才投影 Delivery。Core 未配置或读取失败时 Plan 显示有界不可用状态。Adapter 只调用 Delivery `resume` 形成 workspace 级投影并拒绝 Receipt-bearing mutation。
 
-Question、审批、Effort、Settings、预览和 Inspect 共享底部工作区。Esc 先退出当前界面；回到主界面后再次按 Esc 才中断当前生成或工具，且不会新建 Session、重启 TUI 或退出进程。Agent 从首次提交到 primary prompt 与 Steer/Follow-up 队列全部耗尽期间，在 composer 上方持续显示独立的动态 `Working` 活动带；宽屏分别显示两类队列数量，40 列显示动态符号和总数。取消只 abort 当前运行：Session identity、已发送用户消息、partial thinking/text/tool 和当前 composer 草稿全部保留，running Tool 进入 cancelled；尚未送达的原生队列由 `clearQueue` 取回并放回 composer。取消栅栏持续到下一次主动 send：旧 generation 的 retry、文本以及 Tool 的 start、update、end 事件均被丢弃，agent end 只负责恢复 idle；Pi Bash 的 AbortSignal 同时终止运行中的子进程组。
+Question、审批、Effort、Settings、预览和 Inspect 共享底部工作区。Esc 先退出当前界面；回到主界面后再次按 Esc 才中断当前生成或工具，且不会新建 Session、重启 TUI 或退出进程。Agent 从首次提交到 primary prompt 与 Steer/Follow-up 队列全部耗尽期间，在 composer 上方持续显示无背景的动态 `Working`；尚未送达的消息另用一行弱化内容和 `↪` 表示，不进入 Transcript 或 Inspect。取消只 abort 当前运行：Session identity、已发送用户消息、partial thinking/text/tool 和当前 composer 草稿全部保留，running Tool 进入 cancelled；尚未送达的原生队列由 `clearQueue` 取回并放回 composer。取消栅栏持续到下一次主动 send：旧 generation 的 retry、文本以及 Tool 的 start、update、end 事件均被丢弃，agent end 只负责恢复 idle；Pi Bash 的 AbortSignal 同时终止运行中的子进程组。
 
 保存结果与短时状态临时替换固定 contextual hint 行，约 3.5 秒后恢复；出现和消失前后总布局高度不变，不创建 overlay，也不改变 composer 焦点。
 
