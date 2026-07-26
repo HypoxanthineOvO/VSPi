@@ -2,81 +2,89 @@ workflow:
   rules:
     - if: '$CI_COMMIT_TAG'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS'
+      when: never
     - if: '$CI_PIPELINE_SOURCE == "push"'
     - if: '$CI_PIPELINE_SOURCE == "web"'
     - when: never
 
+stages:
+  - quality
+  - test
+  - package
+  - install
+  - release
+
 default:
-  interruptible: true
+  image:
+    name: node:22.22.0-bookworm-slim@sha256:dd9d21971ec4395903fa6143c2b9267d048ae01ca6d3ea96f16cb30df6187d94
   tags:
-    - latex-runner
-  cache:
-    key:
-      files:
-        - package-lock.json
-    paths:
-      - .npm/
-      - node-v22.22.3-linux-x64/
+    - vspi-docker
+  interruptible: true
+  before_script:
+    - node --version
+    - npm --version
+    - npm ci --no-audit --no-fund
 
 variables:
-  npm_config_cache: "$CI_PROJECT_DIR/.npm"
+  npm_config_cache: "/cache/vspi/npm"
   npm_config_fetch_retries: "5"
   npm_config_fetch_retry_maxtimeout: "120000"
   npm_config_fetch_retry_mintimeout: "10000"
-  NODE_ARCHIVE_SHA256: "2e5d13569282d016861fae7c8f935e741693c269101a5bebcf761a5376d1f99f"
-  NODE_VERSION: "22.22.3"
 
-stages:
-  - verify
-
-verify:
-  stage: verify
-  before_script:
-    - |
-      set -eu
-      NODE_ARCHIVE="node-v${NODE_VERSION}-linux-x64.tar.xz"
-      NODE_HOME="$CI_PROJECT_DIR/node-v${NODE_VERSION}-linux-x64"
-      if [ ! -x "$NODE_HOME/bin/node" ]; then
-        NODE_PATH="v${NODE_VERSION}/${NODE_ARCHIVE}"
-        for base_url in "https://npmmirror.com/mirrors/node" "https://nodejs.org/dist"; do
-          if curl --proto '=https' --tlsv1.2 --retry 4 --retry-all-errors --retry-delay 3 \
-            --connect-timeout 15 --max-time 240 -fL -o "$NODE_ARCHIVE" "$base_url/$NODE_PATH"; then
-            break
-          fi
-          rm -f "$NODE_ARCHIVE"
-        done
-        test -f "$NODE_ARCHIVE"
-        echo "${NODE_ARCHIVE_SHA256}  ${NODE_ARCHIVE}" | sha256sum -c -
-        tar -xJf "$NODE_ARCHIVE"
-        rm "$NODE_ARCHIVE"
-      fi
-      export PATH="$NODE_HOME/bin:$PATH"
-      node --version
-      npm --version
-    - |
-      for attempt in 1 2 3; do
-        if npm ci --ignore-scripts --no-audit --no-fund; then
-          break
-        fi
-        if [ "$attempt" -eq 3 ]; then
-          exit 1
-        fi
-        echo "npm ci failed on attempt ${attempt}; retrying"
-        sleep 10
-      done
+quality:
+  stage: quality
   script:
     - npm run check
-    - npm test -- --maxWorkers=4
     - git diff --check
-    - test "$(node dist/index.js --version)" = "$(node -p "require('./package.json').version")"
-    - npm pack
-    - export TARBALL="vspi-$(node -p "require('./package.json').version").tgz"
-    - test -f "$TARBALL"
-    - mkdir .package-smoke
-    - npm install --prefix .package-smoke --no-audit --no-fund "./$TARBALL"
-    - test "$(.package-smoke/node_modules/.bin/vspi --version)" = "$(node -p "require('./package.json').version")"
+
+test:
+  stage: test
+  script:
+    - npm test -- --maxWorkers=4
+
+package:
+  stage: package
+  script:
+    - mkdir -p .artifacts
+    - npm pack --json --pack-destination .artifacts > .artifacts/pack.json
+    - node scripts/ci/verify-package.mjs .artifacts/pack.json
+    - sha256sum ".artifacts/vspi-$(node -p "require('./package.json').version").tgz" > .artifacts/SHA256SUMS
   artifacts:
+    name: "vspi-${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}"
     when: on_success
     paths:
-      - vspi-*.tgz
+      - .artifacts/
     expire_in: 1 week
+
+install-smoke:
+  stage: install
+  needs:
+    - job: package
+      artifacts: true
+  script:
+    - export VERSION="$(node -p "require('./package.json').version")"
+    - export TARBALL="$CI_PROJECT_DIR/.artifacts/vspi-${VERSION}.tgz"
+    - cd "$(mktemp -d)"
+    - npm install --prefix install-root --omit=dev --no-audit --no-fund "$TARBALL"
+    - test "$(install-root/node_modules/.bin/vspi --version)" = "$VERSION"
+
+release:
+  stage: release
+  needs:
+    - job: package
+      artifacts: true
+    - job: install-smoke
+  before_script:
+    - node --version
+    - command -v curl
+  script:
+    - export VERSION="$(node -p "require('./package.json').version")"
+    - export FILENAME="vspi-${VERSION}.tgz"
+    - export PACKAGE_URL="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/vspi/$VERSION/$FILENAME"
+    - curl --fail-with-body --header "JOB-TOKEN:$CI_JOB_TOKEN" --upload-file ".artifacts/$FILENAME" "$PACKAGE_URL"
+    - node scripts/ci/create-release-payload.mjs .artifacts/SHA256SUMS > .artifacts/release.json
+    - curl --fail-with-body --request POST --header "JOB-TOKEN:$CI_JOB_TOKEN" --header "Content-Type:application/json" --data-binary @.artifacts/release.json "$CI_API_V4_URL/projects/$CI_PROJECT_ID/releases"
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/'
+    - when: never

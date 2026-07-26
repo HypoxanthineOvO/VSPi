@@ -7,3 +7,5 @@ tmp/
 .pipeline/memory/
 .pipeline/runtime/
 .pipeline/snapshots/
+.artifacts/
+.package-smoke/
