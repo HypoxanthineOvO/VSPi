@@ -18,6 +18,29 @@ describe("provider authentication dialog", () => {
     expect(dialog.render(60, plainTheme()).map(stripAnsi).join("\n")).not.toContain("sk-private-value");
   });
 
+  it("accepts chunked bracketed paste in secret prompts without treating pasted newlines as submit", async () => {
+    const dialog = new AuthDialog("自定义中转站", vi.fn(), vi.fn());
+    const result = dialog.prompt({ type: "secret", message: "API Key" });
+
+    dialog.handleInput("\u001b[200~sk-pasted");
+    dialog.handleInput("-secret\r\n");
+    dialog.handleInput("\u001b[201~");
+
+    const rendered = dialog.render(60, plainTheme()).map(stripAnsi).join("\n");
+    expect(rendered).not.toContain("sk-pasted-secret");
+    expect(rendered).toContain("•".repeat("sk-pasted-secret".length));
+
+    dialog.handleInput("\r");
+    await expect(result).resolves.toBe("sk-pasted-secret");
+  });
+
+  it("handles a complete bracketed paste followed by Enter in the same terminal chunk", async () => {
+    const dialog = new AuthDialog("自定义中转站", vi.fn(), vi.fn());
+    const result = dialog.prompt({ type: "text", message: "Base URL" });
+    dialog.handleInput("\u001b[200~https://api.example.com/v1\u001b[201~\r");
+    await expect(result).resolves.toBe("https://api.example.com/v1");
+  });
+
   it("aborts the whole login flow on Escape", async () => {
     const cancelled = vi.fn();
     const dialog = new AuthDialog("Kimi For Coding", vi.fn(), cancelled);
