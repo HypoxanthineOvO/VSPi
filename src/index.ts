@@ -28,6 +28,7 @@ import { BUILTIN_PROVIDERS } from "./providers/builtins.js";
 import { createProviderConfigService } from "./providers/config-service.js";
 import { applySettingsToCapabilities, detectTerminalCapabilities } from "./ui/capabilities.js";
 import { createTheme } from "./ui/theme.js";
+import { updateVspi } from "./update/self-update.js";
 import { VSPI_VERSION } from "./version.js";
 import { createStartupWorkflowAdapter } from "./workflow/startup.js";
 import type { WorkflowAdapter } from "./workflow/types.js";
@@ -289,6 +290,7 @@ function printHelp(): void {
   vspi resume              启动后进入会话选择器
   vspi run "<prompt>"      非交互模式：执行单个 prompt，结果输出到 stdout
   vspi bridge              启动附件 Bridge（SSH 粘贴图片）
+  vspi update              检查并安装最新稳定版本
 
 选项：
   --policy <level>         Safe | Standard | YOLO | Auto（只控制审批强度）
@@ -304,6 +306,16 @@ function printHelp(): void {
   VSPI_WORKFLOW_*          --workflow 所需的完整 bundle identity（详见 README）
   Provider 凭据可用 vspi login 配置，或通过环境变量注入
 `);
+}
+
+async function selfUpdate(): Promise<void> {
+  process.stdout.write(`正在检查 VSPi ${VSPI_VERSION} 的更新...\n`);
+  const result = await updateVspi(VSPI_VERSION);
+  process.stdout.write(
+    result.status === "updated"
+      ? `已更新到 VSPi ${result.latestVersion}，请重新运行 vspi。\n`
+      : `当前已是最新版本 ${result.currentVersion}。\n`,
+  );
 }
 
 /** 非交互单次执行：发送一个 prompt，把最终的 assistant 文本写到 stdout。 */
@@ -358,6 +370,7 @@ async function runOnce(prompt: string): Promise<void> {
 const entry = process.argv[2];
 if (entry === "bridge") await bridge();
 else if (entry === "run") await runOnce(process.argv.slice(3).join(" "));
+else if (entry === "update") await selfUpdate();
 else if (entry === "init" || entry === "login" || entry === "logout") {
   const settings = await loadSettings(process.cwd());
   await runAuthSetup({

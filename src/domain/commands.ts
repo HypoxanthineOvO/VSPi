@@ -11,6 +11,7 @@ export type ActionHandler =
   | "newSession"
   | "sessions"
   | "compact"
+  | "update"
   | "plan"
   | "models"
   | "providers"
@@ -69,6 +70,15 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
     description: "压缩当前上下文",
     group: "VSPi",
     handler: "compact",
+    availability: "enabled",
+  },
+  {
+    id: "update",
+    aliases: [],
+    label: "/update",
+    description: "检查并安装最新版本",
+    group: "VSPi",
+    handler: "update",
     availability: "enabled",
   },
   {

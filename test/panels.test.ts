@@ -103,13 +103,23 @@ describe("panel controller", () => {
     const plain = lines.map(stripAnsi);
     expect(lines.every((line) => visibleWidth(line) === width)).toBe(true);
     expect(plain[1]).toContain("Standard");
-    expect(plain[2]).toContain("destructive");
-    expect(plain.join("\n")).toContain("切换到 Auto 并执行");
-    expect(plain.some((line) => /^│\s{4,}› 允许本次/.test(line))).toBe(true);
+    expect(plain[1]).toContain("删除或覆盖文件");
+    expect(plain[2]).toContain("rm -rf build/output");
+    expect(plain.join("\n")).toContain("提升到 Auto 并执行");
+    expect(plain.some((line) => /^│\s{4,}› 1\. 允许本次/.test(line))).toBe(true);
+    for (const option of [
+      "1. 允许本次",
+      "2. 本会话允许同类命令",
+      "3. 提升到 Auto 并执行",
+      "4. 拒绝",
+      "5. 拒绝并说明",
+    ]) {
+      expect(plain.join("\n")).toContain(option);
+    }
   });
 
   it.each(["Safe", "Standard", "YOLO", "Auto"] as const)(
-    "renders %s as an eight-cell centered Policy badge above the category",
+    "renders %s as an eight-cell Policy badge beside the category",
     (policy) => {
       const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
       panel.openApproval({
@@ -129,7 +139,7 @@ describe("panel controller", () => {
       const backgroundCells = sgrCells(badgeLine).filter((cell) => cell.background === expectedBackground);
       expect(backgroundCells).toHaveLength(8);
       expect(cellsForText(badgeLine, policy).every((cell) => cell.background === expectedBackground)).toBe(true);
-      expect(stripAnsi(lines[2] ?? "")).toContain("ssh");
+      expect(stripAnsi(lines[1] ?? "")).toContain("SSH 连接");
     },
   );
 

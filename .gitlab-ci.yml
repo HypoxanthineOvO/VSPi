@@ -71,6 +71,7 @@ install-smoke:
 
 release:
   stage: release
+  interruptible: false
   needs:
     - job: package
       artifacts: true

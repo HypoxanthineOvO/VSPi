@@ -13,7 +13,7 @@ export function normalizeEffortLevel(value: unknown, fallback: EffortLevel = "me
 }
 
 export function effortLabel(level: EffortLevel): string {
-  if (level === "xhigh") return "X-High";
+  if (level === "xhigh") return "Xhigh";
   return `${level.slice(0, 1).toUpperCase()}${level.slice(1)}`;
 }
 

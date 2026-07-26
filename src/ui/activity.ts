@@ -1,4 +1,5 @@
-import { padLine, truncateToWidth } from "./ansi.js";
+import type { TranscriptMessage } from "../domain/types.js";
+import { alignRight, padLine, truncateToWidth } from "./ansi.js";
 import type { VspiTheme } from "./theme.js";
 
 export interface ActivityRailInput {
@@ -8,20 +9,18 @@ export interface ActivityRailInput {
 }
 
 export function renderActivityRail(input: ActivityRailInput, width: number, theme: VspiTheme): string {
-  const queued = input.steering + input.followUp;
-  const detail =
-    width < 60
-      ? queued > 0
-        ? ` · 队列 ${queued}`
-        : ""
-      : [input.steering ? `插入 ${input.steering}` : "", input.followUp ? `后续 ${input.followUp}` : ""]
-          .filter(Boolean)
-          .map((value) => ` · ${value}`)
-          .join("");
-  const text = truncateToWidth(
-    `${theme.focus("▌")} ${theme.bold("Working")} ${theme.focus(input.indicator)}${detail}`,
-    Math.max(1, width),
-    "…",
-  );
-  return theme.activitySurface(padLine(text, width));
+  const text = truncateToWidth(`${theme.bold("Working")} ${theme.muted(input.indicator)}`, Math.max(1, width), "…");
+  return padLine(text, width);
+}
+
+export function renderQueuedMessage(
+  message: Extract<TranscriptMessage, { kind: "text" }>,
+  width: number,
+  theme: VspiTheme,
+): string {
+  const attachmentText = (message.attachments ?? []).map((attachment) => attachment.alias).join(" · ");
+  const content = [message.text.replace(/\s+/g, " ").trim(), attachmentText].filter(Boolean).join(" · ");
+  const left = `${theme.focus("▌")} ${theme.muted(content)}`;
+  const right = theme.muted(theme.capabilities.unicode ? "↪" : ">");
+  return theme.activitySurface(alignRight(left, right, width));
 }

@@ -48,7 +48,7 @@ import type {
   PromptProfileSnapshot,
   ResolvedPromptProfile,
 } from "../prompts/types.js";
-import { renderActivityRail } from "../ui/activity.js";
+import { renderActivityRail, renderQueuedMessage } from "../ui/activity.js";
 import { padLine } from "../ui/ansi.js";
 import { AuthDialog } from "../ui/auth-dialog.js";
 import { Composer } from "../ui/composer.js";
@@ -62,7 +62,13 @@ import { PanelController, type PanelEvent } from "../ui/panels.js";
 import { renderSplash, type StartupStatus } from "../ui/splash.js";
 import { renderStatusLines } from "../ui/status.js";
 import type { VspiTheme } from "../ui/theme.js";
-import { buildTranscriptNodes, renderTranscript, type TranscriptNode } from "../ui/transcript.js";
+import {
+  buildTranscriptNodes,
+  isQueuedTranscriptMessage,
+  renderTranscript,
+  type TranscriptNode,
+} from "../ui/transcript.js";
+import { type SelfUpdateResult, updateVspi } from "../update/self-update.js";
 import { VSPI_VERSION } from "../version.js";
 import type { WorkflowAdapter, WorkflowSnapshot } from "../workflow/types.js";
 
@@ -80,6 +86,7 @@ export interface VspiAppOptions {
   planTaskRouter?: PlanTaskRouter;
   workflowAdapter?: WorkflowAdapter;
   promptProfiles?: PromptProfileUi;
+  selfUpdate?: (currentVersion: string) => Promise<SelfUpdateResult>;
   openOnStart?: "sessions" | "providers";
   onExit: () => void;
 }
@@ -583,13 +590,31 @@ export class VspiApp implements Component, Focusable {
           ),
         ]
       : [];
+    const queuedMessages = this.messages
+      .filter(isQueuedTranscriptMessage)
+      .map((message) => renderQueuedMessage(message, width, this.theme));
     const status = this.renderStatus(width);
     const panelRows =
       this.panels.kind === "approval"
-        ? Math.min(14, Math.max(3, this.tui.terminal.rows - composer.length - activity.length - status.length - 6))
+        ? Math.min(
+            14,
+            Math.max(
+              3,
+              this.tui.terminal.rows - composer.length - activity.length - queuedMessages.length - status.length - 6,
+            ),
+          )
         : this.tui.terminal.rows <= 24
-          ? Math.max(3, 9 - activity.length - (status.length - 1))
-          : Math.min(16, Math.max(3, this.tui.terminal.rows - composer.length - activity.length - 7 - status.length));
+          ? Math.max(
+              3,
+              (this.panels.kind === "models" ? 10 : 9) - activity.length - queuedMessages.length - (status.length - 1),
+            )
+          : Math.min(
+              16,
+              Math.max(
+                3,
+                this.tui.terminal.rows - composer.length - activity.length - queuedMessages.length - 7 - status.length,
+              ),
+            );
     if (this.preview) {
       output.push(...this.preview.render(width));
       output.push(this.notice ? this.renderNotice(width) : this.theme.muted(padLine(this.previewLabel, width)));
@@ -605,6 +630,7 @@ export class VspiApp implements Component, Focusable {
       output.push(hint);
     }
     output.push(...activity);
+    output.push(...queuedMessages);
     output.push(...composer);
     output.push(...status);
     return output;
@@ -886,6 +912,23 @@ export class VspiApp implements Component, Focusable {
       } catch (error) {
         this.composer.setText(raw);
         this.showNotice(`上下文压缩失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+      }
+      return;
+    }
+    if (action.handler === "update") {
+      this.panels.close();
+      this.showNotice("正在检查 VSPi 更新...", "info");
+      this.requestRender();
+      try {
+        const result = await (this.options.selfUpdate ?? updateVspi)(VSPI_VERSION);
+        this.showNotice(
+          result.status === "updated"
+            ? `已更新到 VSPi ${result.latestVersion}，重启后生效`
+            : `当前已是最新版本 ${result.currentVersion}`,
+          "success",
+        );
+      } catch (error) {
+        this.showNotice(`更新失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
       }
       return;
     }

@@ -29,7 +29,7 @@ Merge Request 和分支 Pipeline 包含四个独立关卡：
 - `package`：只构建一个 npm tarball，验证包内容并生成 SHA-256。
 - `install-smoke`：在干净目录中按正常生命周期安装同一个 tarball，并执行 CLI。
 
-SemVer Tag 会增加 `release` Job。它把 package 阶段的原始 tarball 上传到 Generic Package Registry，并创建指向不可变包地址的 GitLab Release；发布阶段绝不重新构建。
+SemVer Tag 会增加不可中断的 `release` Job。它把 package 阶段的原始 tarball 上传到 Generic Package Registry，并创建指向不可变包地址的 GitLab Release；发布阶段绝不重新构建。版本、文件名和 tag 都从 `package.json` 派生，测试不得写死当前发布版本。
 
 GitLab 项目设置要求 main 仅 Maintainer 可 push/merge且禁止 force push，`v*` Tag 仅 Maintainer 可创建，Merge Request 必须通过 Pipeline。Container Registry 每日执行清理，保留最近 10 个镜像 Tag，并且只清理 90 天以上的旧 Tag。
 

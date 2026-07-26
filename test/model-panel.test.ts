@@ -58,6 +58,23 @@ describe("model panel responsive layout", () => {
     expect(second.rows).toHaveLength(first.rows.length);
   });
 
+  it("keeps wrapped Effort and price visible in the 64-column, 24-row panel budget", () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    panel.setModels(
+      MODELS.filter((model) => model.id === "gpt-5.4"),
+      [],
+      "gpt-5.4",
+    );
+    panel.open("models");
+    const rendered = render(panel, 64, 9).join("\n");
+
+    expect(rendered).toContain("Xhigh /");
+    expect(rendered).toContain("Max");
+    expect(rendered).toContain("输入 ¥");
+    expect(rendered).toContain("输出 ¥");
+    expect(rendered).not.toMatch(/\d+-\d+ \/ \d+/);
+  });
+
   it.each([80, 100])("shows model-group roles only in the right pane at width %i", (width) => {
     const panel = new PanelController(DEFAULT_SETTINGS);
     panel.setModels(MODELS, MODEL_GROUPS, "kimi-k3");

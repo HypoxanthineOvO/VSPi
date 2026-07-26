@@ -284,7 +284,7 @@ export class PanelController {
   private planItems: PlanItem[] = [];
   private planSnapshot: StoredPlan | undefined;
   private workflowSnapshot: WorkflowSnapshot | undefined;
-  private planCollapsed = new Set<string>();
+  private planPanelCollapsed = false;
   private planActionMenu = false;
   private planActionIndex = 0;
   private planNextActionEditing = false;
@@ -448,7 +448,7 @@ export class PanelController {
   setPlanItems(items: PlanItem[]): void {
     this.planSnapshot = undefined;
     this.planItems = structuredClone(items);
-    this.planCollapsed.clear();
+    this.planPanelCollapsed = false;
     this.state.selected = 0;
     this.state.scroll = 0;
   }
@@ -457,7 +457,7 @@ export class PanelController {
     this.workflowSnapshot = undefined;
     this.planSnapshot = snapshot ? structuredClone(snapshot) : undefined;
     this.planItems = snapshot ? flattenPlanItems(snapshot) : [];
-    this.planCollapsed.clear();
+    this.planPanelCollapsed = false;
     this.planActionMenu = false;
     this.planNextActionEditing = false;
     this.state.selected = 0;
@@ -481,7 +481,7 @@ export class PanelController {
             depth: 0,
           }))
         : [];
-    this.planCollapsed.clear();
+    this.planPanelCollapsed = false;
     this.planActionMenu = false;
     this.planNextActionEditing = false;
     this.state.selected = 0;
@@ -598,6 +598,10 @@ export class PanelController {
     else if (this.kind === "tools") [title, body] = ["Tools", this.renderTools(bodyWidth, theme)];
     else if (this.kind === "policy") [title, body] = ["Policy", this.renderPolicy(bodyWidth, theme)];
     else [title, body] = ["Plan", this.renderPlan(bodyWidth, theme, planFocused)];
+
+    if (this.kind === "plan" && this.planPanelCollapsed && this.planItems.length > 0) {
+      return [padLine(`${theme.focus("Plan")} · ${theme.blue(theme.bold(this.planDisplayTitle()))}`, width)];
+    }
 
     let footer: string | undefined;
     if (body.length > bodyRows) {
@@ -1021,17 +1025,18 @@ export class PanelController {
       }
       return;
     }
+    if (panelKey(data, Key.left)) {
+      this.planPanelCollapsed = true;
+      return;
+    }
+    if (panelKey(data, Key.right)) {
+      this.planPanelCollapsed = false;
+      return;
+    }
+    if (this.planPanelCollapsed) return;
     if (handler === "moveSelection" && this.move(data, visible.length)) return;
     const item = visible[this.state.selected];
     if (!item) return;
-    if (matchesKey(data, Key.left)) {
-      this.planCollapsed.add(item.id);
-      return;
-    }
-    if (matchesKey(data, Key.right)) {
-      this.planCollapsed.delete(item.id);
-      return;
-    }
     if (panelKey(data, Key.enter) && this.planSnapshot) {
       this.planActionMenu = true;
       this.planActionIndex = 0;
@@ -1270,12 +1275,14 @@ export class PanelController {
   }
 
   private renderWideModels(width: number, theme: VspiTheme): string[] {
-    const rowCount = width >= 90 ? 6 : 5;
+    const rowCount = 6;
     const leftWidth = Math.max(18, Math.floor((width - 1) * 0.4));
     const rightWidth = width - leftWidth - 1;
     const left = this.modelListRows(rowCount, leftWidth, theme);
     const right =
-      this.modelTab === 0 ? this.modelDetailRows(rowCount, theme) : this.modelGroupDetailRows(rowCount, theme);
+      this.modelTab === 0
+        ? this.modelDetailRows(rowCount, rightWidth, theme)
+        : this.modelGroupDetailRows(rowCount, theme);
     return Array.from({ length: rowCount }, (_, index) => {
       const leftRow = left[index] ?? padLine("", leftWidth);
       const rightRow = padLine(right[index] ?? "", rightWidth);
@@ -1284,10 +1291,10 @@ export class PanelController {
   }
 
   private renderNarrowModels(width: number, theme: VspiTheme): string[] {
-    const rowCount = 5;
+    const rowCount = 6;
     if (this.modelNarrowDetail) {
       const details =
-        this.modelTab === 0 ? this.modelDetailRows(rowCount, theme) : this.modelGroupDetailRows(rowCount, theme);
+        this.modelTab === 0 ? this.modelDetailRows(rowCount, width, theme) : this.modelGroupDetailRows(rowCount, theme);
       return Array.from({ length: rowCount }, (_, index) => padLine(details[index] ?? "", width));
     }
     return this.modelListRows(rowCount, width, theme);
@@ -1360,27 +1367,22 @@ export class PanelController {
     return entries;
   }
 
-  private modelDetailRows(rowCount: number, theme: VspiTheme): string[] {
+  private modelDetailRows(rowCount: number, width: number, theme: VspiTheme): string[] {
     const model = this.filteredModels()[this.state.selected];
     if (!model) return [theme.muted("没有匹配的模型")];
     const input = model.price.inputUsdPerMillion * FX.fxRate;
     const output = model.price.outputUsdPerMillion * FX.fxRate;
     const provider = `${theme.muted("Provider  ")}${model.brand}`;
     const modelId = `${theme.muted("Model ID  ")}${model.id}`;
-    const capability = `${theme.muted("能力  ")}${model.vision ? "文本 · 图片" : "文本"}`;
+    const capability = `${theme.muted("能力      ")}${model.vision ? "文本 · 图片 · Tools" : "文本 · Tools"}`;
     const effort = `${theme.muted("Effort  ")}${model.efforts.map(effortLabel).join(" / ")}`;
     const release = model.releasedAt ? `${theme.muted("发布  ")}${model.releasedAt}` : "";
     const price = `${theme.warning("输入 ¥")}${input.toFixed(2)} / 百万  ${theme.warning("输出 ¥")}${output.toFixed(2)} / 百万`;
-    if (rowCount >= 6) {
-      return [theme.bold(theme.focus(model.label)), provider, modelId, `${capability}  ${effort}`, release, price];
-    }
-    return [
-      theme.bold(theme.focus(model.label)),
-      `${provider}  ${modelId}`,
-      `${capability}  ${effort}`,
-      release,
-      price,
-    ];
+    const combinedIdentity = `${provider}  ${modelId}`;
+    const capabilityRelease = [capability, release].filter(Boolean).join("  ");
+    const effortRows = wrapTextWithAnsi(effort, width);
+    const details = [theme.bold(theme.focus(model.label)), combinedIdentity, capabilityRelease, ...effortRows, price];
+    return details.length <= rowCount ? details : [...details.slice(0, rowCount - 1), price];
   }
 
   private modelGroupDetailRows(rowCount: number, theme: VspiTheme): string[] {
@@ -1622,44 +1624,52 @@ export class PanelController {
     const target = request.action.target ?? request.action.operation ?? request.category;
     const badgeWidth = Math.min(8, contentWidth);
     const policyBadge = theme.policyBadge(request.policy, centerText(request.policy, badgeWidth));
-    const lines = [
-      inset(alignRight("", policyBadge, contentWidth)),
-      inset(theme.bold(request.category)),
-      ...wrapTextWithAnsi(target, contentWidth).map((line) => theme.muted(inset(line))),
-      padLine("", width),
-    ];
+    const title = approvalCategoryLabel(request.category);
+    const commandWidth = Math.max(1, contentWidth - 2);
+    const commandRows = wrapTextWithAnsi(target, commandWidth);
+    const lines = [inset(`${policyBadge}  ${theme.bold(title)}`)];
+    for (const command of commandRows) {
+      lines.push(inset(theme.codeBlock(centerText(theme.warning(theme.bold(command)), contentWidth))));
+    }
+    lines.push(padLine("", width));
     if (this.approvalReasonEditing) {
       lines.push(theme.error(inset("拒绝并说明")));
       lines.push(inset(theme.selected(padLine(` ${this.approvalReason}${this._cursor(theme)} `, contentWidth))));
       return lines;
     }
     const choices = [
-      "允许本次",
-      `本会话允许 ${request.category}`,
-      ...(request.requiredPolicy ? [`切换到 ${request.requiredPolicy} 并执行`] : []),
-      "拒绝",
-      "拒绝并说明...",
+      { label: "允许本次", description: "仅执行这一次命令" },
+      { label: "本会话允许同类命令", description: "以后不再重复询问" },
+      ...(request.requiredPolicy
+        ? [{ label: `提升到 ${request.requiredPolicy} 并执行`, description: "调整到可执行该操作的等级" }]
+        : []),
+      { label: "拒绝", description: "不执行命令" },
+      { label: "拒绝并说明...", description: "同时向 Agent 提供原因" },
     ];
     const optionIndent = contentWidth >= 8 ? 2 : 0;
     const optionWidth = Math.max(1, contentWidth - optionIndent);
     choices.forEach((choice, index) => {
+      const numberedLabel = `${index + 1}. ${choice.label}`;
+      const labelWidth = Math.min(30, Math.max(18, Math.floor(optionWidth * 0.45)));
+      const row =
+        optionWidth >= 52 ? `${padLine(numberedLabel, labelWidth)}${theme.muted(choice.description)}` : numberedLabel;
       lines.push(
-        inset(`${" ".repeat(optionIndent)}${selectedLine(choice, index === this.state.selected, optionWidth, theme)}`),
+        inset(`${" ".repeat(optionIndent)}${selectedLine(row, index === this.state.selected, optionWidth, theme)}`),
       );
+      if (optionWidth < 52) lines.push(theme.muted(inset(`${" ".repeat(optionIndent + 4)}${choice.description}`)));
     });
     return lines;
   }
 
   private visiblePlanItems(): PlanItem[] {
-    const output: PlanItem[] = [];
-    let hiddenDepth: number | undefined;
-    for (const item of this.planItems) {
-      if (hiddenDepth !== undefined && item.depth > hiddenDepth) continue;
-      hiddenDepth = undefined;
-      output.push(item);
-      if (item.depth === 0 && this.planCollapsed.has(item.id)) hiddenDepth = item.depth;
+    return this.planItems;
+  }
+
+  private planDisplayTitle(): string {
+    if (this.workflowSnapshot?.status === "ready" && this.workflowSnapshot.delivery) {
+      return humanizePlanId(this.workflowSnapshot.delivery.id);
     }
-    return output;
+    return this.planSnapshot?.title ?? "Plan";
   }
 
   private renderPlan(width: number, theme: VspiTheme, focused: boolean): string[] {
@@ -1671,24 +1681,20 @@ export class PanelController {
     const lines = snapshot
       ? [
           alignRight(
-            theme.bold(snapshot.title),
+            theme.blue(theme.bold(snapshot.title)),
             theme.muted(`r${snapshot.revision} · ${complete}/${this.planItems.length}`),
             width,
           ),
-          padLine(`目标  ${snapshot.goal}`, width),
-          ...(snapshot.background ? [padLine(`背景  ${snapshot.background}`, width)] : []),
-          ...snapshot.challenges.map((challenge) => padLine(`难点  ${challenge}`, width)),
+          padLine(`${theme.warning(theme.bold("目标"))}  ${snapshot.goal}`, width),
         ]
       : [alignRight("", theme.muted(`${complete} / ${this.planItems.length}`), width)];
     items.forEach((item, index) => {
       const symbol =
         item.status === "done" ? theme.success("✓") : item.status === "current" ? theme.focus("●") : theme.muted("○");
-      const sourceIndex = this.planItems.findIndex((candidate) => candidate.id === item.id);
-      const hasChildren = (this.planItems[sourceIndex + 1]?.depth ?? 0) > item.depth;
-      const fold = hasChildren ? (this.planCollapsed.has(item.id) ? "▸ " : "▾ ") : "  ";
+      const label = item.status === "current" ? theme.focus(theme.bold(item.label)) : item.label;
       lines.push(
         selectedLine(
-          `${"  ".repeat(item.depth)}${fold}${symbol} ${item.label}`,
+          `${planTreePrefix(items, index, theme)}${symbol} ${label}`,
           focused && index === this.state.selected,
           width,
           theme,
@@ -1696,8 +1702,6 @@ export class PanelController {
       );
     });
     if (snapshot) {
-      for (const blocker of snapshot.blockers) lines.push(theme.warning(padLine(`阻塞  ${blocker}`, width)));
-      if (snapshot.nextAction) lines.push(theme.blue(padLine(`下一步  ${snapshot.nextAction}`, width)));
       if (this.planActionMenu) {
         lines.push(selectedLine("状态", this.planActionIndex === 0, width, theme));
         lines.push(selectedLine("焦点", this.planActionIndex === 1, width, theme));
@@ -1832,15 +1836,20 @@ export class PanelController {
     }
     const question = this.questions[this.questionIndex];
     if (!question) return [];
+    const gutter = width >= 6 ? 1 : 0;
+    const contentWidth = Math.max(1, width - gutter);
+    const inset = (line: string) => padLine(`${" ".repeat(gutter)}${padLine(line, contentWidth)}`, width);
     const lines = [
-      alignRight(theme.muted(`Question ${this.questionIndex + 1} / ${this.questions.length}`), status, width),
-      theme.bold(padLine(question.title, width)),
-      ...wrapTextWithAnsi(question.prompt, width).map((line) => padLine(line, width)),
-      theme.border(padLine((theme.capabilities.unicode ? "─" : "-").repeat(width), width)),
+      inset(
+        alignRight(theme.muted(`Question ${this.questionIndex + 1} / ${this.questions.length}`), status, contentWidth),
+      ),
+      inset(theme.bold(question.title)),
+      ...wrapTextWithAnsi(question.prompt, contentWidth).map(inset),
+      inset(theme.border((theme.capabilities.unicode ? "─" : "-").repeat(contentWidth))),
     ];
     if (this.questionDirectAnswer || question.kind === "freeText") {
-      lines.push(theme.muted(padLine("你的回答", width)));
-      lines.push(theme.selected(padLine(` ${this.questionInput}${this._cursor(theme)} `, width)));
+      lines.push(theme.muted(inset("你的回答")));
+      lines.push(inset(theme.selected(padLine(` ${this.questionInput}${this._cursor(theme)} `, contentWidth))));
       return lines;
     }
     const options = [...(question.options ?? []), { id: "other", label: "其他" }];
@@ -1849,13 +1858,29 @@ export class PanelController {
       const checked = question.kind === "multiChoice" && answer.includes(option.id) ? theme.success("✓ ") : "";
       const rank = question.kind === "ranking" && option.id !== "other" ? `${index + 1}. ` : "";
       const selected = index === this.state.selected;
-      lines.push(selectedLine(`${checked}${rank}${option.label}`, selected, width, theme));
+      const label = `${checked}${rank}${option.label}`;
       if ("description" in option && option.description) {
-        const description = padLine(`    ${option.description}`, width);
-        lines.push(selected ? theme.selected(description) : theme.muted(description));
+        if (contentWidth >= 56) {
+          const labelWidth = Math.min(24, Math.max(16, Math.floor(contentWidth * 0.32)));
+          lines.push(
+            inset(
+              selectedLine(
+                `${padLine(label, labelWidth)}${theme.muted(option.description)}`,
+                selected,
+                contentWidth,
+                theme,
+              ),
+            ),
+          );
+        } else {
+          lines.push(inset(selectedLine(label, selected, contentWidth, theme)));
+          lines.push(theme.muted(inset(`    ${option.description}`)));
+        }
+      } else {
+        lines.push(inset(selectedLine(label, selected, contentWidth, theme)));
       }
     });
-    lines.push(theme.muted(padLine("  直接回答    跳过", width)));
+    lines.push(theme.muted(inset("  直接回答    跳过")));
     return lines;
   }
 
@@ -1874,6 +1899,46 @@ export function humanizePlanId(id: string): string {
       return `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`;
     })
     .join(" ");
+}
+
+function approvalCategoryLabel(category: ApprovalRequest["category"]): string {
+  const labels: Record<ApprovalRequest["category"], string> = {
+    "file-read": "读取文件",
+    "file-write": "修改文件",
+    "bash-read": "执行只读命令",
+    process: "执行进程",
+    network: "访问网络",
+    ssh: "SSH 连接",
+    "git-write": "修改 Git",
+    destructive: "删除或覆盖文件",
+    container: "容器操作",
+    system: "系统操作",
+    shared: "共享操作",
+  };
+  return labels[category];
+}
+
+function hasLaterPlanSibling(items: PlanItem[], index: number): boolean {
+  const item = items[index];
+  if (!item) return false;
+  for (let cursor = index + 1; cursor < items.length; cursor += 1) {
+    const candidate = items[cursor];
+    if (!candidate || candidate.depth < item.depth) return false;
+    if (candidate.depth === item.depth) return true;
+  }
+  return false;
+}
+
+function planTreePrefix(items: PlanItem[], index: number, theme: VspiTheme): string {
+  const item = items[index];
+  if (!item || item.depth === 0) return "";
+  let prefix = "";
+  for (let depth = 0; depth < item.depth - 1; depth += 1) {
+    let ancestorIndex = index - 1;
+    while (ancestorIndex >= 0 && (items[ancestorIndex]?.depth ?? -1) > depth) ancestorIndex -= 1;
+    prefix += ancestorIndex >= 0 && hasLaterPlanSibling(items, ancestorIndex) ? "│  " : "   ";
+  }
+  return theme.muted(`${prefix}${hasLaterPlanSibling(items, index) ? "├─ " : "╰─ "}`);
 }
 
 function modelKey(model: { provider?: string; id: string } | undefined): string {

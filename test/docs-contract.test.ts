@@ -14,6 +14,7 @@ const PRODUCTION_COMMANDS = [
   "/new",
   "/sessions",
   "/compact",
+  "/update",
   "/model",
   "/providers",
   "/plan",
@@ -155,12 +156,10 @@ function expectSharedFacts(content: string, artifact: string): void {
   for (const command of REMOVED_COMMANDS) {
     expect.soft(commandBlock, `${artifact}: removed command ${command}`).not.toContain(command);
   }
+  expect.soft(content, `${artifact}: Update command is documented`).toContain("/update");
   expect
-    .soft(content, `${artifact}: removed Update command is absent from the whole artifact`)
-    .not.toContain("/update");
-  expect
-    .soft(content, `${artifact}: self-update is explicitly outside the v0.2 production surface`)
-    .toMatch(/自更新[^。\n]{0,120}(?:不属于|不在|不提供|后续)[^。\n]{0,80}v0\.2/i);
+    .soft(content, `${artifact}: self-update documents release and checksum verification`)
+    .toMatch(/自更新[^。\n]{0,180}(?:GitLab|Release)[^。\n]{0,180}SHA-256/i);
 }
 
 function hasNearby(content: string, left: string[], right: string[], distance = 240): boolean {

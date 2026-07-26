@@ -28,6 +28,7 @@ describe("M9 npm package artifact", () => {
   it("dry-runs and creates a minimal tarball with the declared bin and release docs", async () => {
     const sourcePackage = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8")) as {
       scripts?: Record<string, string>;
+      version?: string;
     };
     expect(sourcePackage.scripts?.prepare).toBeUndefined();
     expect(sourcePackage.scripts?.prepack).toBe("npm run build");
@@ -37,7 +38,7 @@ describe("M9 npm package artifact", () => {
     const dryPaths = dry.files.map((entry) => entry.path);
     expect(dryPaths).toEqual(expect.arrayContaining(["package.json", "README.md", "Docs/tui-v1.md", "dist/index.js"]));
     expect(dryPaths.some((path) => /^(?:src|test|\.pipeline|tmp)\//.test(path))).toBe(false);
-    expect(dryPaths.some((path) => /^dist\/update\//.test(path))).toBe(false);
+    expect(dryPaths).toContain("dist/update/self-update.js");
 
     const output = await mkdtemp(join(tmpdir(), "vspi-m9-pack-"));
     const packed = parsePack(
@@ -48,7 +49,7 @@ describe("M9 npm package artifact", () => {
     expect(listing).toContain("package/dist/index.js");
     expect(listing).toContain("package/package.json");
     expect(listing.some((path) => path.includes("/test/") || path.includes("/.pipeline/"))).toBe(false);
-    expect(listing.some((path) => path.includes("/dist/update/"))).toBe(false);
+    expect(listing).toContain("package/dist/update/self-update.js");
   }, 150_000);
 
   it("installs the real tarball in an empty project and runs its bin smoke explicitly in Fixture mode", async () => {
@@ -91,7 +92,8 @@ describe("M9 npm package artifact", () => {
       version?: string;
     };
     expect(installedPackage.bin).toEqual({ vspi: "dist/index.js" });
-    expect(installedPackage.version).toBe("0.2.1");
+    const sourcePackage = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8")) as { version: string };
+    expect(installedPackage.version).toBe(sourcePackage.version);
     expect(installedPackage.private).not.toBe(true);
     expect(installedPackage.scripts?.prepare).toBeUndefined();
   }, 150_000);
