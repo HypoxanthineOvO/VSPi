@@ -7,6 +7,7 @@ describe("command catalog", () => {
     expect(root.map((command) => command.label)).toEqual([
       "/new",
       "/sessions",
+      "/import",
       "/compact",
       "/update",
       "/model",

@@ -36,6 +36,13 @@ import { type ProviderProtocol, runProtocolProbe } from "../providers/protocol-p
 import { normalizeProjectProvider, registerBuiltinProviders } from "../providers/runtime-registration.js";
 import { createQuestionToolDefinition } from "../questions/tool.js";
 import {
+  ExternalSessionCatalog,
+  type ExternalSessionPreview,
+  type ExternalSessionSource,
+  type ExternalSessionSummary,
+  type ExternalTranscriptItem,
+} from "../sessions/external-history.js";
+import {
   type AcquiredSessionLease,
   acquireSessionLease,
   readSessionLease,
@@ -77,6 +84,7 @@ export interface PiRuntimeBackendOptions {
   executionPolicy?: ExecutionPolicyService;
   sessionFactory?: (manager: SessionManager) => Promise<SessionFactoryResult>;
   sessionLeases?: boolean;
+  externalSessions?: Pick<ExternalSessionCatalog, "list" | "preview">;
   modelRuntime?: ModelRuntimeView;
   planBackend?: LocalPlanBackend;
   promptProfiles?: {
@@ -213,6 +221,7 @@ export class PiRuntimeBackend implements ChatBackend {
   private handoffFinalizing = false;
   private leaseLifecycleReady = false;
   private readonly leaseAbortController = new AbortController();
+  private readonly externalSessions: Pick<ExternalSessionCatalog, "list" | "preview">;
 
   private readonly options: PiRuntimeBackendOptions & { executionPolicy: ExecutionPolicyService };
 
@@ -223,6 +232,7 @@ export class PiRuntimeBackend implements ChatBackend {
         options.executionPolicy ??
         createExecutionPolicyService({ workspace: options.cwd, recovery: options.recovery ?? false }),
     };
+    this.externalSessions = options.externalSessions ?? new ExternalSessionCatalog();
   }
 
   private get session(): AgentSession | undefined {
@@ -680,6 +690,66 @@ export class PiRuntimeBackend implements ChatBackend {
     if (sourcePlanId && this.getPlanBinding()?.planId !== sourcePlanId) await this.appendPlanBinding(sourcePlanId);
     await this.acceptReplacement("fork");
     this.events?.onNotice(`已从「${selected.name || selected.firstMessage || id}」创建分支`, "success");
+  }
+
+  async listExternalSessions(
+    options: { source?: ExternalSessionSource; query?: string; limit?: number } = {},
+  ): Promise<ExternalSessionSummary[]> {
+    return this.externalSessions.list(options);
+  }
+
+  async previewExternalSession(id: string): Promise<ExternalSessionPreview> {
+    return this.externalSessions.preview(id);
+  }
+
+  async importExternalSession(id: string, expectedFingerprint: string): Promise<void> {
+    this.assertHandoffWritable();
+    this.assertCompactionStable("import an external session");
+    const preview = await this.externalSessions.preview(id);
+    if (preview.items.length === 0) throw new Error("外部会话没有可导入的可见内容");
+    if (preview.fingerprint !== expectedFingerprint) {
+      throw new Error("源会话在确认后已经更新，请重新预览再导入");
+    }
+    const manager = SessionManager.create(this.options.cwd, this.options.sessionDir);
+    manager.appendCustomEntry("vspi.external-session-import", {
+      source: preview.source,
+      sourceId: preview.sourceId,
+      sourceCwd: preview.cwd,
+      fingerprint: preview.fingerprint,
+      snapshotBytes: preview.snapshotBytes,
+      snapshotModifiedAt: preview.snapshotModifiedAt,
+      importedAt: new Date().toISOString(),
+      policy: "visible-full-redacted",
+    });
+    manager.appendSessionInfo(preview.title);
+    for (const item of preview.items) appendImportedItem(manager, preview.source, item);
+    const path = manager.getSessionFile();
+    if (!path) throw new Error("无法创建持久化的 VSPi Session");
+
+    const runtime = this.requireRuntime();
+    const acquired = await this.acquireLease(path);
+    this.events?.onSessionInvalidating?.();
+    this.unsubscribeCurrent();
+    let switched: { cancelled: boolean };
+    try {
+      switched = await this.runReplacement(() => runtime.switchSession(path));
+    } catch (error) {
+      await acquired?.lease.release();
+      throw error;
+    }
+    if (switched.cancelled) {
+      await acquired?.lease.release();
+      return this.rebindAfterCancelledReplacement();
+    }
+    await this.adoptLease(acquired?.lease);
+    await this.acceptReplacement("import");
+    this.events?.onMessage({
+      id: `session-import:${this.requireSession().sessionId}`,
+      role: "assistant",
+      kind: "session",
+      text: `已从 ${preview.source === "codex" ? "Codex" : "Claude Code"} 复制导入；原会话保持不变。`,
+    });
+    this.events?.onNotice(`已导入「${preview.title}」`, "success");
   }
 
   async dispose(): Promise<void> {
@@ -1454,6 +1524,36 @@ function sessionWasInterrupted(messages: readonly unknown[]): boolean {
   if (!last || typeof last !== "object" || Array.isArray(last)) return false;
   const message = last as { role?: unknown; stopReason?: unknown };
   return message.role === "user" || (message.role === "assistant" && message.stopReason === "aborted");
+}
+
+function appendImportedItem(
+  manager: SessionManager,
+  source: ExternalSessionSource,
+  item: ExternalTranscriptItem,
+): void {
+  const timestamp = item.timestamp ?? Date.now();
+  if (item.role === "user") {
+    manager.appendMessage({ role: "user", content: item.text, timestamp });
+    return;
+  }
+  const text = item.kind === "tool" ? `[Imported Tool]\n${item.text}` : item.text;
+  manager.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text }],
+    api: source === "codex" ? "openai-responses" : "anthropic-messages",
+    provider: source === "codex" ? "codex-import" : "claude-code-import",
+    model: "external-history",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp,
+  });
 }
 
 function stableForkLeafId(manager: SessionManager): string | undefined {

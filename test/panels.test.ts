@@ -47,6 +47,40 @@ function text(panel: PanelController, width = 80, rows = 14): string {
 }
 
 describe("panel controller", () => {
+  it("renders and filters the external history picker without overflowing", () => {
+    const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
+    panel.setExternalSessions([
+      {
+        id: "codex:one",
+        source: "codex",
+        sourceId: "one",
+        title: "发布 VSPi 0.2.5",
+        cwd: "/home/heyx/VSPi",
+        updatedAt: "2026-07-26T12:00:00.000Z",
+      },
+      {
+        id: "claude:two",
+        source: "claude",
+        sourceId: "two",
+        title: "Question 交互修改",
+        cwd: "/home/heyx/VSPi",
+        updatedAt: "2026-07-25T12:00:00.000Z",
+      },
+    ]);
+    panel.open("externalImport");
+    expect(text(panel)).toContain("Codex  1");
+    expect(text(panel)).toContain("发布 VSPi 0.2.5");
+    expect(text(panel)).toContain("原始历史始终保持不变");
+
+    panel.handleInput("\t");
+    expect(text(panel)).toContain("Question 交互修改");
+    panel.handleInput("Q");
+    expect(panel.handleInput(ENTER)).toMatchObject({
+      type: "externalImport",
+      session: { id: "claude:two" },
+    });
+  });
+
   it("marks a Session owned by another TUI without exposing lease internals", () => {
     const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
     panel.setSessions([

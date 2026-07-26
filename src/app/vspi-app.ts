@@ -49,6 +49,7 @@ import type {
   PromptProfileSnapshot,
   ResolvedPromptProfile,
 } from "../prompts/types.js";
+import type { ExternalSessionSource } from "../sessions/external-history.js";
 import { renderActivityRail, renderQueuedMessage } from "../ui/activity.js";
 import { padLine } from "../ui/ansi.js";
 import { AuthDialog } from "../ui/auth-dialog.js";
@@ -996,6 +997,17 @@ export class VspiApp implements Component, Focusable {
       } catch (error) {
         this.showNotice(`会话读取失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
       }
+    } else if (action.handler === "externalImport") {
+      try {
+        if (!this.backend.listExternalSessions) throw new Error("当前后端不支持外部会话导入");
+        const source = parseExternalImportSource(raw);
+        this.showNotice("正在扫描 Codex 与 Claude Code 历史…", "info");
+        this.requestRender();
+        this.panels.setExternalSessions(await this.backend.listExternalSessions({ limit: 5_000 }), source);
+        this.panels.open("externalImport");
+      } catch (error) {
+        this.showNotice(`外部会话读取失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+      }
     } else if (action.handler === "settings" || action.handler === "thinkingSettings") {
       try {
         const layers = await loadSettingsLayers(this.options.cwd, undefined, {
@@ -1194,6 +1206,47 @@ export class VspiApp implements Component, Focusable {
       } catch (error) {
         this.sessionTransition = false;
         this.showNotice(`会话分支失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+      }
+    } else if (event.type === "externalImport") {
+      if (this.activityActive()) {
+        this.showNotice("生成中，请等待完成后再导入会话", "warning");
+        return;
+      }
+      try {
+        if (!this.backend.previewExternalSession || !this.backend.importExternalSession) {
+          throw new Error("当前后端不支持外部会话导入");
+        }
+        this.showNotice("正在读取外部会话的完整可见记录…", "info");
+        const preview = await this.backend.previewExternalSession(event.session.id);
+        const contextWarning =
+          this.usage.contextWindow > 0 && preview.estimatedTokens > this.usage.contextWindow * 0.8
+            ? ` 注意：导入量已达到当前 ${formatTokenEstimate(this.usage.contextWindow)} 上下文的 80% 以上，首次继续时可能触发压缩。`
+            : "";
+        const [answered] = await this.requestQuestions([
+          {
+            id: `external-import:${preview.id}`,
+            title: `导入 ${preview.source === "codex" ? "Codex" : "Claude Code"} 会话`,
+            prompt: `${preview.title}\n${preview.messageCount} 条对话 · ${preview.toolCount} 条工具记录 · 约 ${formatTokenEstimate(preview.estimatedTokens)} tokens。工具输出会脱敏后复制，原会话保持不变。${contextWarning}`,
+            kind: "singleChoice",
+            options: [
+              { id: "import", label: "复制为新的 VSPi Session", description: "保留完整可见记录并切换到新 Session" },
+              { id: "cancel", label: "取消", description: "不写入任何内容" },
+            ],
+          },
+        ]);
+        if (answered?.answer !== "import") {
+          this.panels.open("externalImport");
+          return;
+        }
+        const epoch = this.sessionEpoch;
+        this.sessionTransition = true;
+        await this.backend.importExternalSession(event.session.id, preview.fingerprint);
+        if (this.sessionEpoch === epoch) this.sessionTransition = false;
+        this.panels.close();
+      } catch (error) {
+        this.sessionTransition = false;
+        if (error instanceof Error && error.name === "AbortError") return;
+        this.showNotice(`会话导入失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
       }
     } else if (event.type === "settings") {
       try {
@@ -2278,6 +2331,16 @@ function findPromptRuleScope(
   if (snapshot.project?.rules.some((rule) => rule.id === ruleId)) return "project";
   if (snapshot.global.rules.some((rule) => rule.id === ruleId)) return "global";
   return undefined;
+}
+
+function parseExternalImportSource(raw: string): ExternalSessionSource {
+  const value = raw.trim().split(/\s+/u)[1]?.toLocaleLowerCase();
+  return value === "claude" || value === "claude-code" ? "claude" : "codex";
+}
+
+function formatTokenEstimate(tokens: number): string {
+  if (tokens < 1_000) return String(tokens);
+  return `${(tokens / 1_000).toFixed(tokens < 10_000 ? 1 : 0)}K`;
 }
 
 async function waitForShutdownCancellation(cancellation: Promise<unknown>, timeoutMs = 5_000): Promise<void> {

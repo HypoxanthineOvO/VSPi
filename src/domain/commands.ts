@@ -10,6 +10,7 @@ export interface CommandDefinition {
 export type ActionHandler =
   | "newSession"
   | "sessions"
+  | "externalImport"
   | "compact"
   | "update"
   | "plan"
@@ -61,6 +62,15 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
     description: "会话与分支",
     group: "VSPi",
     handler: "sessions",
+    availability: "enabled",
+  },
+  {
+    id: "import",
+    aliases: [],
+    label: "/import",
+    description: "导入 Codex 或 Claude Code 历史会话",
+    group: "VSPi",
+    handler: "externalImport",
     availability: "enabled",
   },
   {
