@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { open, realpath, rename, rm } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   type AgentSession,
   type AgentSessionEvent,
@@ -9,6 +9,7 @@ import {
   createAgentSessionRuntime,
   createAgentSessionServices,
   getAgentDir,
+  type ModelRuntime,
   SessionManager,
   SettingsManager,
   type ToolDefinition,
@@ -29,10 +30,17 @@ import { createPromptProfileExtension } from "../prompts/pi-prompt-profile-exten
 import type { ModelIdentity, ResolvedPromptProfile } from "../prompts/types.js";
 import { BUILTIN_PROVIDERS } from "../providers/builtins.js";
 import { createProviderConfigService } from "../providers/config-service.js";
+import { loginProviderWithoutModelNetwork, oauthAvailableInCurrentTerminal } from "../providers/login.js";
 import { isVisibleRuntimeModel } from "../providers/model-visibility.js";
 import { type ProviderProtocol, runProtocolProbe } from "../providers/protocol-probe.js";
 import { normalizeProjectProvider, registerBuiltinProviders } from "../providers/runtime-registration.js";
 import { createQuestionToolDefinition } from "../questions/tool.js";
+import {
+  type AcquiredSessionLease,
+  acquireSessionLease,
+  readSessionLease,
+  type SessionLease,
+} from "../sessions/lease.js";
 import type {
   CancelResult,
   ChatBackend,
@@ -61,11 +69,14 @@ interface RuntimeOwner {
 
 export interface PiRuntimeBackendOptions {
   cwd: string;
+  agentDir?: string;
+  sessionDir?: string;
   continueRecent?: boolean;
   trustedProject?: boolean;
   recovery?: boolean;
   executionPolicy?: ExecutionPolicyService;
   sessionFactory?: (manager: SessionManager) => Promise<SessionFactoryResult>;
+  sessionLeases?: boolean;
   modelRuntime?: ModelRuntimeView;
   planBackend?: LocalPlanBackend;
   promptProfiles?: {
@@ -106,7 +117,8 @@ interface ModelRuntimeView {
   getProviderAuthStatus?(providerId: string): { configured: boolean; source?: string; label?: string };
   getAuth?(model: RuntimeModel): Promise<{ auth: { apiKey?: string; baseUrl?: string }; source?: string } | undefined>;
   listCredentials?(): Promise<readonly { providerId: string; type: "api_key" | "oauth" }[]>;
-  login?(providerId: string, type: "api_key" | "oauth", interaction: ProviderAuthInteraction): Promise<unknown>;
+  login?: ModelRuntime["login"];
+  refresh?: ModelRuntime["refresh"];
   logout?(providerId: string): Promise<void>;
 }
 
@@ -196,6 +208,11 @@ export class PiRuntimeBackend implements ChatBackend {
   private compactionMutationBlocked = false;
   private agentRunning = false;
   private queueState = { steering: 0, followUp: 0 };
+  private sessionLease: SessionLease | undefined;
+  private handoffRequested = false;
+  private handoffFinalizing = false;
+  private leaseLifecycleReady = false;
+  private readonly leaseAbortController = new AbortController();
 
   private readonly options: PiRuntimeBackendOptions & { executionPolicy: ExecutionPolicyService };
 
@@ -231,20 +248,28 @@ export class PiRuntimeBackend implements ChatBackend {
 
   async start(events: ChatBackendEvents): Promise<void> {
     this.events = events;
-    const manager = this.options.continueRecent
-      ? SessionManager.continueRecent(this.options.cwd)
-      : SessionManager.create(this.options.cwd);
-    this.runtime = await this.createRuntime(manager);
-    this.trackRuntimeInvalidation(this.runtime);
+    let manager = this.options.continueRecent
+      ? SessionManager.continueRecent(this.options.cwd, this.options.sessionDir)
+      : SessionManager.create(this.options.cwd, this.options.sessionDir);
+    const acquired = await this.acquireLease(manager.getSessionFile());
+    if (acquired?.waited && manager.getSessionFile()) manager = SessionManager.open(manager.getSessionFile() ?? "");
+    this.sessionLease = acquired?.lease;
     try {
+      this.runtime = await this.createRuntime(manager);
+      this.trackRuntimeInvalidation(this.runtime);
       this.bindCurrentSession(this.options.continueRecent ? "resume" : "startup");
+      this.leaseLifecycleReady = true;
+      this.maybeFinalizeHandoff();
     } catch (error) {
       await this.failRuntime(false);
+      await this.sessionLease?.release();
+      this.sessionLease = undefined;
       throw error;
     }
   }
 
   async send(text: string, options: SendOptions): Promise<SendResult> {
+    this.assertHandoffWritable();
     const session = this.requireSession();
     if (options.attachments.length > 0 && !this.supportsVision) throw new Error(`${this.modelLabel} 不支持图片输入`);
     session.setThinkingLevel(options.effort);
@@ -283,6 +308,7 @@ export class PiRuntimeBackend implements ChatBackend {
   }
 
   async cancel(): Promise<CancelResult> {
+    this.assertHandoffWritable();
     const session = this.session;
     const queued = session?.clearQueue?.() ?? { steering: [], followUp: [] };
     const queuedMessages = [...queued.steering, ...queued.followUp].map(stripAttachmentManifest);
@@ -321,6 +347,7 @@ export class PiRuntimeBackend implements ChatBackend {
   }
 
   async compact(options?: CompactOptions): Promise<void> {
+    this.assertHandoffWritable();
     if (this.compacting) throw new Error("A context compaction is already in progress");
     const resolved = resolveCompactionProfile({
       hasPlanBinding: this.getPlanBinding() !== undefined,
@@ -329,7 +356,7 @@ export class PiRuntimeBackend implements ChatBackend {
     });
     this.compacting = true;
     this.compactionMutationBlocked = true;
-    this.events?.onBusy(true);
+    this.publishActivity();
     try {
       await this.requireSession().compact(resolved.customInstructions);
       this.reviewTracker.noteCompaction();
@@ -338,7 +365,7 @@ export class PiRuntimeBackend implements ChatBackend {
     } finally {
       this.compacting = false;
       if (this.activeGeneration === undefined) this.compactionMutationBlocked = false;
-      this.events?.onBusy(false);
+      this.publishActivity();
     }
   }
 
@@ -347,6 +374,7 @@ export class PiRuntimeBackend implements ChatBackend {
   }
 
   async newSession(options: NewSessionOptions = { defaults: false, continuePlan: false }): Promise<void> {
+    this.assertHandoffWritable();
     this.assertCompactionStable("create a new session");
     const runtime = this.requireRuntime();
     const continuedPlanId = options.continuePlan ? this.getPlanBinding()?.planId : undefined;
@@ -363,20 +391,30 @@ export class PiRuntimeBackend implements ChatBackend {
     this.unsubscribeCurrent();
     const result = await this.runReplacement(() => runtime.newSession());
     if (result.cancelled) return this.rebindAfterCancelledReplacement();
+    await this.replaceLease(this.session?.sessionManager?.getSessionFile());
     if (continuedPlanId) await this.appendPlanBinding(continuedPlanId);
     await this.acceptReplacement("new", options.continuePlan);
     this.events?.onNotice("已新建 Pi 会话", "success");
   }
 
   async listSessions(): Promise<SessionOption[]> {
-    const sessions = await SessionManager.list(this.options.cwd);
-    return sessions.map((session) => ({
-      id: session.id,
-      label: session.name || session.firstMessage || "空会话",
-      relativeTime: relativeTime(session.modified),
-      branchDepth: session.parentSessionPath ? 1 : 0,
-      ...(session.id === this.session?.sessionId ? { current: true } : {}),
-    }));
+    const sessions = await SessionManager.list(this.options.cwd, this.options.sessionDir);
+    return Promise.all(
+      sessions.map(async (session) => {
+        const owner = await readSessionLease(session.path, this.options.agentDir ?? getAgentDir());
+        const ownedHere = owner?.token === this.sessionLease?.owner.token;
+        return {
+          id: session.id,
+          label: session.name || session.firstMessage || "空会话",
+          relativeTime: relativeTime(session.modified),
+          branchDepth: session.parentSessionPath ? 1 : 0,
+          ...(session.id === this.session?.sessionId ? { current: true } : {}),
+          ...(owner && !ownedHere
+            ? { owner: { hostname: owner.hostname, pid: owner.pid, heartbeatAt: owner.heartbeatAt } }
+            : {}),
+        };
+      }),
+    );
   }
 
   async getModelOptions(): Promise<RuntimeModelOption[]> {
@@ -416,7 +454,7 @@ export class PiRuntimeBackend implements ChatBackend {
         status: configured ? "已配置" : "未配置",
         detail: `${count} 个展示模型 · ${authSourceLabel(auth?.source)}`,
         authMethods: [
-          ...(provider.auth?.oauth
+          ...(provider.auth?.oauth && oauthAvailableInCurrentTerminal(provider.id)
             ? [
                 {
                   type: "oauth" as const,
@@ -439,7 +477,7 @@ export class PiRuntimeBackend implements ChatBackend {
   ): Promise<void> {
     const runtime = this.requireModelRuntime();
     if (!runtime.login) throw new Error("当前 Pi runtime 不支持交互式登录");
-    await runtime.login(providerId, type, interaction);
+    await loginProviderWithoutModelNetwork(runtime, providerId, type, interaction);
     await runtime.getAvailable(providerId);
   }
 
@@ -484,6 +522,7 @@ export class PiRuntimeBackend implements ChatBackend {
   }
 
   async selectModel(provider: string, id: string): Promise<ModelSelectionResult> {
+    this.assertHandoffWritable();
     const session = this.requireSession();
     const selected = (await this.requireModelRuntime().getAvailable(provider)).find(
       (model) => model.provider === provider && model.id === id,
@@ -520,19 +559,36 @@ export class PiRuntimeBackend implements ChatBackend {
   }
 
   async setEffort(level: EffortLevel): Promise<void> {
+    this.assertHandoffWritable();
     this.requireSession().setThinkingLevel(level);
     this.publishUsage();
     this.events?.onNotice(`Effort 已切换为 ${level}`, "success");
   }
 
   async switchSession(id: string): Promise<void> {
+    this.assertHandoffWritable();
     this.assertCompactionStable("switch sessions");
     const runtime = this.requireRuntime();
     const selected = await this.findSession(id);
+    if (this.sessionLease?.sessionPath === resolve(selected.path)) {
+      this.events?.onNotice("当前已经在这个 Session 中", "info");
+      return;
+    }
+    const acquired = await this.acquireLease(selected.path);
     this.events?.onSessionInvalidating?.();
     this.unsubscribeCurrent();
-    const result = await this.runReplacement(() => runtime.switchSession(selected.path));
-    if (result.cancelled) return this.rebindAfterCancelledReplacement();
+    let result: { cancelled: boolean };
+    try {
+      result = await this.runReplacement(() => runtime.switchSession(selected.path));
+    } catch (error) {
+      await acquired?.lease.release();
+      throw error;
+    }
+    if (result.cancelled) {
+      await acquired?.lease.release();
+      return this.rebindAfterCancelledReplacement();
+    }
+    await this.adoptLease(acquired?.lease);
     await this.acceptReplacement("resume");
     this.events?.onNotice(`已切换到 ${selected.name || selected.firstMessage || id}`, "success");
   }
@@ -552,6 +608,7 @@ export class PiRuntimeBackend implements ChatBackend {
   }
 
   async bindPlan(planId: string | undefined): Promise<void> {
+    this.assertHandoffWritable();
     if (!this.options.planBackend) throw new Error("Local Plan compatibility is not enabled");
     this.assertCompactionStable("change the Local Plan binding");
     if (planId !== undefined && !/^[A-Za-z0-9._-]{1,96}$/.test(planId)) throw new Error("Invalid Local Plan ID");
@@ -564,6 +621,7 @@ export class PiRuntimeBackend implements ChatBackend {
   }
 
   async forkSession(id: string): Promise<void> {
+    this.assertHandoffWritable();
     this.assertCompactionStable("fork the session");
     const runtime = this.requireRuntime();
     const selected = await this.findSession(id);
@@ -571,26 +629,72 @@ export class PiRuntimeBackend implements ChatBackend {
     const sourcePlanId = this.options.planBackend ? readManagerPlanBinding(sourceManager)?.planId : undefined;
     const leafId = sourceManager.getLeafId();
     if (!leafId) throw new Error("空会话没有可分支的消息");
+    const sourceIsCurrent = this.sessionLease?.sessionPath === resolve(selected.path);
+    const sourceOwner = await readSessionLease(selected.path, this.options.agentDir ?? getAgentDir());
+    if (!sourceIsCurrent && sourceOwner) {
+      const snapshotLeaf = stableForkLeafId(sourceManager);
+      if (!snapshotLeaf) throw new Error("占用中的 Session 还没有可安全分支的完整回复");
+      const branchPath = sourceManager.createBranchedSession(snapshotLeaf);
+      if (!branchPath) throw new Error("无法为只读中的 Session 创建分支文件");
+      const branchLease = await this.acquireLease(branchPath);
+      this.events?.onSessionInvalidating?.();
+      this.unsubscribeCurrent();
+      let switched: { cancelled: boolean };
+      try {
+        switched = await this.runReplacement(() => runtime.switchSession(branchPath));
+      } catch (error) {
+        await branchLease?.lease.release();
+        throw error;
+      }
+      if (switched.cancelled) {
+        await branchLease?.lease.release();
+        return this.rebindAfterCancelledReplacement();
+      }
+      await this.adoptLease(branchLease?.lease);
+      if (sourcePlanId && this.getPlanBinding()?.planId !== sourcePlanId) await this.appendPlanBinding(sourcePlanId);
+      await this.acceptReplacement("fork");
+      this.events?.onNotice(`已从「${selected.name || selected.firstMessage || id}」的落盘快照创建分支`, "success");
+      return;
+    }
+    const sourceLease = sourceIsCurrent ? undefined : await this.acquireLease(selected.path);
     this.events?.onSessionInvalidating?.();
     this.unsubscribeCurrent();
-    const switched = await this.runReplacement(() => runtime.switchSession(selected.path));
-    if (switched.cancelled) return this.rebindAfterCancelledReplacement();
+    let switched: { cancelled: boolean };
+    try {
+      switched = await this.runReplacement(() => runtime.switchSession(selected.path));
+    } catch (error) {
+      await sourceLease?.lease.release();
+      throw error;
+    }
+    if (switched.cancelled) {
+      await sourceLease?.lease.release();
+      return this.rebindAfterCancelledReplacement();
+    }
+    if (sourceLease) await this.adoptLease(sourceLease.lease);
     const forked = await this.runReplacement(() => runtime.fork(leafId, { position: "at" }));
     if (forked.cancelled) {
       await this.acceptReplacement("resume");
       return;
     }
+    await this.replaceLease(this.session?.sessionManager?.getSessionFile());
     if (sourcePlanId && this.getPlanBinding()?.planId !== sourcePlanId) await this.appendPlanBinding(sourcePlanId);
     await this.acceptReplacement("fork");
     this.events?.onNotice(`已从「${selected.name || selected.firstMessage || id}」创建分支`, "success");
   }
 
   async dispose(): Promise<void> {
+    this.leaseLifecycleReady = false;
+    this.leaseAbortController.abort();
     this.events?.onSessionInvalidating?.();
     this.unsubscribeCurrent();
-    await this.runtime?.dispose();
-    this.runtime = undefined;
-    this.events?.onBusy(false);
+    try {
+      await this.runtime?.dispose();
+      this.runtime = undefined;
+      this.events?.onBusy(false);
+    } finally {
+      await this.sessionLease?.release();
+      this.sessionLease = undefined;
+    }
   }
 
   private async createRuntime(manager: SessionManager): Promise<RuntimeOwner> {
@@ -707,7 +811,7 @@ export class PiRuntimeBackend implements ChatBackend {
     };
     return createAgentSessionRuntime(factory, {
       cwd: this.options.cwd,
-      agentDir: getAgentDir(),
+      agentDir: this.options.agentDir ?? getAgentDir(),
       sessionManager: manager,
     });
   }
@@ -754,6 +858,14 @@ export class PiRuntimeBackend implements ChatBackend {
       this.hydratedMessages.add(message);
       this.hydrateMessage(message, index);
     });
+    if (reason === "resume" && sessionWasInterrupted(session.messages)) {
+      this.events?.onMessage({
+        id: `session-interrupted:${session.sessionId}`,
+        role: "assistant",
+        kind: "session",
+        text: "上一轮在完成前中断；已恢复落盘内容，未自动重试。",
+      });
+    }
     this.publishUsage();
     this.publishActivity();
   }
@@ -812,6 +924,65 @@ export class PiRuntimeBackend implements ChatBackend {
     const queued = this.queueState.steering + this.queueState.followUp > 0;
     this.events?.onQueueUpdate?.({ ...this.queueState });
     this.events?.onBusy(activeGeneration || this.agentRunning || this.compacting || queued);
+    this.maybeFinalizeHandoff();
+  }
+
+  private async acquireLease(sessionFile: string | undefined): Promise<AcquiredSessionLease | undefined> {
+    if (!sessionFile || !(this.options.sessionLeases ?? !this.options.sessionFactory)) return undefined;
+    let waiting = false;
+    try {
+      return await acquireSessionLease(sessionFile, {
+        agentDir: this.options.agentDir ?? getAgentDir(),
+        signal: this.leaseAbortController.signal,
+        onWait: (owner) => {
+          waiting = true;
+          this.events?.onSessionWait?.(true);
+          this.events?.onNotice(
+            `Session 正在 ${owner.hostname} 的 PID ${owner.pid} 运行；当前任务完成后将自动接管`,
+            "info",
+          );
+        },
+        onTakeover: () => this.requestDeferredHandoff(),
+      });
+    } finally {
+      if (waiting) this.events?.onSessionWait?.(false);
+    }
+  }
+
+  private requestDeferredHandoff(): void {
+    if (this.handoffRequested) return;
+    this.handoffRequested = true;
+    this.events?.onHandoffPending?.();
+    this.events?.onNotice("另一终端正在等待接管；当前任务和队列会继续到安全点", "info");
+    this.maybeFinalizeHandoff();
+  }
+
+  private maybeFinalizeHandoff(): void {
+    if (!this.handoffRequested || this.handoffFinalizing || !this.leaseLifecycleReady) return;
+    const active =
+      this.activeGeneration !== undefined ||
+      this.agentRunning ||
+      this.compacting ||
+      this.queueState.steering + this.queueState.followUp > 0;
+    if (active) return;
+    this.handoffFinalizing = true;
+    if (this.events?.onTakeover) this.events.onTakeover();
+    else void this.dispose();
+  }
+
+  private assertHandoffWritable(): void {
+    if (this.handoffRequested) throw new Error("Session 正在交接到另一终端，不再接受新的操作");
+  }
+
+  private async replaceLease(sessionFile: string | undefined): Promise<void> {
+    const acquired = await this.acquireLease(sessionFile);
+    await this.adoptLease(acquired?.lease);
+  }
+
+  private async adoptLease(next: SessionLease | undefined): Promise<void> {
+    const previous = this.sessionLease;
+    this.sessionLease = next;
+    await previous?.release();
   }
 
   private trackRuntimeInvalidation(runtime: RuntimeOwner): void {
@@ -1276,6 +1447,37 @@ async function writeSessionEntriesAtomically(path: string, entries: unknown[]): 
   } finally {
     await directoryHandle.close();
   }
+}
+
+function sessionWasInterrupted(messages: readonly unknown[]): boolean {
+  const last = messages.at(-1);
+  if (!last || typeof last !== "object" || Array.isArray(last)) return false;
+  const message = last as { role?: unknown; stopReason?: unknown };
+  return message.role === "user" || (message.role === "assistant" && message.stopReason === "aborted");
+}
+
+function stableForkLeafId(manager: SessionManager): string | undefined {
+  let stable: string | undefined;
+  let turnPending = false;
+  for (const entry of manager.getBranch()) {
+    if (entry.type === "message") {
+      const message = entry.message as { role?: unknown; stopReason?: unknown };
+      if (message.role === "user") {
+        turnPending = true;
+        continue;
+      }
+      if (
+        message.role === "assistant" &&
+        (message.stopReason === "stop" || message.stopReason === "error" || message.stopReason === "aborted")
+      ) {
+        stable = entry.id;
+        turnPending = false;
+      }
+      continue;
+    }
+    if (stable && !turnPending) stable = entry.id;
+  }
+  return stable;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

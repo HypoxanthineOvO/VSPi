@@ -69,7 +69,14 @@ export interface SubAgentMessage {
   status: "queued" | "running" | "success" | "error";
 }
 
-export type TranscriptMessage = TextMessage | ThinkingMessage | ToolMessage | SubAgentMessage;
+export interface SessionMarkerMessage {
+  id: string;
+  role: "assistant";
+  kind: "session";
+  text: string;
+}
+
+export type TranscriptMessage = TextMessage | ThinkingMessage | ToolMessage | SubAgentMessage | SessionMarkerMessage;
 
 export interface ModelPrice {
   inputUsdPerMillion: number;
@@ -132,6 +139,11 @@ export interface SessionOption {
   relativeTime: string;
   branchDepth: number;
   current?: boolean;
+  owner?: {
+    hostname: string;
+    pid: number;
+    heartbeatAt: string;
+  };
 }
 
 export type QuestionKind = "singleChoice" | "multiChoice" | "ranking" | "freeText";

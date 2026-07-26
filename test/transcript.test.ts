@@ -37,6 +37,20 @@ function toolMessage(
 }
 
 describe("transcript rendering", () => {
+  it("renders interrupted Session state as a quiet standalone marker", () => {
+    const lines = renderTranscriptMessage(
+      {
+        id: "session-interrupted:test",
+        role: "assistant",
+        kind: "session",
+        text: "上一轮在完成前中断；已恢复落盘内容，未自动重试。",
+      },
+      80,
+      plainTheme(),
+    );
+    expect(lines).toEqual(["◇ 上一轮在完成前中断；已恢复落盘内容，未自动重试。"]);
+  });
+
   it("renders a short user message as a full-width three-line dark surface", () => {
     const lines = renderTranscriptMessage(
       userMessage("hello"),

@@ -179,6 +179,40 @@ describe("startup orchestration", () => {
     expect(attachmentStart).toHaveBeenCalledTimes(backendFails ? 0 : 1);
     expect(attachmentDispose).toHaveBeenCalledOnce();
   });
+
+  it("aborts an active generation before disposing the backend on foreground exit", async () => {
+    let events: Parameters<ChatBackend["start"]>[0] | undefined;
+    const order: string[] = [];
+    const backend = fakeBackend(
+      vi.fn(async (next) => {
+        events = next;
+      }),
+      vi.fn(async () => {
+        order.push("dispose");
+      }),
+    );
+    backend.cancel = vi.fn(async () => {
+      order.push("cancel");
+      return { queuedMessages: [] };
+    });
+    const attachments = {
+      start: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    } as unknown as AttachmentService;
+    const app = new VspiApp(fakeTui(), plainTheme(), backend, {
+      cwd: "/workspace/graceful-exit",
+      settings: DEFAULT_SETTINGS,
+      attachments,
+      renderOnce: true,
+      onExit: vi.fn(),
+    });
+    await app.start();
+    events?.onBusy(true);
+
+    await app.dispose();
+
+    expect(order).toEqual(["cancel", "dispose"]);
+  });
 });
 
 function fakeTui(): TUI {

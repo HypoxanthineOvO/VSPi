@@ -1,5 +1,6 @@
 import { decodeKittyPrintable, Key, matchesKey } from "@earendil-works/pi-tui";
 import type { ProviderAuthEvent, ProviderAuthInteraction, ProviderAuthPrompt } from "../backend/types.js";
+import { isRemoteTerminal } from "../providers/login.js";
 import { frame, padLine, wrapTextWithAnsi } from "./ansi.js";
 import type { VspiTheme } from "./theme.js";
 
@@ -28,6 +29,7 @@ export class AuthDialog implements ProviderAuthInteraction {
     private readonly providerName: string,
     private readonly requestRender: () => void,
     private readonly onCancel: () => void,
+    private readonly purpose: "登录" | "配置" = "登录",
   ) {}
 
   notify(event: ProviderAuthEvent): void {
@@ -35,13 +37,21 @@ export class AuthDialog implements ProviderAuthInteraction {
       this.messages = [
         { text: terminalHyperlink(event.verificationUri), tone: "focus" },
         { text: `设备码  ${event.userCode}`, tone: "warning" },
-        { text: "请打开链接完成授权；设备码会自动轮询，不需要粘贴回调地址。", tone: "muted" },
+        { text: "请在任意设备打开链接完成授权；远程终端会自动轮询，不需要 localhost 回调。", tone: "muted" },
         { text: "VSPi 正在等待授权结果…", tone: "muted" },
       ];
     } else if (event.type === "auth_url") {
       this.messages = [
         { text: terminalHyperlink(event.url), tone: "focus" },
         ...(event.instructions ? [{ text: event.instructions, tone: "warning" as const }] : []),
+        ...(isRemoteTerminal()
+          ? [
+              {
+                text: "已检测到 SSH：请在本地浏览器打开链接；若下方出现输入框，可粘贴最终跳转 URL。",
+                tone: "muted" as const,
+              },
+            ]
+          : []),
       ];
     } else if (event.type === "info") {
       this.messages.push({ text: event.message, tone: "text" });
@@ -58,6 +68,7 @@ export class AuthDialog implements ProviderAuthInteraction {
   prompt(prompt: ProviderAuthPrompt): Promise<string> {
     if (this.cancelled || this.signal.aborted) return Promise.reject(new Error("Login cancelled"));
     this.rejectPending(new Error("Authentication prompt replaced"));
+    prompt = preferDeviceCodeInRemoteSession(prompt);
     this.resetInput();
     this.selected = 0;
     return new Promise((resolve, reject) => {
@@ -145,10 +156,10 @@ export class AuthDialog implements ProviderAuthInteraction {
         body.push(theme.selected(padLine(`  ${placeholder}${theme.inverse(" ")}`, bodyWidth)));
       }
     } else if (body.length === 0) {
-      body.push(theme.muted("正在准备认证…"));
+      body.push(theme.muted(this.purpose === "配置" ? "正在保存配置…" : "正在建立登录…"));
     }
     body.push("", theme.muted(prompt ? "Enter 确认 · Esc 取消" : "Esc 取消"));
-    return frame(body, width, theme, { title: `${this.providerName} · 登录`, focused: true });
+    return frame(body, width, theme, { title: `${this.providerName} · ${this.purpose}`, focused: true });
   }
 
   private resolvePending(value: string): void {
@@ -207,6 +218,23 @@ export class AuthDialog implements ProviderAuthInteraction {
     this.pasteBuffer = "";
     this.inBracketedPaste = false;
   }
+}
+
+function preferDeviceCodeInRemoteSession(prompt: ProviderAuthPrompt): ProviderAuthPrompt {
+  if (!isRemoteTerminal() || prompt.type !== "select") return prompt;
+  const deviceIndex = prompt.options.findIndex((option) => /device(?:-|_)?code|headless/iu.test(option.id));
+  if (deviceIndex < 0) return prompt;
+  const device = prompt.options[deviceIndex];
+  if (!device) return prompt;
+  const preferred = {
+    ...device,
+    label: /SSH/iu.test(device.label) ? device.label : `${device.label} · SSH 推荐`,
+    description: device.description ?? "可在本地浏览器完成，远程终端自动接收结果",
+  };
+  return {
+    ...prompt,
+    options: [preferred, ...prompt.options.filter((_option, index) => index !== deviceIndex)],
+  };
 }
 
 function sanitizeSingleLinePaste(value: string): string {

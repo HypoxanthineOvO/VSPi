@@ -16,6 +16,7 @@ import {
   type SupportedProviderApi,
 } from "../providers/config-service.js";
 import { customProviderId, discoverProviderModels, modelsFromManualInput } from "../providers/custom-provider.js";
+import { loginProviderWithoutModelNetwork, oauthAvailableInCurrentTerminal } from "../providers/login.js";
 import { registerBuiltinProviders } from "../providers/runtime-registration.js";
 import { alignRight, frame, padLine, wrapTextWithAnsi } from "../ui/ansi.js";
 import { AuthDialog } from "../ui/auth-dialog.js";
@@ -82,7 +83,7 @@ class AuthSetupApp implements Component, Focusable {
             credentials.get(provider.id) ??
             (status.configured ? (this.runtime.isUsingOAuth(provider.id) ? "oauth" : "api_key") : undefined);
           return [
-            ...(provider.auth.oauth
+            ...(provider.auth.oauth && oauthAvailableInCurrentTerminal(provider.id)
               ? [
                   {
                     providerId: provider.id,
@@ -223,6 +224,7 @@ class AuthSetupApp implements Component, Focusable {
         if (this.exitAfterAction) this.finish();
         else this.tui.requestRender();
       },
+      entry.type === "oauth" ? "登录" : "配置",
     );
     this.dialog = dialog;
     this.tui.requestRender();
@@ -231,11 +233,20 @@ class AuthSetupApp implements Component, Focusable {
         const result = await this.configureCustomProvider(dialog);
         if (cancelled || dialog.signal.aborted) return;
         this.dialog = undefined;
-        this.notice = `${result.name} 已添加，发现 ${result.modelCount} 个模型，API Key 已保存`;
+        const message = `${result.name} 已添加，发现 ${result.modelCount} 个模型，API Key 已保存`;
+        if (this.exitAfterAction) {
+          this.finish(message);
+          return;
+        }
+        this.notice = message;
         await this.load();
         return;
       }
-      await this.runtime.login(entry.providerId, entry.type, dialog);
+      dialog.notify({
+        type: "progress",
+        message: entry.type === "oauth" ? "正在启动账号登录…" : "正在保存 API Key…",
+      });
+      await loginProviderWithoutModelNetwork(this.runtime, entry.providerId, entry.type, dialog);
       if (cancelled || dialog.signal.aborted) return;
       this.dialog = undefined;
       if (this.exitAfterAction) {
@@ -293,7 +304,7 @@ class AuthSetupApp implements Component, Focusable {
     });
     if (!name || !baseUrl || !apiKey) throw new Error("名称、Base URL 和 API Key 都不能为空");
     try {
-      dialog.notify({ type: "progress", message: "正在读取模型列表…" });
+      dialog.notify({ type: "progress", message: "正在读取模型列表（最多 5 秒）…" });
       let models: ProviderModelRecord[];
       try {
         models = await discoverProviderModels({ name, baseUrl, protocol, apiKey }, { signal: dialog.signal });
@@ -315,7 +326,7 @@ class AuthSetupApp implements Component, Focusable {
       const providerId = customProviderId(name, baseUrl);
       await this.providerConfig.saveGlobalProvider(providerId, { name, baseUrl, protocol, models });
       await this.runtime.refresh({ allowNetwork: false, signal: dialog.signal });
-      await this.runtime.login(providerId, "api_key", {
+      await loginProviderWithoutModelNetwork(this.runtime, providerId, "api_key", {
         signal: dialog.signal,
         notify: (event) => dialog.notify(event),
         prompt: async (prompt) => (prompt.type === "secret" ? apiKey : dialog.prompt(prompt)),
@@ -382,7 +393,7 @@ export async function runAuthSetup(options: {
     runtime,
     providerConfig,
     options.mode,
-    () => complete?.(),
+    (message) => complete?.(message),
     options.providerRef !== undefined,
   );
   await app.load();

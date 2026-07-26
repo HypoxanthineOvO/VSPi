@@ -47,6 +47,23 @@ function text(panel: PanelController, width = 80, rows = 14): string {
 }
 
 describe("panel controller", () => {
+  it("marks a Session owned by another TUI without exposing lease internals", () => {
+    const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
+    panel.setSessions([
+      {
+        id: "shared-session",
+        label: "发布 0.2.5",
+        relativeTime: "刚刚",
+        branchDepth: 0,
+        owner: { hostname: "genesis", pid: 18421, heartbeatAt: new Date().toISOString() },
+      },
+    ]);
+    panel.open("sessions");
+    expect(text(panel)).toContain("发布 0.2.5");
+    expect(text(panel)).toContain("使用中");
+    expect(text(panel)).not.toContain("18421");
+  });
+
   it("returns all five structured approval decisions and layers Escape inside reason input", () => {
     const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
     const request = {

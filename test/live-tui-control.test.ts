@@ -157,9 +157,9 @@ describe("real TUI live run control", () => {
   });
 
   it.each([40, 80, 120] as const)("keeps the independent activity rail within %s columns", (width) => {
-    const rendered = renderActivityRail({ indicator: "⠋", steering: 2, followUp: 1 }, width, plainTheme());
+    const rendered = renderActivityRail({ indicator: "⣾", steering: 2, followUp: 1 }, width, plainTheme());
     expect(visibleWidth(rendered)).toBe(width);
-    expect(stripAnsi(rendered)).toContain("Working ⠋");
+    expect(stripAnsi(rendered)).toContain("Working ⣾");
     expect(stripAnsi(rendered)).not.toMatch(/▌|插入|后续|队列/);
   });
 

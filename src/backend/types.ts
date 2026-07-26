@@ -67,6 +67,9 @@ export interface ChatBackendEvents {
   onQuestion?: (questions: Question[], signal?: AbortSignal) => Promise<Question[]>;
   onPlanBindingChange?: (binding: PlanBinding | undefined) => void;
   onEffectivePrompt?: (segments: EffectivePromptSegment[]) => void;
+  onSessionWait?: (waiting: boolean) => void;
+  onHandoffPending?: () => void;
+  onTakeover?: () => void;
 }
 
 export interface ChatQueueState {
