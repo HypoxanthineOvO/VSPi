@@ -16,6 +16,8 @@ Registry 脚本会备份 `/etc/gitlab/gitlab.rb` 和已有的 Registry Nginx 站
 
 发布新 CI 镜像后，以 Registry 返回的不可变 digest 替换 `.gitlab-ci.yml` 中的默认镜像。Dockerfile、基础镜像或已安装工具发生变化时，递增 `ci/image/VERSION`；禁止覆盖已有镜像 Tag。
 
+Pi 原生 `find` 与 `grep` 分别依赖 `fd` 和 `rg`。CI 不允许在测试运行时查询 GitHub latest 或临时下载工具；固定版本的官方归档镜像在 Generic Package `vspi-ci-tools/1` 中，Dockerfile 使用 `ci/image/TOOLS.sha256` 对应的 SHA-256 校验。升级工具时必须发布新的 Generic Package 版本并递增 CI 镜像版本。
+
 ## Pipeline 契约
 
 Merge Request 和分支 Pipeline 包含四个独立关卡：
