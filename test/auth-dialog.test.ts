@@ -35,9 +35,12 @@ describe("provider authentication dialog", () => {
       userCode: "ABCD-EFGH",
       verificationUri: "https://auth.kimi.com/device",
     });
-    const rendered = dialog.render(72, plainTheme()).map(stripAnsi).join("\n");
+    const raw = dialog.render(72, plainTheme()).join("\n");
+    const rendered = stripAnsi(raw);
+    expect(raw).toContain("\u001b]8;;https://auth.kimi.com/device\u0007");
     expect(rendered).toContain("https://auth.kimi.com/device");
     expect(rendered).toContain("ABCD-EFGH");
-    expect(rendered).toContain("正在等待结果");
+    expect(rendered).toContain("设备码会自动轮询");
+    expect(rendered).toContain("正在等待授权结果");
   });
 });

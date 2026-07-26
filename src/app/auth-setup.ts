@@ -1,4 +1,4 @@
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
   type Focusable,
@@ -9,6 +9,14 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import type { AppSettings } from "../domain/types.js";
+import { BUILTIN_PROVIDERS } from "../providers/builtins.js";
+import {
+  createProviderConfigService,
+  type ProviderModelRecord,
+  type SupportedProviderApi,
+} from "../providers/config-service.js";
+import { customProviderId, discoverProviderModels, modelsFromManualInput } from "../providers/custom-provider.js";
+import { registerBuiltinProviders } from "../providers/runtime-registration.js";
 import { alignRight, frame, padLine, wrapTextWithAnsi } from "../ui/ansi.js";
 import { AuthDialog } from "../ui/auth-dialog.js";
 import { applySettingsToCapabilities, detectTerminalCapabilities } from "../ui/capabilities.js";
@@ -19,7 +27,7 @@ type SetupMode = "login" | "logout";
 interface SetupEntry {
   providerId: string;
   providerName: string;
-  type: "api_key" | "oauth";
+  type: "api_key" | "oauth" | "custom";
   label: string;
   configured: boolean;
 }
@@ -36,6 +44,7 @@ class AuthSetupApp implements Component, Focusable {
     private readonly tui: TUI,
     private readonly theme: VspiTheme,
     private readonly runtime: ModelRuntime,
+    private readonly providerConfig: ReturnType<typeof createProviderConfigService>,
     private readonly mode: SetupMode,
     private readonly finish: (message?: string) => void,
     private readonly exitAfterAction: boolean,
@@ -96,6 +105,13 @@ class AuthSetupApp implements Component, Focusable {
                 ]
               : []),
           ];
+        })
+        .concat({
+          providerId: "custom",
+          providerName: "自定义中转站",
+          type: "custom",
+          label: "名称 · Base URL · API Key · 类型",
+          configured: false,
         })
         .sort(compareEntries);
     }
@@ -211,6 +227,14 @@ class AuthSetupApp implements Component, Focusable {
     this.dialog = dialog;
     this.tui.requestRender();
     try {
+      if (entry.type === "custom") {
+        const result = await this.configureCustomProvider(dialog);
+        if (cancelled || dialog.signal.aborted) return;
+        this.dialog = undefined;
+        this.notice = `${result.name} 已添加，发现 ${result.modelCount} 个模型，API Key 已保存`;
+        await this.load();
+        return;
+      }
       await this.runtime.login(entry.providerId, entry.type, dialog);
       if (cancelled || dialog.signal.aborted) return;
       this.dialog = undefined;
@@ -232,10 +256,81 @@ class AuthSetupApp implements Component, Focusable {
       this.tui.requestRender();
     }
   }
+
+  private async configureCustomProvider(dialog: AuthDialog): Promise<{ name: string; modelCount: number }> {
+    const name = (
+      await dialog.prompt({
+        type: "text",
+        message: "中转站名称",
+        placeholder: "例如 My Gateway",
+        signal: dialog.signal,
+      })
+    ).trim();
+    const baseUrl = (
+      await dialog.prompt({
+        type: "text",
+        message: "Base URL",
+        placeholder: "https://gateway.example.com/v1",
+        signal: dialog.signal,
+      })
+    ).trim();
+    const protocol = (await dialog.prompt({
+      type: "select",
+      message: "接口类型",
+      options: [
+        { id: "openai-responses", label: "OpenAI Responses", description: "Responses API 中转站" },
+        { id: "openai-completions", label: "OpenAI Compatible", description: "Chat Completions 兼容接口" },
+        { id: "anthropic-messages", label: "Anthropic Messages", description: "Anthropic Messages 兼容接口" },
+        { id: "google-generative-ai", label: "Google Generative AI", description: "Gemini generateContent 兼容接口" },
+      ],
+      signal: dialog.signal,
+    })) as SupportedProviderApi;
+    let apiKey = await dialog.prompt({
+      type: "secret",
+      message: "API Key",
+      placeholder: "仅保存到 Pi auth.json",
+      signal: dialog.signal,
+    });
+    if (!name || !baseUrl || !apiKey) throw new Error("名称、Base URL 和 API Key 都不能为空");
+    try {
+      dialog.notify({ type: "progress", message: "正在读取模型列表…" });
+      let models: ProviderModelRecord[];
+      try {
+        models = await discoverProviderModels({ name, baseUrl, protocol, apiKey }, { signal: dialog.signal });
+      } catch (error) {
+        dialog.notify({
+          type: "info",
+          message: `未能自动读取模型列表：${error instanceof Error ? error.message : "未知错误"}`,
+        });
+        const manual = await dialog.prompt({
+          type: "text",
+          message: "请输入至少一个模型 ID，多个可用逗号分隔",
+          placeholder: "model-id",
+          signal: dialog.signal,
+        });
+        models = modelsFromManualInput(manual);
+      }
+      if (models.length === 0) throw new Error("自定义 Provider 至少需要一个模型 ID");
+
+      const providerId = customProviderId(name, baseUrl);
+      await this.providerConfig.saveGlobalProvider(providerId, { name, baseUrl, protocol, models });
+      await this.runtime.refresh({ allowNetwork: false, signal: dialog.signal });
+      await this.runtime.login(providerId, "api_key", {
+        signal: dialog.signal,
+        notify: (event) => dialog.notify(event),
+        prompt: async (prompt) => (prompt.type === "secret" ? apiKey : dialog.prompt(prompt)),
+      });
+      return { name, modelCount: models.length };
+    } finally {
+      apiKey = "";
+    }
+  }
 }
 
 function compareEntries(left: SetupEntry, right: SetupEntry): number {
   const priority = [
+    "vsplab",
+    "custom",
     "kimi-coding",
     "openai-codex",
     "anthropic",
@@ -266,6 +361,13 @@ export async function runAuthSetup(options: {
   const capabilities = applySettingsToCapabilities(detectTerminalCapabilities(), options.settings);
   const theme = createTheme(capabilities, options.settings.theme);
   const runtime = await ModelRuntime.create();
+  registerBuiltinProviders(runtime, BUILTIN_PROVIDERS);
+  const providerConfig = createProviderConfigService({
+    cwd: process.cwd(),
+    agentDir: getAgentDir(),
+    trustedProject: false,
+    builtins: BUILTIN_PROVIDERS,
+  });
   let complete: ((message?: string) => void) | undefined;
   let resultMessage = "";
   const finished = new Promise<void>((resolve) => {
@@ -278,6 +380,7 @@ export async function runAuthSetup(options: {
     tui,
     theme,
     runtime,
+    providerConfig,
     options.mode,
     () => complete?.(),
     options.providerRef !== undefined,
