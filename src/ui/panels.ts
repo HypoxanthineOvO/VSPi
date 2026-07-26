@@ -32,6 +32,13 @@ import {
 import { redactPrompt } from "../prompts/effective-prompt.js";
 import { BRAND_PRIORITY, providerPriorityIndex } from "../providers/builtins.js";
 import type { ExternalSessionSource, ExternalSessionSummary } from "../sessions/external-history.js";
+import type {
+  SkillCatalogIssue,
+  SkillCatalogItem,
+  SkillCatalogSnapshot,
+  SkillCatalogTab,
+  SkillScope,
+} from "../skills/types.js";
 import { TOOL_CAPABILITIES, type ToolCapabilityStatus } from "../tools/capability-catalog.js";
 import type { WorkflowSnapshot } from "../workflow/types.js";
 import {
@@ -61,6 +68,7 @@ export type PanelKind =
   | "providers"
   | "sessions"
   | "externalImport"
+  | "skills"
   | "settings"
   | "usage"
   | "theme"
@@ -86,6 +94,11 @@ export type PanelEvent =
   | { type: "session"; session: SessionOption }
   | { type: "fork"; session: SessionOption }
   | { type: "externalImport"; session: ExternalSessionSummary }
+  | { type: "skillInstall"; source: string; scope: SkillScope }
+  | { type: "skillAgentSearch"; query: string }
+  | { type: "skillToggle"; skill: SkillCatalogItem; enabled: boolean }
+  | { type: "skillUpdate"; skill: SkillCatalogItem }
+  | { type: "skillRemove"; skill: SkillCatalogItem }
   | { type: "settings"; settings: AppSettings }
   | { type: "effort"; effort: EffortLevel }
   | { type: "approval"; response: ApprovalResponse }
@@ -118,6 +131,8 @@ interface PanelState {
   selected: number;
   scroll: number;
 }
+
+type SkillRow = { kind: "skill"; item: SkillCatalogItem } | { kind: "issue"; issue: SkillCatalogIssue };
 
 export interface PromptPanelSnapshot {
   profiles: Array<{
@@ -290,6 +305,14 @@ export class PanelController {
   private externalSessions: ExternalSessionSummary[] = [];
   private externalImportSource: ExternalSessionSource = "codex";
   private externalImportSearch = "";
+  private skillSnapshot: SkillCatalogSnapshot = { items: [], issues: [], projectTrusted: false };
+  private skillTab: SkillCatalogTab = "enabled";
+  private skillSearch = "";
+  private skillAdding = false;
+  private skillViewing = false;
+  private skillAddMode: "source" | "agent" = "source";
+  private skillAddText = "";
+  private skillScope: SkillScope = "user";
   private providerEditing = false;
   private providerActionMenu = false;
   private activeProviderId: string | undefined;
@@ -413,6 +436,15 @@ export class PanelController {
     this.externalSessions = structuredClone(sessions);
     this.externalImportSource = source;
     this.externalImportSearch = "";
+    this.state.selected = 0;
+    this.state.scroll = 0;
+  }
+
+  setSkillCatalog(snapshot: SkillCatalogSnapshot): void {
+    this.skillSnapshot = structuredClone(snapshot);
+    this.skillAdding = false;
+    this.skillViewing = false;
+    this.skillAddText = "";
     this.state.selected = 0;
     this.state.scroll = 0;
   }
@@ -589,6 +621,7 @@ export class PanelController {
     if (this.kind === "providers") return this.handleProviders(data);
     if (this.kind === "sessions") return this.handleSessions(data, interaction.handler);
     if (this.kind === "externalImport") return this.handleExternalImport(data, interaction.handler);
+    if (this.kind === "skills") return this.handleSkills(data, interaction.handler);
     if (this.kind === "settings") return this.handleSettings(data);
     if (this.kind === "theme") return this.handleTheme(data);
     if (this.kind === "question") return this.handleQuestion(data);
@@ -616,6 +649,7 @@ export class PanelController {
     else if (this.kind === "sessions") [title, body] = ["Sessions", this.renderSessions(bodyWidth, theme)];
     else if (this.kind === "externalImport")
       [title, body] = ["导入会话", this.renderExternalImport(bodyWidth, bodyRows, theme)];
+    else if (this.kind === "skills") [title, body] = ["Skills", this.renderSkills(bodyWidth, bodyRows, theme)];
     else if (this.kind === "settings") [title, body] = ["Settings", this.renderSettings(bodyWidth, theme)];
     else if (this.kind === "usage") [title, body] = ["Usage", this.renderUsage(bodyWidth, usage)];
     else if (this.kind === "theme") [title, body] = ["Theme", this.renderTheme(bodyWidth, theme)];
@@ -693,7 +727,18 @@ export class PanelController {
     if (this.kind === "plan") state.hasItems = this.visiblePlanItems().length > 0;
     else if (this.kind === "sessions") state.hasItems = this.sessions.length > 0;
     else if (this.kind === "externalImport") state.hasItems = this.filteredExternalSessions().length > 0;
-    else if (this.kind === "commands") {
+    else if (this.kind === "skills") {
+      const item = this.selectedSkill();
+      state.hasItems = this.skillRows().length > 0;
+      state.skillAdding = this.skillAdding;
+      state.skillViewing = this.skillViewing;
+      state.narrowSkill = this.lastBodyWidth < 58;
+      state.skillAddHasText = this.skillAddText.trim().length > 0;
+      state.skillCanEnable = item?.actions.includes("enable") ?? false;
+      state.skillCanDisable = item?.actions.includes("disable") ?? false;
+      state.skillCanUpdate = item?.actions.includes("update") ?? false;
+      state.skillCanRemove = item?.actions.includes("remove") ?? false;
+    } else if (this.kind === "commands") {
       const matches = commandMatches(this.commandQuery);
       const selected = matches[this.state.selected];
       state.hasItems = selected !== undefined;
@@ -911,6 +956,78 @@ export class PanelController {
       const session = sessions[this.state.selected];
       return session ? { type: "externalImport", session } : undefined;
     }
+    return undefined;
+  }
+
+  private handleSkills(data: string, handler: string): PanelEvent | undefined {
+    if (handler === "openSkillAdd") {
+      this.skillAdding = true;
+      this.skillViewing = false;
+      this.skillAddText = "";
+      this.skillScope = "user";
+      this.state.selected = 0;
+      return;
+    }
+    if (handler === "closeSkillPanel") {
+      if (this.skillAdding) {
+        this.skillAdding = false;
+        this.skillAddText = "";
+        return;
+      }
+      if (this.skillViewing) {
+        this.skillViewing = false;
+        return;
+      }
+      this.close();
+      return { type: "close" };
+    }
+    if (handler === "switchSkillAddMode") {
+      this.skillAddMode = this.skillAddMode === "source" ? "agent" : "source";
+      this.skillAddText = "";
+      return;
+    }
+    if (handler === "switchSkillScope") {
+      if (this.skillSnapshot.projectTrusted) this.skillScope = this.skillScope === "user" ? "project" : "user";
+      return;
+    }
+    if (handler === "editSkillText") {
+      const current = this.skillAdding ? this.skillAddText : this.skillSearch;
+      const next = panelKey(data, Key.backspace)
+        ? Array.from(current).slice(0, -1).join("")
+        : `${current}${printable(data) ?? ""}`;
+      if (this.skillAdding) this.skillAddText = next;
+      else {
+        this.skillSearch = next;
+        this.state.selected = 0;
+      }
+      return;
+    }
+    if (handler === "submitSkillAdd") {
+      const value = this.skillAddText.trim();
+      if (!value) return;
+      return this.skillAddMode === "source"
+        ? { type: "skillInstall", source: value, scope: this.skillScope }
+        : { type: "skillAgentSearch", query: value };
+    }
+    if (handler === "switchSkillTab") {
+      const tabs: SkillCatalogTab[] = ["enabled", "available", "issues"];
+      this.skillTab = tabs[(tabs.indexOf(this.skillTab) + 1) % tabs.length] ?? "enabled";
+      this.state.selected = 0;
+      this.state.scroll = 0;
+      this.skillViewing = false;
+      return;
+    }
+    const rows = this.skillRows();
+    if (handler === "moveSelection" && this.move(data, rows.length)) return;
+    const row = rows[this.state.selected];
+    if (row?.kind !== "skill") return;
+    if (handler === "viewSkill") {
+      this.skillViewing = true;
+      return;
+    }
+    if (handler === "toggleSkill") return { type: "skillToggle", skill: row.item, enabled: !row.item.enabled };
+    if (handler === "updateSkill") return { type: "skillUpdate", skill: row.item };
+    if (handler === "removeSkill") return { type: "skillRemove", skill: row.item };
     return undefined;
   }
 
@@ -1575,6 +1692,140 @@ export class PanelController {
         return `${left}${theme.muted("│")}${right}`;
       }),
     ];
+  }
+
+  private renderSkills(width: number, rows: number, theme: VspiTheme): string[] {
+    if (this.skillAdding) return this.renderSkillAdd(width, rows, theme);
+    if (this.skillViewing && width < 58) {
+      return this.skillDetail(this.skillRows()[this.state.selected], width, rows, theme);
+    }
+    const enabledCount = this.skillSnapshot.items.filter((item) => item.enabled).length;
+    const availableCount = this.skillSnapshot.items.length - enabledCount;
+    const tabs: Array<[SkillCatalogTab, string]> = [
+      ["enabled", `已启用  ${enabledCount}`],
+      ["available", `可导入  ${availableCount}`],
+      ["issues", `问题  ${this.skillSnapshot.issues.length}`],
+    ];
+    const tabText = tabs
+      .map(([id, label]) => (id === this.skillTab ? theme.selected(` ${label} `) : theme.muted(` ${label} `)))
+      .join(" ");
+    const header = alignRight(tabText, theme.focus("＋ 添加"), width);
+    const query = this.skillSearch || theme.muted("输入名称、描述或来源");
+    const search = padLine(`  ${theme.muted("搜索  ")}${query}${theme.inverse(" ")}`, width);
+    const contentRows = Math.max(1, rows - 2);
+    const skillRows = this.skillRows();
+    clampSelection(this.state, skillRows.length);
+    if (width < 58) return [header, search, ...this.skillList(skillRows, width, contentRows, theme)];
+    const listWidth = Math.max(30, Math.floor(width * 0.55));
+    const detailWidth = Math.max(1, width - listWidth - 1);
+    const list = this.skillList(skillRows, listWidth, contentRows, theme);
+    const detail = this.skillDetail(skillRows[this.state.selected], detailWidth, contentRows, theme);
+    return [
+      header,
+      search,
+      ...Array.from({ length: contentRows }, (_, index) => {
+        const left = list[index] ?? padLine("", listWidth);
+        const right = detail[index] ?? padLine("", detailWidth);
+        return `${left}${theme.muted("│")}${right}`;
+      }),
+    ];
+  }
+
+  private renderSkillAdd(width: number, rows: number, theme: VspiTheme): string[] {
+    const tabs = [
+      this.skillAddMode === "source" ? theme.selected(" URL / npm ") : theme.muted(" URL / npm "),
+      this.skillAddMode === "agent" ? theme.selected(" 让 Agent 帮我找 ") : theme.muted(" 让 Agent 帮我找 "),
+    ].join(" ");
+    const label = this.skillAddMode === "source" ? "来源" : "你需要什么";
+    const value =
+      this.skillAddText || theme.muted(this.skillAddMode === "source" ? "Git URL 或 npm:package" : "描述 Skill 用途");
+    const global = this.skillScope === "user" ? theme.selected(" Global ") : theme.muted(" Global ");
+    const projectLabel = this.skillSnapshot.projectTrusted ? " Project " : " Project · Untrusted ";
+    const project = this.skillScope === "project" ? theme.selected(projectLabel) : theme.muted(projectLabel);
+    const body = [
+      padLine(tabs, width),
+      padLine("", width),
+      padLine(`  ${theme.muted(label)}`, width),
+      padLine(`  ${theme.focus("› ")}${value}${theme.inverse(" ")}`, width),
+      padLine("", width),
+      padLine(`  ${theme.muted("范围  ")}${global}  ${project}`, width),
+    ];
+    return Array.from({ length: rows }, (_, index) => body[index] ?? padLine("", width));
+  }
+
+  private skillList(rows: SkillRow[], width: number, count: number, theme: VspiTheme): string[] {
+    if (rows.length === 0)
+      return [theme.muted(padLine(this.skillTab === "issues" ? "没有 Skill 问题" : "没有匹配的 Skill", width))];
+    const start = Math.max(0, Math.min(this.state.selected - Math.floor(count / 2), Math.max(0, rows.length - count)));
+    return Array.from({ length: count }, (_, offset) => {
+      const index = start + offset;
+      const row = rows[index];
+      if (!row) return padLine("", width);
+      if (row.kind === "issue") {
+        return selectedLine(
+          alignRight(`${theme.error("! ")}${row.issue.message}`, "Issue", Math.max(1, width - 2)),
+          index === this.state.selected,
+          width,
+          theme,
+        );
+      }
+      const status = row.item.enabled ? theme.success("● ") : theme.muted("○ ");
+      const scope =
+        row.item.scope === "project" ? "Project" : row.item.scope === "user" ? "Global" : row.item.sourceLabel;
+      const source = row.item.scope === "external" ? scope : `${scope} · ${row.item.sourceLabel}`;
+      return selectedLine(
+        alignRight(`${status}${row.item.name}`, source, Math.max(1, width - 2)),
+        index === this.state.selected,
+        width,
+        theme,
+      );
+    });
+  }
+
+  private skillDetail(row: SkillRow | undefined, width: number, rows: number, theme: VspiTheme): string[] {
+    if (!row) return Array.from({ length: rows }, () => padLine("", width));
+    const detail =
+      row.kind === "issue"
+        ? [
+            theme.error(theme.bold(row.issue.message)),
+            "",
+            `${theme.muted("路径  ")}${truncateStart(row.issue.path ?? "未知", Math.max(1, width - 6))}`,
+          ]
+        : [
+            theme.bold(truncateToWidth(row.item.name, width, "…")),
+            wrapTextWithAnsi(row.item.description, width)[0] ?? "",
+            "",
+            `${theme.muted("状态  ")}${row.item.enabled ? theme.success("当前会话已启用") : theme.muted(row.item.installed ? "已安装 · 未启用" : "可导入")}`,
+            `${theme.muted("来源  ")}${row.item.sourceLabel}${row.item.packageDisplaySource ? ` · ${truncateStart(row.item.packageDisplaySource, Math.max(1, width - 12))}` : ""}`,
+            `${theme.muted("路径  ")}${truncateStart(row.item.filePath, Math.max(1, width - 6))}`,
+            `${theme.muted("触发  ")}/skill:${row.item.name}`,
+            `${theme.muted("Model ")}${row.item.disableModelInvocation ? "仅显式调用" : "可自动调用"}`,
+          ];
+    return Array.from({ length: rows }, (_, index) => padLine(detail[index] ?? "", width));
+  }
+
+  private skillRows(): SkillRow[] {
+    const query = this.skillSearch.trim().toLocaleLowerCase();
+    if (this.skillTab === "issues") {
+      return this.skillSnapshot.issues
+        .filter((issue) => !query || `${issue.message}\n${issue.path ?? ""}`.toLocaleLowerCase().includes(query))
+        .map((issue) => ({ kind: "issue" as const, issue }));
+    }
+    return this.skillSnapshot.items
+      .filter((item) => (this.skillTab === "enabled" ? item.enabled : !item.enabled))
+      .filter(
+        (item) =>
+          !query ||
+          `${item.name}\n${item.description}\n${item.sourceLabel}\n${item.filePath}`
+            .toLocaleLowerCase()
+            .includes(query),
+      )
+      .map((item) => ({ kind: "skill" as const, item }));
+  }
+
+  private selectedSkill(): SkillCatalogItem | undefined {
+    const row = this.skillRows()[this.state.selected];
+    return row?.kind === "skill" ? row.item : undefined;
   }
 
   private externalImportList(

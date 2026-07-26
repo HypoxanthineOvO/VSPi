@@ -48,6 +48,9 @@ import {
   readSessionLease,
   type SessionLease,
 } from "../sessions/lease.js";
+import { PiSkillManager } from "../skills/service.js";
+import { createSkillToolDefinitions } from "../skills/tools.js";
+import type { SkillManager, SkillScope } from "../skills/types.js";
 import type {
   CancelResult,
   ChatBackend,
@@ -85,6 +88,7 @@ export interface PiRuntimeBackendOptions {
   sessionFactory?: (manager: SessionManager) => Promise<SessionFactoryResult>;
   sessionLeases?: boolean;
   externalSessions?: Pick<ExternalSessionCatalog, "list" | "preview">;
+  skillManager?: SkillManager;
   modelRuntime?: ModelRuntimeView;
   planBackend?: LocalPlanBackend;
   promptProfiles?: {
@@ -222,6 +226,7 @@ export class PiRuntimeBackend implements ChatBackend {
   private leaseLifecycleReady = false;
   private readonly leaseAbortController = new AbortController();
   private readonly externalSessions: Pick<ExternalSessionCatalog, "list" | "preview">;
+  private skillManager: SkillManager | undefined;
 
   private readonly options: PiRuntimeBackendOptions & { executionPolicy: ExecutionPolicyService };
 
@@ -233,6 +238,7 @@ export class PiRuntimeBackend implements ChatBackend {
         createExecutionPolicyService({ workspace: options.cwd, recovery: options.recovery ?? false }),
     };
     this.externalSessions = options.externalSessions ?? new ExternalSessionCatalog();
+    this.skillManager = options.skillManager;
   }
 
   private get session(): AgentSession | undefined {
@@ -752,6 +758,31 @@ export class PiRuntimeBackend implements ChatBackend {
     this.events?.onNotice(`已导入「${preview.title}」`, "success");
   }
 
+  async listSkills() {
+    return this.requireSkillManager().list();
+  }
+
+  async installSkill(source: string, scope: SkillScope, enable: boolean) {
+    const result = await this.requireSkillManager().install(source, scope, enable);
+    this.refreshSkillPrompt();
+    return result;
+  }
+
+  async setSkillEnabled(id: string, enabled: boolean, scope?: SkillScope): Promise<void> {
+    await this.requireSkillManager().setEnabled(id, enabled, scope);
+    this.refreshSkillPrompt();
+  }
+
+  async updateSkill(id: string): Promise<void> {
+    await this.requireSkillManager().update(id);
+    this.refreshSkillPrompt();
+  }
+
+  async removeSkill(id: string): Promise<void> {
+    await this.requireSkillManager().remove(id);
+    this.refreshSkillPrompt();
+  }
+
   async dispose(): Promise<void> {
     this.leaseLifecycleReady = false;
     this.leaseAbortController.abort();
@@ -834,6 +865,12 @@ export class PiRuntimeBackend implements ChatBackend {
             }
           : {}),
       });
+      this.skillManager = new PiSkillManager({
+        cwd,
+        agentDir,
+        settingsManager,
+        resourceLoader: services.resourceLoader,
+      });
       registerBuiltinProviders(services.modelRuntime, BUILTIN_PROVIDERS);
       if (projectTrusted) {
         const projectConfig = createProviderConfigService({ cwd, agentDir, trustedProject: true, builtins: [] });
@@ -863,6 +900,17 @@ export class PiRuntimeBackend implements ChatBackend {
           return request(questions, signal);
         },
       });
+      const skillTools = this.events?.onQuestion
+        ? createSkillToolDefinitions({
+            manager: () => this.requireSkillManager(),
+            afterMutation: () => this.refreshSkillPrompt(),
+            request: (questions, signal) => {
+              const request = this.events?.onQuestion;
+              if (!request) throw new Error("Question UI is unavailable");
+              return request(questions, signal);
+            },
+          })
+        : [];
       this.replacementModelIdentity = undefined;
       this.replacementThinking = undefined;
       return {
@@ -872,8 +920,11 @@ export class PiRuntimeBackend implements ChatBackend {
           ...(sessionStartEvent ? { sessionStartEvent } : {}),
           ...(model ? { model } : {}),
           ...(thinkingLevel ? { thinkingLevel } : {}),
-          customTools: [...policyTools, ...(this.events?.onQuestion ? [question] : [])] as unknown as ToolDefinition[],
-          tools: ["read", "ls", "find", "grep", "bash", "edit", "write", "question"],
+          customTools: [
+            ...policyTools,
+            ...(this.events?.onQuestion ? [question, ...skillTools] : []),
+          ] as unknown as ToolDefinition[],
+          tools: ["read", "ls", "find", "grep", "bash", "edit", "write", "question", "skill_list", "skill_manage"],
         })),
         services,
         diagnostics: services.diagnostics,
@@ -890,6 +941,16 @@ export class PiRuntimeBackend implements ChatBackend {
     const manager = this.requireSession().sessionManager;
     if (!manager) throw new Error("Active Pi SessionManager is unavailable");
     await appendDurablePlanBinding(manager, planId);
+  }
+
+  private requireSkillManager(): SkillManager {
+    if (!this.skillManager) throw new Error("Skill manager is unavailable in the current runtime");
+    return this.skillManager;
+  }
+
+  private refreshSkillPrompt(): void {
+    const session = this.session;
+    if (session) session.setActiveToolsByName(session.getActiveToolNames());
   }
 
   private assertCompactionStable(action: string): void {

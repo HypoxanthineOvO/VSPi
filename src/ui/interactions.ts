@@ -22,6 +22,14 @@ export interface InteractionState {
   policyYolo?: boolean;
   questionMode?: "choice" | "ranking" | "freeText" | "review";
   approvalReasonEditing?: boolean;
+  skillAdding?: boolean;
+  skillViewing?: boolean;
+  narrowSkill?: boolean;
+  skillAddHasText?: boolean;
+  skillCanEnable?: boolean;
+  skillCanDisable?: boolean;
+  skillCanUpdate?: boolean;
+  skillCanRemove?: boolean;
 }
 
 export interface InteractionDefinition {
@@ -256,6 +264,132 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.escape],
     handler: "closePanel",
     hint: "Esc 关闭",
+  }),
+  inputAction({
+    id: "panel.skills.add",
+    surface: "panel",
+    context: "skills",
+    keys: ["+"],
+    handler: "openSkillAdd",
+    matcher: (value) => value === "+",
+    enabled: (state) => state.skillAdding !== true && state.skillViewing !== true,
+    hint: "+ 添加",
+  }),
+  keyAction({
+    id: "panel.skills.move",
+    surface: "panel",
+    context: "skills",
+    keys: ["Up", "Down"],
+    keyValues: [Key.up, Key.down],
+    handler: "moveSelection",
+    enabled: (state) => state.skillAdding !== true && state.skillViewing !== true && state.hasItems === true,
+    hint: "↑↓ 选择",
+  }),
+  keyAction({
+    id: "panel.skills.tab",
+    surface: "panel",
+    context: "skills",
+    keys: ["Tab"],
+    keyValues: [Key.tab],
+    handler: "switchSkillTab",
+    enabled: (state) => state.skillAdding !== true && state.skillViewing !== true,
+    hint: "Tab 切换",
+  }),
+  keyAction({
+    id: "panel.skills.add-tab",
+    surface: "panel",
+    context: "skills",
+    keys: ["Tab"],
+    keyValues: [Key.tab],
+    handler: "switchSkillAddMode",
+    enabled: (state) => state.skillAdding === true,
+    hint: "Tab 切换",
+  }),
+  keyAction({
+    id: "panel.skills.add-scope",
+    surface: "panel",
+    context: "skills",
+    keys: ["Left", "Right"],
+    keyValues: [Key.left, Key.right],
+    handler: "switchSkillScope",
+    enabled: (state) => state.skillAdding === true,
+    hint: "←→ 范围",
+  }),
+  keyAction({
+    id: "panel.skills.toggle",
+    surface: "panel",
+    context: "skills",
+    keys: ["Space"],
+    keyValues: [Key.space],
+    handler: "toggleSkill",
+    enabled: (state) =>
+      state.skillAdding !== true &&
+      state.skillViewing !== true &&
+      (state.skillCanEnable === true || state.skillCanDisable === true),
+    hint: "Space 启停",
+  }),
+  keyAction({
+    id: "panel.skills.view",
+    surface: "panel",
+    context: "skills",
+    keys: ["Enter"],
+    keyValues: [Key.enter],
+    handler: "viewSkill",
+    enabled: (state) =>
+      state.skillAdding !== true &&
+      state.skillViewing !== true &&
+      state.narrowSkill === true &&
+      state.hasItems === true,
+    hint: "Enter 查看",
+  }),
+  inputAction({
+    id: "panel.skills.update",
+    surface: "panel",
+    context: "skills",
+    keys: ["U"],
+    handler: "updateSkill",
+    matcher: (value) => value === "U",
+    enabled: (state) => state.skillAdding !== true && state.skillViewing !== true && state.skillCanUpdate === true,
+    hint: "U 更新",
+  }),
+  inputAction({
+    id: "panel.skills.remove",
+    surface: "panel",
+    context: "skills",
+    keys: ["D"],
+    handler: "removeSkill",
+    matcher: (value) => value === "D",
+    enabled: (state) => state.skillAdding !== true && state.skillViewing !== true && state.skillCanRemove === true,
+    hint: "D 移除",
+  }),
+  keyAction({
+    id: "panel.skills.add-submit",
+    surface: "panel",
+    context: "skills",
+    keys: ["Enter"],
+    keyValues: [Key.enter],
+    handler: "submitSkillAdd",
+    enabled: (state) => state.skillAdding === true && state.skillAddHasText === true,
+    hint: "Enter 提交",
+  }),
+  inputAction({
+    id: "panel.skills.text",
+    surface: "panel",
+    context: "skills",
+    keys: ["Text", "Backspace"],
+    handler: "editSkillText",
+    matcher: (value) => printable(value) || matchesKey(value, Key.backspace),
+    enabled: (state) => state.skillViewing !== true,
+    hint: (state) => (state.skillAdding === true ? "输入文字" : "输入搜索"),
+  }),
+  keyAction({
+    id: "panel.skills.close",
+    surface: "panel",
+    context: "skills",
+    keys: ["Escape"],
+    keyValues: [Key.escape],
+    handler: "closeSkillPanel",
+    hint: (state) => (state.skillAdding === true || state.skillViewing === true ? "Esc 返回" : "Esc 关闭"),
   }),
   ...(["models", "settings", "theme", "policy", "effort", "approval", "tools"] as const).map((context) =>
     keyAction({

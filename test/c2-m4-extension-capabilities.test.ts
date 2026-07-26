@@ -90,6 +90,13 @@ describe("C2 M4 extension capability boundaries", () => {
         boundary: "verified file handle and attachment session",
       },
       {
+        id: "skills",
+        label: "Skills",
+        status: "available",
+        route: "Pi ResourceLoader + skill_list / skill_manage",
+        boundary: "Question confirmation before every mutation",
+      },
+      {
         id: "browser",
         label: "Browser",
         status: "not-connected",
@@ -120,7 +127,18 @@ describe("C2 M4 extension capability boundaries", () => {
     );
     const tools = productionToolAllowlist(source);
 
-    expect(tools).toEqual(["read", "ls", "find", "grep", "bash", "edit", "write", "question"]);
+    expect(tools).toEqual([
+      "read",
+      "ls",
+      "find",
+      "grep",
+      "bash",
+      "edit",
+      "write",
+      "question",
+      "skill_list",
+      "skill_manage",
+    ]);
     expect(tools).not.toEqual(expect.arrayContaining(["browser", "mcp", "pty", "ssh", "git"]));
   });
 
