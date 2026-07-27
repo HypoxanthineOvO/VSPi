@@ -60,6 +60,63 @@ describe("responsive layout", () => {
     }
   });
 
+  it("keeps the full frame within the terminal height even with a long busy transcript", async () => {
+    const tui = fakeTui(24);
+    const app = new VspiApp(tui, plainTheme(), new FixtureBackend(), {
+      cwd: "/workspace/project",
+      settings: DEFAULT_SETTINGS,
+      attachments: fakeAttachments(),
+      renderOnce: true,
+      onExit: vi.fn(),
+    });
+    await app.start();
+    const testable = app as unknown as {
+      messages: import("../src/domain/types.js").TranscriptMessage[];
+      panels: { setPlanSnapshot(plan: unknown): void };
+    };
+    for (let index = 0; index < 40; index += 1) {
+      testable.messages.push(
+        { id: `user-${index}`, role: "user", kind: "text", text: `问题 ${index} ${"长文本".repeat(20)}` },
+        {
+          id: `thinking-${index}`,
+          role: "assistant",
+          kind: "thinking",
+          effort: "medium",
+          text: `思考 ${index} ${"推理过程".repeat(30)}`,
+          collapsed: true,
+        },
+        {
+          id: `tool-${index}`,
+          role: "assistant",
+          kind: "tool",
+          groupId: `group-${Math.floor(index / 3)}`,
+          name: "bash",
+          summary: `命令 ${index}`,
+          status: "success",
+          output: `输出 ${index} ${"结果".repeat(40)}`,
+          expanded: false,
+        },
+        { id: `assistant-${index}`, role: "assistant", kind: "text", text: `回答 ${index} ${"内容".repeat(25)}` },
+      );
+    }
+    testable.panels.setPlanSnapshot({
+      id: "plan-1",
+      revision: 1,
+      semanticHash: "a".repeat(64),
+      archived: false,
+      title: "长期计划",
+      goal: "验证布局",
+      challenges: [],
+      items: [{ id: "work", title: "工作项", status: "pending" }],
+      blockers: [],
+    });
+
+    const frame = app.render(80);
+    expect(frame.length).toBeLessThanOrEqual(24);
+    expect(frame.every((line) => visibleWidth(line) <= 80)).toBe(true);
+    await app.dispose();
+  });
+
   it("renders the complete bottom stack inside width budgets at 80x24 and narrow fallback", async () => {
     for (const width of [40, 80]) {
       const tui = fakeTui(24);

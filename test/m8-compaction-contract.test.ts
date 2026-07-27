@@ -222,6 +222,48 @@ describe("M8 compaction profiles", () => {
     },
   );
 
+  it("refreshes usage when Pi-native auto compaction succeeds", async () => {
+    const h = await harness();
+    try {
+      vi.mocked(h.events.onUsage).mockClear();
+      h.emit({
+        type: "compaction_end",
+        reason: "threshold",
+        aborted: false,
+        willRetry: false,
+        result: {},
+      } as AgentSessionEvent);
+      expect(h.events.onUsage).toHaveBeenCalledOnce();
+      expect(h.events.onUsage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ contextTokens: 0, contextWindow: 32_000 }),
+      );
+    } finally {
+      await h.backend.dispose();
+    }
+  });
+
+  it("does not refresh usage when Pi-native compaction is cancelled or fails", async () => {
+    const h = await harness();
+    try {
+      for (const event of [
+        { type: "compaction_end", reason: "threshold", aborted: true, willRetry: false },
+        {
+          type: "compaction_end",
+          reason: "threshold",
+          aborted: false,
+          willRetry: false,
+          errorMessage: "compaction failed",
+        },
+      ] as AgentSessionEvent[]) {
+        vi.mocked(h.events.onUsage).mockClear();
+        h.emit(event);
+        expect(h.events.onUsage).not.toHaveBeenCalled();
+      }
+    } finally {
+      await h.backend.dispose();
+    }
+  });
+
   it("keeps auto compaction Pi-native and only observes completion as a review boundary", async () => {
     const h = await harness();
     try {

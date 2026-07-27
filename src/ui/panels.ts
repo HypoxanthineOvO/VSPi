@@ -1,4 +1,4 @@
-import { decodeKittyPrintable, Key, matchesKey } from "@earendil-works/pi-tui";
+import { decodeKittyPrintable, Input, Key, matchesKey } from "@earendil-works/pi-tui";
 import {
   BUILTIN_COMMAND_SOURCE,
   type CommandDefinition,
@@ -347,7 +347,8 @@ export class PanelController {
   private questionIndex = 0;
   private questionReview = false;
   private questionDirectAnswer = false;
-  private questionInput = "";
+  private questionHintInline = false;
+  private readonly questionInput = new Input();
   private questions: Question[] = [];
   private approvalRequest: ApprovalRequest | undefined;
   private approvalReasonEditing = false;
@@ -363,6 +364,7 @@ export class PanelController {
 
   constructor(settings: AppSettings) {
     this.settings = { ...settings };
+    this.questionInput.focused = true;
     this.settingsLayers = {
       global: { ...settings, scope: "global" },
       ...(settings.scope === "project" ? { project: { ...settings, scope: "project" } } : {}),
@@ -389,7 +391,7 @@ export class PanelController {
       this.questionIndex = 0;
       this.questionReview = false;
       this.questionDirectAnswer = false;
-      this.questionInput = "";
+      this.questionInput.setValue("");
     }
     if (kind === "settings") {
       this.settingsEndpointEditing = false;
@@ -542,10 +544,10 @@ export class PanelController {
             label: `${milestone.id} ${milestone.title}`,
             status:
               milestone.status === "verified"
-                ? "done"
-                : ["executing", "pending_stone"].includes(milestone.status)
-                  ? "current"
-                  : "pending",
+                ? ("done" as const)
+                : milestone.status === "executing"
+                  ? ("in_progress" as const)
+                  : ("pending" as const),
             depth: 0,
           }))
         : [];
@@ -591,7 +593,7 @@ export class PanelController {
       if (this.kind === "question" && (this.questionDirectAnswer || this.questionReview)) {
         this.questionDirectAnswer = false;
         this.questionReview = false;
-        this.questionInput = "";
+        this.questionInput.setValue("");
         return;
       }
       if (this.providerEditing) {
@@ -673,6 +675,13 @@ export class PanelController {
     else if (this.kind === "policy") [title, body] = ["Policy", this.renderPolicy(bodyWidth, theme)];
     else [title, body] = ["Plan", this.renderPlan(bodyWidth, theme, planFocused)];
 
+    // Question 内容溢出时选项优先：键位提示移到列表末尾随内容滚动，不再固定挤占一行。
+    this.questionHintInline = false;
+    if (this.kind === "question" && body.length > bodyRows) {
+      body = [...body, theme.muted(padLine(this.questionHintText(), bodyWidth))];
+      this.questionHintInline = true;
+    }
+
     if (this.kind === "plan" && this.planPanelCollapsed && this.planItems.length > 0) {
       return [padLine(`${theme.focus("Plan")} · ${theme.blue(theme.bold(this.planDisplayTitle()))}`, width)];
     }
@@ -691,7 +700,10 @@ export class PanelController {
       }
       this.state.scroll = Math.max(0, Math.min(this.state.scroll, body.length - bodyRows));
       if (selectionStart < this.state.scroll) this.state.scroll = selectionStart;
-      if (selectionEnd >= this.state.scroll + bodyRows) this.state.scroll = selectionEnd - bodyRows + 1;
+      // 块不高于视口时才对齐块底；超高块保持块顶可见，避免首尾互斥把内容推走。
+      if (selectionEnd - selectionStart < bodyRows && selectionEnd >= this.state.scroll + bodyRows) {
+        this.state.scroll = selectionEnd - bodyRows + 1;
+      }
       const total = body.length;
       body = body.slice(this.state.scroll, this.state.scroll + bodyRows);
       footer = `${this.state.scroll + 1}-${this.state.scroll + body.length} / ${total}`;
@@ -737,6 +749,15 @@ export class PanelController {
             ? hint.replace("Tab 切换视图  ", "")
             : hint;
     return theme.muted(padLine(contextualHint, width));
+  }
+
+  /** True when the panel carries its own hint inside scrollable body content. */
+  hintRenderedInline(): boolean {
+    return this.kind === "question" && this.questionHintInline;
+  }
+
+  private questionHintText(): string {
+    return this.questionHint(renderInteractionHint("panel", "question", this.interactionState()));
   }
 
   // Registry 的 Question hint 按 questionMode 粗粒度生成，这里按真实题型补齐/剔除键位。
@@ -1347,26 +1368,23 @@ export class PanelController {
     }
     const question = this.questions[this.questionIndex];
     if (!question) return;
+    if (this.questionDirectAnswer || question.kind === "freeText") {
+      if (panelKey(data, Key.enter)) {
+        question.answer = this.questionInput.getValue();
+        this.advanceQuestion();
+        return;
+      }
+      const previous = this.questionInput.getValue();
+      this.questionInput.handleInput(data);
+      if (Array.from(this.questionInput.getValue()).length > 2_000) this.questionInput.setValue(previous);
+      return;
+    }
     if (panelKey(data, Key.left) || panelKey(data, Key.right)) {
       const offset = panelKey(data, Key.left) ? -1 : 1;
       this.questionIndex = Math.max(0, Math.min(this.questions.length - 1, this.questionIndex + offset));
       this.questionDirectAnswer = false;
-      this.questionInput = "";
+      this.questionInput.setValue("");
       this.state.selected = 0;
-      return;
-    }
-    if (this.questionDirectAnswer || question.kind === "freeText") {
-      if (panelKey(data, Key.backspace)) {
-        this.questionInput = this.questionInput.slice(0, -1);
-        return;
-      }
-      if (panelKey(data, Key.enter)) {
-        question.answer = this.questionInput;
-        this.advanceQuestion();
-        return;
-      }
-      const char = printable(data);
-      if (char && Array.from(this.questionInput).length < 2_000) this.questionInput += char;
       return;
     }
     // 跳过键只在选择/排序导航态生效；freeText 输入态下 Shift+S 是字面字符 "S"。
@@ -1379,7 +1397,7 @@ export class PanelController {
     if (this.move(data, options.length)) return;
     if (panelKey(data, Key.tab)) {
       this.questionDirectAnswer = true;
-      this.questionInput = "";
+      this.questionInput.setValue("");
       return;
     }
     const rankingUp = panelKey(data, Key.ctrl("up")) || panelKey(data, Key.alt("up"));
@@ -1398,7 +1416,7 @@ export class PanelController {
       if (!selected) return;
       if (selected.id === "other") {
         this.questionDirectAnswer = true;
-        this.questionInput = "";
+        this.questionInput.setValue("");
         return;
       }
       if (question.kind === "multiChoice") {
@@ -1424,7 +1442,7 @@ export class PanelController {
 
   private advanceQuestion(): void {
     this.questionDirectAnswer = false;
-    this.questionInput = "";
+    this.questionInput.setValue("");
     this.state.selected = 0;
     if (this.questionIndex >= this.questions.length - 1) this.questionReview = true;
     else this.questionIndex += 1;
@@ -2163,16 +2181,20 @@ export class PanelController {
       : [alignRight("", theme.muted(`${complete} / ${this.planItems.length}`), width)];
     items.forEach((item, index) => {
       const symbol =
-        item.status === "done" ? theme.success("✓") : item.status === "current" ? theme.focus("●") : theme.muted("○");
-      const label = item.status === "current" ? theme.focus(theme.bold(item.label)) : item.label;
-      lines.push(
-        selectedLine(
-          `${planTreePrefix(items, index, theme)}${symbol} ${label}`,
-          focused && index === this.state.selected,
-          width,
-          theme,
-        ),
-      );
+        item.status === "done"
+          ? theme.success("✓")
+          : item.status === "blocked"
+            ? theme.error("✕")
+            : item.status === "in_progress"
+              ? theme.focus("●")
+              : theme.muted("○");
+      const label = item.focused ? theme.focus(theme.bold(item.label)) : item.label;
+      const prefix = planTreePrefix(items, index, theme);
+      lines.push(selectedLine(`${prefix}${symbol} ${label}`, focused && index === this.state.selected, width, theme));
+      if (item.status === "blocked" && item.blocker) {
+        const indent = " ".repeat(visibleWidth(stripAnsi(prefix)) + 2);
+        lines.push(padLine(`${indent}${theme.warning("阻塞")} ${theme.muted(item.blocker)}`, width));
+      }
     });
     if (snapshot) {
       if (this.planActionMenu) {
@@ -2221,8 +2243,14 @@ export class PanelController {
     this.visiblePlanItems().forEach((item, index) => {
       const milestone = delivery.milestones.find((candidate) => candidate.id === item.id);
       const symbol =
-        item.status === "done" ? theme.success("✓") : item.status === "current" ? theme.focus("●") : theme.muted("○");
-      // 标记已承载 done/current/pending 语义，只有"待锚定"这类附加信息才补文字
+        item.status === "done"
+          ? theme.success("✓")
+          : item.status === "blocked"
+            ? theme.error("✕")
+            : item.status === "in_progress"
+              ? theme.focus("●")
+              : theme.muted("○");
+      // 标记已承载 done/in_progress/pending 语义，只有"待锚定"这类附加信息才补文字
       const statusText = milestone?.status === "pending_stone" ? " · 待锚定" : "";
       const id = (milestone?.id ?? item.id).padEnd(idWidth);
       lines.push(
@@ -2321,38 +2349,57 @@ export class PanelController {
       inset(theme.border((theme.capabilities.unicode ? "─" : "-").repeat(contentWidth))),
     ];
     if (this.questionDirectAnswer || question.kind === "freeText") {
+      const input = this.questionInput.render(Math.max(1, contentWidth - 2))[0] ?? "";
       lines.push(theme.muted(inset("你的回答")));
-      lines.push(inset(theme.selected(padLine(` ${this.questionInput}${this._cursor(theme)} `, contentWidth))));
+      lines.push(inset(theme.selected(padLine(` ${input} `, contentWidth))));
       return lines;
     }
     const options = [...(question.options ?? []), { id: "other", label: "其他" }];
-    options.forEach((option, index) => {
-      const answer = Array.isArray(question.answer) ? question.answer : [];
-      const checked = question.kind === "multiChoice" && answer.includes(option.id) ? theme.success("✓ ") : "";
+    const answer = Array.isArray(question.answer) ? question.answer : [];
+    const decorated = options.map((option, index) => {
+      const checked = question.kind === "multiChoice" && answer.includes(option.id) ? "✓ " : "";
       const rank = question.kind === "ranking" && option.id !== "other" ? `${index + 1}. ` : "";
-      const selected = index === this.state.selected;
-      const label = `${checked}${rank}${option.label}`;
-      if ("description" in option && option.description) {
-        if (contentWidth >= 56) {
-          const labelWidth = Math.min(24, Math.max(16, Math.floor(contentWidth * 0.32)));
+      return { option, label: `${checked}${rank}${option.label}` };
+    });
+    const labelWidth = Math.min(24, Math.max(16, Math.floor(contentWidth * 0.32)));
+    // 对齐布局只在每个 label 与 description 都能完整单行容纳时启用；
+    // 任一项超长即切换流式块，绝不截断选项文本。
+    const compactFit =
+      contentWidth >= 56 &&
+      decorated.every(({ option, label }) => {
+        if (visibleWidth(label) > labelWidth) return false;
+        const description = "description" in option ? option.description : undefined;
+        if (description && visibleWidth(description) > contentWidth - labelWidth) return false;
+        return true;
+      });
+    if (compactFit) {
+      decorated.forEach(({ option, label }, index) => {
+        const selected = index === this.state.selected;
+        const description = "description" in option && option.description ? option.description : undefined;
+        if (description) {
           lines.push(
             inset(
-              selectedLine(
-                `${padLine(label, labelWidth)}${theme.muted(option.description)}`,
-                selected,
-                contentWidth,
-                theme,
-              ),
+              selectedLine(`${padLine(label, labelWidth)}${theme.muted(description)}`, selected, contentWidth, theme),
             ),
           );
         } else {
           lines.push(inset(selectedLine(label, selected, contentWidth, theme)));
-          lines.push(theme.muted(inset(`    ${option.description}`)));
         }
-      } else {
-        lines.push(inset(selectedLine(label, selected, contentWidth, theme)));
-      }
-    });
+      });
+    } else {
+      decorated.forEach(({ option, label }, index) => {
+        const selected = index === this.state.selected;
+        const description = "description" in option && option.description ? option.description : undefined;
+        for (const labelLine of wrapTextWithAnsi(label, Math.max(1, contentWidth - 2))) {
+          lines.push(inset(selectedLine(labelLine, selected, contentWidth, theme)));
+        }
+        if (description) {
+          for (const descriptionLine of wrapTextWithAnsi(description, Math.max(1, contentWidth - 4))) {
+            lines.push(inset(selectedLine(`  ${theme.muted(descriptionLine)}`, selected, contentWidth, theme)));
+          }
+        }
+      });
+    }
     lines.push(theme.muted(inset("  直接回答    跳过")));
     return lines;
   }
@@ -2424,9 +2471,11 @@ function flattenPlanItems(plan: StoredPlan): PlanItem[] {
     for (const item of items) {
       result.push({
         id: item.id,
-        label: `${item.title}${item.id === plan.focusItemId ? "  [焦点]" : ""}${item.blocker ? `  · ${item.blocker}` : ""}`,
-        status: item.status === "done" ? "done" : item.id === plan.focusItemId ? "current" : "pending",
+        label: item.title,
+        status: item.status,
         depth,
+        ...(item.id === plan.focusItemId ? { focused: true } : {}),
+        ...(item.status === "blocked" && item.blocker ? { blocker: item.blocker } : {}),
       });
       if (item.children) visit(item.children, depth + 1);
     }
@@ -2442,7 +2491,8 @@ function nextPlanStatus(itemId: string, plan: StoredPlan): PlanStatus {
     if (!item) break;
     if (item.id === itemId) {
       if (item.status === "pending") return "in_progress";
-      if (item.status === "in_progress" || item.status === "blocked") return "done";
+      if (item.status === "in_progress") return "blocked";
+      if (item.status === "blocked") return "done";
       return "pending";
     }
     if (item.children) stack.unshift(...item.children);

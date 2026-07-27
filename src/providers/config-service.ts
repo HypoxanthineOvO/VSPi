@@ -35,6 +35,8 @@ export interface ProviderRecord {
   api?: string;
   protocol?: string;
   headers?: Record<string, string>;
+  /** Runtime provider whose catalog supplies shared model metadata (context window, cost, capabilities). */
+  inheritModelsFrom?: string;
   models: ProviderModelRecord[];
 }
 

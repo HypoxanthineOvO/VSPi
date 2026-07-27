@@ -53,6 +53,7 @@ import type {
   PromptProfileSnapshot,
   ResolvedPromptProfile,
 } from "../prompts/types.js";
+import { UserQuestionCancelledError } from "../questions/tool.js";
 import type { ExternalSessionSource } from "../sessions/external-history.js";
 import { normalizeSkillInstallSource } from "../skills/service.js";
 import type { SkillCatalogItem, SkillScope } from "../skills/types.js";
@@ -76,6 +77,7 @@ import { renderSplash, type StartupStatus } from "../ui/splash.js";
 import { renderStatusLines } from "../ui/status.js";
 import type { VspiTheme } from "../ui/theme.js";
 import {
+  buildTranscriptNodes,
   isQueuedTranscriptMessage,
   renderTranscript,
   selectTranscriptWindow,
@@ -179,6 +181,7 @@ interface ActiveSubmission {
 interface PendingQuestion {
   questions: Question[];
   relaying: boolean;
+  ownedByRoute: boolean;
   resolve(questions: Question[]): void;
   reject(error: Error): void;
   cleanup(): void;
@@ -212,6 +215,7 @@ export class VspiApp implements Component, Focusable {
   private inspectNodeId: string | undefined;
   private inspectToolId: string | undefined;
   private inspectDepth: "node" | "tool" = "node";
+  private transcriptStartNodeId: string | undefined;
   private nextBehavior: "prompt" | "followUp" = "prompt";
   private renameAttachmentId: string | undefined;
   private renameInput = "";
@@ -555,6 +559,12 @@ export class VspiApp implements Component, Focusable {
       commandCompletable: this.commandCompletionAvailable(),
       selectedAttachment: this.composer.selectedAttachment() !== undefined,
     };
+    // Modal panels own their complete keyspace. Composer Tab completion/Inspect navigation
+    // must never preempt Question direct-answer, Approval, or settings controls.
+    if (this.panels.kind !== "plan" && this.panels.kind !== "commands") {
+      this.handlePanelInput(data);
+      return;
+    }
     if (matchesInteraction("composer", "main", "cancelOrExit", data, composerState)) {
       if (this.activityActive()) void this.cancelGeneration();
       else this.options.onExit();
@@ -610,12 +620,11 @@ export class VspiApp implements Component, Focusable {
       this.focusComposer();
       return;
     }
-    if (this.panels.kind === "commands") {
-      if (this.panels.acceptsInput(data)) {
-        this.handlePanelInput(data);
-        return;
-      }
-    } else if (this.panels.kind !== "plan" || this.panelFocused) {
+    if (this.panels.kind === "commands" && this.panels.acceptsInput(data)) {
+      this.handlePanelInput(data);
+      return;
+    }
+    if (this.panels.kind === "plan" && this.panelFocused) {
       this.handlePanelInput(data);
       return;
     }
@@ -686,24 +695,6 @@ export class VspiApp implements Component, Focusable {
       return [...this.panels.renderSessionsSurface(width, surfaceRows, this.theme), ...notice, ...status];
     }
     const transcriptFocused = this.workspaceFocus === "transcript";
-    const transcriptWindow = this.currentTranscriptWindow(width);
-    const output = renderTranscript(transcriptWindow.messages, width, this.theme, {
-      ...(transcriptFocused && this.inspectNodeId ? { selectedNodeId: this.inspectNodeId } : {}),
-      ...(transcriptFocused && this.inspectDepth === "tool" && this.inspectToolId
-        ? { selectedToolId: this.inspectToolId }
-        : {}),
-      thinkingDisplay: this.options.settings.thinkingDisplay,
-      wrapCode: this.options.settings.wrapCode,
-      collapseCompletedTools: this.options.settings.collapseTools,
-      cache: this.transcriptRenderCache,
-    });
-    if (transcriptWindow.hiddenBlocks > 0) {
-      output.unshift(
-        this.theme.muted(padLine(`  ◇ 更早的 ${transcriptWindow.hiddenBlocks} 条内容暂未显示`, width)),
-        "",
-      );
-    }
-    if (output.length > 0) output.push("");
     const composer = this.composer.render(width);
     const activity = this.activityActive()
       ? [
@@ -727,30 +718,47 @@ export class VspiApp implements Component, Focusable {
       .filter(isQueuedTranscriptMessage)
       .map((message) => renderQueuedMessage(message, width, this.theme));
     const status = this.renderStatus(width);
-    const planSurfaceVisible = this.panels.kind !== "plan" || this.panels.hasPlanContent() || this.planPanelExplicit;
-    const panelRows =
-      this.panels.kind === "approval"
-        ? Math.min(
-            14,
-            Math.max(
-              3,
-              this.tui.terminal.rows - composer.length - activity.length - queuedMessages.length - status.length - 6,
-            ),
-          )
-        : this.tui.terminal.rows <= 24
-          ? Math.max(
-              3,
-              (this.panels.kind === "models" ? 10 : 9) - activity.length - queuedMessages.length - (status.length - 1),
-            )
-          : Math.min(
-              16,
-              Math.max(
-                3,
-                this.tui.terminal.rows - composer.length - activity.length - queuedMessages.length - 7 - status.length,
-              ),
-            );
-    if (this.preview) {
-      output.push(...this.preview.render(width));
+    const planSurfaceVisible =
+      !transcriptFocused && (this.panels.kind !== "plan" || this.panels.hasPlanContent() || this.planPanelExplicit);
+    const panelRows = this.panelRowBudget(composer.length, activity.length, queuedMessages.length, status.length);
+    const previewLines = this.preview?.render(width);
+    // The transcript gets only the rows left over after every other surface. Keeping the
+    // whole frame within the visible viewport guarantees pi-tui's differential renderer
+    // can always reach changed lines; a taller frame would force full redraws that clear
+    // the screen (and native scrollback) whenever an early line changes.
+    const reserved = previewLines ? previewLines.length + 1 : (planSurfaceVisible ? panelRows : 0) + 1; // hint/notice row
+    const terminalRows = Number.isFinite(this.tui.terminal.rows) ? this.tui.terminal.rows : 24;
+    const transcriptRows = Math.max(
+      3,
+      terminalRows - composer.length - activity.length - queuedMessages.length - status.length - reserved - 3,
+    );
+    const transcriptWindow = this.currentTranscriptWindow(width, transcriptRows);
+    const output = renderTranscript(transcriptWindow.messages, width, this.theme, {
+      ...(transcriptFocused && this.inspectNodeId ? { selectedNodeId: this.inspectNodeId } : {}),
+      ...(transcriptFocused && this.inspectDepth === "tool" && this.inspectToolId
+        ? { selectedToolId: this.inspectToolId }
+        : {}),
+      thinkingDisplay: this.options.settings.thinkingDisplay,
+      wrapCode: this.options.settings.wrapCode,
+      collapseCompletedTools: this.options.settings.collapseTools,
+      cache: this.transcriptRenderCache,
+    });
+    if (transcriptWindow.hiddenBlocks > 0) {
+      output.unshift(
+        this.theme.muted(padLine(`  ◇ 更早的 ${transcriptWindow.hiddenBlocks} 条内容暂未显示`, width)),
+        "",
+      );
+    }
+    if (transcriptWindow.truncatedTailBlocks > 0) {
+      output.push(
+        this.theme.muted(
+          padLine(`  ◇ 更新的 ${transcriptWindow.truncatedTailBlocks} 条内容未显示 · ↓ 回到最新`, width),
+        ),
+      );
+    }
+    if (output.length > 0) output.push("");
+    if (previewLines) {
+      output.push(...previewLines);
       output.push(this.notice ? this.renderNotice(width) : this.theme.muted(padLine(this.previewLabel, width)));
     } else {
       if (planSurfaceVisible) {
@@ -772,14 +780,31 @@ export class VspiApp implements Component, Focusable {
     return output;
   }
 
+  private panelRowBudget(composerRows: number, activityRows: number, queuedRows: number, statusRows: number): number {
+    if (this.panels.kind === "approval") {
+      return Math.min(
+        14,
+        Math.max(3, this.tui.terminal.rows - composerRows - activityRows - queuedRows - statusRows - 6),
+      );
+    }
+    if (this.tui.terminal.rows <= 24) {
+      return Math.max(3, (this.panels.kind === "models" ? 10 : 9) - activityRows - queuedRows - (statusRows - 1));
+    }
+    return Math.min(
+      16,
+      Math.max(3, this.tui.terminal.rows - composerRows - activityRows - queuedRows - 7 - statusRows),
+    );
+  }
+
   invalidate(): void {
     this.composer.invalidate();
   }
 
-  private renderPanelHint(width: number): string {
+  private renderPanelHint(width: number): string | undefined {
     if (this.panels.kind === "plan" && !this.panelFocused) {
       return this.theme.muted(padLine(renderInteractionHint("panel", "plan", {}), width));
     }
+    if (this.panels.hintRenderedInline()) return undefined;
     return this.panels.renderHint(width, this.theme);
   }
 
@@ -859,13 +884,21 @@ export class VspiApp implements Component, Focusable {
           clientMessageId: messageId,
         });
         this.composer.editor.addToHistory(text);
-        const mode = result?.delivery ?? delivery;
-        const queuedMessage = this.messages.find((message) => message.id === messageId);
-        if (queuedMessage?.kind === "text" && mode) queuedMessage.delivery = mode;
-        this.showNotice(
-          mode === "followUp" ? "已加入 Follow-up，将在当前任务完成后继续" : "已插入，将在下一次模型调用前送达",
-          "success",
-        );
+        if (result?.status !== "queued") {
+          // The backend was already idle despite the app's busy view: it started a new prompt.
+          // Reconcile presentation with the backend's authoritative decision instead of leaving
+          // the message stuck in the queued lane forever.
+          const settled = this.messages.find((message) => message.id === messageId);
+          if (settled?.kind === "text") delete settled.delivery;
+        } else {
+          const mode = result?.delivery ?? delivery;
+          const queuedMessage = this.messages.find((message) => message.id === messageId);
+          if (queuedMessage?.kind === "text" && mode) queuedMessage.delivery = mode;
+          this.showNotice(
+            mode === "followUp" ? "已加入 Follow-up，将在当前任务完成后继续" : "已插入，将在下一次模型调用前送达",
+            "success",
+          );
+        }
       } catch (error) {
         this.messages = this.messages.filter((message) => message.id !== messageId);
         const currentDraft = this.composer.getText().trim();
@@ -888,9 +921,29 @@ export class VspiApp implements Component, Focusable {
     this.activeSubmission = submission;
     this.setRunActive(true);
     try {
-      const result = await this.backend.send(text, { attachments, effort: this.effort, behavior });
+      const result = await this.backend.send(text, {
+        attachments,
+        effort: this.effort,
+        behavior,
+        clientMessageId: messageId,
+      });
       if (submission.cancelled || result?.status === "cancelled") {
         this.finalizeCancelledSubmission(submission);
+        return;
+      }
+      if (result?.status === "queued") {
+        // The backend was still streaming although the app already saw an idle boundary
+        // (agent_end precedes Pi's final settle). Adopt the backend's authoritative decision:
+        // present the message in the queued lane so its lifecycle matches what the model sees.
+        const queuedMessage = this.messages.find((message) => message.id === messageId);
+        if (queuedMessage?.kind === "text") queuedMessage.delivery = result.delivery ?? "steer";
+        this.composer.editor.addToHistory(text);
+        this.showNotice(
+          (result.delivery ?? "steer") === "followUp"
+            ? "已加入 Follow-up，将在当前任务完成后继续"
+            : "已插入，将在下一次模型调用前送达",
+          "success",
+        );
         return;
       }
       this.modelLabel = this.backend.modelLabel;
@@ -1057,6 +1110,7 @@ export class VspiApp implements Component, Focusable {
           return;
         }
         await this.backend.compact(compact);
+        this.composer.setText("");
         this.panels.close();
       } catch (error) {
         this.composer.setText(raw);
@@ -1201,7 +1255,7 @@ export class VspiApp implements Component, Focusable {
         pending.cleanup();
         pending.resolve({ type: "deny", reason: "Approval cancelled by user" });
       }
-      if (this.pendingQuestion) this.cancelPendingQuestion("Question cancelled by user");
+      if (this.pendingQuestion) this.cancelPendingQuestion("Question cancelled by user", { userInitiated: true });
       if (this.pendingRouteSubmission) {
         this.composer.setText(this.pendingRouteSubmission.raw);
         this.pendingRouteSubmission = undefined;
@@ -1953,6 +2007,7 @@ export class VspiApp implements Component, Focusable {
       this.pendingQuestion = {
         questions: structuredClone(questions),
         relaying: false,
+        ownedByRoute: false,
         resolve,
         reject,
         cleanup: () => signal?.removeEventListener("abort", abort),
@@ -1983,14 +2038,14 @@ export class VspiApp implements Component, Focusable {
     return answered?.answer === "fork" ? "fork" : answered?.answer === "cancel" ? "cancel" : "takeover";
   }
 
-  private cancelPendingQuestion(message: string): void {
+  private cancelPendingQuestion(message: string, options: { userInitiated?: boolean; abort?: boolean } = {}): void {
     const pending = this.pendingQuestion;
     if (!pending) return;
     this.pendingQuestion = undefined;
     pending.cleanup();
     if (this.panels.kind === "question") this.panels.close();
-    const error = new Error(message);
-    error.name = "AbortError";
+    const error = options.userInitiated ? new UserQuestionCancelledError(message) : new Error(message);
+    if (!options.userInitiated || options.abort) error.name = "AbortError";
     pending.reject(error);
   }
 
@@ -2266,6 +2321,7 @@ export class VspiApp implements Component, Focusable {
     this.workspaceFocus = "composer";
     this.panelFocused = false;
     this.inspectIndex = undefined;
+    this.transcriptStartNodeId = undefined;
     this.requestRender();
   }
 
@@ -2274,25 +2330,83 @@ export class VspiApp implements Component, Focusable {
     this.workspaceFocus = "plan";
     this.panelFocused = true;
     this.inspectIndex = undefined;
+    this.transcriptStartNodeId = undefined;
     this.requestRender();
   }
 
-  private currentTranscriptWindow(width?: number): TranscriptWindow {
+  private currentTranscriptWindow(width?: number, maxRows?: number): TranscriptWindow {
     const terminalWidth = width ?? this.tui.terminal.columns;
     const safeWidth = Number.isFinite(terminalWidth) ? Math.max(1, terminalWidth) : 80;
-    const terminalRows = Number.isFinite(this.tui.terminal.rows) ? this.tui.terminal.rows : 24;
     return selectTranscriptWindow(this.messages, {
       width: safeWidth,
-      maxRows: Math.max(1, terminalRows * 6),
+      maxRows: Math.max(1, maxRows ?? this.transcriptViewportRows(safeWidth)),
       maxBlocks: 80,
       maxCharacters: 60_000,
       thinkingDisplay: this.options.settings.thinkingDisplay,
       collapseCompletedTools: this.options.settings.collapseTools,
       ...(this.workspaceFocus === "transcript" && this.inspectNodeId ? { pinnedNodeId: this.inspectNodeId } : {}),
+      ...(this.workspaceFocus === "transcript" && this.transcriptStartNodeId
+        ? { startNodeId: this.transcriptStartNodeId }
+        : {}),
     });
   }
 
+  /** Move the Inspect selection one node earlier and extend the window batch-wise around it. */
+  private extendTranscriptHistory(): boolean {
+    const all = buildTranscriptNodes(this.messages);
+    const firstId = this.currentTranscriptWindow().nodes[0]?.id;
+    const firstGlobal = all.findIndex((node) => node.id === firstId);
+    const target = firstGlobal > 0 ? all[firstGlobal - 1] : undefined;
+    if (!firstId || !target) return false;
+    this.inspectNodeId = target.id;
+    this.inspectToolId = undefined;
+    this.inspectDepth = "node";
+    this.inspectIndex = target.messageIndexes[0];
+    const start = Math.max(0, firstGlobal - 20);
+    this.transcriptStartNodeId = all[start]?.id;
+    // The anchored budget may not reach the selection when blocks are tall; reconcile keeps it visible.
+    this.reconcileTranscriptStart();
+    return true;
+  }
+
+  /** Keep the Inspect window anchored around the selection; fall back to tail-following near the end. */
+  private reconcileTranscriptStart(): void {
+    const all = buildTranscriptNodes(this.messages);
+    const selectedGlobal = all.findIndex((node) => node.id === this.inspectNodeId);
+    if (selectedGlobal < 0 || selectedGlobal >= all.length - 3) {
+      this.transcriptStartNodeId = undefined;
+      return;
+    }
+    const window = this.currentTranscriptWindow();
+    if (window.nodes.some((node) => node.id === this.inspectNodeId)) {
+      if (window.truncatedTailBlocks === 0) this.transcriptStartNodeId = undefined;
+      return;
+    }
+    const start = Math.max(0, selectedGlobal - 5);
+    this.transcriptStartNodeId = all[start]?.id;
+  }
+
+  /** Rows the transcript may occupy without pushing the whole frame past the visible viewport. */
+  private transcriptViewportRows(width: number): number {
+    const terminalRows = Number.isFinite(this.tui.terminal.rows) ? this.tui.terminal.rows : 24;
+    const composerRows = this.composer.render(width).length;
+    const activityRows = this.activityActive() ? 1 : 0;
+    const queuedRows = this.messages.filter(isQueuedTranscriptMessage).length;
+    const statusRows = this.renderStatus(width).length;
+    const planSurfaceVisible =
+      this.workspaceFocus !== "transcript" &&
+      (this.panels.kind !== "plan" || this.panels.hasPlanContent() || this.planPanelExplicit);
+    const previewRows = this.preview ? this.preview.render(width).length + 1 : 0;
+    const panelRows =
+      previewRows === 0 && planSurfaceVisible
+        ? this.panelRowBudget(composerRows, activityRows, queuedRows, statusRows)
+        : 0;
+    const chrome = composerRows + activityRows + queuedRows + statusRows + panelRows + previewRows + 1;
+    return Math.max(3, terminalRows - chrome - 3);
+  }
+
   private focusTranscript(): boolean {
+    this.transcriptStartNodeId = undefined;
     const nodes = this.currentTranscriptWindow().nodes;
     if (nodes.length === 0) {
       this.showNotice("暂无消息，无法进入 Transcript", "info");
@@ -2369,12 +2483,34 @@ export class VspiApp implements Component, Focusable {
 
     if (interaction.handler === "moveInspect") {
       const offset = matchesKey(data, Key.up) ? -1 : 1;
+      if (offset < 0 && nodeIndex === 0) {
+        // 到达当前窗口顶部：选中上移一条并向前扩展一批更早历史。
+        if (!this.extendTranscriptHistory()) this.showNotice("已到最早内容", "info");
+        this.requestRender();
+        return;
+      }
+      if (offset > 0 && nodeIndex === nodes.length - 1) {
+        // 到达锚点窗口底部：选中下移一条，窗口跟随或回到 tail 模式。
+        const all = buildTranscriptNodes(this.messages);
+        const selectedGlobal = all.findIndex((node) => node.id === this.inspectNodeId);
+        const nextGlobal = selectedGlobal >= 0 ? all[selectedGlobal + 1] : undefined;
+        if (nextGlobal) {
+          this.inspectNodeId = nextGlobal.id;
+          this.inspectToolId = undefined;
+          this.inspectDepth = "node";
+          this.inspectIndex = nextGlobal.messageIndexes[0];
+          this.reconcileTranscriptStart();
+        }
+        this.requestRender();
+        return;
+      }
       const next = nodes[Math.max(0, Math.min(nodes.length - 1, nodeIndex + offset))];
       if (next) {
         this.inspectNodeId = next.id;
         this.inspectToolId = undefined;
         this.inspectDepth = "node";
         this.inspectIndex = next.messageIndexes[0];
+        this.reconcileTranscriptStart();
       }
     } else if (interaction.handler === "toggleInspectItem") {
       const message = this.messages[selectedNode.messageIndexes[0] ?? -1];
@@ -2596,6 +2732,7 @@ export class VspiApp implements Component, Focusable {
     this.inspectNodeId = undefined;
     this.inspectToolId = undefined;
     this.inspectDepth = "node";
+    this.transcriptStartNodeId = undefined;
     this.nextBehavior = "prompt";
     this.pendingRouteSubmission = undefined;
     this.planPanelExplicit = false;

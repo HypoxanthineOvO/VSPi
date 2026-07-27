@@ -3,7 +3,7 @@ import type { EffortLevel } from "../domain/types.js";
 import type { ProviderLayer, ProviderRecord } from "./config-service.js";
 import { normalizeProviderApi } from "./config-service.js";
 
-type RuntimeRegistrar = Pick<ModelRuntime, "registerProvider">;
+type RuntimeRegistrar = Pick<ModelRuntime, "registerProvider" | "getModel">;
 
 interface RuntimeProviderModel {
   id: string;
@@ -16,19 +16,26 @@ interface RuntimeProviderModel {
   contextWindow?: number;
   inputUsdPerMillion?: number;
   outputUsdPerMillion?: number;
-  cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
+  cost?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    tiers?: unknown;
+  };
   maxTokens?: number;
   headers?: Record<string, string>;
+  compat?: object;
 }
 
 /** Register VSPi-owned providers through one path shared by startup and init. */
 export function registerBuiltinProviders(runtime: RuntimeRegistrar, providers: readonly ProviderRecord[]): void {
   for (const provider of providers) {
-    runtime.registerProvider(provider.id, normalizeBuiltinProvider(provider) as never);
+    runtime.registerProvider(provider.id, normalizeBuiltinProvider(provider, runtime) as never);
   }
 }
 
-export function normalizeBuiltinProvider(provider: ProviderRecord) {
+export function normalizeBuiltinProvider(provider: ProviderRecord, runtime?: Pick<ModelRuntime, "getModel">) {
   const envVar = `${provider.id.replace(/[^a-z0-9]/gi, "_").toUpperCase()}_API_KEY`;
   const api = provider.protocol
     ? normalizeProviderApi(provider.protocol, "provider.protocol")
@@ -39,7 +46,41 @@ export function normalizeBuiltinProvider(provider: ProviderRecord) {
     name: provider.name,
     ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
     apiKey: `$${envVar}`,
-    models: provider.models.map((model) => normalizeRuntimeModel(model, api)),
+    models: provider.models.map((model) => normalizeRuntimeModel(resolveInheritedModel(provider, model, runtime), api)),
+  };
+}
+
+/**
+ * Merge shared model metadata from the upstream Pi catalog (contextWindow, maxTokens,
+ * input capabilities, reasoning, thinking map, cost tiers). VSPi records only override
+ * fields they explicitly set. Missing upstream entries fail closed: guessing a context
+ * window here is how the 1.05M/272K drift happened.
+ */
+function resolveInheritedModel(
+  provider: ProviderRecord,
+  model: ProviderRecord["models"][number],
+  runtime: Pick<ModelRuntime, "getModel"> | undefined,
+): RuntimeProviderModel {
+  if (!provider.inheritModelsFrom) return model;
+  const upstream = runtime?.getModel(provider.inheritModelsFrom, model.id);
+  if (!upstream) {
+    throw new Error(
+      `${provider.name} model ${model.id} requires the Pi ${provider.inheritModelsFrom} catalog entry, but it is missing`,
+    );
+  }
+  const thinkingLevelMap = model.thinkingLevelMap ?? upstream.thinkingLevelMap;
+  return {
+    id: model.id,
+    name: model.name || upstream.name,
+    reasoning: model.reasoning ?? upstream.reasoning,
+    ...(thinkingLevelMap
+      ? { thinkingLevelMap: thinkingLevelMap as NonNullable<RuntimeProviderModel["thinkingLevelMap"]> }
+      : {}),
+    input: model.input ?? upstream.input,
+    cost: model.cost ?? upstream.cost,
+    contextWindow: model.contextWindow ?? upstream.contextWindow,
+    maxTokens: model.maxTokens ?? upstream.maxTokens,
+    ...(upstream.compat ? { compat: upstream.compat as object } : {}),
   };
 }
 
@@ -84,6 +125,7 @@ function normalizeRuntimeModel(model: RuntimeProviderModel, api: string) {
     ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
     input: normalizeModelInput(model.input),
     cost: {
+      ...model.cost,
       input: model.cost?.input ?? model.inputUsdPerMillion ?? 0,
       output: model.cost?.output ?? model.outputUsdPerMillion ?? 0,
       cacheRead: model.cost?.cacheRead ?? 0,
@@ -91,6 +133,7 @@ function normalizeRuntimeModel(model: RuntimeProviderModel, api: string) {
     },
     contextWindow: model.contextWindow ?? 128_000,
     maxTokens: model.maxTokens ?? 8_192,
+    ...(model.compat ? { compat: model.compat } : {}),
   };
 }
 

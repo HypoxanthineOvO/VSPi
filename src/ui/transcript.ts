@@ -29,12 +29,16 @@ export interface TranscriptWindowOptions {
   thinkingDisplay?: TranscriptRenderOptions["thinkingDisplay"];
   collapseCompletedTools?: boolean;
   pinnedNodeId?: string;
+  /** Anchor mode: start the window at this node and fill forward instead of trailing the tail. */
+  startNodeId?: string;
 }
 
 export interface TranscriptWindow {
   messages: TranscriptMessage[];
   nodes: TranscriptNode[];
   hiddenBlocks: number;
+  /** Nodes after the window that are not shown (anchor mode browsing mid-history). */
+  truncatedTailBlocks: number;
 }
 
 interface TranscriptCacheEntry {
@@ -125,11 +129,50 @@ export function selectTranscriptWindow(
   options: TranscriptWindowOptions,
 ): TranscriptWindow {
   const nodes = buildTranscriptNodes(messages);
-  if (nodes.length === 0) return { messages: [], nodes: [], hiddenBlocks: 0 };
+  if (nodes.length === 0) return { messages: [], nodes: [], hiddenBlocks: 0, truncatedTailBlocks: 0 };
 
   const maxBlocks = Math.max(1, options.maxBlocks ?? 80);
   const maxCharacters = Math.max(1, options.maxCharacters ?? 60_000);
   const maxRows = Math.max(1, options.maxRows);
+
+  if (options.startNodeId) {
+    const startIndex = nodes.findIndex((node) => node.id === options.startNodeId);
+    if (startIndex >= 0) {
+      let anchorCharacters = 0;
+      let anchorRows = 0;
+      let end = startIndex;
+      for (let nodeIndex = startIndex; nodeIndex < nodes.length; nodeIndex += 1) {
+        const node = nodes[nodeIndex];
+        if (!node) break;
+        const block = node.messageIndexes
+          .map((messageIndex) => messages[messageIndex])
+          .filter((message): message is TranscriptMessage => message !== undefined);
+        const nextCharacters = block.reduce((total, message) => total + transcriptMessageCharacters(message), 0);
+        const nextRows = estimateTranscriptBlockRows(block, options);
+        if (
+          nodeIndex > startIndex &&
+          (nodeIndex - startIndex >= maxBlocks ||
+            anchorCharacters + nextCharacters > maxCharacters ||
+            anchorRows + nextRows > maxRows)
+        ) {
+          break;
+        }
+        end = nodeIndex + 1;
+        anchorCharacters += nextCharacters;
+        anchorRows += nextRows;
+      }
+      const anchorNodes = nodes.slice(startIndex, end);
+      const firstMessageIndex = anchorNodes[0]?.messageIndexes[0] ?? messages.length;
+      const lastMessageIndex = (anchorNodes.at(-1)?.messageIndexes.at(-1) ?? firstMessageIndex - 1) + 1;
+      return {
+        messages: messages.slice(firstMessageIndex, lastMessageIndex),
+        nodes: anchorNodes,
+        hiddenBlocks: startIndex,
+        truncatedTailBlocks: nodes.length - end,
+      };
+    }
+  }
+
   let characters = 0;
   let rows = 0;
   let start = nodes.length;
@@ -164,6 +207,7 @@ export function selectTranscriptWindow(
     messages: messages.slice(firstMessageIndex),
     nodes: selectedNodes,
     hiddenBlocks: start,
+    truncatedTailBlocks: 0,
   };
 }
 

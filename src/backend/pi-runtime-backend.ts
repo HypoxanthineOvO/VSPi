@@ -534,13 +534,19 @@ export class PiRuntimeBackend implements ChatBackend {
     this.publishActivity();
     try {
       await this.requireSession().compact(resolved.customInstructions);
-      this.reviewTracker.noteCompaction();
-      this.publishUsage();
-      this.events?.onNotice(`上下文压缩完成 · ${resolved.profile}`, "success");
+      if (this.compacting) {
+        // Fake sessions and very small integrations may not emit Pi lifecycle events. In production,
+        // compaction_end is the single completion path and must not be completed a second time here.
+        this.reviewTracker.noteCompaction();
+        this.publishUsage();
+        this.events?.onNotice(`上下文压缩完成 · ${resolved.profile}`, "success");
+      }
     } finally {
-      this.compacting = false;
-      if (this.activeGeneration === undefined) this.compactionMutationBlocked = false;
-      this.publishActivity();
+      if (this.compacting) {
+        this.compacting = false;
+        if (this.activeGeneration === undefined) this.compactionMutationBlocked = false;
+        this.publishActivity();
+      }
     }
   }
 
@@ -1708,7 +1714,10 @@ export class PiRuntimeBackend implements ChatBackend {
       return;
     }
     if (event.type === "compaction_end") {
-      if (!event.aborted && event.result) this.reviewTracker.noteCompaction();
+      if (!event.aborted && event.result) {
+        this.reviewTracker.noteCompaction();
+        this.publishUsage();
+      }
       this.compacting = false;
       this.compactionMutationBlocked = this.activeGeneration !== undefined || event.willRetry;
       this.agentRunning = event.willRetry;

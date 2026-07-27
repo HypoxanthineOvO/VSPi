@@ -749,6 +749,76 @@ describe("Plan router question", () => {
   });
 });
 
+describe("submission queue reconciliation", () => {
+  it("adopts the backend queued decision when the app already saw an idle boundary", async () => {
+    const send = vi.fn(async () => ({ status: "queued" as const, delivery: "steer" as const }));
+    const app = await createApp(backendWith({}, { send }));
+    const testable = app as unknown as TestableApp;
+    try {
+      await testable.submit("窗口期消息");
+      const message = testable.messages.find((candidate) => candidate.kind === "text" && candidate.role === "user");
+      expect(message?.kind === "text" && message.delivery).toBe("steer");
+      expect(testable.notice?.text).toContain("已插入");
+    } finally {
+      await app.dispose();
+    }
+  });
+
+  it("settles a message back into the main transcript when the backend was actually idle", async () => {
+    const ref: { events?: ChatBackendEvents } = {};
+    const send = vi.fn(async () => {});
+    const app = await createApp(backendWith(ref, { send }));
+    const testable = app as unknown as TestableApp;
+    try {
+      ref.events?.onBusy(true);
+      await testable.submit("分叉时序消息");
+      const message = testable.messages.find((candidate) => candidate.kind === "text" && candidate.role === "user");
+      expect(message?.kind === "text" && message.delivery).toBeUndefined();
+      expect(testable.notice?.text ?? "").not.toContain("已插入");
+    } finally {
+      await app.dispose();
+    }
+  });
+});
+
+describe("transcript history loading", () => {
+  it("loads earlier history in batches when Inspect moves past the window top", async () => {
+    const app = await createApp(backendWith({}));
+    const testable = app as unknown as TestableApp;
+    try {
+      for (let index = 0; index < 60; index += 1) {
+        testable.messages.push({
+          id: `history-${index}`,
+          role: "assistant",
+          kind: "text",
+          text: `历史消息 ${index}`,
+        });
+      }
+      app.handleInput("\t");
+      expect(testable.workspaceFocus).toBe("transcript");
+      expect(testable.inspectNodeId).toBe("history-59");
+
+      // 窗口顶部向上越界：逐批加载，直到抵达最早一条
+      for (let guard = 0; guard < 80 && testable.inspectNodeId !== "history-0"; guard += 1) {
+        app.handleInput("\x1b[A");
+      }
+      expect(testable.inspectNodeId).toBe("history-0");
+      // 再一次向上：已经在最早内容，不报错
+      app.handleInput("\x1b[A");
+      expect(testable.inspectNodeId).toBe("history-0");
+
+      // 向下回到尾部后恢复 tail 跟随，渲染帧仍不超过终端高度
+      for (let guard = 0; guard < 80 && testable.inspectNodeId !== "history-59"; guard += 1) {
+        app.handleInput("\x1b[B");
+      }
+      expect(testable.inspectNodeId).toBe("history-59");
+      expect(app.render(80).length).toBeLessThanOrEqual(24);
+    } finally {
+      await app.dispose();
+    }
+  });
+});
+
 describe("tool approval overlay", () => {
   it("returns a structured denial when Escape closes the approval panel", async () => {
     const broker = createInteractiveApprovalBroker();

@@ -614,7 +614,7 @@ const actions: InteractionDefinition[] = [
     matcher: () => true,
     hint: (state) => {
       if (state.questionMode === "review") return "Enter 提交  ← 返回";
-      if (state.questionMode === "freeText") return "Enter 确认  ←→ 切题  Shift+S 跳过";
+      if (state.questionMode === "freeText") return "Enter 确认  ←→ 移动光标";
       if (state.questionMode === "ranking") return "↑↓ 选择  Ctrl/Alt+↑↓ 重排  Enter 确认  ←→ 切题  Shift+S 跳过";
       return "↑↓ 选择  Space 多选  Tab 直接回答  Enter 确认  ←→ 切题  Shift+S 跳过";
     },
