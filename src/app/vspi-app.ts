@@ -56,6 +56,11 @@ import type {
 import type { ExternalSessionSource } from "../sessions/external-history.js";
 import { normalizeSkillInstallSource } from "../skills/service.js";
 import type { SkillCatalogItem, SkillScope } from "../skills/types.js";
+import {
+  HttpThinkingTranslator,
+  normalizeTranslationEndpoint,
+  type ThinkingTranslator,
+} from "../translation/thinking-translator.js";
 import { renderActivityRail, renderQueuedMessage } from "../ui/activity.js";
 import { padLine } from "../ui/ansi.js";
 import { AuthDialog } from "../ui/auth-dialog.js";
@@ -71,10 +76,12 @@ import { renderSplash, type StartupStatus } from "../ui/splash.js";
 import { renderStatusLines } from "../ui/status.js";
 import type { VspiTheme } from "../ui/theme.js";
 import {
-  buildTranscriptNodes,
   isQueuedTranscriptMessage,
   renderTranscript,
+  selectTranscriptWindow,
   type TranscriptNode,
+  TranscriptRenderCache,
+  type TranscriptWindow,
 } from "../ui/transcript.js";
 import { type SelfUpdateResult, updateVspi } from "../update/self-update.js";
 import { VSPI_VERSION } from "../version.js";
@@ -95,6 +102,7 @@ export interface VspiAppOptions {
   workflowAdapter?: WorkflowAdapter;
   promptProfiles?: PromptProfileUi;
   selfUpdate?: (currentVersion: string) => Promise<SelfUpdateResult>;
+  thinkingTranslator?: ThinkingTranslator;
   openOnStart?: "sessions" | "providers";
   onForegroundRelinquish?: () => void;
   onForegroundResume?: () => void;
@@ -243,6 +251,12 @@ export class VspiApp implements Component, Focusable {
   private planPanelExplicit = false;
   private promptProfileSnapshot: PromptProfileSnapshot | undefined;
   private effectivePromptSegments: EffectivePromptSegment[] = [];
+  private readonly transcriptRenderCache = new TranscriptRenderCache();
+  private readonly thinkingTranslator: ThinkingTranslator;
+  private thinkingTranslationQueue: Promise<void> = Promise.resolve();
+  private thinkingTranslationAbort: AbortController | undefined;
+  private thinkingTranslationRevision = 0;
+  private readonly translatedThinkingSources = new Map<string, string>();
 
   get focused(): boolean {
     return this._focused;
@@ -266,6 +280,7 @@ export class VspiApp implements Component, Focusable {
     } as TUI;
     this.composer = new Composer(renderingTui, theme);
     this.panels = new PanelController(options.settings);
+    this.thinkingTranslator = options.thinkingTranslator ?? new HttpThinkingTranslator();
     this.yoloAcknowledgementBroker = options.yoloAcknowledgementBroker ?? createYoloAcknowledgementBroker();
     this.executionPolicy =
       options.executionPolicy ??
@@ -296,7 +311,18 @@ export class VspiApp implements Component, Focusable {
           if (this.sessionTransition) return;
           const index = this.messages.findIndex((message) => message.id === id);
           const current = this.messages[index];
-          if (index >= 0 && current) this.messages[index] = { ...current, ...patch } as TranscriptMessage;
+          if (index >= 0 && current) {
+            const next = { ...current, ...patch } as TranscriptMessage;
+            this.messages[index] = next;
+            if (
+              current.kind === "thinking" &&
+              next.kind === "thinking" &&
+              current.streaming &&
+              next.streaming === false
+            ) {
+              this.queueThinkingTranslation(id);
+            }
+          }
           this.requestRender();
         },
         onBusy: (busy) => {
@@ -397,6 +423,7 @@ export class VspiApp implements Component, Focusable {
       if (this.backendSessionReady) await this.initializeRuntimeSurface();
       await this.refreshPlanSnapshot(this.sessionEpoch);
       await this.refreshWorkflowSnapshot();
+      this.queueVisibleThinkingTranslations();
       if (this.options.openOnStart === "sessions") {
         try {
           this.panels.setSessions(await this.backend.listSessions());
@@ -468,6 +495,9 @@ export class VspiApp implements Component, Focusable {
     this.yoloAcknowledgementBroker.cancel();
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
     if (this.workingTimer) clearInterval(this.workingTimer);
+    this.thinkingTranslationRevision += 1;
+    this.thinkingTranslationAbort?.abort();
+    this.thinkingTranslationAbort = undefined;
     this.cancelPendingQuestion("Question cancelled because VSPi is closing");
     this.cancelPendingApproval("Approval cancelled because VSPi is closing");
     this.options.approvalBroker?.setHandler(undefined);
@@ -645,8 +675,16 @@ export class VspiApp implements Component, Focusable {
 
   render(width: number): string[] {
     if (this.authDialog) return this.authDialog.render(width, this.theme);
+    if (this.panels.kind === "sessions") {
+      const status = this.renderStatus(width);
+      const notice = this.notice ? [this.renderNotice(width)] : [];
+      const terminalRows = Number.isFinite(this.tui.terminal.rows) ? this.tui.terminal.rows : 24;
+      const surfaceRows = Math.max(3, terminalRows - status.length - notice.length);
+      return [...this.panels.renderSessionsSurface(width, surfaceRows, this.theme), ...notice, ...status];
+    }
     const transcriptFocused = this.workspaceFocus === "transcript";
-    const output = renderTranscript(this.messages, width, this.theme, {
+    const transcriptWindow = this.currentTranscriptWindow(width);
+    const output = renderTranscript(transcriptWindow.messages, width, this.theme, {
       ...(transcriptFocused && this.inspectNodeId ? { selectedNodeId: this.inspectNodeId } : {}),
       ...(transcriptFocused && this.inspectDepth === "tool" && this.inspectToolId
         ? { selectedToolId: this.inspectToolId }
@@ -654,7 +692,14 @@ export class VspiApp implements Component, Focusable {
       thinkingDisplay: this.options.settings.thinkingDisplay,
       wrapCode: this.options.settings.wrapCode,
       collapseCompletedTools: this.options.settings.collapseTools,
+      cache: this.transcriptRenderCache,
     });
+    if (transcriptWindow.hiddenBlocks > 0) {
+      output.unshift(
+        this.theme.muted(padLine(`  ◇ 更早的 ${transcriptWindow.hiddenBlocks} 条内容暂未显示`, width)),
+        "",
+      );
+    }
     if (output.length > 0) output.push("");
     const composer = this.composer.render(width);
     const activity = this.activityActive()
@@ -1365,16 +1410,23 @@ export class VspiApp implements Component, Focusable {
       await this.applySkillMutation("remove", event.skill);
     } else if (event.type === "settings") {
       try {
-        const path = await saveSettings(this.options.cwd, event.settings, undefined, {
+        const settings = {
+          ...event.settings,
+          thinkingTranslationEndpoint: normalizeTranslationEndpoint(event.settings.thinkingTranslationEndpoint),
+        };
+        const path = await saveSettings(this.options.cwd, settings, undefined, {
           trustedProject: this.backend.isProjectTrusted?.() ?? false,
         });
-        this.panels.confirmSettings(event.settings);
-        if (this.options.settings.scope === event.settings.scope) {
-          this.options.settings = { ...event.settings };
-          this.applyThinkingDisplay(event.settings.thinkingDisplay);
+        this.panels.confirmSettings(settings);
+        if (this.options.settings.scope === settings.scope) {
+          const endpointChanged =
+            this.options.settings.thinkingTranslationEndpoint !== settings.thinkingTranslationEndpoint;
+          this.options.settings = { ...settings };
+          this.applyThinkingDisplay(settings.thinkingDisplay);
+          if (endpointChanged) this.applyThinkingTranslationEndpoint();
         }
         this.panels.close();
-        this.showNotice(`${event.settings.scope === "global" ? "全局" : "项目"}设置已保存到 ${path}`, "success");
+        this.showNotice(`${settings.scope === "global" ? "全局" : "项目"}设置已保存到 ${path}`, "success");
       } catch (error) {
         this.showNotice(`设置保存失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
       }
@@ -2222,8 +2274,23 @@ export class VspiApp implements Component, Focusable {
     this.requestRender();
   }
 
+  private currentTranscriptWindow(width?: number): TranscriptWindow {
+    const terminalWidth = width ?? this.tui.terminal.columns;
+    const safeWidth = Number.isFinite(terminalWidth) ? Math.max(1, terminalWidth) : 80;
+    const terminalRows = Number.isFinite(this.tui.terminal.rows) ? this.tui.terminal.rows : 24;
+    return selectTranscriptWindow(this.messages, {
+      width: safeWidth,
+      maxRows: Math.max(1, terminalRows * 6),
+      maxBlocks: 80,
+      maxCharacters: 60_000,
+      thinkingDisplay: this.options.settings.thinkingDisplay,
+      collapseCompletedTools: this.options.settings.collapseTools,
+      ...(this.workspaceFocus === "transcript" && this.inspectNodeId ? { pinnedNodeId: this.inspectNodeId } : {}),
+    });
+  }
+
   private focusTranscript(): boolean {
-    const nodes = buildTranscriptNodes(this.messages);
+    const nodes = this.currentTranscriptWindow().nodes;
     if (nodes.length === 0) {
       this.showNotice("暂无消息，无法进入 Transcript", "info");
       return false;
@@ -2254,7 +2321,7 @@ export class VspiApp implements Component, Focusable {
   private cycleWorkspaceFocus(): void {
     const hasPlan = this.panels.hasPlanContent();
     if (this.workspaceFocus === "composer") {
-      if (buildTranscriptNodes(this.messages).length > 0) this.focusTranscript();
+      if (this.currentTranscriptWindow().nodes.length > 0) this.focusTranscript();
       else if (hasPlan) this.focusPlan();
       return;
     }
@@ -2283,7 +2350,7 @@ export class VspiApp implements Component, Focusable {
       return;
     }
 
-    const nodes = buildTranscriptNodes(this.messages);
+    const nodes = this.currentTranscriptWindow().nodes;
     const nodeIndex = nodes.findIndex((node) => node.id === this.inspectNodeId);
     const selectedNode = nodes[nodeIndex];
     if (!selectedNode) {
@@ -2365,7 +2432,7 @@ export class VspiApp implements Component, Focusable {
   }
 
   private inspectInteractionState(): InteractionState {
-    const nodes = buildTranscriptNodes(this.messages);
+    const nodes = this.currentTranscriptWindow().nodes;
     const selectedNode = nodes.find((node) => node.id === this.inspectNodeId);
     const selected = this.messages[selectedNode?.messageIndexes[0] ?? -1];
     return {
@@ -2384,6 +2451,75 @@ export class VspiApp implements Component, Focusable {
     for (const message of this.messages) {
       if (message.kind === "thinking") message.collapsed = mode !== "expanded";
     }
+  }
+
+  private applyThinkingTranslationEndpoint(): void {
+    this.thinkingTranslationRevision += 1;
+    this.thinkingTranslationAbort?.abort();
+    this.thinkingTranslationAbort = undefined;
+    this.translatedThinkingSources.clear();
+    this.messages = this.messages.map((message) =>
+      message.kind === "thinking" ? { ...message, translatedText: undefined, translationStatus: undefined } : message,
+    );
+    this.transcriptRenderCache.clear();
+    this.queueVisibleThinkingTranslations();
+  }
+
+  private queueVisibleThinkingTranslations(): void {
+    if (!this.options.settings.thinkingTranslationEndpoint) return;
+    const visible = this.currentTranscriptWindow().messages.filter(
+      (message): message is Extract<TranscriptMessage, { kind: "thinking" }> =>
+        message.kind === "thinking" && !message.streaming,
+    );
+    for (const message of visible.slice(-20)) this.queueThinkingTranslation(message.id);
+  }
+
+  private queueThinkingTranslation(id: string): void {
+    const endpoint = this.options.settings.thinkingTranslationEndpoint;
+    if (!endpoint) return;
+    const index = this.messages.findIndex((message) => message.id === id);
+    const message = this.messages[index];
+    if (index < 0 || message?.kind !== "thinking" || message.streaming || !message.text.trim()) return;
+    const sourceKey = `${endpoint}\0${message.text}`;
+    if (this.translatedThinkingSources.get(id) === sourceKey) return;
+    this.translatedThinkingSources.set(id, sourceKey);
+    this.messages[index] = { ...message, translatedText: undefined, translationStatus: "pending" };
+    const sessionEpoch = this.sessionEpoch;
+    const revision = this.thinkingTranslationRevision;
+    const sourceText = message.text;
+    this.thinkingTranslationQueue = this.thinkingTranslationQueue
+      .catch(() => undefined)
+      .then(async () => {
+        if (sessionEpoch !== this.sessionEpoch || revision !== this.thinkingTranslationRevision) return;
+        const controller = new AbortController();
+        this.thinkingTranslationAbort = controller;
+        try {
+          const translatedText = await this.thinkingTranslator.translate(sourceText, endpoint, controller.signal);
+          if (sessionEpoch !== this.sessionEpoch || revision !== this.thinkingTranslationRevision) return;
+          this.updateThinkingTranslation(id, sourceText, {
+            translatedText,
+            translationStatus: translatedText ? "translated" : "error",
+          });
+        } catch {
+          if (sessionEpoch !== this.sessionEpoch || revision !== this.thinkingTranslationRevision) return;
+          this.updateThinkingTranslation(id, sourceText, { translatedText: undefined, translationStatus: "error" });
+        } finally {
+          if (this.thinkingTranslationAbort === controller) this.thinkingTranslationAbort = undefined;
+        }
+      });
+    this.requestRender();
+  }
+
+  private updateThinkingTranslation(
+    id: string,
+    sourceText: string,
+    patch: Pick<Extract<TranscriptMessage, { kind: "thinking" }>, "translatedText" | "translationStatus">,
+  ): void {
+    const index = this.messages.findIndex((message) => message.id === id);
+    const current = this.messages[index];
+    if (index < 0 || current?.kind !== "thinking" || current.text !== sourceText) return;
+    this.messages[index] = { ...current, ...patch };
+    this.requestRender();
   }
 
   private async pasteAttachment(): Promise<void> {
@@ -2442,6 +2578,11 @@ export class VspiApp implements Component, Focusable {
       this.activeSubmission = undefined;
     }
     this.messages = [];
+    this.thinkingTranslationRevision += 1;
+    this.thinkingTranslationAbort?.abort();
+    this.thinkingTranslationAbort = undefined;
+    this.translatedThinkingSources.clear();
+    this.transcriptRenderCache.clear();
     this.usage = DEFAULT_USAGE;
     this.queueState = { steering: 0, followUp: 0 };
     this.runActive = false;

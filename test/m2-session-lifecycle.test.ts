@@ -5,7 +5,9 @@ import type { AttachmentService } from "../src/attachments/service.js";
 import type { ChatBackend, ChatBackendEvents, SendOptions } from "../src/backend/types.js";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/domain/fixtures.js";
 import type { Attachment, SessionOption, TranscriptMessage } from "../src/domain/types.js";
+import { stripAnsi } from "../src/ui/ansi.js";
 import type { PanelEvent } from "../src/ui/panels.js";
+import type { TranscriptWindow } from "../src/ui/transcript.js";
 import { plainTheme } from "./helpers.js";
 
 type SessionReason = "startup" | "new" | "resume" | "fork";
@@ -18,6 +20,9 @@ type TestableApp = {
   applyPanelEvent(event: PanelEvent): Promise<void>;
   messages: TranscriptMessage[];
   busy: boolean;
+  inspectNodeId?: string;
+  currentTranscriptWindow(width?: number): TranscriptWindow;
+  focusTranscript(): boolean;
 };
 
 function fakeTui(setProgress = vi.fn()): TUI {
@@ -89,6 +94,62 @@ async function flush(): Promise<void> {
 }
 
 describe("M2 session identity isolation", () => {
+  it("limits the visible waterfall and keeps Inspect inside that same window", async () => {
+    const controlled = sessionBackend();
+    const app = await createApp(controlled.backend);
+    const testable = app as unknown as TestableApp;
+    testable.messages = Array.from({ length: 140 }, (_, index) => ({
+      id: `history-${index}`,
+      role: "assistant",
+      kind: "text",
+      text: `HISTORY_CONTENT_${index}`,
+    }));
+    const window = testable.currentTranscriptWindow(80);
+    const firstVisible = window.nodes[0];
+    expect(window.hiddenBlocks).toBeGreaterThan(0);
+    expect(firstVisible).toBeDefined();
+
+    const rendered = app.render(80).map(stripAnsi).join("\n");
+    expect(rendered).toContain(`更早的 ${window.hiddenBlocks} 条内容暂未显示`);
+    expect(rendered).toContain("HISTORY_CONTENT_139");
+    expect(rendered).not.toContain("HISTORY_CONTENT_0");
+
+    expect(testable.focusTranscript()).toBe(true);
+    for (let index = 0; index < 200; index += 1) app.handleInput("\u001b[A");
+    expect(testable.inspectNodeId).toBe(firstVisible?.id);
+    expect(testable.inspectNodeId).not.toBe("history-0");
+    await app.dispose();
+  });
+
+  it("lets Sessions take over the full content area and restores chat on Escape", async () => {
+    const controlled = sessionBackend();
+    vi.mocked(controlled.backend.listSessions).mockResolvedValue([
+      { id: "current", label: "当前会话", relativeTime: "刚刚", branchDepth: 0, current: true },
+      { id: "older", label: "较早会话", relativeTime: "8 分钟前", branchDepth: 0 },
+    ]);
+    const app = await createApp(controlled.backend);
+
+    await (app as unknown as TestableApp).submit("/resume");
+    const sessions = app.render(80).map(stripAnsi);
+    const surface = sessions.join("\n");
+    expect(sessions).toHaveLength(24);
+    expect(surface).toContain("Sessions");
+    expect(surface).toContain("2 个会话");
+    expect(surface).toContain("当前会话");
+    expect(surface).toContain("Enter 打开");
+    expect(surface).not.toContain("OLD_SESSION_SENTINEL");
+    expect(surface).not.toContain("输入消息");
+    expect(surface).not.toContain("Working");
+    expect(surface).not.toContain("Plan");
+
+    app.handleInput("\u001b");
+    await flush();
+    const restored = app.render(80).map(stripAnsi).join("\n");
+    expect(restored).toContain("OLD_SESSION_SENTINEL");
+    expect(restored).toMatch(/╭─+╮[\s\S]*╰─+╯/u);
+    await app.dispose();
+  });
+
   it("clears the old transcript before hydrating a switched session", async () => {
     const controlled = sessionBackend();
     const app = await createApp(controlled.backend);

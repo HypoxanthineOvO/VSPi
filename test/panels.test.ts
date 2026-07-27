@@ -232,7 +232,7 @@ describe("panel controller", () => {
     const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
     panel.open("settings");
     expect(text(panel, 80, 18)).toContain("完成后收起工具  开");
-    for (let index = 0; index < 4; index += 1) panel.handleInput(DOWN);
+    for (let index = 0; index < 5; index += 1) panel.handleInput(DOWN);
     panel.handleInput(ENTER);
     expect(text(panel, 80, 18)).toContain("完成后收起工具  关");
     expect(panel.handleInput("\u0013")).toMatchObject({
@@ -256,6 +256,27 @@ describe("panel controller", () => {
     expect(panel.handleInput("\u0013")).toMatchObject({
       type: "settings",
       settings: { thinkingDisplay: "hidden" },
+    });
+  });
+
+  it("edits and pastes a Thinking translation endpoint without losing the Settings draft", () => {
+    const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
+    panel.open("settings");
+    for (let index = 0; index < 3; index += 1) panel.handleInput(DOWN);
+    expect(text(panel, 90, 20)).toContain("思考翻译服务  关");
+
+    panel.handleInput(ENTER);
+    panel.handleInput("127.0.0.1:5000");
+    expect(text(panel, 90, 20)).toContain("127.0.0.1:5000");
+    panel.handleInput("\u001b");
+    expect(text(panel, 90, 20)).toContain("思考翻译服务  关");
+
+    panel.handleInput(ENTER);
+    panel.handleInput("translate.local:8080");
+    panel.handleInput(ENTER);
+    expect(panel.handleInput("\u0013")).toMatchObject({
+      type: "settings",
+      settings: { thinkingTranslationEndpoint: "translate.local:8080" },
     });
   });
 

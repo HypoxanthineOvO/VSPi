@@ -116,7 +116,9 @@ export function emphasizeVisibleRange(text: string, target: string, theme: VspiT
 
 export interface FrameOptions {
   title?: string;
+  rightTitle?: string;
   footer?: string;
+  footerPosition?: "left" | "right";
   focused?: boolean;
   background?: (text: string) => string;
   maxBodyLines?: number;
@@ -131,10 +133,18 @@ export function frame(lines: string[], width: number, theme: VspiTheme, options:
     : { tl: "+", tr: "+", bl: "+", br: "+", h: "-", v: "|" };
   const borderStyle = options.focused ? theme.focus : theme.border;
   const body = options.maxBodyLines === undefined ? lines : lines.slice(0, options.maxBodyLines);
-  const title = options.title ? ` ${options.title} ` : "";
-  const top = `${chars.tl}${title}${chars.h.repeat(Math.max(0, innerWidth - visibleWidth(title)))}${chars.tr}`;
-  const footer = options.footer ? ` ${options.footer} ` : "";
-  const bottom = `${chars.bl}${chars.h.repeat(Math.max(0, innerWidth - visibleWidth(footer)))}${footer}${chars.br}`;
+  const rawRightTitle = options.rightTitle ? ` ${options.rightTitle} ` : "";
+  const rightTitle = truncateToWidth(rawRightTitle, innerWidth, "");
+  const rawTitle = options.title ? ` ${options.title} ` : "";
+  const title = truncateToWidth(rawTitle, Math.max(0, innerWidth - visibleWidth(rightTitle)), "");
+  const top = `${chars.tl}${title}${chars.h.repeat(
+    Math.max(0, innerWidth - visibleWidth(title) - visibleWidth(rightTitle)),
+  )}${rightTitle}${chars.tr}`;
+  const footer = truncateToWidth(options.footer ? ` ${options.footer} ` : "", innerWidth, "");
+  const bottom =
+    options.footerPosition === "left"
+      ? `${chars.bl}${footer}${chars.h.repeat(Math.max(0, innerWidth - visibleWidth(footer)))}${chars.br}`
+      : `${chars.bl}${chars.h.repeat(Math.max(0, innerWidth - visibleWidth(footer)))}${footer}${chars.br}`;
   const rendered = [borderStyle(padLine(top, safeWidth))];
   for (const line of body.length > 0 ? body : [""]) {
     const content = padLine(line, innerWidth);

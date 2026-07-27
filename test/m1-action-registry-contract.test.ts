@@ -139,6 +139,7 @@ describe("M1 production action contract", () => {
     expect(resolveCommand("/session")?.id).toBe("sessions");
     expect(resolveCommand("/resume")?.id).toBe("sessions");
     expect(resolveCommand("/provider")?.id).toBe("providers");
+    expect(resolveCommand("/permission")?.id).toBe("policy");
     expect(resolveCommand("/exit")?.id).toBe("quit");
     expect(resolveCommand("/q")?.id).toBe("quit");
   });
@@ -220,14 +221,14 @@ describe("M1 production action contract", () => {
     }
   });
 
-  it("executes the enabled /policy handler by opening the real Policy panel", async () => {
+  it("executes /permission through the same enabled Policy handler", async () => {
     const action = getActionDefinition("policy");
     expect(action).toMatchObject({ availability: "enabled", handler: "policy" });
     expect(action?.disabledReason).toBeUndefined();
 
     const { app, backend } = await createApp();
     try {
-      app.composer.setText("/policy");
+      app.composer.setText("/permission");
       app.handleInput("\r");
       await flush();
       const rendered = app.render(80).map(stripAnsi).join("\n");

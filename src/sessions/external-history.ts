@@ -19,9 +19,15 @@ export interface ExternalSessionSummary {
 
 export interface ExternalTranscriptItem {
   role: "user" | "assistant";
-  kind: "message" | "tool";
+  kind: "message" | "thinking";
   text: string;
   timestamp?: number;
+}
+
+export interface ExternalContextCheckpoint {
+  summary: string;
+  tailStartIndex: number;
+  sourceContextWindow?: number;
 }
 
 export interface ExternalSessionPreview extends ExternalSessionSummary {
@@ -29,6 +35,8 @@ export interface ExternalSessionPreview extends ExternalSessionSummary {
   messageCount: number;
   toolCount: number;
   estimatedTokens: number;
+  sourceContextWindow?: number;
+  contextCheckpoint?: ExternalContextCheckpoint;
   fingerprint: string;
   snapshotBytes: number;
   snapshotModifiedAt: string;
@@ -49,6 +57,17 @@ interface ClaudeHistoryEntry {
   project?: unknown;
   sessionId?: unknown;
   timestamp?: unknown;
+}
+
+interface ParsedExternalSession {
+  cwd?: string;
+  items: ExternalTranscriptItem[];
+  toolCount: number;
+  sourceContextWindow?: number;
+  contextCheckpoint?: {
+    summary: string;
+    rawTailStartIndex: number;
+  };
 }
 
 const SECRET_ASSIGNMENT =
@@ -82,15 +101,31 @@ export class ExternalSessionCatalog {
       session.source === "codex"
         ? await parseCodex(session.path, snapshot.size)
         : await parseClaude(session.path, snapshot.size);
-    const items = coalesceItems(parsed.items);
-    const normalized = items.map((item) => `${item.role}\0${item.kind}\0${item.text}`).join("\n");
+    const splitAt = parsed.contextCheckpoint?.rawTailStartIndex;
+    const beforeCheckpoint = coalesceItems(splitAt === undefined ? parsed.items : parsed.items.slice(0, splitAt));
+    const afterCheckpoint = splitAt === undefined ? [] : coalesceItems(parsed.items.slice(splitAt));
+    const items = [...beforeCheckpoint, ...afterCheckpoint];
+    const contextCheckpoint = parsed.contextCheckpoint
+      ? {
+          summary: parsed.contextCheckpoint.summary,
+          tailStartIndex: beforeCheckpoint.length,
+          ...(parsed.sourceContextWindow ? { sourceContextWindow: parsed.sourceContextWindow } : {}),
+        }
+      : undefined;
+    const normalized = [
+      ...items.map((item) => `${item.role}\0${item.kind}\0${item.text}`),
+      contextCheckpoint ? `checkpoint\0${contextCheckpoint.summary}\0${contextCheckpoint.tailStartIndex}` : "",
+      `tools\0${parsed.toolCount}`,
+    ].join("\n");
     const summary = parsed.cwd ? { ...session, cwd: parsed.cwd } : session;
     return {
       ...withoutPath(summary),
       items,
       messageCount: items.filter((item) => item.kind === "message").length,
-      toolCount: items.filter((item) => item.kind === "tool").length,
+      toolCount: parsed.toolCount,
       estimatedTokens: Math.ceil(items.reduce((total, item) => total + item.text.length, 0) / 3),
+      ...(parsed.sourceContextWindow ? { sourceContextWindow: parsed.sourceContextWindow } : {}),
+      ...(contextCheckpoint ? { contextCheckpoint } : {}),
       fingerprint: createHash("sha256").update(normalized).digest("hex"),
       snapshotBytes: snapshot.size,
       snapshotModifiedAt: new Date(snapshot.mtimeMs).toISOString(),
@@ -224,12 +259,13 @@ export class ExternalSessionCatalog {
   }
 }
 
-async function parseCodex(
-  path: string,
-  snapshotBytes: number,
-): Promise<{ cwd?: string; items: ExternalTranscriptItem[] }> {
+async function parseCodex(path: string, snapshotBytes: number): Promise<ParsedExternalSession> {
   const items: ExternalTranscriptItem[] = [];
+  const toolCallIds = new Set<string>();
+  let anonymousToolCount = 0;
   let cwd: string | undefined;
+  let sourceContextWindow: number | undefined;
+  let contextCheckpoint: ParsedExternalSession["contextCheckpoint"];
   await forEachJsonLine(path, snapshotBytes, (row) => {
     const payload = objectField(row, "payload");
     const outerType = stringField(row, "type");
@@ -245,44 +281,41 @@ async function parseCodex(
       return;
     }
     if (outerType === "event_msg" && type === "agent_message") {
-      pushItem(items, "assistant", "message", stringField(payload, "message"), timestamp);
+      const kind = stringField(payload, "phase") === "commentary" ? "thinking" : "message";
+      pushItem(items, "assistant", kind, stringField(payload, "message"), timestamp);
       return;
     }
-    if (outerType === "response_item" && (type === "function_call" || type === "custom_tool_call")) {
-      const name = stringField(payload, "name") || "tool";
-      pushItem(items, "assistant", "tool", renderToolCall(name, payload.arguments ?? payload.input), timestamp);
+    if (outerType === "event_msg" && type === "token_count") {
+      const window = positiveInteger(objectField(payload, "info").model_context_window);
+      if (window) sourceContextWindow = window;
       return;
     }
-    if (outerType === "response_item" && (type === "function_call_output" || type === "custom_tool_call_output")) {
-      pushItem(items, "assistant", "tool", renderToolOutput(payload.output), timestamp);
+    if (outerType === "compacted") {
+      const summary = sanitizeVisibleText(stringField(payload, "message")).trim();
+      if (summary) contextCheckpoint = { summary, rawTailStartIndex: items.length };
       return;
     }
-    if (outerType === "response_item" && type.endsWith("_call_output")) {
-      pushItem(items, "assistant", "tool", renderToolOutput(payload.output ?? payload), timestamp);
-      return;
-    }
-    if (outerType === "response_item" && type.endsWith("_call")) {
-      const name = stringField(payload, "name") || type.slice(0, -"_call".length).replaceAll("_", " ");
-      pushItem(
-        items,
-        "assistant",
-        "tool",
-        renderToolCall(name, payload.arguments ?? payload.input ?? payload.action ?? payload),
-        timestamp,
+    if (outerType === "response_item" && isCodexToolRecord(type)) {
+      countToolRecord(
+        toolCallIds,
+        () => {
+          anonymousToolCount += 1;
+        },
+        stringField(payload, "call_id") || stringField(payload, "id"),
       );
       return;
     }
     if (outerType === "event_msg" && type === "mcp_tool_call_end") {
-      const invocation = objectField(payload, "invocation");
-      const server = stringField(invocation, "server");
-      const tool = stringField(invocation, "tool") || "tool";
-      const name = server ? `MCP ${server}/${tool}` : `MCP ${tool}`;
-      const call = renderToolCall(name, invocation.arguments);
-      const result = renderToolOutput(payload.result);
-      pushItem(items, "assistant", "tool", `${call}\n\n${result}`, timestamp);
+      anonymousToolCount += 1;
     }
   });
-  return { ...(cwd ? { cwd } : {}), items };
+  return {
+    ...(cwd ? { cwd } : {}),
+    items,
+    toolCount: toolCallIds.size + anonymousToolCount,
+    ...(sourceContextWindow ? { sourceContextWindow } : {}),
+    ...(contextCheckpoint ? { contextCheckpoint } : {}),
+  };
 }
 
 async function discoverCodexSession(
@@ -326,11 +359,10 @@ async function discoverCodexSession(
   };
 }
 
-async function parseClaude(
-  path: string,
-  snapshotBytes: number,
-): Promise<{ cwd?: string; items: ExternalTranscriptItem[] }> {
+async function parseClaude(path: string, snapshotBytes: number): Promise<ParsedExternalSession> {
   const items: ExternalTranscriptItem[] = [];
+  const toolCallIds = new Set<string>();
+  let anonymousToolCount = 0;
   let cwd: string | undefined;
   await forEachJsonLine(path, snapshotBytes, (row) => {
     if (row.isSidechain === true || row.isMeta === true) return;
@@ -351,20 +383,28 @@ async function parseClaude(
       const blockType = stringField(block, "type");
       if (blockType === "text") {
         pushItem(items, type, "message", stringField(block, "text"), timestamp);
+      } else if (blockType === "thinking") {
+        pushItem(items, "assistant", "thinking", stringField(block, "thinking"), timestamp);
       } else if (blockType === "tool_use") {
-        pushItem(
-          items,
-          "assistant",
-          "tool",
-          renderToolCall(stringField(block, "name") || "tool", block.input),
-          timestamp,
+        countToolRecord(
+          toolCallIds,
+          () => {
+            anonymousToolCount += 1;
+          },
+          stringField(block, "id"),
         );
       } else if (blockType === "tool_result") {
-        pushItem(items, "assistant", "tool", renderToolOutput(block.content), timestamp);
+        countToolRecord(
+          toolCallIds,
+          () => {
+            anonymousToolCount += 1;
+          },
+          stringField(block, "tool_use_id"),
+        );
       }
     }
   });
-  return { ...(cwd ? { cwd } : {}), items };
+  return { ...(cwd ? { cwd } : {}), items, toolCount: toolCallIds.size + anonymousToolCount };
 }
 
 async function discoverClaudeSession(path: string): Promise<{ cwd?: string; title?: string } | undefined> {
@@ -406,7 +446,7 @@ async function discoverClaudeSession(path: string): Promise<{ cwd?: string; titl
 function pushItem(
   items: ExternalTranscriptItem[],
   role: "user" | "assistant",
-  kind: "message" | "tool",
+  kind: "message" | "thinking",
   rawText: unknown,
   timestamp?: number,
 ): void {
@@ -416,24 +456,20 @@ function pushItem(
   items.push({ role, kind, text, ...(timestamp === undefined ? {} : { timestamp }) });
 }
 
-function renderToolCall(name: string, input: unknown): string {
-  const detail = stringifyVisible(input);
-  return detail ? `Tool · ${name}\n${detail}` : `Tool · ${name}`;
+function isCodexToolRecord(type: string): boolean {
+  return (
+    type === "function_call" ||
+    type === "function_call_output" ||
+    type === "custom_tool_call" ||
+    type === "custom_tool_call_output" ||
+    type.endsWith("_call") ||
+    type.endsWith("_call_output")
+  );
 }
 
-function renderToolOutput(output: unknown): string {
-  const detail = stringifyVisible(output);
-  return detail ? `Tool Result\n${detail}` : "Tool Result";
-}
-
-function stringifyVisible(value: unknown): string {
-  if (typeof value === "string") return sanitizeVisibleText(value);
-  if (value === undefined || value === null) return "";
-  try {
-    return sanitizeVisibleText(JSON.stringify(value, null, 2));
-  } catch {
-    return "[无法序列化的可见输出]";
-  }
+function countToolRecord(ids: Set<string>, countAnonymous: () => void, id: string): void {
+  if (id) ids.add(id);
+  else countAnonymous();
 }
 
 export function sanitizeVisibleText(value: string): string {
@@ -573,6 +609,10 @@ function timestampValue(value: unknown): number {
 function parseTimestamp(value: unknown): number | undefined {
   const timestamp = timestampValue(value);
   return timestamp > 0 ? timestamp : undefined;
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : undefined;
 }
 
 function withoutPath(session: IndexedSession): ExternalSessionSummary {

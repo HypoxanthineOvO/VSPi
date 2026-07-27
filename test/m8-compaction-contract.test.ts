@@ -53,10 +53,12 @@ async function harness(compactImpl?: (instructions?: string) => Promise<unknown>
   const compact = vi.fn(compactImpl ?? (async () => ({})));
   const abortCompaction = vi.fn();
   const abort = vi.fn(async () => {});
+  const followUp = vi.fn(async () => {});
   const managers: SessionManager[] = [];
+  const planBackend = createLocalPlanBackend({ rootDir: join(cwd, "compatibility-plans") });
   const backend = new PiBackend({
     cwd,
-    planBackend: createLocalPlanBackend({ rootDir: join(cwd, "compatibility-plans") }),
+    planBackend,
     sessionFactory: async (manager: SessionManager) => {
       managers.push(manager);
       return {
@@ -75,6 +77,9 @@ async function harness(compactImpl?: (instructions?: string) => Promise<unknown>
           },
           setThinkingLevel: vi.fn(),
           prompt: vi.fn(async () => {}),
+          followUp,
+          steer: vi.fn(async () => {}),
+          clearQueue: vi.fn(() => ({ steering: [], followUp: [] })),
           abort,
           compact,
           abortCompaction,
@@ -109,6 +114,8 @@ async function harness(compactImpl?: (instructions?: string) => Promise<unknown>
     compact,
     abortCompaction,
     abort,
+    followUp,
+    planBackend,
     events,
     managers,
     emit: (event: AgentSessionEvent) => listener?.(event),
@@ -390,6 +397,39 @@ describe("M8 compaction mutation barrier", () => {
       }
     },
   );
+  it("queues one internal Plan reconciliation when a completion claim did not update the bound Plan", async () => {
+    const h = await harness();
+    try {
+      const plan = await h.planBackend.create({
+        title: "Finish page updates",
+        goal: "Apply and verify the requested page changes",
+        challenges: [],
+        items: [
+          { id: "content", title: "Update content", status: "done" },
+          { id: "verify", title: "Verify desktop and mobile", status: "in_progress" },
+        ],
+        focusItemId: "verify",
+        blockers: [],
+        nextAction: "Run browser checks",
+      });
+      await h.api.bindPlan(plan.id);
+      h.emit({ type: "agent_start" } as AgentSessionEvent);
+      const message = {
+        role: "assistant",
+        content: [{ type: "text", text: "已完成页面修改和桌面端、移动端验证。" }],
+      };
+      h.emit({ type: "message_end", message } as AgentSessionEvent);
+      h.emit({ type: "message_end", message } as AgentSessionEvent);
+
+      await vi.waitFor(() => expect(h.followUp).toHaveBeenCalledOnce());
+      expect(h.followUp).toHaveBeenCalledWith(
+        expect.stringMatching(/vspi_plan_reconciliation[\s\S]*plan_read[\s\S]*plan_update/u),
+      );
+      expect(h.followUp).toHaveBeenCalledWith(expect.stringContaining("不要重复执行"));
+    } finally {
+      await h.backend.dispose();
+    }
+  });
 });
 
 describe("M8 Pi compaction event state machine", () => {

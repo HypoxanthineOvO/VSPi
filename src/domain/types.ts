@@ -45,6 +45,8 @@ export interface ThinkingMessage {
   text: string;
   collapsed: boolean;
   streaming?: boolean;
+  translatedText?: string | undefined;
+  translationStatus?: "pending" | "translated" | "error" | undefined;
 }
 
 export interface ToolMessage {
@@ -169,6 +171,7 @@ export interface AppSettings {
   theme: "VSPi Dark" | "VSPi Light" | "Terminal";
   reducedMotion: boolean;
   thinkingDisplay: "hidden" | "collapsed" | "expanded";
+  thinkingTranslationEndpoint: string;
   wrapCode: boolean;
   collapseTools: boolean;
   bridgeEnabled: boolean;

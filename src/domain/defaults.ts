@@ -25,6 +25,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   theme: "Terminal",
   reducedMotion: false,
   thinkingDisplay: "collapsed",
+  thinkingTranslationEndpoint: "",
   wrapCode: false,
   collapseTools: true,
   bridgeEnabled: true,

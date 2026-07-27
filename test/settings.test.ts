@@ -25,12 +25,21 @@ describe("settings persistence", () => {
     const root = await mkdtemp(join(tmpdir(), "vspi-settings-"));
     const home = await mkdtemp(join(tmpdir(), "vspi-home-"));
     await saveSettings(root, { ...DEFAULT_SETTINGS, scope: "global", reducedMotion: true }, home);
-    const projectPath = await saveSettings(root, { ...DEFAULT_SETTINGS, scope: "project", wrapCode: true }, home, {
-      trustedProject: true,
-    });
+    const projectPath = await saveSettings(
+      root,
+      {
+        ...DEFAULT_SETTINGS,
+        scope: "project",
+        wrapCode: true,
+        thinkingTranslationEndpoint: "http://127.0.0.1:5000/translate",
+      },
+      home,
+      { trustedProject: true },
+    );
     const loaded = await loadSettings(root, home, { trustedProject: true });
     expect(loaded.scope).toBe("project");
     expect(loaded.wrapCode).toBe(true);
+    expect(loaded.thinkingTranslationEndpoint).toBe("http://127.0.0.1:5000/translate");
     expect(settingsPaths(root, home).project).toBe(projectPath);
     expect((await stat(projectPath)).mode & 0o777).toBe(0o600);
   });
@@ -51,7 +60,10 @@ describe("settings persistence", () => {
         bridgeEnabled: true,
       })}\n`,
     );
-    await expect(loadSettings(root, home)).resolves.toMatchObject({ collapseTools: true });
+    await expect(loadSettings(root, home)).resolves.toMatchObject({
+      collapseTools: true,
+      thinkingTranslationEndpoint: "",
+    });
   });
 
   it("migrates legacy thinking booleans and gives the new enum precedence", async () => {

@@ -25,17 +25,26 @@ describe("external Session history catalog", () => {
         {
           type: "response_item",
           timestamp: "2026-07-26T12:00:02Z",
-          payload: { type: "reasoning", encrypted_content: "hidden" },
+          payload: {
+            type: "reasoning",
+            summary: [{ type: "summary_text", text: "inspect workspace" }],
+            encrypted_content: "hidden",
+          },
+        },
+        {
+          type: "event_msg",
+          timestamp: "2026-07-26T12:00:02Z",
+          payload: { type: "agent_message", phase: "commentary", message: "inspect workspace" },
         },
         {
           type: "response_item",
           timestamp: "2026-07-26T12:00:03Z",
-          payload: { type: "function_call", name: "bash", arguments: '{"command":"pwd"}' },
+          payload: { type: "function_call", call_id: "call-1", name: "bash", arguments: '{"command":"pwd"}' },
         },
         {
           type: "response_item",
           timestamp: "2026-07-26T12:00:04Z",
-          payload: { type: "function_call_output", output: "api_key=top-secret" },
+          payload: { type: "function_call_output", call_id: "call-1", output: "api_key=top-secret" },
         },
         {
           type: "event_msg",
@@ -51,7 +60,31 @@ describe("external Session history catalog", () => {
           timestamp: "2026-07-26T12:00:04Z",
           payload: { type: "web_search_call", action: { query: "VSPi" } },
         },
-        { type: "event_msg", timestamp: "2026-07-26T12:00:05Z", payload: { type: "agent_message", message: "done" } },
+        {
+          type: "event_msg",
+          timestamp: "2026-07-26T12:00:05Z",
+          payload: { type: "agent_message", phase: "final_answer", message: "done" },
+        },
+        {
+          type: "event_msg",
+          timestamp: "2026-07-26T12:00:06Z",
+          payload: { type: "token_count", info: { model_context_window: 353_400 } },
+        },
+        {
+          type: "compacted",
+          timestamp: "2026-07-26T12:00:07Z",
+          payload: { message: "checkpoint summary" },
+        },
+        {
+          type: "event_msg",
+          timestamp: "2026-07-26T12:00:08Z",
+          payload: { type: "user_message", message: "continue" },
+        },
+        {
+          type: "event_msg",
+          timestamp: "2026-07-26T12:00:09Z",
+          payload: { type: "agent_message", phase: "commentary", message: "tail progress" },
+        },
       ]
         .map((row) => JSON.stringify(row))
         .join("\n")}\n`,
@@ -105,16 +138,27 @@ describe("external Session history catalog", () => {
       expect.objectContaining({ role: "user", kind: "message", text: "hello" }),
       expect.objectContaining({
         role: "assistant",
-        kind: "tool",
-        text: expect.stringMatching(/Tool · bash[\s\S]*\[REDACTED\][\s\S]*MCP docs\/search[\s\S]*web search/u),
+        kind: "thinking",
+        text: "inspect workspace",
       }),
       expect.objectContaining({ role: "assistant", kind: "message", text: "done" }),
+      expect.objectContaining({ role: "user", kind: "message", text: "continue" }),
+      expect.objectContaining({ role: "assistant", kind: "thinking", text: "tail progress" }),
     ]);
-    expect(codex.items.map((item) => item.text).join("\n")).not.toContain("hidden");
+    expect(codex.toolCount).toBe(3);
+    expect(codex.sourceContextWindow).toBe(353_400);
+    expect(codex.contextCheckpoint).toEqual({
+      summary: "checkpoint summary",
+      tailStartIndex: 3,
+      sourceContextWindow: 353_400,
+    });
+    expect(codex.items.map((item) => item.text).join("\n")).not.toContain("encrypted_content");
+    expect(codex.items.map((item) => item.text).join("\n")).not.toContain("api_key");
 
     const claude = await catalog.preview(`claude:${claudeId}`);
     expect(claude.items).toEqual([
       expect.objectContaining({ role: "user", text: "hello" }),
+      expect.objectContaining({ role: "assistant", kind: "thinking", text: "hidden" }),
       expect.objectContaining({ role: "assistant", text: "working" }),
     ]);
   });

@@ -33,6 +33,7 @@ describe("command catalog", () => {
     expect(resolveCommand("/workflow")).toBeUndefined();
     expect(resolveCommand("/thinking")?.id).toBe("thinking");
     expect(resolveCommand("/capabilities")?.id).toBe("tools");
+    expect(resolveCommand("/permission")?.id).toBe("policy");
     expect(resolveCommand("/q")?.id).toBe("quit");
     expect(resolveCommand("/update")?.id).toBe("update");
     expect(resolveCommand("/demo-question")).toBeUndefined();

@@ -33,7 +33,7 @@ import type {
   UsageSnapshot,
 } from "../domain/types.js";
 import { createPlanToolDefinitions } from "../plans/tools.js";
-import type { LocalPlanBackend, PlanBinding } from "../plans/types.js";
+import type { LocalPlanBackend, PlanBinding, PlanWorkItem, StoredPlan } from "../plans/types.js";
 import {
   type ApprovalRequest,
   type ApprovalResponse,
@@ -56,7 +56,9 @@ import {
   type ExternalSessionPreview,
   type ExternalSessionSource,
   type ExternalSessionSummary,
+  type ExternalTranscriptItem,
 } from "../sessions/external-history.js";
+import { createExternalImportCompatibilityExtension } from "../sessions/import-compatibility.js";
 import {
   type AcquiredSessionLease,
   acquireSessionLease,
@@ -242,6 +244,8 @@ export class PiRuntimeBackend implements ChatBackend {
   private unusableError: Error | undefined;
   private effectivePromptSegments: EffectivePromptSegment[] = [];
   private readonly reviewTracker = createReviewTracker();
+  private planMutatedThisTurn = false;
+  private planReconciliationQueued = false;
   private compacting = false;
   private compactionMutationBlocked = false;
   private agentRunning = false;
@@ -444,6 +448,7 @@ export class PiRuntimeBackend implements ChatBackend {
     );
     const manifest = createAttachmentManifest(options.attachments);
     if (text.trim().length > 0) this.reviewTracker.noteMeaningfulTurn();
+    this.planReconciliationQueued = false;
     const payload = `${text}${manifest}`;
     if (session.isStreaming || this.activeGeneration !== undefined || this.compacting) {
       const delivery = options.behavior === "followUp" ? "followUp" : "steer";
@@ -874,33 +879,50 @@ export class PiRuntimeBackend implements ChatBackend {
     const activeModel = activeSession.model;
     if (!activeModel) throw new Error("当前 VSPi Session 没有可继承的模型");
     const manager = SessionManager.create(this.options.cwd, this.options.sessionDir);
+    const contextPlan = planImportedContext(preview, activeModel.contextWindow);
+    const thinkingCount = preview.items.filter((item) => item.kind === "thinking").length;
     manager.appendCustomEntry("vspi.external-session-import", {
+      version: 3,
       source: preview.source,
       sourceId: preview.sourceId,
       sourceCwd: preview.cwd,
+      title: preview.title,
       fingerprint: preview.fingerprint,
       snapshotBytes: preview.snapshotBytes,
       snapshotModifiedAt: preview.snapshotModifiedAt,
       importedAt: new Date().toISOString(),
-      policy: "reference-custom-message-v1",
+      messageCount: preview.messageCount,
+      thinkingCount,
+      toolCount: preview.toolCount,
+      visibleItemCount: preview.items.length,
+      contextItemCount: preview.items.length - contextPlan.firstItemIndex,
+      contextStrategy: contextPlan.strategy,
+      contextWindow: contextPlan.effectiveWindow,
+      policy: "native-visible-checkpoint-context-v3",
     });
     manager.appendSessionInfo(preview.title);
     manager.appendModelChange(activeModel.provider, activeModel.id);
     manager.appendThinkingLevelChange(activeSession.thinkingLevel);
-    manager.appendCustomMessageEntry(
-      "vspi.external-session-reference",
-      renderExternalSessionReference(preview),
-      false,
-      {
-        version: 1,
-        source: preview.source,
-        sourceId: preview.sourceId,
-        title: preview.title,
-        messageCount: preview.messageCount,
-        toolCount: preview.toolCount,
-        fingerprint: preview.fingerprint,
-      },
-    );
+    const entryIds = preview.items.map((item) => appendImportedMessage(manager, item, activeModel));
+    if (contextPlan.summary !== undefined) {
+      const firstKeptEntryId =
+        entryIds[contextPlan.firstItemIndex] ??
+        manager.appendCustomEntry("vspi.external-session-context-boundary", { version: 1 });
+      manager.appendCompaction(
+        contextPlan.summary,
+        firstKeptEntryId,
+        preview.estimatedTokens,
+        {
+          version: 1,
+          source: preview.source,
+          strategy: contextPlan.strategy,
+          sourceContextWindow: preview.sourceContextWindow,
+          effectiveContextWindow: contextPlan.effectiveWindow,
+          omittedToolCount: preview.toolCount,
+        },
+        true,
+      );
+    }
     await persistSessionManager(manager);
     const path = manager.getSessionFile();
     if (!path) throw new Error("无法创建持久化的 VSPi Session");
@@ -1019,12 +1041,14 @@ export class PiRuntimeBackend implements ChatBackend {
               authority: this.options.workflowPlan ? "workflow" : "local",
             })
           : undefined;
+      const externalImportCompatibilityExtension = createExternalImportCompatibilityExtension();
       const services = await createAgentSessionServices({
         cwd,
         agentDir,
         settingsManager,
         ...(this.options.modelRuntime ? { modelRuntime: this.options.modelRuntime as never } : {}),
         ...(this.options.recovery ||
+        externalImportCompatibilityExtension ||
         promptProfileExtension ||
         planCapsuleExtension ||
         workflowPlanExtension ||
@@ -1043,6 +1067,7 @@ export class PiRuntimeBackend implements ChatBackend {
                 ...(!this.options.recovery
                   ? {
                       extensionFactories: [
+                        externalImportCompatibilityExtension,
                         promptProfileExtension,
                         planCapsuleExtension,
                         workflowPlanExtension,
@@ -1107,7 +1132,8 @@ export class PiRuntimeBackend implements ChatBackend {
               read: async () => this.getPlanBinding()?.planId ?? null,
               bind: async (planId) => this.bindPlan(planId ?? undefined),
             },
-            onMutation: async () => {
+            onMutation: async (operation) => {
+              if (operation === "update" || operation === "archive") this.planMutatedThisTurn = true;
               this.reviewTracker.reset();
               this.events?.onPlanBindingChange?.(this.getPlanBinding());
             },
@@ -1189,6 +1215,8 @@ export class PiRuntimeBackend implements ChatBackend {
     this.queueState = { steering: 0, followUp: 0 };
     this.turn = 0;
     this.reviewTracker.reset();
+    this.planMutatedThisTurn = false;
+    this.planReconciliationQueued = false;
     this.compactionMutationBlocked = false;
     if (reason === "resume") this.reviewTracker.noteResume();
     const binding = ++this.binding;
@@ -1200,10 +1228,12 @@ export class PiRuntimeBackend implements ChatBackend {
       reason,
       ...(continuePlan !== undefined ? { continuePlan } : {}),
     });
-    session.messages.forEach((message, index) => {
-      this.hydratedMessages.add(message);
-      this.hydrateMessage(message, index);
-    });
+    if (!this.hydrateStructuredExternalSession(session)) {
+      session.messages.forEach((message, index) => {
+        this.hydratedMessages.add(message);
+        this.hydrateMessage(message, index);
+      });
+    }
     if (reason === "resume" && sessionWasInterrupted(session.messages)) {
       this.events?.onMessage({
         id: `session-interrupted:${session.sessionId}`,
@@ -1487,6 +1517,7 @@ export class PiRuntimeBackend implements ChatBackend {
         .map((block) => (block.type === "text" ? stringField(block, "text") : block.type === "image" ? "[图片]" : ""))
         .filter(Boolean)
         .join("\n");
+      if (text.startsWith("<vspi_plan_reconciliation ")) return;
       if (text) this.events.onMessage({ id: `${prefix}-user`, role: "user", kind: "text", text });
       return;
     }
@@ -1558,6 +1589,69 @@ export class PiRuntimeBackend implements ChatBackend {
     }
   }
 
+  private hydrateStructuredExternalSession(session: AgentSession): boolean {
+    const branch = session.sessionManager?.getBranch();
+    if (!branch) return false;
+    const marker = branch.find((entry) => {
+      if (entry.type !== "custom" || entry.customType !== "vspi.external-session-import" || !isRecord(entry.data)) {
+        return false;
+      }
+      const policy = stringField(entry.data, "policy");
+      return policy === "native-conversation-display-history-v2" || policy === "native-visible-checkpoint-context-v3";
+    });
+    if (!marker || marker.type !== "custom" || !isRecord(marker.data)) return false;
+
+    const source = stringField(marker.data, "source") === "claude" ? "Claude Code" : "Codex";
+    const title = stringField(marker.data, "title") || "外部会话";
+    const messageCount = safeInteger(marker.data.messageCount);
+    const thinkingCount = safeInteger(marker.data.thinkingCount);
+    const toolCount = safeInteger(marker.data.toolCount);
+    const visibleItemCount = safeInteger(marker.data.visibleItemCount) || messageCount + thinkingCount;
+    const details = [`${visibleItemCount} 条可见消息`, ...(toolCount > 0 ? ["工具记录未导入"] : [])];
+    this.events?.onMessage({
+      id: `external-import:${session.sessionId}`,
+      role: "assistant",
+      kind: "session",
+      text: `从 ${source} 导入 · ${title} · ${details.join(" · ")}`,
+    });
+
+    let historyIndex = 0;
+    for (const entry of branch) {
+      if (entry.type === "message") {
+        this.hydratedMessages.add(entry.message);
+        this.hydrateMessage(entry.message, historyIndex);
+        historyIndex += 1;
+        continue;
+      }
+      if (entry.type !== "custom" || entry.customType !== "vspi.external-session-item" || !isRecord(entry.data)) {
+        continue;
+      }
+      const item = parseExternalTranscriptItem(entry.data.item);
+      if (!item) continue;
+      this.hydrateExternalTranscriptItem(item, `pi-import-${safeId(session.sessionId)}-${safeId(entry.id)}`);
+      historyIndex += 1;
+    }
+    return true;
+  }
+
+  private hydrateExternalTranscriptItem(item: ExternalTranscriptItem, id: string): void {
+    if (item.kind === "message") {
+      this.events?.onMessage({ id, role: item.role, kind: "text", text: item.text, streaming: false });
+      return;
+    }
+    if (item.kind === "thinking") {
+      this.events?.onMessage({
+        id,
+        role: "assistant",
+        kind: "thinking",
+        effort: normalizeEffortLevel(this.session?.thinkingLevel),
+        text: item.text,
+        collapsed: true,
+        streaming: false,
+      });
+    }
+  }
+
   private handleEvent(event: AgentSessionEvent): void {
     if (!this.events) return;
     if (this.unusableError) {
@@ -1596,6 +1690,7 @@ export class PiRuntimeBackend implements ChatBackend {
       this.runningToolIds.clear();
       this.contentSequence = 0;
       this.agentRunning = true;
+      this.planMutatedThisTurn = false;
       this.publishActivity();
       return;
     }
@@ -1627,7 +1722,10 @@ export class PiRuntimeBackend implements ChatBackend {
     if (event.type === "message_end" && event.message.role === "assistant") {
       if (this.hydratedMessages.has(event.message)) return;
       for (const id of this.contentIds.values()) this.events.onMessageUpdate(id, { streaming: false });
-      if (assistantClaimsCompletion(event.message)) this.reviewTracker.noteCompletionClaim();
+      if (assistantClaimsCompletion(event.message)) {
+        this.reviewTracker.noteCompletionClaim();
+        this.queuePlanReconciliationIfNeeded();
+      }
       this.publishUsage();
       return;
     }
@@ -1724,6 +1822,42 @@ export class PiRuntimeBackend implements ChatBackend {
     });
   }
 
+  private queuePlanReconciliationIfNeeded(): void {
+    if (
+      this.planMutatedThisTurn ||
+      this.planReconciliationQueued ||
+      this.options.workflowPlan ||
+      !this.options.planBackend
+    ) {
+      return;
+    }
+    const binding = this.getPlanBinding();
+    if (!binding) return;
+    this.planReconciliationQueued = true;
+    void this.queuePlanReconciliation(binding.planId).catch((error: unknown) => {
+      this.planReconciliationQueued = false;
+      this.events?.onNotice(
+        `Plan 对账失败：${error instanceof Error ? error.message : "未知错误"}。请在下一轮先检查 Plan。`,
+        "warning",
+      );
+    });
+  }
+
+  private async queuePlanReconciliation(planId: string): Promise<void> {
+    const backend = this.options.planBackend;
+    if (!backend) return;
+    const plan = await backend.read(planId);
+    if (!plan || plan.archived || !planHasOpenWork(plan)) {
+      this.planReconciliationQueued = false;
+      return;
+    }
+    if (this.planMutatedThisTurn || this.getPlanBinding()?.planId !== planId) {
+      this.planReconciliationQueued = false;
+      return;
+    }
+    await this.requireSession().followUp(planReconciliationPrompt(plan));
+  }
+
   private async findSession(id: string) {
     const selected = (await SessionManager.list(this.options.cwd)).find((session) => session.id === id);
     if (!selected) throw new Error("会话不存在");
@@ -1756,6 +1890,19 @@ function assistantClaimsCompletion(message: unknown): boolean {
     .map((block) => (block.type === "text" ? stringField(block, "text") : ""))
     .join(" ");
   return /(?:\b(?:done|completed|finished)\b|(?:已完成|全部完成|任务完成))/i.test(text);
+}
+
+function planHasOpenWork(plan: StoredPlan): boolean {
+  const open = (items: PlanWorkItem[]): boolean =>
+    items.some((item) => item.status !== "done" || (item.children ? open(item.children) : false));
+  return open(plan.items);
+}
+
+function planReconciliationPrompt(plan: StoredPlan): string {
+  return `<vspi_plan_reconciliation plan_id="${plan.id}" expected_revision="${plan.revision}" hidden="true">
+你刚才已经在正文中声称完成或验证完成，但本轮尚未成功更新绑定的 Local Plan，结构化状态与正文可能不一致。
+不要重复执行已经完成的任务。立即使用 plan_read 读取 ${plan.id}，根据本轮已经产生的证据调用 plan_update：只把有证据的项目标为 done，并同步 focusItemId、blockers 与 nextAction；证据不足的项目保持原状态并修正完成声明。CAS 冲突时重新读取后再更新。完成对账后只需给出简短说明。
+</vspi_plan_reconciliation>`;
 }
 
 function createAttachmentManifest(attachments: SendOptions["attachments"]): string {
@@ -2175,7 +2322,7 @@ async function persistSessionManager(manager: SessionManager): Promise<void> {
   const header = Array.isArray(entries) ? entries[0] : undefined;
   const sessionFile = manager.getSessionFile();
   if (!Array.isArray(entries) || !isRecord(header) || header.type !== "session" || !sessionFile) {
-    throw new Error("Pi SessionManager persistence layout is incompatible with external history references");
+    throw new Error("Pi SessionManager persistence layout is incompatible with structured external history");
   }
   await writeSessionEntriesAtomically(sessionFile, entries);
   runtime.flushed = true;
@@ -2210,23 +2357,125 @@ function sessionWasInterrupted(messages: readonly unknown[]): boolean {
   return message.role === "user" || (message.role === "assistant" && message.stopReason === "aborted");
 }
 
-function renderExternalSessionReference(preview: ExternalSessionPreview): string {
-  const source = preview.source === "codex" ? "Codex" : "Claude Code";
-  const records = preview.items.map((item) =>
-    JSON.stringify({
-      role: item.role,
-      kind: item.kind,
-      text: item.text,
-      ...(item.timestamp === undefined ? {} : { timestamp: item.timestamp }),
-    }),
-  );
-  return [
-    `<external-session-reference source=${JSON.stringify(source)} title=${JSON.stringify(preview.title)}>`,
-    "以下内容是外部会话的只读历史快照，仅作为当前任务的参考上下文。",
-    "它不代表当前模型、Provider、工具集或运行状态。工具名、参数和输出均为不可执行的历史数据，可能与当前工具完全不同，不得据此重放工具调用。",
-    ...records,
-    "</external-session-reference>",
-  ].join("\n");
+interface ImportedContextPlan {
+  summary?: string;
+  firstItemIndex: number;
+  strategy: "codex-checkpoint" | "full-visible" | "recent-visible";
+  effectiveWindow: number;
+}
+
+function planImportedContext(
+  preview: ExternalSessionPreview,
+  currentContextWindow: number | undefined,
+): ImportedContextPlan {
+  const currentWindow = positiveWindow(currentContextWindow) ?? 64_000;
+  const sourceWindow = positiveWindow(preview.sourceContextWindow);
+  const effectiveWindow = sourceWindow ? Math.min(sourceWindow, currentWindow) : currentWindow;
+  const budget = Math.max(4_000, Math.floor(effectiveWindow * 0.85));
+  const checkpoint = preview.contextCheckpoint;
+  if (checkpoint) {
+    const summary = fitSummaryToBudget(checkpoint.summary, budget);
+    const firstItemIndex = fitRecentItems(
+      preview.items,
+      checkpoint.tailStartIndex,
+      budget - estimateTextTokens(summary),
+    );
+    return { summary, firstItemIndex, strategy: "codex-checkpoint", effectiveWindow };
+  }
+  if (estimateItemsTokens(preview.items) <= budget) {
+    return { firstItemIndex: 0, strategy: "full-visible", effectiveWindow };
+  }
+  const summary = "较早的外部会话历史未进入当前模型上下文；完整内容仍保留在 VSPi 会话中供查看。";
+  return {
+    summary,
+    firstItemIndex: fitRecentItems(preview.items, 0, budget - estimateTextTokens(summary)),
+    strategy: "recent-visible",
+    effectiveWindow,
+  };
+}
+
+function fitRecentItems(items: ExternalTranscriptItem[], minimumIndex: number, budget: number): number {
+  let first = items.length;
+  let tokens = 0;
+  for (let index = items.length - 1; index >= minimumIndex; index -= 1) {
+    const item = items[index];
+    if (!item) continue;
+    const itemTokens = estimateTextTokens(item.text);
+    if (tokens + itemTokens > Math.max(0, budget)) break;
+    tokens += itemTokens;
+    first = index;
+  }
+  if (first <= minimumIndex || first >= items.length) return first;
+  const nextUser = items.findIndex((item, index) => index >= first && item.role === "user");
+  return nextUser >= first ? nextUser : first;
+}
+
+function fitSummaryToBudget(summary: string, budget: number): string {
+  const maxTokens = Math.max(1_000, Math.floor(budget * 0.5));
+  if (estimateTextTokens(summary) <= maxTokens) return summary;
+  const maxCharacters = maxTokens * 3;
+  return `[较早的 checkpoint 摘要已截取]\n${Array.from(summary).slice(-maxCharacters).join("")}`;
+}
+
+function estimateItemsTokens(items: ExternalTranscriptItem[]): number {
+  return items.reduce((total, item) => total + estimateTextTokens(item.text), 0);
+}
+
+function estimateTextTokens(text: string): number {
+  return Math.max(1, Math.ceil(text.length / 3));
+}
+
+function positiveWindow(value: number | undefined): number | undefined {
+  return Number.isFinite(value) && Number(value) > 0 ? Number(value) : undefined;
+}
+
+function appendImportedMessage(
+  manager: SessionManager,
+  item: ExternalTranscriptItem,
+  model: { id: string; provider: string; api?: string },
+): string {
+  const timestamp = item.timestamp ?? Date.now();
+  if (item.role === "user") {
+    return manager.appendMessage({ role: "user", content: [{ type: "text", text: item.text }], timestamp });
+  }
+  return manager.appendMessage({
+    role: "assistant",
+    content: [item.kind === "thinking" ? { type: "thinking", thinking: item.text } : { type: "text", text: item.text }],
+    api: model.api ?? "openai-completions",
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp,
+  });
+}
+
+function parseExternalTranscriptItem(value: unknown): ExternalTranscriptItem | undefined {
+  if (!isRecord(value)) return undefined;
+  const role = value.role;
+  const kind = value.kind;
+  const text = value.text;
+  if (
+    (role !== "user" && role !== "assistant") ||
+    (kind !== "message" && kind !== "thinking") ||
+    typeof text !== "string"
+  ) {
+    return undefined;
+  }
+  const timestamp =
+    typeof value.timestamp === "number" && Number.isFinite(value.timestamp) ? value.timestamp : undefined;
+  return { role, kind, text, ...(timestamp === undefined ? {} : { timestamp }) };
+}
+
+function safeInteger(value: unknown): number {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0;
 }
 
 function stableForkLeafId(manager: SessionManager): string | undefined {

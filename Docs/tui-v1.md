@@ -32,7 +32,7 @@ Plan 背景       #182529
 
 ## 启动封面
 
-封面使用多行圆角框、`◈` 品牌符号和块字符 VSPi。initial brand-only 初始帧仅显示品牌、现有六行块字符 Logo 与动画进度，不含运行状态或模型声明；写出首帧的同一轮立即启动应用初始化，使初始化与约 280ms 的四帧动画并行。reduced-motion、CI 与 dumb terminal 跳过中间帧，但不绕过初始化屏障。
+封面使用多行圆角框、`◈` 品牌符号和块字符 VSPi。initial brand-only 初始帧仅显示品牌、现有六行块字符 Logo 与静态进度线，不含运行状态或模型声明；应用初始化完成后只原位替换一次最终状态帧，不播放中间动画。两帧都预留终端最右一列，避免 right-margin autowrap 造成额外物理行；reduced-motion、CI 与 dumb terminal 使用同一初始化屏障。
 
 最终帧等待应用初始化完成，使用初始化后解析得到的真实 Model，并显示从 `package.json` 读取的包版本、Backend 与独立的执行 Policy。真实后端显示 `Backend Pi`，显式离线后端显示 `Backend Fixture`；Policy 统一表达为 `Policy … · Host`，仅表示审批等级和宿主执行。启动、`/new` 和 alias `/clear` 都必须先把完整最终帧提交并写入终端 `scrollback`，之后才启动新的动态 TUI；后续刷新和差分渲染只拥有其下方的动态区域，不会擦除、清空或覆盖这个最终帧。
 
@@ -49,7 +49,7 @@ Plan 背景       #182529
 │                                                                              │
 │ Model  OpenAI / GPT-5.4                                                      │
 │ Backend Pi                                                                   │
-│ Policy Standard · Host                                                 v0.3.4│
+│ Policy Standard · Host                                                 v0.3.5│
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -129,7 +129,7 @@ Command 响应式规则：40 列使用“身份行 + 描述/source 行”的两�
 
 ## M1 Contextual Hints
 
-所有 contextual hint 都位于面板 frame 外、composer上方，并且只宣告当前真实可用的操作。Command 的 literal 文案固定为 `↑↓ 选择  Tab 补全  Enter 执行  Esc 关闭`；Plan、Provider、Sessions、Settings、Usage、Theme、Question 与 Model 使用各自的上下文提示，未接入动作不得出现在 hint 中。
+contextual hint 只宣告当前真实可用的操作。普通面板 hint 位于 frame 外、composer 上方；Sessions 接管整个主内容区时把 `↑↓ / Enter / Shift+F / Esc` 放入底边并保留 Status，不渲染 Transcript、Plan、Composer 或 Working。Command 的 literal 文案固定为 `↑↓ 选择  Tab 补全  Enter 执行  Esc 关闭`；Plan、Provider、Settings、Usage、Theme、Question 与 Model 使用各自的上下文提示，未接入动作不得出现在 hint 中。
 
 Model 以外层 60 列为 breakpoint：小于 60 列是窄屏列表/详情布局，hint 显示 `←→ 详情`，Right 进入详情、Left 返回；外层 60 列及以上是宽屏双栏，左侧列表、右侧详情，hint 不宣告无效的左右切换。
 
@@ -143,7 +143,7 @@ v0.3 的生产命令清单是：
 
 手动 `/compact` 提供 Pi Native、Execution Continuity、Research Decisions 与 Custom 四种 profile。
 未绑定 Local Plan 默认 Pi Native，绑定 Plan 默认 Execution Continuity；`/compact --list` 可检查当前选择范围。
-v0.3.4 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
+v0.3.5 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
 
 `/plan`、`/prompt`、`/tools` 与 `/policy` 均由 Action Registry 接入真实生产工作区。无 Workflow 时 Plan 使用 workspace-scoped Local Plan；没有活动计划时常驻 frame 与 hint 都不渲染，Shift+Tab 跳过空 Plan，显式 `/plan` 可临时打开入口。显式启用 Workflow 后才只读投影 Workflow Delivery。Prompt 提供 Factory/Fork、分层规则、导入导出与 Effective Prompt；Tools 只读展示当前能力、路由与失败边界。
 
@@ -155,7 +155,7 @@ v0.3.4 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动
 
 ```
 
-回答只用弱化的 `•` 标记开始。Transcript 按后端事件只追加：工具前文本、Tool、Tool result 与工具后回答各有唯一节点，相同 `contentIndex` 不得复用节点 ID。thinking 默认折叠且保留原始英文；`thinkingDisplay` 提供隐藏、折叠、展开三态：隐藏只收起正文，活跃时显示“思考中”，完成后仍保留最简思考记录；折叠保留 Effort/耗时标题；展开直接显示正文。Inspect 始终使用稳定 message id，并可查看当前单条 thinking/tool 详情。同一批 Tool 使用一个 `工具调用` 组头；每项把状态符号、固定宽度名称列和弱化动作摘要放在一行，摘要从同一列开始，运行/失败文字位于摘要末尾；中间项使用 `├─`，末项使用 `└─`。只要组内存在 queued/running 项，就实时展示完整树；全部进入 success/error/cancelled 后，`collapseTools=true` 将其收束为包含总数和失败/取消计数的一行摘要。Settings 的“完成后收起工具”默认开启，关闭后完整树持续显示；Inspect/Enter 临时恢复完整顺序，edit 输出继续使用行号、增删色与窄屏换行。Markdown 标题使用内容蓝色前景和字重，不增加背景块。Sub Agent 只展示模型、effort、任务和状态。
+回答只用弱化的 `•` 标记开始。Transcript 按后端事件只追加：工具前文本、Tool、Tool result 与工具后回答各有唯一节点，相同 `contentIndex` 不得复用节点 ID。完整 Session 历史不删除，主聊天只投影最多 80 个内容块、60K 字符和约 6 屏的最近后缀；旧块用顶部弱提示计数，逐消息/工具组缓存避免 Working 帧重复解析整段 Markdown，Inspect 使用同一窗口。`thinkingDisplay` 提供隐藏、折叠、展开三态：隐藏只收起正文，活跃时显示“思考中”，完成后仍保留最简思考记录；折叠保留 Effort/耗时标题并显示最后一段关键内容；展开显示完整正文。可选 `thinkingTranslationEndpoint` 只在 Thinking 完成后串行调用 HTTP(S) 翻译服务，原文继续保留在 Session，译文替换可见投影；pending/success/error 都在标题中有弱状态。Inspect 始终使用稳定 message id，并可查看当前单条 thinking/tool 详情。同一批 Tool 使用一个 `工具调用` 组头；每项把状态符号、固定宽度名称列和弱化动作摘要放在一行，摘要从同一列开始，运行/失败文字位于摘要末尾；中间项使用 `├─`，末项使用 `└─`。只要组内存在 queued/running 项，就实时展示完整树；全部进入 success/error/cancelled 后，`collapseTools=true` 将其收束为包含总数和失败/取消计数的一行摘要。Settings 的“完成后收起工具”默认开启，关闭后完整树持续显示；Inspect/Enter 临时恢复完整顺序，edit 输出继续使用行号、增删色与窄屏换行。Markdown 标题使用内容蓝色前景和字重，不增加背景块。Sub Agent 只展示模型、effort、任务和状态。
 
 ## Composer
 
@@ -187,7 +187,7 @@ composer 正文空态为一行，随内容增长，最多显示 10 行；之后�
 
 Plan、Commands、Model、Provider、Sessions、历史导入、Skills、Settings、Usage、Theme、Question、Tools 和图片预览占用同一位置，不互相嵌套；后续面板也不得创建 nested modal。
 
-历史导入面板使用 Codex / Claude Code 水平 Tab、标题/路径搜索与固定列表/详情布局；窄终端降级为单列。两类来源均补充发现未索引的用户主会话，同时排除 Codex subagent rollout 与 Claude Code `agent-*` 记录。选中后 Enter 直接流式解析并复制，不调用 Question，也没有“提交答案”二次复核。解析以读取开始时的字节长度为边界，只接受边界内的完整 JSONL 行；写入前可见指纹变化必须放弃本次快照并重试。导入始终创建新 Pi Session，不改写 Codex/Claude 源文件；全部可见历史被编码成一个隐藏显示、参与模型上下文的 `vspi.external-session-reference` custom message。来源模型、Provider、工具名、参数和输出仅为不可执行参考数据，不参与当前模型恢复、不要求工具兼容，也不得重放。新 Session 另存导入时的当前 VSPi model/effort 作为后续运行身份。隐藏 thinking、system/developer prompt、凭据、权限或内部控制记录不进入快照，常见凭据在落盘前脱敏。超过当前上下文 80% 只警告，不静默截断。
+历史导入面板使用 Codex / Claude Code 水平 Tab、标题/路径搜索与固定列表/详情布局；窄终端降级为单列。两类来源均补充发现未索引的用户主会话，同时排除 Codex subagent rollout 与 Claude Code `agent-*` 记录。选中后 Enter 直接流式解析并复制，不调用 Question，也没有“提交答案”二次复核。解析以读取开始时的字节长度为边界，只接受边界内的完整 JSONL 行；写入前可见指纹变化必须放弃本次快照并重试。导入始终创建新 Pi Session，不改写 Codex/Claude 源文件；用户消息、助手 Thinking 与最终回答转换为原生可见历史，工具调用和工具输出完全丢弃。新 Session 另存导入时的当前 VSPi model/effort 作为后续运行身份。模型上下文优先使用 Codex 最近 compaction checkpoint 与其后正文，否则按当前模型窗口约 85% 的预算截取最近正文；显示历史不受该上下文裁剪影响。system/developer prompt、凭据、权限或内部控制记录不进入快照，常见凭据在落盘前脱敏；v0.3.3/v0.3.4 的 legacy reference custom message 在 Provider context 边界 fail closed 过滤。
 
 Skills 工作区使用“已启用 / 可导入 / 问题”Tab、搜索和列表/详情布局；外层 58 列以下用 Enter 进入详情、Esc 返回。Pi Native ResourceLoader/SettingsManager/DefaultPackageManager 是唯一资源与包真相源。Codex/Claude Code Skill 只登记原始 `SKILL.md` 路径；Git/npm 安装固定 `autoload: false`，extension、prompt、theme 为空，只允许包目录内发现的 Skill pattern。所有 mutation 先通过 Question；安装确认包含“安装并启用 / 仅安装 / 取消”。`skill_list` 与 `skill_manage` 进入模型工具表，但管理调用仍不能绕过 Question。失败安装原子回滚，既有包不被清理，URL 凭据在面板、diagnostic 和错误中脱敏。MCP 保持独立后续版本，不在此工作区注册。
 
@@ -245,7 +245,7 @@ Workflow bootstrap 使用 TypeScript adapter 包裹同进程 ESM JavaScript Core
 
 Question 已注册为 Pi 的真实 TypeBox `question` ToolDefinition，并在初始及 replacement runtime 中与 Policy tools 一起安装；调用本身以 Tool 节点进入 Transcript。弹出后使用 `Question n / m` 进度元数据、粗体标题、正文、分隔线、选项标题与次级说明形成层次；四种题型支持“其他”、直接回答、跳过和最终检查，填空输入位于 Question 工作区内部。`Left/Right` 切题，`Up/Down` 选择，`Ctrl/Alt+Up/Down` 排序，`Tab` 直接回答，`Shift+S` 跳过，`Enter` 确认/提交；hint 只显示当前状态可用动作。Tool result 只返回 question id、answer/skipped，取消、Session replacement 与 dispose 都 fail closed。
 
-Settings 分别加载 Global 与 Project 层，Tab 切换只更换草稿，Enter 修改，`Ctrl+S` Apply，Esc Cancel；切 Tab 和修改开关不会立即写文件。`/effort` 从当前 Pi Session 的 `getAvailableThinkingLevels()` 读取模型实际支持的 `off/minimal/low/medium/high/xhigh/max` 子集，展示时首字母大写，保存时保留原生小写值；旧中文配置在读取时迁移。未 trust 或 Recovery 时只允许 Global settings。
+Settings 分别加载 Global 与 Project 层，Tab 切换只更换草稿，Enter 修改，`Ctrl+S` Apply，Esc Cancel；切 Tab 和修改开关不会立即写文件。“思考翻译服务”进入独立文本编辑态，支持粘贴 IP:端口、域名或完整 URL，Enter 确认字段、Esc 取消字段编辑；保存时只接受无 userinfo 的 HTTP(S)，缺省 path 补 `/translate`。`/effort` 从当前 Pi Session 的 `getAvailableThinkingLevels()` 读取模型实际支持的 `off/minimal/low/medium/high/xhigh/max` 子集，展示时首字母大写，保存时保留原生小写值；旧中文配置在读取时迁移。未 trust 或 Recovery 时只允许 Global settings。
 
 ## 升级边界
 

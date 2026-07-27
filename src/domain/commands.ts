@@ -184,7 +184,7 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
   },
   {
     id: "policy",
-    aliases: [],
+    aliases: ["permission"],
     label: "/policy",
     description: "查看执行 Policy",
     group: "VSPi",

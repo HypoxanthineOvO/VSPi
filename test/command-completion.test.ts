@@ -78,6 +78,7 @@ describe("slash command Tab completion", () => {
   it.each([
     ["/ex", "/exit"],
     ["/qui", "/quit"],
+    ["/per", "/permission"],
   ] as const)("completes the unique matched token %s without execution or history writes", async (input, expected) => {
     const { app, backend, onExit } = await createApp();
     app.composer.editor.addToHistory("existing history");

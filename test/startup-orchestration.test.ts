@@ -5,7 +5,7 @@ import { VspiApp } from "../src/app/vspi-app.js";
 import type { AttachmentService } from "../src/attachments/service.js";
 import type { ChatBackend } from "../src/backend/types.js";
 import { DEFAULT_SETTINGS } from "../src/domain/fixtures.js";
-import { stripAnsi } from "../src/ui/ansi.js";
+import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
 import { plainTheme } from "./helpers.js";
 
 const PI_STATUS: StartupStatus = {
@@ -33,6 +33,26 @@ afterEach(() => {
 });
 
 describe("startup orchestration", () => {
+  it("uses one static brand frame and one width-safe final status frame", async () => {
+    const chunks: string[] = [];
+    const startTui = vi.fn();
+    await startUiAfterSplash({
+      width: 80,
+      theme: plainTheme({ reducedMotion: false }),
+      write: (chunk) => chunks.push(chunk),
+      startApp: () => PI_STATUS,
+      startTui,
+    });
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks.filter((chunk) => stripAnsi(chunk).includes(PI_STATUS.model))).toHaveLength(1);
+    for (const chunk of chunks) {
+      for (const line of stripAnsi(chunk).split("\n"))
+        expect(visibleWidth(line.replace("\r", ""))).toBeLessThanOrEqual(79);
+    }
+    expect(startTui).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ["animated", false],
     ["reduced-motion", true],

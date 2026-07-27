@@ -340,6 +340,8 @@ export class PanelController {
   private settingsLayers: { global: AppSettings; project?: AppSettings; projectInherited: boolean };
   private settingsDirty = false;
   private settingsTab = 1;
+  private settingsEndpointEditing = false;
+  private settingsEndpointInput = "";
   private effort: EffortLevel = "medium";
   private effortLevels: EffortLevel[] = ["medium"];
   private questionIndex = 0;
@@ -389,6 +391,10 @@ export class PanelController {
       this.questionDirectAnswer = false;
       this.questionInput = "";
     }
+    if (kind === "settings") {
+      this.settingsEndpointEditing = false;
+      this.settingsEndpointInput = "";
+    }
   }
 
   openQuestions(questions: Question[]): void {
@@ -425,6 +431,8 @@ export class PanelController {
     this.settingsLayers.projectInherited = false;
     this.settings = { ...settings };
     this.settingsDirty = false;
+    this.settingsEndpointEditing = false;
+    this.settingsEndpointInput = "";
   }
 
   close(): void {
@@ -572,6 +580,7 @@ export class PanelController {
   }
 
   handleInput(data: string): PanelEvent | undefined {
+    if (this.kind === "settings" && this.settingsEndpointEditing) return this.handleSettings(data);
     const interactionState = this.interactionState();
     if (matchesInteraction("panel", this.kind, "closePanel", data, interactionState)) {
       if (this.kind === "approval" && this.approvalReasonEditing) {
@@ -695,15 +704,38 @@ export class PanelController {
     });
   }
 
+  renderSessionsSurface(width: number, maxRows: number, theme: VspiTheme): string[] {
+    const bodyWidth = Math.max(1, width - 2);
+    const bodyRows = Math.max(1, maxRows - 2);
+    this.lastBodyWidth = bodyWidth;
+    let body = this.renderSessions(bodyWidth, theme);
+    this.state.scroll = Math.max(0, Math.min(this.state.scroll, Math.max(0, body.length - bodyRows)));
+    if (this.state.selected < this.state.scroll) this.state.scroll = this.state.selected;
+    if (this.state.selected >= this.state.scroll + bodyRows) this.state.scroll = this.state.selected - bodyRows + 1;
+    body = body.slice(this.state.scroll, this.state.scroll + bodyRows);
+    while (body.length < bodyRows) body.push("");
+    const hint = renderInteractionHint("panel", "sessions", this.interactionState());
+    return frame(body, width, theme, {
+      title: "Sessions",
+      rightTitle: `${this.sessions.length} 个会话`,
+      footer: hint,
+      footerPosition: "left",
+      focused: true,
+      maxBodyLines: bodyRows,
+    });
+  }
+
   renderHint(width: number, theme: VspiTheme): string {
     this.lastBodyWidth = Math.max(1, width - 2);
     const hint = renderInteractionHint("panel", this.kind, this.interactionState());
     const contextualHint =
-      this.kind === "question"
-        ? this.questionHint(hint)
-        : this.kind === "models" && this.modelGroups.length === 0
-          ? hint.replace("Tab 切换视图  ", "")
-          : hint;
+      this.kind === "settings" && this.settingsEndpointEditing
+        ? "输入 IP:端口、域名或完整 URL  Enter 确认  Esc 取消"
+        : this.kind === "question"
+          ? this.questionHint(hint)
+          : this.kind === "models" && this.modelGroups.length === 0
+            ? hint.replace("Tab 切换视图  ", "")
+            : hint;
     return theme.muted(padLine(contextualHint, width));
   }
 
@@ -1036,6 +1068,29 @@ export class PanelController {
   }
 
   private handleSettings(data: string): PanelEvent | undefined {
+    if (this.settingsEndpointEditing) {
+      if (panelKey(data, Key.escape)) {
+        this.settingsEndpointEditing = false;
+        this.settingsEndpointInput = "";
+        return;
+      }
+      if (panelKey(data, Key.enter)) {
+        const endpoint = this.settingsEndpointInput.trim();
+        this.settingsDirty ||= endpoint !== this.settings.thinkingTranslationEndpoint;
+        this.settings.thinkingTranslationEndpoint = endpoint;
+        this.settingsEndpointEditing = false;
+        this.settingsEndpointInput = "";
+        return;
+      }
+      if (panelKey(data, Key.backspace)) {
+        this.settingsEndpointInput = Array.from(this.settingsEndpointInput).slice(0, -1).join("");
+        return;
+      }
+      const value = printable(data);
+      if (value)
+        this.settingsEndpointInput = Array.from(`${this.settingsEndpointInput}${value}`).slice(0, 500).join("");
+      return;
+    }
     if (matchesKey(data, Key.left) || matchesKey(data, Key.right) || matchesKey(data, Key.tab)) {
       const nextTab = this.settingsTab === 0 ? 1 : 0;
       const next = nextTab === 0 ? this.settingsLayers.global : this.settingsLayers.project;
@@ -1068,6 +1123,11 @@ export class PanelController {
         this.settingsDirty = true;
         return;
       }
+      if (row.key === "thinkingTranslationEndpoint") {
+        this.settingsEndpointEditing = true;
+        this.settingsEndpointInput = this.settings.thinkingTranslationEndpoint;
+        return;
+      }
       const key = row.key;
       this.settings[key] = !this.settings[key];
       this.settingsDirty = true;
@@ -1080,6 +1140,8 @@ export class PanelController {
     const source = this.settingsTab === 0 ? this.settingsLayers.global : this.settingsLayers.project;
     if (source) this.settings = { ...source };
     this.settingsDirty = false;
+    this.settingsEndpointEditing = false;
+    this.settingsEndpointInput = "";
   }
 
   private handleEffort(data: string): PanelEvent | undefined {
@@ -1887,7 +1949,14 @@ export class PanelController {
 
   private settingRows(): Array<{
     label: string;
-    key: "theme" | "reducedMotion" | "thinkingDisplay" | "wrapCode" | "collapseTools" | "bridgeEnabled";
+    key:
+      | "theme"
+      | "reducedMotion"
+      | "thinkingDisplay"
+      | "thinkingTranslationEndpoint"
+      | "wrapCode"
+      | "collapseTools"
+      | "bridgeEnabled";
     group: string;
   }> {
     return [
@@ -1897,6 +1966,11 @@ export class PanelController {
         group: "Transcript",
         label: `thinking 显示模式  ${thinkingDisplayLabel(this.settings.thinkingDisplay)}`,
         key: "thinkingDisplay",
+      },
+      {
+        group: "Transcript",
+        label: `思考翻译服务  ${this.settings.thinkingTranslationEndpoint || "关"}`,
+        key: "thinkingTranslationEndpoint",
       },
       { group: "Transcript", label: `代码自动换行  ${this.settings.wrapCode ? "开" : "关"}`, key: "wrapCode" },
       {
@@ -1922,7 +1996,11 @@ export class PanelController {
         group = row.group;
         lines.push(theme.muted(padLine(`  ${group}`, width)));
       }
-      lines.push(selectedLine(row.label, index === this.state.selected, width, theme));
+      const label =
+        row.key === "thinkingTranslationEndpoint" && this.settingsEndpointEditing
+          ? `思考翻译服务  ${this.settingsEndpointInput}${theme.inverse(" ")}`
+          : row.label;
+      lines.push(selectedLine(label, index === this.state.selected, width, theme));
     });
     lines.push(theme.muted(padLine("  键位方案  VSPi 默认", width)));
     return lines;

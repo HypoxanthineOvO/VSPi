@@ -1,6 +1,6 @@
 # VSPi
 
-VSPi v0.3.4 是基于 `@earendil-works/pi-tui` 与 `@earendil-works/pi-coding-agent` 的自定义中文 TUI。当前实现已接入统一动作目录、真实 Session runtime、Provider/Model/Effort 真相源、执行 Policy、Question tool、图片附件、外部历史会话导入、Skill 管理、安全自更新、同服务器 Session 前台迁移，以及可配置的 thinking/Markdown 渲染与可选只读 Workflow 投影。
+VSPi v0.3.5 是基于 `@earendil-works/pi-tui` 与 `@earendil-works/pi-coding-agent` 的自定义中文 TUI。当前实现已接入统一动作目录、真实 Session runtime、Provider/Model/Effort 真相源、执行 Policy、Question tool、图片附件、外部历史会话导入、Skill 管理、安全自更新、同服务器 Session 前台迁移，以及有界缓存 transcript、可配置的 Thinking 翻译/Markdown 渲染与可选只读 Workflow 投影。
 
 ## 安装
 
@@ -86,7 +86,7 @@ VSPi 沿用 Pi 的模型、Provider、凭据和 session 目录，不另建 Secre
 
 ## 启动与默认界面
 
-启动序列会先立即写出 initial brand-only 初始帧：它只显示 VSPi 品牌、现有六行块字符 Logo 和动画进度，不含运行状态或模型声明；应用初始化在同一轮启动并与封面动画并行。最终帧等待应用初始化完成，使用初始化后解析得到的真实 Model、`package.json` 解析出的包版本、真实 Backend 与执行 Policy。真实 pi 显示 `Backend Pi`，显式离线后端显示 `Backend Fixture`；执行边界统一显示 `Policy … · Host`，Policy 只控制审批强度，Backend 与 Policy 是两项独立元数据。
+启动序列会先立即写出 initial brand-only 静态帧：它只显示 VSPi 品牌、现有六行块字符 Logo 和静态进度线，不含运行状态或模型声明。应用初始化完成后原位替换一次最终状态帧，不播放多段进度动画；两帧都预留终端最右一列，避免自动换行造成残留。最终帧使用初始化后解析得到的真实 Model、`package.json` 解析出的包版本、真实 Backend 与执行 Policy。真实 pi 显示 `Backend Pi`，显式离线后端显示 `Backend Fixture`；执行边界统一显示 `Policy … · Host`，Policy 只控制审批强度，Backend 与 Policy 是两项独立元数据。
 
 完整 Logo 的最终帧连同结尾 newline 会先提交并写入终端 `scrollback`，之后才启动动态 TUI；后续刷新和差分渲染只管理它下方的动态区域，不会擦除、清空或覆盖这个最终帧。启动、`/new` 和它的 alias `/clear` 都遵守同一规则：先把完整 final Splash 写入 scrollback，再建立新的动态区域。启用 reduced motion 时不播放中间帧，但仍遵守相同的初始化屏障与最终帧写入顺序。
 
@@ -123,10 +123,10 @@ Status 的短模型样例左右锚是：80 列第一行 `Model 0 / Effort 24 / C
 
 `/compact` 在未绑定 Local Plan 时默认使用 Pi Native，绑定 Plan 时默认使用 Execution Continuity。
 使用 `/compact --list` 检查四种手动 profile；也可显式选择 `native`、`continuity`、`research`，
-或使用 `/compact custom <instructions>`。v0.3.4 的自动 threshold/overflow 压缩仍保持 Pi Native；
+或使用 `/compact custom <instructions>`。v0.3.5 的自动 threshold/overflow 压缩仍保持 Pi Native；
 统一配置自动压缩 profile 留待后续版本。
 
-退出候选显示为 `quit (exit)`。canonical `/new` 的 alias 是 `/clear`；`/sessions` 的 aliases 是 `/session` 与 `/resume`；`/providers` 的 alias 是 `/provider`；canonical `/quit` 的 aliases 是 `/exit` 和 `/q`，输入 alias 时显示 `/exit  (/quit)`，canonical 注释使用弱化灰色。`/thinking`、`/login` 与 `/logout` 是 canonical 命令。插件/扩展命令保留 package `source` 来源，而内置命令显示 Built-in。
+退出候选显示为 `quit (exit)`。canonical `/new` 的 alias 是 `/clear`；`/sessions` 的 aliases 是 `/session` 与 `/resume`；`/providers` 的 alias 是 `/provider`；`/policy` 的 alias 是 `/permission`；canonical `/quit` 的 aliases 是 `/exit` 和 `/q`，输入 alias 时显示 `/exit  (/quit)`，canonical 注释使用弱化灰色。`/thinking`、`/login` 与 `/logout` 是 canonical 命令。插件/扩展命令保留 package `source` 来源，而内置命令显示 Built-in。
 
 `Tab` 是唯一补全键，只处理无参数的单一 slash token，并且必须只有唯一候选：`/ex → /exit`，其可见结果只强调 `ex`，斜杠与 `it` 保持普通；`/qui → /quit` 只强调 `qui`，斜杠与 `t` 保持普通；`/ses → /sessions`、`/provi → /providers`、`/cl → /clear`。存在参数、普通文本或多个 token 候选时不改写。`Tab` 只修改 composer 文本，不会执行命令，也不写入 history（历史记录）；最终执行始终使用 canonical 命令身份。若两个不同 canonical 命令注册了同一个 exact alias，解析和面板 Enter 都会 fail closed，不会静默执行注册顺序中的第一项。composer 中的 slash token 与 Command 候选中的匹配前缀同时使用颜色和粗体、下划线、反显（bold / underline / inverse），因此无色终端仍可辨认，普通文本不受影响。
 
@@ -138,7 +138,7 @@ Command 工作区在 40 列把每个命令排成身份行与详情/source 行，
 
 用户消息使用焦点色竖标和至少三行的全宽表面，短消息也保留上下留白，不绘制额外 frame。`VSPi Dark` 使用 `#202428`/`#F4F7FA`，Light 使用对应浅色表面，默认 Terminal 不强加前景或背景。40/80/120 列下硬换行、长单词和附件摘要都保持宽度安全；Transcript Inspect 只改变选择态，不改变消息尺寸。
 
-Transcript 是按后端事件只追加的瀑布时间线。工具前文本、Tool 调用、Tool 结果和工具后最终回答分别拥有唯一节点；即使 Pi 在同一 Agent 回合重复使用相同 `contentIndex`，后来的文本也不会覆盖或移动到早先节点。同一批 Tool 组成一个执行组，名称使用组内固定宽度列，弱化的路径、命令或 Question 数量摘要从同一列开始，运行/失败状态位于摘要末尾；中间项使用 `├─`、末项使用 `└─`。组内仍有 queued/running 项时始终实时展示完整树；全部进入 success/error/cancelled 后，默认收束为包含总数和异常计数的一行摘要。Settings 中低强调的“完成后收起工具”可关闭此行为；Inspect/Enter 会临时恢复完整顺序、结果与 diff。
+Transcript 是按后端事件只追加的瀑布时间线。工具前文本、Tool 调用、Tool 结果和工具后最终回答分别拥有唯一节点；即使 Pi 在同一 Agent 回合重复使用相同 `contentIndex`，后来的文本也不会覆盖或移动到早先节点。完整历史仍保存在 Session，主聊天按最多 80 个内容块、60K 字符和约 6 屏的有界后缀展示，顶部弱提示隐藏块数；逐消息/工具组缓存使 Working 动画不再重复解析整段 Markdown，Inspect 与可见窗口使用同一范围。同一批 Tool 组成一个执行组，名称使用组内固定宽度列，弱化的路径、命令或 Question 数量摘要从同一列开始，运行/失败状态位于摘要末尾；中间项使用 `├─`、末项使用 `└─`。组内仍有 queued/running 项时始终实时展示完整树；全部进入 success/error/cancelled 后，默认收束为包含总数和异常计数的一行摘要。Settings 中低强调的“完成后收起工具”可关闭此行为；Inspect/Enter 会临时恢复完整顺序、结果与 diff。
 
 - `Enter` 空闲时提交；工作中作为 Steer 插入，在当前工具批次结束后、下一次模型调用前送达。
 - `Shift+Enter` 或 `Ctrl+J` 换行。
@@ -155,13 +155,13 @@ Model、Provider、Sessions、Settings、Usage、Theme 和 Question 共用底部
 
 同一台服务器上的每个 Pi Session 只允许一个执行 owner 和一个可交互前台。Sessions 面板把其他进程持有的会话标为“使用中”，选择后可迁移前台、从最后一个完整回复创建分支或取消。普通接管不会 abort 旧任务：新 TUI 立即成为唯一交互前台，以正常主界面接收旧 runtime 的完整快照和实时输出；旧 TUI 显示“已在另一终端继续”后停止读取输入，但旧进程暂时保留不可序列化的 Pi runtime，直到当前 generation、工具或压缩结束。新前台在此期间发送的普通消息通过 `0600` Unix control socket 存入旧 owner 的等待队列，不会进入当前 generation；安全点到达后按顺序执行。新前台按 Esc 才会通过同一控制通道明确中断旧 runtime，随后继续处理已接受的等待消息。
 
-pending 或随后出现的 Question/Approval 会迁移到新前台，回答仍回到旧进程原有的工具 Promise。所有活动和等待消息结束后，旧 owner 把 lease 原子改写给唯一指定的 successor，再退出；其他终端只能观察新 owner 并串行请求下一次迁移，不能争抢空锁或同时回答交互。新前台在安全点前断开时，旧 TUI 恢复，pending 交互重新弹出，已经被 owner 接受的等待消息仍会执行。`vspi continue` 遇到占用时采用同样机制。普通退出不在后台继续任务；恢复只加载已落盘内容，不重连旧请求、不自动重试。锁只保证同服务器进程，跨服务器共享目录不在 v0.3.4 的支持范围内。
+pending 或随后出现的 Question/Approval 会迁移到新前台，回答仍回到旧进程原有的工具 Promise。所有活动和等待消息结束后，旧 owner 把 lease 原子改写给唯一指定的 successor，再退出；其他终端只能观察新 owner 并串行请求下一次迁移，不能争抢空锁或同时回答交互。新前台在安全点前断开时，旧 TUI 恢复，pending 交互重新弹出，已经被 owner 接受的等待消息仍会执行。`vspi continue` 遇到占用时采用同样机制。普通退出不在后台继续任务；恢复只加载已落盘内容，不重连旧请求、不自动重试。锁只保证同服务器进程，跨服务器共享目录不在 v0.3.5 的支持范围内。
 
 ## 历史会话导入
 
 `/import` 或 `vspi import [codex|claude]` 会打开原生终端导入面板。Codex 来源于 `~/.codex/session_index.jsonl`、`~/.codex/sessions/**/*.jsonl` 和 `~/.codex/archived_sessions/**/*.jsonl`；Claude Code 来源于 `~/.claude/history.jsonl` 与 `~/.claude/projects/**/*.jsonl`。两者未进入索引的用户主会话也会被发现，Codex subagent rollout 和 Claude Code `agent-*` 记录不会出现。
 
-导入是一次 Enter 完成的参考快照复制，不会修改或接管源文件，也不进入 Question 的“提交答案”复核。VSPi 按读取开始时的文件字节边界解析已完整写入的 JSONL 记录，将用户可见对话、工具参数和工具输出保存为一个不可执行的 Pi `custom_message`；来源模型、Provider 和工具名只作为历史数据，既不要求与当前环境一致，也不会被恢复或重放。新 Session 明确保留导入时正在使用的 VSPi 模型与 Effort，Transcript 只显示来源、标题和记录数摘要，不用历史工具记录刷屏。隐藏 thinking、system/developer prompt、权限状态与内部控制记录不会进入参考快照；API Key、Bearer Token、password 等常见凭据在落盘前脱敏。读取后若源会话的可见内容已经变化，导入会拒绝本次快照并要求重试。
+导入是一次 Enter 完成的结构化快照复制，不会修改或接管源文件，也不进入 Question 的“提交答案”复核。VSPi 按读取开始时的文件字节边界解析已完整写入的 JSONL 记录，把用户消息、助手 Thinking 与最终回答转换为原生可见 Session 历史；工具调用和工具输出完全丢弃，不展示、不进入模型上下文。新 Session 保留导入时正在使用的 VSPi 模型与 Effort；模型上下文优先使用 Codex 最近的 compaction checkpoint 及其后正文，否则按当前模型窗口截取最近可见正文，完整可见历史仍可在 Transcript 中查看。system/developer prompt、权限状态与内部控制记录不会进入导入结果；API Key、Bearer Token、password 等常见凭据在落盘前脱敏。读取后若源会话的可见内容已经变化，导入会拒绝本次快照并要求重试；旧版 30 MB reference blob 会在 Provider context 边界被兼容过滤。
 
 确认框显示对话数、工具记录数和 token 估算。估算量超过当前模型窗口 80% 时会警告，但不会静默截断；首次继续对话时可能由 Pi 触发压缩。导入成功后会创建并切换到新的原生 VSPi Session，源会话始终保持不变。
 
@@ -171,7 +171,7 @@ pending 或随后出现的 Question/Approval 会迁移到新前台，回答仍�
 
 `+` 支持 Git URL 与 `npm:package`，也可切换到“让 Agent 帮我找”，后者会作为普通用户消息提交。安装前必须通过 Question 选择“安装并启用 / 仅安装 / 取消”；启用、停用、更新和移除同样逐次确认。受管包固定 `autoload: false`，extension、prompt、theme 全部禁用，只登记实际发现且位于包目录内的 `SKILL.md`。安装或持久化失败会回滚本次新装内容，不删除原有包；来源和错误输出不回显 URL 凭据。
 
-模型可用 `skill_list` 只读检查目录，并用 `skill_manage` 提议安装、启停、更新或移除；所有 mutation 仍进入同一套 Question 确认。资源变更后会刷新 Pi ResourceLoader，并重建当前会话下一轮使用的 Skill system prompt。MCP 不属于 `0.3.4`，仍在 `/tools` 中显示 `Not connected`。
+模型可用 `skill_list` 只读检查目录，并用 `skill_manage` 提议安装、启停、更新或移除；所有 mutation 仍进入同一套 Question 确认。资源变更后会刷新 Pi ResourceLoader，并重建当前会话下一轮使用的 Skill system prompt。MCP 不属于 `0.3.5`，仍在 `/tools` 中显示 `Not connected`。
 
 每个已接入工作区都有 contextual hint。hint 位于面板 frame外，并直接位于 composer上方；Command 的完整提示是 `↑↓ 选择  Tab 补全  Enter 执行  Esc 关闭`。Plan、Provider、Sessions、Settings、Usage、Theme、Question 和 Model 按当前真实可用动作生成提示；未来工作区接入前不得宣告无效键位。
 
@@ -221,7 +221,7 @@ npm run dev -- --recovery
 
 ## Workflow Adapter Bootstrap
 
-VSPi `0.3.4` 的 Workflow bootstrap 只读投影 Hypo-Workflow Plan，并且默认关闭。只有显式传入 `--workflow` 才会读取 Workflow bundle identity、加载 Core 并访问 workspace Delivery；默认启动不会读取 Workflow 环境变量或项目状态。Plan 标题在展示层把 slug 分隔符转换为空格、把版本段转换为点号并首字母大写，持久 ID 完全不变；标题、Workflow 元数据、分隔线和里程碑列表形成独立层次。Adapter 是 TypeScript host boundary，加载同一 Node.js 进程中的 ESM JavaScript Core；`.pipeline` 文件只能由 Core API 读写，VSPi 不直接解析或修改 authority YAML/JSON。
+VSPi `0.3.5` 的 Workflow bootstrap 只读投影 Hypo-Workflow Plan，并且默认关闭。只有显式传入 `--workflow` 才会读取 Workflow bundle identity、加载 Core 并访问 workspace Delivery；默认启动不会读取 Workflow 环境变量或项目状态。Plan 标题在展示层把 slug 分隔符转换为空格、把版本段转换为点号并首字母大写，持久 ID 完全不变；标题、Workflow 元数据、分隔线和里程碑列表形成独立层次。Adapter 是 TypeScript host boundary，加载同一 Node.js 进程中的 ESM JavaScript Core；`.pipeline` 文件只能由 Core API 读写，VSPi 不直接解析或修改 authority YAML/JSON。
 
 Workflow 集成选择“可选、只读 Provider”，而不是无 Workflow 或深度写入集成：
 
@@ -247,7 +247,7 @@ vspi --workflow
 
 Loader 在 import 前验证 archive digest、bundle/runtime manifest digest、release descriptor、source commit、全部 Core 文件与 runtime dependency 字节；manifest 必须绑定 descriptor 与 Core root export，`node_modules` 不允许未声明文件或 symlink。import 后再验证 required root exports 与 Host Contract v1。未传 `--workflow` 时界面不出现 Workflow 状态；显式开启后若配置缺失、安装过旧、sibling release、损坏或版本不兼容，`/plan` 显示有界诊断，所有 Workflow authority 请求默认拒绝，普通聊天仍可用。`--recovery` 在读取上述环境变量之前就禁用 Adapter，因此即使这些值恶意或损坏也不会触发 bundle discovery、import 或项目 Workflow 读取。
 
-0.3.4 不在 VSPi 内注册 `/hw:init`、`/hw:resume`、`/hw:accept` 等 Receipt-bearing 生命周期命令；这些命令继续由 Hypo-Workflow 自身提供。VSPi 只通过 `/plan` 展示可选的只读投影。
+0.3.5 不在 VSPi 内注册 `/hw:init`、`/hw:resume`、`/hw:accept` 等 Receipt-bearing 生命周期命令；这些命令继续由 Hypo-Workflow 自身提供。VSPi 只通过 `/plan` 展示可选的只读投影。
 
 当前 Policy 不是 OS sandbox，也不把 SSH、容器或远程系统包装成隔离边界。更细的命令解析、小模型审批、远程目标约束和系统级 containment 属于后续安全加固，不阻塞本轮可用性。
 
@@ -288,7 +288,7 @@ Settings 分别显示 Global 与 Project 草稿，只有 `Ctrl+S` 才 Apply，Es
 <project>/.vspi/settings.json
 ```
 
-`reducedMotion`、`bridgeEnabled`、Theme、`thinkingDisplay` 和 `wrapCode` 均已接入运行时。`thinkingDisplay` 支持隐藏、折叠、展开：隐藏只收起正文并始终保留思考记录，折叠显示 Effort/耗时标题，展开直接显示正文；Inspect 仍按稳定 message id 选中并查看单条 thinking/tool。旧 `showThinking` 会自动迁移；`wrapCode` 控制 fenced code 的长行是否换行，40/80/120 列均保持宽度安全。
+`reducedMotion`、`bridgeEnabled`、Theme、`thinkingDisplay`、`thinkingTranslationEndpoint` 和 `wrapCode` 均已接入运行时。`thinkingDisplay` 支持隐藏、折叠、展开：隐藏只收起正文并始终保留思考记录，折叠显示最后一段关键内容，展开显示完整正文；Inspect 仍按稳定 message id 选中并查看单条 thinking/tool。Settings 的“思考翻译服务”接受 IP:端口、域名或完整 HTTP(S) URL；只在完整 Thinking 结束后串行翻译，原文继续保留在 Session，译文只替换 TUI 展示。未提供 path 时默认使用 `/translate`，兼容通用 JSON、LibreTranslate、DeepLX 与 Hypo-Translate 响应，8 秒超时且响应上限 1 MiB。旧 `showThinking` 会自动迁移；`wrapCode` 控制 fenced code 的长行是否换行，40/80/120 列均保持宽度安全。
 
 默认 Model/Effort 单独保存在无 secret 的 `runtime-defaults.json`。global 总是可用；project 只有本次启动显式授予项目 trust 时才读取和写入。Model identity 始终只保存精确 `{provider,id}`；同 id 的不同 Provider 不会混用。只有 Pi 后端会持久化 runtime defaults，显式 Fixture 不得把 `fixture/offline-fixture` 写入共享默认值。Pi 遇到跨后端、失效或未认证的已保存模型时保留当前可用模型并显示警告，不阻断启动；已保存 Effort 不在当前模型的原生档位集合中时同样保留当前档位。Model 或 Effort 选择成功后按 Settings 当前 scope 原子保存；普通 `/new` 在重建 ModelRuntime 并注册当前可信 overlay 后按 `{provider,id}` 重解析模型，`/new --default` 则不继承旧模型对象，而是重新读取并应用默认值。
 
@@ -312,6 +312,6 @@ npm audit
 
 ## v1 边界
 
-当前实现包括统一 Action Registry、诚实 Splash、真实 Session lifecycle、ModelRuntime 驱动的 Model/Provider、原生模型与 Effort 写入、Host 工具审批、显式 probe、Markdown 流式渲染、自有 Question、图片提交、Workflow 只读 Plan、Prompt Profile、连续性压缩、Theme、`thinkingDisplay`、`wrapCode` 与 `/tools` 能力目录。系统提示词在 pi base 之后始终注入内置中文语言约定（以简体中文为主回复，代码/命令/标识符保持原文），出厂 Prompt Profile 文案同为中文。Browser、MCP 与持久 PTY 仍是明确的后续扩展边界。
+当前实现包括统一 Action Registry、诚实 Splash、真实 Session lifecycle、ModelRuntime 驱动的 Model/Provider、原生模型与 Effort 写入、Host 工具审批、显式 probe、Markdown 流式渲染、自有 Question、图片提交、Workflow 只读 Plan、Prompt Profile、连续性压缩、Theme、`thinkingDisplay`、Thinking 翻译、`wrapCode` 与 `/tools` 能力目录。系统提示词在 pi base 之后始终注入内置中文语言约定（以简体中文为主回复，代码/命令/标识符保持原文），出厂 Prompt Profile 文案同为中文。Browser、MCP 与持久 PTY 仍是明确的后续扩展边界。
 
 详细界面规范见 [Docs/tui-v1.md](Docs/tui-v1.md)。
