@@ -7,8 +7,10 @@ export function createReleasePayload(checksumPath, env = process.env) {
   const version = env.VERSION;
   const filename = env.FILENAME;
   const packageUrl = env.PACKAGE_URL;
+  const latestPackageUrl = env.LATEST_PACKAGE_URL;
   const tag = env.CI_COMMIT_TAG;
-  if (!version || !filename || !packageUrl || !tag) throw new Error("release environment is incomplete");
+  if (!version || !filename || !packageUrl || !latestPackageUrl || !tag)
+    throw new Error("release environment is incomplete");
   if (tag !== `v${version}`) throw new Error(`tag ${tag} does not match v${version}`);
 
   const checksumLine = readFileSync(checksumPath, "utf8").trim();
@@ -18,12 +20,16 @@ export function createReleasePayload(checksumPath, env = process.env) {
   }
 
   const directAssetUrl = `${env.CI_PROJECT_URL}/-/releases/${tag}/downloads/${filename}`;
+  const latestFilename = "vspi-latest.tgz";
+  const latestAssetUrl = `${env.CI_PROJECT_URL}/-/releases/permalink/latest/downloads/${latestFilename}`;
   const description = [
     `Install the prebuilt VSPi ${version} package:`,
     "",
     "```bash",
-    `npm install -g '${directAssetUrl}'`,
+    `npm install -g '${latestAssetUrl}'`,
     "```",
+    "",
+    `Pinned package: \`${directAssetUrl}\``,
     "",
     `SHA-256: \`${sha256}\``,
   ].join("\n");
@@ -33,7 +39,15 @@ export function createReleasePayload(checksumPath, env = process.env) {
     tag_name: tag,
     description,
     assets: {
-      links: [{ name: filename, url: packageUrl, direct_asset_path: `/${filename}`, link_type: "package" }],
+      links: [
+        { name: filename, url: packageUrl, direct_asset_path: `/${filename}`, link_type: "package" },
+        {
+          name: latestFilename,
+          url: latestPackageUrl,
+          direct_asset_path: `/${latestFilename}`,
+          link_type: "package",
+        },
+      ],
     },
   };
 }

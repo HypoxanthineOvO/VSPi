@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const PROJECT_ORIGIN = "https://gitlab.vsplab.cn";
 const PROJECT_PATH = "heyx/vspi";
@@ -20,6 +20,18 @@ export interface SelfUpdateOptions {
   installPackage?: (tarballPath: string) => Promise<void>;
   releaseApiUrl?: string;
   temporaryRoot?: string;
+}
+
+export interface PackageInstallerInvocation {
+  command: string;
+  args: string[];
+  manager: "npm" | "volta";
+}
+
+export interface PackageInstallerOptions {
+  environment?: NodeJS.ProcessEnv;
+  entryPath?: string;
+  execute?: (invocation: PackageInstallerInvocation, environment: NodeJS.ProcessEnv) => Promise<void>;
 }
 
 interface ParsedRelease {
@@ -83,14 +95,38 @@ async function fetchChecked(fetchImpl: typeof globalThis.fetch, url: string, tim
   return response;
 }
 
-async function npmInstallGlobal(tarballPath: string): Promise<void> {
-  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+function pathIsWithin(path: string, root: string): boolean {
+  const relation = relative(resolve(root), resolve(path));
+  return relation === "" || (!relation.startsWith("..") && !isAbsolute(relation));
+}
+
+export function resolvePackageInstaller(
+  tarballPath: string,
+  entryPath = process.argv[1],
+  environment: NodeJS.ProcessEnv = process.env,
+): PackageInstallerInvocation {
+  const voltaHome = environment.VOLTA_HOME;
+  if (entryPath && voltaHome && pathIsWithin(entryPath, join(voltaHome, "tools", "image", "packages", "vspi"))) {
+    return {
+      command: join(voltaHome, "bin", process.platform === "win32" ? "volta.exe" : "volta"),
+      args: ["install", `vspi@${resolve(tarballPath)}`],
+      manager: "volta",
+    };
+  }
+  return {
+    command: process.platform === "win32" ? "npm.cmd" : "npm",
+    args: ["install", "--global", "--no-audit", "--no-fund", resolve(tarballPath)],
+    manager: "npm",
+  };
+}
+
+async function executeInstaller(invocation: PackageInstallerInvocation, environment: NodeJS.ProcessEnv): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     execFile(
-      npm,
-      ["install", "--global", "--no-audit", "--no-fund", tarballPath],
+      invocation.command,
+      invocation.args,
       {
-        env: { ...process.env, npm_config_update_notifier: "false" },
+        env: { ...environment, npm_config_update_notifier: "false" },
         maxBuffer: 8 * 1024 * 1024,
         timeout: 180_000,
       },
@@ -100,10 +136,39 @@ async function npmInstallGlobal(tarballPath: string): Promise<void> {
           return;
         }
         const detail = stderr.trim().split("\n").at(-1);
-        reject(new Error(detail ? `npm 安装失败：${detail}` : `npm 安装失败：${error.message}`));
+        const label = invocation.manager === "volta" ? "Volta" : "npm";
+        reject(new Error(detail ? `${label} 安装失败：${detail}` : `${label} 安装失败：${error.message}`));
       },
     );
   });
+}
+
+async function entryPackageVersion(entryPath: string): Promise<string | undefined> {
+  try {
+    const value = JSON.parse(await readFile(resolve(dirname(entryPath), "..", "package.json"), "utf8")) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const manifest = value as Record<string, unknown>;
+    return manifest.name === "vspi" && typeof manifest.version === "string" ? manifest.version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function installVspiPackage(
+  tarballPath: string,
+  expectedVersion: string,
+  options: PackageInstallerOptions = {},
+): Promise<void> {
+  const environment = options.environment ?? process.env;
+  const entryPath = options.entryPath ?? process.argv[1];
+  if (!entryPath) throw new Error("无法识别当前 VSPi 安装位置");
+  const invocation = resolvePackageInstaller(tarballPath, entryPath, environment);
+  await (options.execute ?? executeInstaller)(invocation, environment);
+  const installedVersion = await entryPackageVersion(entryPath);
+  if (installedVersion !== expectedVersion) {
+    const actual = installedVersion ? `仍为 ${installedVersion}` : "无法读取版本";
+    throw new Error(`安装命令已结束，但当前 VSPi ${actual}；请检查是否存在多个全局安装位置`);
+  }
 }
 
 export async function updateVspi(currentVersion: string, options: SelfUpdateOptions = {}): Promise<SelfUpdateResult> {
@@ -131,7 +196,8 @@ export async function updateVspi(currentVersion: string, options: SelfUpdateOpti
       .update(await readFile(tarballPath))
       .digest("hex");
     if (actualChecksum !== release.checksum) throw new Error("VSPi 更新包 SHA-256 校验失败");
-    await (options.installPackage ?? npmInstallGlobal)(tarballPath);
+    if (options.installPackage) await options.installPackage(tarballPath);
+    else await installVspiPackage(tarballPath, release.version);
     return { status: "updated", currentVersion, latestVersion: release.version };
   } finally {
     await rm(directory, { recursive: true, force: true });

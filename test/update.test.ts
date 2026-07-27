@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readdir, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { compareVersions, updateVspi } from "../src/update/self-update.js";
+import { compareVersions, installVspiPackage, resolvePackageInstaller, updateVspi } from "../src/update/self-update.js";
 
 const ORIGIN = "https://gitlab.vsplab.cn";
 
@@ -84,5 +84,73 @@ describe("VSPi self-update", () => {
     });
     await expect(updateVspi("0.2.1", { fetch: badAsset, installPackage })).rejects.toThrow(/受信任/);
     expect(installPackage).not.toHaveBeenCalled();
+  });
+
+  it("updates a Volta-managed entry through Volta instead of a second npm global prefix", () => {
+    const invocation = resolvePackageInstaller(
+      "/tmp/vspi-0.3.2.tgz",
+      "/home/test/.volta/tools/image/packages/vspi/lib/node_modules/vspi/dist/index.js",
+      { VOLTA_HOME: "/home/test/.volta" },
+    );
+
+    expect(invocation).toEqual({
+      command: "/home/test/.volta/bin/volta",
+      args: ["install", "vspi@/tmp/vspi-0.3.2.tgz"],
+      manager: "volta",
+    });
+  });
+
+  it("uses npm when the current entry is outside Volta's managed package", () => {
+    const invocation = resolvePackageInstaller(
+      "/tmp/vspi-0.3.2.tgz",
+      "/usr/local/lib/node_modules/vspi/dist/index.js",
+      { VOLTA_HOME: "/home/test/.volta" },
+    );
+
+    expect(invocation.manager).toBe("npm");
+    expect(invocation.args).toEqual(["install", "--global", "--no-audit", "--no-fund", "/tmp/vspi-0.3.2.tgz"]);
+  });
+
+  it("does not report success when the current installation remains on the old version", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "vspi-update-entry-"));
+    try {
+      const entryPath = join(directory, "dist", "index.js");
+      await mkdir(join(directory, "dist"));
+      await writeFile(entryPath, "");
+      await writeFile(join(directory, "package.json"), JSON.stringify({ name: "vspi", version: "0.2.2" }));
+
+      await expect(
+        installVspiPackage("/tmp/vspi-0.3.2.tgz", "0.3.2", {
+          entryPath,
+          environment: {},
+          execute: async () => {},
+        }),
+      ).rejects.toThrow(/仍为 0\.2\.2.*多个全局安装位置/);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("accepts an update only after the current entry reports the expected version", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "vspi-update-entry-"));
+    try {
+      const entryPath = join(directory, "dist", "index.js");
+      const manifestPath = join(directory, "package.json");
+      await mkdir(join(directory, "dist"));
+      await writeFile(entryPath, "");
+      await writeFile(manifestPath, JSON.stringify({ name: "vspi", version: "0.2.2" }));
+
+      await expect(
+        installVspiPackage("/tmp/vspi-0.3.2.tgz", "0.3.2", {
+          entryPath,
+          environment: {},
+          execute: async () => {
+            await writeFile(manifestPath, JSON.stringify({ name: "vspi", version: "0.3.2" }));
+          },
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 });
