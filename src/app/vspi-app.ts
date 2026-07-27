@@ -679,7 +679,10 @@ export class VspiApp implements Component, Focusable {
       const status = this.renderStatus(width);
       const notice = this.notice ? [this.renderNotice(width)] : [];
       const terminalRows = Number.isFinite(this.tui.terminal.rows) ? this.tui.terminal.rows : 24;
-      const surfaceRows = Math.max(3, terminalRows - status.length - notice.length);
+      // Keep one physical row free. A first TUI render starts immediately after the
+      // persisted Splash, and an exact-height surface can scroll its title offscreen
+      // on terminals that commit a pending bottom-margin wrap.
+      const surfaceRows = Math.max(3, terminalRows - status.length - notice.length - 1);
       return [...this.panels.renderSessionsSurface(width, surfaceRows, this.theme), ...notice, ...status];
     }
     const transcriptFocused = this.workspaceFocus === "transcript";

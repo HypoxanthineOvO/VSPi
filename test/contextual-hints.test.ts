@@ -151,7 +151,7 @@ describe("contextual panel hints", () => {
       expect(rendered).toContain("暂无会话");
       expect(result.plain.find((line) => line.startsWith("╰"))).toContain("Esc 返回");
       expect(rendered).not.toContain("输入消息");
-      expect(result.ansi).toHaveLength(24);
+      expect(result.ansi).toHaveLength(23);
       expect(result.ansi.every((line) => visibleWidth(line) === 80)).toBe(true);
     } finally {
       await result.app.dispose();

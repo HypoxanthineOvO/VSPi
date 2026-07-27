@@ -70,18 +70,21 @@ export interface StartupSequenceOptions {
   getWidth?: () => number;
 }
 
-function replaceFrame(previousHeight: number, nextFrame: string[]): string {
-  const moveToTop = previousHeight > 1 ? `\x1b[${previousHeight - 1}A` : "";
-  return `\r${moveToTop}\x1b[J${nextFrame.join("\n")}`;
+export function renderStartupPlaceholder(width: number, theme: VspiTheme): string {
+  const symbol = theme.capabilities.unicode ? "◈" : "*";
+  return padLine(theme.focus(` ${symbol} VSPi`), Math.max(1, width));
+}
+
+function replacePlaceholder(nextFrame: string[]): string {
+  return `\r\x1b[2K${nextFrame.join("\n")}`;
 }
 
 export async function runStartupSequence(options: StartupSequenceOptions): Promise<void> {
   const currentWidth = (): number => Math.max(1, options.getWidth?.() ?? options.width);
   const safeWidth = (): number => Math.max(4, currentWidth() - 1);
-  const frame = renderSplash(safeWidth(), options.theme, 0);
-  options.write(frame.join("\n"));
+  options.write(renderStartupPlaceholder(safeWidth(), options.theme));
   const status = await options.startApp();
   const finalFrame = renderSplash(safeWidth(), options.theme, 1, status);
-  options.write(`${replaceFrame(frame.length, finalFrame)}\n`);
+  options.write(`${replacePlaceholder(finalFrame)}\n`);
   await options.startTui();
 }

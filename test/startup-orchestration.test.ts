@@ -33,7 +33,7 @@ afterEach(() => {
 });
 
 describe("startup orchestration", () => {
-  it("uses one static brand frame and one width-safe final status frame", async () => {
+  it("uses one single-line brand placeholder and one width-safe final status frame", async () => {
     const chunks: string[] = [];
     const startTui = vi.fn();
     await startUiAfterSplash({
@@ -45,6 +45,8 @@ describe("startup orchestration", () => {
     });
 
     expect(chunks).toHaveLength(2);
+    expect(stripAnsi(chunks[0] ?? "").split("\n")).toHaveLength(1);
+    expect(chunks[1]?.startsWith("\r\u001b[2K")).toBe(true);
     expect(chunks.filter((chunk) => stripAnsi(chunk).includes(PI_STATUS.model))).toHaveLength(1);
     for (const chunk of chunks) {
       for (const line of stripAnsi(chunk).split("\n"))
