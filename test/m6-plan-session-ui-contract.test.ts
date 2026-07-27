@@ -411,7 +411,14 @@ describe("M6 Local Plan workspace projection", () => {
     expect(rendered).not.toContain(PLAN.nextAction ?? "");
     expect(rendered).toContain("╰─ ● Persist session binding");
     expect(rendered).not.toMatch(/[▸▾]/);
-    expect(rendered).toMatch(/(focus|焦点)[^\n]*Persist session binding|Persist session binding[^\n]*(focus|焦点)/i);
+    // focus 不再拼接文字标记；blocked 项单独一行显示真实阻塞原因
+    expect(rendered).not.toContain("[焦点]");
+    expect(rendered).not.toMatch(/Document the contract[^\n]*Awaiting API review/);
+    expect(rendered).toContain("✕ Document the contract");
+    expect(rendered).toContain("阻塞 Awaiting API review");
+    const projected = (panel as unknown as { planItems: Array<{ id: string; focused?: boolean }> }).planItems;
+    expect(projected.find((item) => item.id === "binding")?.focused).toBe(true);
+    expect(projected.filter((item) => item.focused)).toHaveLength(1);
     expect(rendered.indexOf("Runtime integration")).toBeLessThan(rendered.indexOf("Persist session binding"));
     expect(rendered.indexOf("Persist session binding")).toBeLessThan(rendered.indexOf("Restore after reload"));
   });

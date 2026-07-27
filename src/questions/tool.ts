@@ -2,6 +2,17 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import type { Question, QuestionOption } from "../domain/types.js";
 
+export class UserQuestionCancelledError extends Error {
+  constructor(message = "Question cancelled by user") {
+    super(message);
+    this.name = "UserQuestionCancelledError";
+  }
+}
+
+export function isUserQuestionCancelled(error: unknown): error is UserQuestionCancelledError {
+  return error instanceof UserQuestionCancelledError;
+}
+
 export interface QuestionToolOptions {
   request(questions: Question[], signal?: AbortSignal): Promise<Question[]>;
 }
@@ -39,6 +50,8 @@ const QuestionParameters = Type.Object(
 type QuestionParametersValue = Static<typeof QuestionParameters>;
 interface QuestionToolDetails {
   answers: Array<{ id: string; answer?: string | string[]; skipped?: true }>;
+  cancelledByUser?: true;
+  continuationHint?: string;
 }
 
 export function createQuestionToolDefinition(
@@ -55,12 +68,26 @@ export function createQuestionToolDefinition(
     executionMode: "sequential",
     async execute(_toolCallId, raw, signal) {
       const questions = normalizeQuestions(raw);
-      const completed = await abortableRequest(options.request, questions, signal);
-      const details: QuestionToolDetails = { answers: normalizeAnswers(questions, completed) };
-      return {
-        content: [{ type: "text", text: JSON.stringify(details) }],
-        details,
-      };
+      try {
+        const completed = await abortableRequest(options.request, questions, signal);
+        const details: QuestionToolDetails = { answers: normalizeAnswers(questions, completed) };
+        return {
+          content: [{ type: "text", text: JSON.stringify(details) }],
+          details,
+        };
+      } catch (error) {
+        if (!isUserQuestionCancelled(error)) throw error;
+        const details: QuestionToolDetails = {
+          answers: normalizeAnswers(questions, []),
+          cancelledByUser: true,
+          continuationHint:
+            "The user closed the interactive question UI without submitting answers. Continue with the available context; if user input is still required, restate the essential question in plain assistant text instead of stopping silently.",
+        };
+        return {
+          content: [{ type: "text", text: JSON.stringify(details) }],
+          details,
+        };
+      }
     },
   };
 }

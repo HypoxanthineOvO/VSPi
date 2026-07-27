@@ -1,3 +1,4 @@
+import { Key } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE, MODEL_GROUPS, MODELS, PROVIDERS } from "../src/domain/fixtures.js";
 import type { Question } from "../src/domain/types.js";
@@ -349,6 +350,35 @@ describe("panel controller", () => {
     if (result?.type === "questions") {
       expect(result.questions[0]?.answer).toBe("Skip");
       expect(result.questions[0]?.skipped).toBeUndefined();
+    }
+  });
+
+  it("edits Unicode free text at the cursor without switching questions", () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    panel.openQuestions([
+      { id: "note", title: "补充", prompt: "输入说明", kind: "freeText" },
+      {
+        id: "confirm",
+        title: "确认",
+        prompt: "确认答案",
+        kind: "singleChoice",
+        options: [{ id: "yes", label: "是" }],
+      },
+    ]);
+
+    for (const character of "中文（）") panel.handleInput(character);
+    panel.handleInput("\u001b[D");
+    panel.handleInput("补");
+    panel.handleInput("\u001b[C");
+    panel.handleInput("充");
+    panel.handleInput(Key.enter);
+
+    expect(text(panel)).toContain("Question 2 / 2");
+    panel.handleInput(Key.enter);
+    const result = panel.handleInput(Key.enter);
+    expect(result?.type).toBe("questions");
+    if (result?.type === "questions") {
+      expect(result.questions[0]?.answer).toBe("中文（补）充");
     }
   });
 

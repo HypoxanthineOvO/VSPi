@@ -130,8 +130,10 @@ export interface ProviderAuthMethod {
 export interface PlanItem {
   id: string;
   label: string;
-  status: "done" | "current" | "pending";
+  status: "pending" | "in_progress" | "blocked" | "done";
   depth: number;
+  focused?: boolean;
+  blocker?: string;
   collapsed?: boolean;
 }
 

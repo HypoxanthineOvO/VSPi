@@ -94,7 +94,7 @@ async function flush(): Promise<void> {
 }
 
 describe("M2 session identity isolation", () => {
-  it("limits the visible waterfall and keeps Inspect inside that same window", async () => {
+  it("keeps the visible waterfall bounded while Inspect loads earlier history on demand", async () => {
     const controlled = sessionBackend();
     const app = await createApp(controlled.backend);
     const testable = app as unknown as TestableApp;
@@ -105,19 +105,20 @@ describe("M2 session identity isolation", () => {
       text: `HISTORY_CONTENT_${index}`,
     }));
     const window = testable.currentTranscriptWindow(80);
-    const firstVisible = window.nodes[0];
     expect(window.hiddenBlocks).toBeGreaterThan(0);
-    expect(firstVisible).toBeDefined();
 
     const rendered = app.render(80).map(stripAnsi).join("\n");
     expect(rendered).toContain(`更早的 ${window.hiddenBlocks} 条内容暂未显示`);
     expect(rendered).toContain("HISTORY_CONTENT_139");
     expect(rendered).not.toContain("HISTORY_CONTENT_0");
 
+    // 前景窗口仍然 bounded，但 Inspect 向上越界时逐批加载，完整历史始终可达。
     expect(testable.focusTranscript()).toBe(true);
-    for (let index = 0; index < 200; index += 1) app.handleInput("\u001b[A");
-    expect(testable.inspectNodeId).toBe(firstVisible?.id);
-    expect(testable.inspectNodeId).not.toBe("history-0");
+    for (let index = 0; index < 400 && testable.inspectNodeId !== "history-0"; index += 1) app.handleInput("\u001b[A");
+    expect(testable.inspectNodeId).toBe("history-0");
+    const inspected = app.render(80).map(stripAnsi).join("\n");
+    expect(inspected).toContain("HISTORY_CONTENT_0");
+    expect(app.render(80).length).toBeLessThanOrEqual(24);
     await app.dispose();
   });
 

@@ -5,58 +5,18 @@ import type { ProviderRecord } from "./config-service.js";
  * 绝不包含 credential；API key 通过 `$<ID>_API_KEY` 环境变量引用注入。
  */
 
-/** VSPLab 中转站模型目录。价格为 OpenAI 官方 USD/1M 刊例（2026-07），如中转站另有定价以实际为准。 */
+/**
+ * VSPLab 中转站模型目录。模型通用元数据（contextWindow、maxTokens、输入能力、
+ * reasoning、thinking map 与成本）在注册时继承 Pi `openai-codex` 目录；
+ * VSPLab 只声明模型 identity 与显示名，不再手抄可能漂移的规格。
+ * Codex API 通道的 272K 上限由上游目录单一维护。
+ */
 const VSPLAB_MODELS: ProviderRecord["models"] = [
-  {
-    id: "gpt-5.6-sol",
-    name: "GPT-5.6 Sol",
-    contextWindow: 1_050_000,
-    input: ["text", "image"],
-    reasoning: true,
-    thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
-    cost: { input: 5.0, output: 30.0, cacheRead: 0.5, cacheWrite: 0 },
-    maxTokens: 128_000,
-  },
-  {
-    id: "gpt-5.6-terra",
-    name: "GPT-5.6 Terra",
-    contextWindow: 1_050_000,
-    input: ["text", "image"],
-    reasoning: true,
-    thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
-    cost: { input: 2.5, output: 15.0, cacheRead: 0.25, cacheWrite: 0 },
-    maxTokens: 128_000,
-  },
-  {
-    id: "gpt-5.6-luna",
-    name: "GPT-5.6 Luna",
-    contextWindow: 1_050_000,
-    input: ["text", "image"],
-    reasoning: true,
-    thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
-    cost: { input: 1.0, output: 6.0, cacheRead: 0.1, cacheWrite: 0 },
-    maxTokens: 128_000,
-  },
-  {
-    id: "gpt-5.5",
-    name: "GPT-5.5",
-    contextWindow: 1_050_000,
-    input: ["text", "image"],
-    reasoning: true,
-    thinkingLevelMap: { off: "none", minimal: null, xhigh: "xhigh" },
-    cost: { input: 5.0, output: 30.0, cacheRead: 0.5, cacheWrite: 0 },
-    maxTokens: 128_000,
-  },
-  {
-    id: "gpt-5.4",
-    name: "GPT-5.4",
-    contextWindow: 1_050_000,
-    input: ["text", "image"],
-    reasoning: true,
-    thinkingLevelMap: { off: "none", xhigh: "xhigh" },
-    cost: { input: 2.5, output: 15.0, cacheRead: 0.25, cacheWrite: 0 },
-    maxTokens: 128_000,
-  },
+  { id: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+  { id: "gpt-5.6-terra", name: "GPT-5.6 Terra" },
+  { id: "gpt-5.6-luna", name: "GPT-5.6 Luna" },
+  { id: "gpt-5.5", name: "GPT-5.5" },
+  { id: "gpt-5.4", name: "GPT-5.4" },
 ];
 
 export const BUILTIN_PROVIDERS: ProviderRecord[] = [
@@ -66,6 +26,7 @@ export const BUILTIN_PROVIDERS: ProviderRecord[] = [
     source: "builtin",
     baseUrl: "https://api.vsplab.cn/v1",
     protocol: "openai-responses",
+    inheritModelsFrom: "openai-codex",
     models: VSPLAB_MODELS,
   },
 ];

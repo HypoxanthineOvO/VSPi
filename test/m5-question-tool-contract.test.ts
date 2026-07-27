@@ -45,6 +45,7 @@ const FREE_TEXT_QUESTION: Question = {
 const QUESTIONS: Question[] = [SINGLE_QUESTION, MULTI_QUESTION, RANKING_QUESTION, FREE_TEXT_QUESTION];
 
 interface QuestionToolModule {
+  UserQuestionCancelledError?: new (message?: string) => Error;
   createQuestionToolDefinition(options: {
     request: (questions: Question[], signal?: AbortSignal) => Promise<Question[]>;
   }): {
@@ -136,6 +137,31 @@ describe("M5 Question ToolDefinition", () => {
     expect(Object.keys((result.details ?? {}) as object)).not.toEqual(
       expect.arrayContaining([expect.stringMatching(/path|secret/i)]),
     );
+  });
+
+  it("returns a cancellable ToolResult with a continuation hint when the user closes the UI", async () => {
+    const module = await loadQuestionTool();
+    expect(module).toBeDefined();
+    if (!module) return;
+    const request = vi.fn(async () => {
+      const Cancelled = module.UserQuestionCancelledError;
+      if (!Cancelled) throw new Error("UserQuestionCancelledError export is missing");
+      throw new Cancelled("Question cancelled by user");
+    });
+    const tool = module.createQuestionToolDefinition({ request });
+    const result = await tool.execute("question-user-cancel", { questions: QUESTIONS });
+    const serialized = JSON.stringify(result);
+
+    expect(result.details).toMatchObject({
+      cancelledByUser: true,
+      continuationHint: expect.stringMatching(/plain assistant text|continue/i),
+      answers: QUESTIONS.map((question) => ({ id: question.id, skipped: true })),
+    });
+    expect(serialized).toContain("cancelledByUser");
+    expect(serialized).toContain("continuationHint");
+    expect(serialized).not.toContain("AbortError");
+    expect(serialized).not.toContain("PRIVATE_PROMPT");
+    expect(serialized).not.toContain("PRIVATE_OPTION_DETAIL");
   });
 
   it("forwards AbortSignal to the pending request and stops with AbortError", async () => {
@@ -235,7 +261,8 @@ describe("M5 dynamic Question panel", () => {
     panel.handleInput(Key.right);
     const freeTextHint = stripAnsi(panel.renderHint(80, plainTheme()));
     expect(freeTextHint).toContain("Enter 确认");
-    expect(freeTextHint).toContain("←→ 切题");
+    expect(freeTextHint).toContain("←→ 移动光标");
+    expect(freeTextHint).not.toContain("←→ 切题");
     expect(freeTextHint).not.toContain("Shift+S");
     expect(freeTextHint).not.toMatch(/↑↓ 选择|Tab 直接回答|Space/);
 
@@ -255,5 +282,61 @@ describe("M5 dynamic Question panel", () => {
     expect(reviewHint).toMatch(/Enter .*提交/);
     expect(reviewHint).toMatch(/← .*返回/);
     expect(reviewHint).not.toMatch(/选择|直接回答|跳过|重排|Space/);
+  });
+
+  it("keeps the aligned layout when every option fits and never truncates text", () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    openQuestions(panel, [SINGLE_QUESTION]);
+    const rendered = panelText(panel);
+    expect(rendered).toContain("紧凑");
+    expect(rendered).not.toContain("…");
+    expect(panel.hintRenderedInline()).toBe(false);
+  });
+
+  it("wraps long option labels and descriptions as whole selected blocks without truncation", () => {
+    const longLabel = `超长选项标签 ${"需要完整换行展示而不是被截断".repeat(6)}`;
+    const longDescription = `说明 ${"这段描述也必须完整保留".repeat(8)}`;
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    openQuestions(panel, [
+      {
+        id: "long",
+        title: "长选项",
+        prompt: "选择一项",
+        kind: "singleChoice",
+        options: [
+          { id: "a", label: longLabel, description: longDescription },
+          { id: "b", label: "短" },
+        ],
+      },
+    ]);
+
+    const raw = panel.render(80, 18, plainTheme(), DEFAULT_USAGE);
+    const rendered = raw.map(stripAnsi).join("\n");
+    expect(rendered).not.toContain("…");
+    for (const fragment of ["需要完整换行展示而不是被截断", "这段描述也必须完整保留"]) {
+      expect(rendered).toContain(fragment);
+    }
+    // 选中块的所有行共享选中标记（›），滚动定位以块为单位
+    const selectedRows = raw.map(stripAnsi).filter((line) => line.includes("› "));
+    expect(selectedRows.length).toBeGreaterThan(1);
+    expect(selectedRows.join("\n")).toContain("需要完整换行");
+  });
+
+  it("moves the key hint into the scrollable body when question content overflows", () => {
+    const manyOptions = Array.from({ length: 12 }, (_, index) => ({
+      id: `opt-${index}`,
+      label: `选项 ${index} ${"内容".repeat(10)}`,
+      description: `描述 ${index} ${"细节".repeat(12)}`,
+    }));
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    openQuestions(panel, [{ id: "many", title: "多选项", prompt: "选择", kind: "singleChoice", options: manyOptions }]);
+
+    panel.render(80, 10, plainTheme(), DEFAULT_USAGE);
+    expect(panel.hintRenderedInline()).toBe(true);
+
+    const roomy = new PanelController(DEFAULT_SETTINGS);
+    openQuestions(roomy, [SINGLE_QUESTION]);
+    roomy.render(80, 18, plainTheme(), DEFAULT_USAGE);
+    expect(roomy.hintRenderedInline()).toBe(false);
   });
 });

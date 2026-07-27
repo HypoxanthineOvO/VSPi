@@ -149,6 +149,33 @@ describe("VspiApp backend error recovery", () => {
     await app.dispose();
   });
 
+  it("keeps /compact out of the composer after a successful manual compact", async () => {
+    const backend = throwingBackend("send");
+    backend.compact = vi.fn(async () => {});
+    const app = await createApp(backend);
+    const testable = app as unknown as TestableApp;
+    try {
+      await testable.submit("/compact continuity");
+      expect(backend.compact).toHaveBeenCalledOnce();
+      expect(app.composer.getText()).toBe("");
+      expect(testable.notice?.tone).not.toBe("error");
+    } finally {
+      await app.dispose();
+    }
+  });
+
+  it("restores /compact only when the backend compaction fails", async () => {
+    const app = await createApp(throwingBackend("compact"));
+    const testable = app as unknown as TestableApp;
+    try {
+      await testable.submit("/compact continuity");
+      expect(app.composer.getText()).toBe("/compact continuity");
+      expect(testable.notice?.tone).toBe("error");
+    } finally {
+      await app.dispose();
+    }
+  });
+
   it("catches session-switch failures and renders an error notice", async () => {
     const app = await createApp(throwingBackend("switchSession"));
     const session: SessionOption = {

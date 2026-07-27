@@ -89,9 +89,9 @@ export const PROVIDERS: ProviderOption[] = [
 
 export const PLAN_ITEMS: PlanItem[] = [
   { id: "cover", label: "启动封面", status: "done", depth: 0 },
-  { id: "input", label: "输入与状态栏", status: "current", depth: 0 },
+  { id: "input", label: "输入与状态栏", status: "in_progress", depth: 0 },
   { id: "shape", label: "输入框形态：完整圆角框", status: "done", depth: 1 },
-  { id: "placement", label: "确定模型、上下文与路径的位置", status: "current", depth: 1 },
+  { id: "placement", label: "确定模型、上下文与路径的位置", status: "in_progress", depth: 1 },
   { id: "wrap", label: "多行增长、滚动与换行", status: "pending", depth: 1 },
   { id: "provider", label: "Provider 选择器", status: "pending", depth: 0 },
 ];

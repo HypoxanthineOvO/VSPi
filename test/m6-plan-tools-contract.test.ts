@@ -163,6 +163,30 @@ describe("M6 typed plan tool schemas", () => {
     expect(Value.Check(byName.get("plan_bind")?.parameters as never, { plan_id: null })).toBe(true);
   });
 
+  it("keeps item blocker optional at every nesting level of the serialized JSON schema", async () => {
+    const { byName } = await toolsFor();
+    const serialized = JSON.parse(JSON.stringify(byName.get("plan_create")?.parameters)) as {
+      properties?: { plan?: { properties?: { items?: { items?: Record<string, unknown> } } } };
+    };
+    const level1 = serialized.properties?.plan?.properties?.items?.items;
+    expect(level1).toBeDefined();
+    const collectRequired = (schema: Record<string, unknown>): string[][] => {
+      const required = Array.isArray(schema.required) ? (schema.required as string[]) : [];
+      const children = schema.properties as Record<string, Record<string, unknown>> | undefined;
+      const nested = children?.children?.items as Record<string, unknown> | undefined;
+      return [required, ...(nested ? collectRequired(nested) : [])];
+    };
+    const requiredLevels = collectRequired(level1 ?? {});
+    expect(requiredLevels.length).toBeGreaterThanOrEqual(3);
+    for (const required of requiredLevels) {
+      expect(required).toContain("id");
+      expect(required).toContain("title");
+      expect(required).toContain("status");
+      expect(required).not.toContain("blocker");
+      expect(required).not.toContain("children");
+    }
+  });
+
   it("bounds identifiers, text, work depth, enum values and additional properties at schema validation", async () => {
     const { byName } = await toolsFor();
     const createSchema = byName.get("plan_create")?.parameters as never;
