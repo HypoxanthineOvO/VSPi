@@ -1,6 +1,6 @@
 # VSPi
 
-VSPi v0.3.2 是基于 `@earendil-works/pi-tui` 与 `@earendil-works/pi-coding-agent` 的自定义中文 TUI。当前实现已接入统一动作目录、真实 Session runtime、Provider/Model/Effort 真相源、执行 Policy、Question tool、图片附件、外部历史会话导入、Skill 管理、安全自更新、同服务器 Session 前台迁移，以及可配置的 thinking/Markdown 渲染与可选只读 Workflow 投影。
+VSPi v0.3.3 是基于 `@earendil-works/pi-tui` 与 `@earendil-works/pi-coding-agent` 的自定义中文 TUI。当前实现已接入统一动作目录、真实 Session runtime、Provider/Model/Effort 真相源、执行 Policy、Question tool、图片附件、外部历史会话导入、Skill 管理、安全自更新、同服务器 Session 前台迁移，以及可配置的 thinking/Markdown 渲染与可选只读 Workflow 投影。
 
 ## 安装
 
@@ -123,7 +123,7 @@ Status 的短模型样例左右锚是：80 列第一行 `Model 0 / Effort 24 / C
 
 `/compact` 在未绑定 Local Plan 时默认使用 Pi Native，绑定 Plan 时默认使用 Execution Continuity。
 使用 `/compact --list` 检查四种手动 profile；也可显式选择 `native`、`continuity`、`research`，
-或使用 `/compact custom <instructions>`。v0.3.2 的自动 threshold/overflow 压缩仍保持 Pi Native；
+或使用 `/compact custom <instructions>`。v0.3.3 的自动 threshold/overflow 压缩仍保持 Pi Native；
 统一配置自动压缩 profile 留待后续版本。
 
 退出候选显示为 `quit (exit)`。canonical `/new` 的 alias 是 `/clear`；`/sessions` 的 aliases 是 `/session` 与 `/resume`；`/providers` 的 alias 是 `/provider`；canonical `/quit` 的 aliases 是 `/exit` 和 `/q`，输入 alias 时显示 `/exit  (/quit)`，canonical 注释使用弱化灰色。`/thinking`、`/login` 与 `/logout` 是 canonical 命令。插件/扩展命令保留 package `source` 来源，而内置命令显示 Built-in。
@@ -155,13 +155,13 @@ Model、Provider、Sessions、Settings、Usage、Theme 和 Question 共用底部
 
 同一台服务器上的每个 Pi Session 只允许一个执行 owner 和一个可交互前台。Sessions 面板把其他进程持有的会话标为“使用中”，选择后可迁移前台、从最后一个完整回复创建分支或取消。普通接管不会 abort 旧任务：新 TUI 立即成为唯一交互前台，以正常主界面接收旧 runtime 的完整快照和实时输出；旧 TUI 显示“已在另一终端继续”后停止读取输入，但旧进程暂时保留不可序列化的 Pi runtime，直到当前 generation、工具或压缩结束。新前台在此期间发送的普通消息通过 `0600` Unix control socket 存入旧 owner 的等待队列，不会进入当前 generation；安全点到达后按顺序执行。新前台按 Esc 才会通过同一控制通道明确中断旧 runtime，随后继续处理已接受的等待消息。
 
-pending 或随后出现的 Question/Approval 会迁移到新前台，回答仍回到旧进程原有的工具 Promise。所有活动和等待消息结束后，旧 owner 把 lease 原子改写给唯一指定的 successor，再退出；其他终端只能观察新 owner 并串行请求下一次迁移，不能争抢空锁或同时回答交互。新前台在安全点前断开时，旧 TUI 恢复，pending 交互重新弹出，已经被 owner 接受的等待消息仍会执行。`vspi continue` 遇到占用时采用同样机制。普通退出不在后台继续任务；恢复只加载已落盘内容，不重连旧请求、不自动重试。锁只保证同服务器进程，跨服务器共享目录不在 v0.3.2 的支持范围内。
+pending 或随后出现的 Question/Approval 会迁移到新前台，回答仍回到旧进程原有的工具 Promise。所有活动和等待消息结束后，旧 owner 把 lease 原子改写给唯一指定的 successor，再退出；其他终端只能观察新 owner 并串行请求下一次迁移，不能争抢空锁或同时回答交互。新前台在安全点前断开时，旧 TUI 恢复，pending 交互重新弹出，已经被 owner 接受的等待消息仍会执行。`vspi continue` 遇到占用时采用同样机制。普通退出不在后台继续任务；恢复只加载已落盘内容，不重连旧请求、不自动重试。锁只保证同服务器进程，跨服务器共享目录不在 v0.3.3 的支持范围内。
 
 ## 历史会话导入
 
 `/import` 或 `vspi import [codex|claude]` 会打开原生终端导入面板。Codex 来源于 `~/.codex/session_index.jsonl`、`~/.codex/sessions/**/*.jsonl` 和 `~/.codex/archived_sessions/**/*.jsonl`；Claude Code 来源于 `~/.claude/history.jsonl` 与 `~/.claude/projects/**/*.jsonl`。两者未进入索引的用户主会话也会被发现，Codex subagent rollout 和 Claude Code `agent-*` 记录不会出现。
 
-导入是复制，不会修改或接管源文件。VSPi 按预览开始时的文件字节边界读取已完整写入的 JSONL 记录，保留用户可见对话、工具参数和工具输出；隐藏 thinking、system/developer prompt、权限状态与内部控制记录不会进入新 Session。可见内容中的 API Key、Bearer Token、password 等常见凭据在落盘前脱敏。确认后若源会话的可见内容已经变化，导入会拒绝并要求重新预览。
+导入是一次 Enter 完成的参考快照复制，不会修改或接管源文件，也不进入 Question 的“提交答案”复核。VSPi 按读取开始时的文件字节边界解析已完整写入的 JSONL 记录，将用户可见对话、工具参数和工具输出保存为一个不可执行的 Pi `custom_message`；来源模型、Provider 和工具名只作为历史数据，既不要求与当前环境一致，也不会被恢复或重放。新 Session 明确保留导入时正在使用的 VSPi 模型与 Effort，Transcript 只显示来源、标题和记录数摘要，不用历史工具记录刷屏。隐藏 thinking、system/developer prompt、权限状态与内部控制记录不会进入参考快照；API Key、Bearer Token、password 等常见凭据在落盘前脱敏。读取后若源会话的可见内容已经变化，导入会拒绝本次快照并要求重试。
 
 确认框显示对话数、工具记录数和 token 估算。估算量超过当前模型窗口 80% 时会警告，但不会静默截断；首次继续对话时可能由 Pi 触发压缩。导入成功后会创建并切换到新的原生 VSPi Session，源会话始终保持不变。
 
@@ -171,7 +171,7 @@ pending 或随后出现的 Question/Approval 会迁移到新前台，回答仍�
 
 `+` 支持 Git URL 与 `npm:package`，也可切换到“让 Agent 帮我找”，后者会作为普通用户消息提交。安装前必须通过 Question 选择“安装并启用 / 仅安装 / 取消”；启用、停用、更新和移除同样逐次确认。受管包固定 `autoload: false`，extension、prompt、theme 全部禁用，只登记实际发现且位于包目录内的 `SKILL.md`。安装或持久化失败会回滚本次新装内容，不删除原有包；来源和错误输出不回显 URL 凭据。
 
-模型可用 `skill_list` 只读检查目录，并用 `skill_manage` 提议安装、启停、更新或移除；所有 mutation 仍进入同一套 Question 确认。资源变更后会刷新 Pi ResourceLoader，并重建当前会话下一轮使用的 Skill system prompt。MCP 不属于 `0.3.2`，仍在 `/tools` 中显示 `Not connected`。
+模型可用 `skill_list` 只读检查目录，并用 `skill_manage` 提议安装、启停、更新或移除；所有 mutation 仍进入同一套 Question 确认。资源变更后会刷新 Pi ResourceLoader，并重建当前会话下一轮使用的 Skill system prompt。MCP 不属于 `0.3.3`，仍在 `/tools` 中显示 `Not connected`。
 
 每个已接入工作区都有 contextual hint。hint 位于面板 frame外，并直接位于 composer上方；Command 的完整提示是 `↑↓ 选择  Tab 补全  Enter 执行  Esc 关闭`。Plan、Provider、Sessions、Settings、Usage、Theme、Question 和 Model 按当前真实可用动作生成提示；未来工作区接入前不得宣告无效键位。
 
@@ -221,7 +221,7 @@ npm run dev -- --recovery
 
 ## Workflow Adapter Bootstrap
 
-VSPi `0.3.2` 的 Workflow bootstrap 只读投影 Hypo-Workflow Plan，并且默认关闭。只有显式传入 `--workflow` 才会读取 Workflow bundle identity、加载 Core 并访问 workspace Delivery；默认启动不会读取 Workflow 环境变量或项目状态。Plan 标题在展示层把 slug 分隔符转换为空格、把版本段转换为点号并首字母大写，持久 ID 完全不变；标题、Workflow 元数据、分隔线和里程碑列表形成独立层次。Adapter 是 TypeScript host boundary，加载同一 Node.js 进程中的 ESM JavaScript Core；`.pipeline` 文件只能由 Core API 读写，VSPi 不直接解析或修改 authority YAML/JSON。
+VSPi `0.3.3` 的 Workflow bootstrap 只读投影 Hypo-Workflow Plan，并且默认关闭。只有显式传入 `--workflow` 才会读取 Workflow bundle identity、加载 Core 并访问 workspace Delivery；默认启动不会读取 Workflow 环境变量或项目状态。Plan 标题在展示层把 slug 分隔符转换为空格、把版本段转换为点号并首字母大写，持久 ID 完全不变；标题、Workflow 元数据、分隔线和里程碑列表形成独立层次。Adapter 是 TypeScript host boundary，加载同一 Node.js 进程中的 ESM JavaScript Core；`.pipeline` 文件只能由 Core API 读写，VSPi 不直接解析或修改 authority YAML/JSON。
 
 Workflow 集成选择“可选、只读 Provider”，而不是无 Workflow 或深度写入集成：
 
@@ -247,7 +247,7 @@ vspi --workflow
 
 Loader 在 import 前验证 archive digest、bundle/runtime manifest digest、release descriptor、source commit、全部 Core 文件与 runtime dependency 字节；manifest 必须绑定 descriptor 与 Core root export，`node_modules` 不允许未声明文件或 symlink。import 后再验证 required root exports 与 Host Contract v1。未传 `--workflow` 时界面不出现 Workflow 状态；显式开启后若配置缺失、安装过旧、sibling release、损坏或版本不兼容，`/plan` 显示有界诊断，所有 Workflow authority 请求默认拒绝，普通聊天仍可用。`--recovery` 在读取上述环境变量之前就禁用 Adapter，因此即使这些值恶意或损坏也不会触发 bundle discovery、import 或项目 Workflow 读取。
 
-0.3.2 不在 VSPi 内注册 `/hw:init`、`/hw:resume`、`/hw:accept` 等 Receipt-bearing 生命周期命令；这些命令继续由 Hypo-Workflow 自身提供。VSPi 只通过 `/plan` 展示可选的只读投影。
+0.3.3 不在 VSPi 内注册 `/hw:init`、`/hw:resume`、`/hw:accept` 等 Receipt-bearing 生命周期命令；这些命令继续由 Hypo-Workflow 自身提供。VSPi 只通过 `/plan` 展示可选的只读投影。
 
 当前 Policy 不是 OS sandbox，也不把 SSH、容器或远程系统包装成隔离边界。更细的命令解析、小模型审批、远程目标约束和系统级 containment 属于后续安全加固，不阻塞本轮可用性。
 

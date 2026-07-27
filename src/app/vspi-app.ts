@@ -1307,29 +1307,14 @@ export class VspiApp implements Component, Focusable {
         const preview = await this.backend.previewExternalSession(event.session.id);
         const contextWarning =
           this.usage.contextWindow > 0 && preview.estimatedTokens > this.usage.contextWindow * 0.8
-            ? ` 注意：导入量已达到当前 ${formatTokenEstimate(this.usage.contextWindow)} 上下文的 80% 以上，首次继续时可能触发压缩。`
-            : "";
-        const [answered] = await this.requestQuestions([
-          {
-            id: `external-import:${preview.id}`,
-            title: `导入 ${preview.source === "codex" ? "Codex" : "Claude Code"} 会话`,
-            prompt: `${preview.title}\n${preview.messageCount} 条对话 · ${preview.toolCount} 条工具记录 · 约 ${formatTokenEstimate(preview.estimatedTokens)} tokens。工具输出会脱敏后复制，原会话保持不变。${contextWarning}`,
-            kind: "singleChoice",
-            options: [
-              { id: "import", label: "复制为新的 VSPi Session", description: "保留完整可见记录并切换到新 Session" },
-              { id: "cancel", label: "取消", description: "不写入任何内容" },
-            ],
-          },
-        ]);
-        if (answered?.answer !== "import") {
-          this.panels.open("externalImport");
-          return;
-        }
+            ? `导入内容超过当前 ${formatTokenEstimate(this.usage.contextWindow)} 上下文的 80%，首次继续时可能触发压缩。`
+            : undefined;
         const epoch = this.sessionEpoch;
         this.sessionTransition = true;
         await this.backend.importExternalSession(event.session.id, preview.fingerprint);
         if (this.sessionEpoch === epoch) this.sessionTransition = false;
         this.panels.close();
+        if (contextWarning) this.showNotice(contextWarning, "warning");
       } catch (error) {
         this.sessionTransition = false;
         if (error instanceof Error && error.name === "AbortError") return;
