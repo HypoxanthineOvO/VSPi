@@ -12,12 +12,74 @@ export interface TranscriptRenderOptions {
   thinkingDisplay?: "hidden" | "collapsed" | "expanded";
   wrapCode?: boolean;
   collapseCompletedTools?: boolean;
+  cache?: TranscriptRenderCache;
 }
 
 export interface TranscriptNode {
   id: string;
   kind: "message" | "toolGroup";
   messageIndexes: number[];
+}
+
+export interface TranscriptWindowOptions {
+  width: number;
+  maxRows: number;
+  maxBlocks?: number;
+  maxCharacters?: number;
+  thinkingDisplay?: TranscriptRenderOptions["thinkingDisplay"];
+  collapseCompletedTools?: boolean;
+  pinnedNodeId?: string;
+}
+
+export interface TranscriptWindow {
+  messages: TranscriptMessage[];
+  nodes: TranscriptNode[];
+  hiddenBlocks: number;
+}
+
+interface TranscriptCacheEntry {
+  references: TranscriptMessage[];
+  state: string;
+  lines: string[];
+}
+
+export class TranscriptRenderCache {
+  private entries = new Map<string, TranscriptCacheEntry>();
+  private hits = 0;
+  private misses = 0;
+
+  render(key: string, references: TranscriptMessage[], state: string, factory: () => string[]): string[] {
+    const cached = this.entries.get(key);
+    if (
+      cached &&
+      cached.state === state &&
+      cached.references.length === references.length &&
+      cached.references.every((reference, index) => reference === references[index])
+    ) {
+      this.hits += 1;
+      return cached.lines;
+    }
+    this.misses += 1;
+    const lines = factory();
+    this.entries.set(key, { references: [...references], state, lines });
+    return lines;
+  }
+
+  retain(keys: Set<string>): void {
+    for (const key of this.entries.keys()) {
+      if (!keys.has(key)) this.entries.delete(key);
+    }
+  }
+
+  clear(): void {
+    this.entries.clear();
+    this.hits = 0;
+    this.misses = 0;
+  }
+
+  stats(): { entries: number; hits: number; misses: number } {
+    return { entries: this.entries.size, hits: this.hits, misses: this.misses };
+  }
 }
 
 export function isQueuedTranscriptMessage(
@@ -56,6 +118,97 @@ export function buildTranscriptNodes(messages: TranscriptMessage[]): TranscriptN
     index = cursor;
   }
   return nodes;
+}
+
+export function selectTranscriptWindow(
+  messages: TranscriptMessage[],
+  options: TranscriptWindowOptions,
+): TranscriptWindow {
+  const nodes = buildTranscriptNodes(messages);
+  if (nodes.length === 0) return { messages: [], nodes: [], hiddenBlocks: 0 };
+
+  const maxBlocks = Math.max(1, options.maxBlocks ?? 80);
+  const maxCharacters = Math.max(1, options.maxCharacters ?? 60_000);
+  const maxRows = Math.max(1, options.maxRows);
+  let characters = 0;
+  let rows = 0;
+  let start = nodes.length;
+  let pinnedIncluded = options.pinnedNodeId === undefined || !nodes.some((node) => node.id === options.pinnedNodeId);
+
+  for (let nodeIndex = nodes.length - 1; nodeIndex >= 0; nodeIndex -= 1) {
+    const node = nodes[nodeIndex];
+    if (!node) continue;
+    const block = node.messageIndexes
+      .map((messageIndex) => messages[messageIndex])
+      .filter((message): message is TranscriptMessage => message !== undefined);
+    const nextCharacters = block.reduce((total, message) => total + transcriptMessageCharacters(message), 0);
+    const nextRows = estimateTranscriptBlockRows(block, options);
+    const selectedBlocks = nodes.length - start;
+    const pinned = node.id === options.pinnedNodeId;
+    if (
+      pinnedIncluded &&
+      selectedBlocks > 0 &&
+      (selectedBlocks >= maxBlocks || characters + nextCharacters > maxCharacters || rows + nextRows > maxRows)
+    ) {
+      break;
+    }
+    start = nodeIndex;
+    characters += nextCharacters;
+    rows += nextRows;
+    if (pinned) pinnedIncluded = true;
+  }
+
+  const selectedNodes = nodes.slice(start);
+  const firstMessageIndex = selectedNodes[0]?.messageIndexes[0] ?? messages.length;
+  return {
+    messages: messages.slice(firstMessageIndex),
+    nodes: selectedNodes,
+    hiddenBlocks: start,
+  };
+}
+
+function transcriptMessageCharacters(message: TranscriptMessage): number {
+  if (message.kind === "thinking") return (message.translatedText || message.text).length;
+  if (message.kind === "text" || message.kind === "session") {
+    return message.text.length;
+  }
+  if (message.kind === "tool") return message.name.length + message.summary.length + (message.output?.length ?? 0);
+  return message.model.length + message.task.length;
+}
+
+function estimatedWrappedRows(text: string, width: number): number {
+  return text.split("\n").reduce((total, line) => total + Math.max(1, Math.ceil(visibleWidth(line) / width)), 0);
+}
+
+function estimateTranscriptBlockRows(block: TranscriptMessage[], options: TranscriptWindowOptions): number {
+  const first = block[0];
+  if (!first) return 0;
+  const width = Math.max(1, options.width - 2);
+  if (first.kind === "tool") {
+    const tools = block.filter(
+      (message): message is Extract<TranscriptMessage, { kind: "tool" }> => message.kind === "tool",
+    );
+    const collapsed =
+      options.collapseCompletedTools && allToolsTerminal(tools) && !tools.some((message) => message.expanded);
+    if (collapsed) return 2;
+    return (
+      2 +
+      tools.reduce(
+        (total, message) =>
+          total + 1 + (message.expanded && message.output ? estimatedWrappedRows(message.output, width) : 0),
+        0,
+      )
+    );
+  }
+  if (first.kind === "text" && first.role === "user") {
+    return 3 + estimatedWrappedRows(first.text, Math.max(1, options.width - 4));
+  }
+  if (first.kind === "thinking") {
+    if (options.thinkingDisplay === "hidden") return 2;
+    return first.collapsed ? 3 : 2 + estimatedWrappedRows(first.translatedText || first.text, width);
+  }
+  if (first.kind === "text") return 1 + estimatedWrappedRows(first.text, width);
+  return 2;
 }
 
 function attachmentSummary(message: Extract<TranscriptMessage, { kind: "text" }>): string[] {
@@ -119,14 +272,26 @@ export function renderTranscriptMessage(
       return [theme.muted("◇ 思考 · 已隐藏")];
     }
     const duration = message.durationMs === undefined ? "" : ` · ${(message.durationMs / 1000).toFixed(1)}s`;
+    const translation =
+      message.translationStatus === "pending"
+        ? " · 翻译中"
+        : message.translationStatus === "translated"
+          ? " · 已翻译"
+          : message.translationStatus === "error"
+            ? " · 翻译失败"
+            : "";
+    const displayText = message.translatedText || message.text;
     lines = [
       theme.muted(
-        `◇ 思考 · Effort ${effortLabel(message.effort)}${duration} · ${message.collapsed ? "已折叠" : "已展开"}`,
+        `◇ 思考 · Effort ${effortLabel(message.effort)}${duration}${translation} · ${message.collapsed ? "已折叠" : "已展开"}`,
       ),
     ];
-    if (!message.collapsed)
+    if (message.collapsed) {
+      const preview = collapsedThinkingPreview(displayText, Math.max(1, width - 2));
+      if (preview) lines.push(theme.muted(`  ${preview}`));
+    } else
       lines.push(
-        ...renderMarkdown(message.text, Math.max(1, width - 2), theme, {
+        ...renderMarkdown(displayText, Math.max(1, width - 2), theme, {
           ...(options.wrapCode !== undefined ? { wrapCode: options.wrapCode } : {}),
           tone: "thinking",
         }).map((line) => `  ${line}`),
@@ -149,6 +314,22 @@ export function renderTranscriptMessage(
 
   if (selected) return renderSelectedLines(lines, width, theme);
   return lines.map((line) => (visibleWidth(line) > width ? padLine(line, width) : line));
+}
+
+function collapsedThinkingPreview(text: string, width: number): string | undefined {
+  const sections = text
+    .split(/\n\s*\n/gu)
+    .map((section) => section.trim())
+    .filter(Boolean);
+  const latest = sections.at(-1);
+  if (!latest) return undefined;
+  const line = latest
+    .split("\n")
+    .map((item) => item.trim())
+    .find(Boolean);
+  if (!line) return undefined;
+  const suffix = sections.length > 1 ? ` · ${sections.length} 段` : "";
+  return truncateToWidth(`${line}${suffix}`, width, "…");
 }
 
 function toolLabel(name: string): string {
@@ -183,6 +364,16 @@ export function renderTranscript(
 ): string[] {
   const output: string[] = [];
   const visible = messages.filter((message) => !isQueuedTranscriptMessage(message));
+  const retainedCacheKeys = new Set<string>();
+  const cacheState = [
+    width,
+    options.thinkingDisplay ?? "collapsed",
+    options.wrapCode === false ? "nowrap" : "wrap",
+    options.collapseCompletedTools ? "collapse-tools" : "expand-tools",
+    options.selectedNodeId ?? "",
+    options.selectedToolId ?? "",
+    options.inspectedId ?? "",
+  ].join(":");
   for (let index = 0; index < visible.length; ) {
     const message = visible[index];
     if (!message) break;
@@ -195,14 +386,28 @@ export function renderTranscript(
         group.push(candidate);
         cursor += 1;
       }
-      output.push(...renderToolGroup(group, width, theme, options));
+      const key = toolGroupNodeId(message);
+      retainedCacheKeys.add(key);
+      const state = `${cacheState}:${group.map((tool) => (tool.expanded ? "1" : "0")).join("")}`;
+      output.push(
+        ...(options.cache?.render(key, group, state, () => renderToolGroup(group, width, theme, options)) ??
+          renderToolGroup(group, width, theme, options)),
+      );
       index = cursor;
     } else {
-      output.push(...renderTranscriptMessage(message, width, theme, options));
+      const key = `message:${message.id}`;
+      retainedCacheKeys.add(key);
+      const mutableState = message.kind === "thinking" ? (message.collapsed ? "collapsed" : "expanded") : "";
+      output.push(
+        ...(options.cache?.render(key, [message], `${cacheState}:${mutableState}`, () =>
+          renderTranscriptMessage(message, width, theme, options),
+        ) ?? renderTranscriptMessage(message, width, theme, options)),
+      );
       index += 1;
     }
     if (index < visible.length && stripAnsi(output.at(-1) ?? "") !== "") output.push("");
   }
+  options.cache?.retain(retainedCacheKeys);
   return output;
 }
 

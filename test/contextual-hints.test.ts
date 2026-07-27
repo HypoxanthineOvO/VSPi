@@ -122,7 +122,6 @@ describe("contextual panel hints", () => {
     ["commands", "/", COMMAND_HINT],
     ["models", "/model", "Enter"],
     ["providers", "/providers", "Enter"],
-    ["empty sessions", "/sessions", "Esc 关闭"],
     ["settings", "/settings", "Tab"],
     ["usage", "/usage", "Esc"],
     ["theme", "/theme", "Enter"],
@@ -138,6 +137,22 @@ describe("contextual panel hints", () => {
       expect(result.ansi[row.frameBottom + 1]).toContain(result.mutedSgr);
       expect(result.ansi.every((line) => visibleWidth(line) === 80)).toBe(true);
       expect(result.ansi.length).toBeLessThanOrEqual(24);
+    } finally {
+      await result.app.dispose();
+    }
+  });
+
+  it("lets Sessions own the full content area and keeps its hint in the bottom border", async () => {
+    const result = await renderPanel("/sessions");
+    try {
+      const rendered = result.plain.join("\n");
+      expect(result.plain[0]).toMatch(/^╭ Sessions/);
+      expect(rendered).toContain("0 个会话");
+      expect(rendered).toContain("暂无会话");
+      expect(result.plain.find((line) => line.startsWith("╰"))).toContain("Esc 返回");
+      expect(rendered).not.toContain("输入消息");
+      expect(result.ansi).toHaveLength(24);
+      expect(result.ansi.every((line) => visibleWidth(line) === 80)).toBe(true);
     } finally {
       await result.app.dispose();
     }

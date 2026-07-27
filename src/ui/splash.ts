@@ -66,15 +66,8 @@ export interface StartupSequenceOptions {
   write: (chunk: string) => void;
   startApp: () => Promise<StartupStatus> | StartupStatus;
   startTui: () => Promise<void> | void;
-  /** 返回当前终端宽度；动画每帧与最终帧都会调用，以便响应 resize。缺省时固定为 width。 */
+  /** 返回当前终端宽度；静态帧与最终状态帧都会调用，以便响应 resize。缺省时固定为 width。 */
   getWidth?: () => number;
-}
-
-const FRAME_DELAY_MS = 70;
-const MOTION_FRAMES = [0, 0.25, 0.5, 0.75] as const;
-
-function waitForNextFrame(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, FRAME_DELAY_MS));
 }
 
 function replaceFrame(previousHeight: number, nextFrame: string[]): string {
@@ -84,31 +77,11 @@ function replaceFrame(previousHeight: number, nextFrame: string[]): string {
 
 export async function runStartupSequence(options: StartupSequenceOptions): Promise<void> {
   const currentWidth = (): number => Math.max(1, options.getWidth?.() ?? options.width);
-  let frame = renderSplash(currentWidth(), options.theme, MOTION_FRAMES[0]);
+  const safeWidth = (): number => Math.max(4, currentWidth() - 1);
+  const frame = renderSplash(safeWidth(), options.theme, 0);
   options.write(frame.join("\n"));
-  let cancelled = false;
-  const statusPromise = Promise.resolve(options.startApp()).catch((error) => {
-    cancelled = true;
-    throw error;
-  });
-  const animationPromise = (async () => {
-    if (options.theme.capabilities.reducedMotion) return;
-    for (const progress of MOTION_FRAMES.slice(1)) {
-      await waitForNextFrame();
-      if (cancelled) return;
-      const nextFrame = renderSplash(currentWidth(), options.theme, progress);
-      options.write(replaceFrame(frame.length, nextFrame));
-      frame = nextFrame;
-    }
-    await waitForNextFrame();
-  })();
-
-  try {
-    const [status] = await Promise.all([statusPromise, animationPromise]);
-    const finalFrame = renderSplash(currentWidth(), options.theme, 1, status);
-    options.write(`${replaceFrame(frame.length, finalFrame)}\n`);
-    await options.startTui();
-  } finally {
-    cancelled = true;
-  }
+  const status = await options.startApp();
+  const finalFrame = renderSplash(safeWidth(), options.theme, 1, status);
+  options.write(`${replaceFrame(frame.length, finalFrame)}\n`);
+  await options.startTui();
 }

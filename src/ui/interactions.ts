@@ -216,7 +216,7 @@ const actions: InteractionDefinition[] = [
     keys: ["Escape"],
     keyValues: [Key.escape],
     handler: "closePanel",
-    hint: "Esc 关闭",
+    hint: "Esc 返回",
   }),
   keyAction({
     id: "panel.external-import.move",

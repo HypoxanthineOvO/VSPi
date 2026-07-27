@@ -40,6 +40,10 @@ function normalizeSettings(input: unknown, fallback: AppSettings): AppSettings {
     theme: value.theme && THEME_VALUES.has(value.theme) ? value.theme : fallback.theme,
     reducedMotion: typeof value.reducedMotion === "boolean" ? value.reducedMotion : fallback.reducedMotion,
     thinkingDisplay,
+    thinkingTranslationEndpoint:
+      typeof value.thinkingTranslationEndpoint === "string"
+        ? value.thinkingTranslationEndpoint.trim().slice(0, 500)
+        : fallback.thinkingTranslationEndpoint,
     wrapCode: typeof value.wrapCode === "boolean" ? value.wrapCode : fallback.wrapCode,
     collapseTools: typeof value.collapseTools === "boolean" ? value.collapseTools : fallback.collapseTools,
     bridgeEnabled: typeof value.bridgeEnabled === "boolean" ? value.bridgeEnabled : fallback.bridgeEnabled,

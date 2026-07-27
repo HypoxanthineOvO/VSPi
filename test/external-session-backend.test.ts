@@ -8,12 +8,13 @@ import type { ChatBackendEvents } from "../src/backend/types.js";
 import type { ExternalSessionPreview } from "../src/sessions/external-history.js";
 
 describe("external Session backend import", () => {
-  it("stores foreign history as an inert reference while preserving the active model", async () => {
+  it("imports full visible history, excludes tools, and resumes from the source checkpoint", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-import-backend-"));
     const sessionDir = join(cwd, "sessions");
     const managers: SessionManager[] = [];
     const resets: Array<{ id: string; reason: string }> = [];
     const transcript: Array<{ kind?: string; text?: string }> = [];
+    const prompt = vi.fn(async () => {});
     const preview = externalPreview();
     const backend = new PiBackend({
       cwd,
@@ -25,7 +26,7 @@ describe("external Session backend import", () => {
       },
       sessionFactory: async (manager) => {
         managers.push(manager);
-        return { session: fakeSession(manager) };
+        return { session: fakeSession(manager, prompt) };
       },
     });
     await backend.start(
@@ -46,37 +47,65 @@ describe("external Session backend import", () => {
           type: "custom",
           customType: "vspi.external-session-import",
           data: expect.objectContaining({
+            version: 3,
             source: "codex",
             sourceId: "source-id",
             fingerprint: "f".repeat(64),
             snapshotBytes: 4_096,
+            policy: "native-visible-checkpoint-context-v3",
+            visibleItemCount: 5,
+            contextItemCount: 2,
+            contextStrategy: "codex-checkpoint",
+            contextWindow: 100_000,
           }),
         }),
       ]),
     );
     const branch = imported?.getBranch() ?? [];
-    expect(branch.filter((entry) => entry.type === "message")).toEqual([]);
+    expect(
+      branch
+        .filter((entry) => entry.type === "message")
+        .map((entry) => (entry.type === "message" ? entry.message.role : "")),
+    ).toEqual(["user", "assistant", "assistant", "user", "assistant"]);
     expect(branch).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: "model_change", provider: "fixture", modelId: "fixture" }),
         expect.objectContaining({
-          type: "custom_message",
-          customType: "vspi.external-session-reference",
-          display: false,
-          content: expect.stringMatching(/只读历史快照[\s\S]*不可执行[\s\S]*codex_only_tool/u),
+          type: "compaction",
+          summary: "Prior decision summary",
+          firstKeptEntryId: expect.any(String),
+          fromHook: true,
+          details: expect.objectContaining({ omittedToolCount: 1, strategy: "codex-checkpoint" }),
         }),
       ]),
     );
     expect(imported?.buildSessionContext().model).toEqual({ provider: "fixture", modelId: "fixture" });
-    expect(imported?.buildSessionContext().messages).toEqual([
-      expect.objectContaining({ role: "custom", customType: "vspi.external-session-reference" }),
+    expect(imported?.buildSessionContext().messages.map((message) => message.role)).toEqual([
+      "compactionSummary",
+      "user",
+      "assistant",
     ]);
-    expect(JSON.stringify(branch)).not.toMatch(/codex-import|external-history/u);
+    expect(JSON.stringify(imported?.buildSessionContext().messages)).toContain("Prior decision summary");
+    expect(JSON.stringify(imported?.buildSessionContext().messages)).not.toMatch(
+      /codex_only_tool|Question|Inspect files/u,
+    );
     expect(resets.at(-1)?.reason).toBe("import");
-    expect(transcript.at(-1)).toMatchObject({
-      kind: "session",
-      text: "只读参考 · Codex · Imported thread · 2 条对话 · 1 条工具记录",
-    });
+    expect(transcript).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "session", text: expect.stringContaining("从 Codex 导入") }),
+        expect.objectContaining({ kind: "text", text: "Question" }),
+        expect.objectContaining({ kind: "thinking", text: "Inspect files" }),
+        expect.objectContaining({ kind: "text", text: "Answer" }),
+        expect.objectContaining({ kind: "text", text: "Latest question" }),
+        expect.objectContaining({ kind: "thinking", text: "Continue work" }),
+      ]),
+    );
+    expect(transcript.some((message) => message.kind === "tool")).toBe(false);
+
+    await expect(
+      backend.send("Continue", { attachments: [], effort: "medium", behavior: "prompt" }),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(prompt).toHaveBeenCalledWith("Continue", expect.objectContaining({ source: "interactive" }));
     await backend.dispose();
   });
 
@@ -141,24 +170,33 @@ function externalPreview(): ExternalSessionPreview {
     updatedAt: "2026-07-26T12:00:00.000Z",
     items: [
       { role: "user", kind: "message", text: "Question", timestamp: 1 },
-      { role: "assistant", kind: "tool", text: 'Tool · codex_only_tool\n{"path":"/tmp"}', timestamp: 2 },
+      { role: "assistant", kind: "thinking", text: "Inspect files", timestamp: 2 },
       { role: "assistant", kind: "message", text: "Answer", timestamp: 3 },
+      { role: "user", kind: "message", text: "Latest question", timestamp: 4 },
+      { role: "assistant", kind: "thinking", text: "Continue work", timestamp: 5 },
     ],
-    messageCount: 2,
+    messageCount: 3,
     toolCount: 1,
     estimatedTokens: 20,
+    sourceContextWindow: 353_400,
+    contextCheckpoint: {
+      summary: "Prior decision summary",
+      tailStartIndex: 3,
+      sourceContextWindow: 353_400,
+    },
     fingerprint: "f".repeat(64),
     snapshotBytes: 4_096,
     snapshotModifiedAt: "2026-07-26T12:00:00.000Z",
   };
 }
 
-function fakeSession(manager: SessionManager): AgentSession {
+function fakeSession(manager: SessionManager, prompt = vi.fn(async () => {})): AgentSession {
   const session = {
     model: {
       id: "fixture",
       name: "Fixture",
       provider: "fixture",
+      api: "openai-completions",
       input: ["text"],
       contextWindow: 100_000,
     },
@@ -170,7 +208,7 @@ function fakeSession(manager: SessionManager): AgentSession {
     subscribe: () => () => {},
     setThinkingLevel: () => {},
     getAvailableThinkingLevels: () => ["off", "medium", "high"],
-    prompt: async () => {},
+    prompt,
     steer: async () => {},
     followUp: async () => {},
     clearQueue: () => ({ steering: [], followUp: [] }),

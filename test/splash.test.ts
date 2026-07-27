@@ -75,7 +75,7 @@ describe("startup cover", () => {
     for (const legacy of LEGACY_COPY) expect(text).not.toContain(legacy);
   });
 
-  it("re-renders animation and final frames at the current width after a resize", async () => {
+  it("renders one static frame and one final frame at the current safe width after a resize", async () => {
     let currentWidth = 80;
     const writes: string[] = [];
     const status: StartupStatus = {
@@ -98,9 +98,9 @@ describe("startup cover", () => {
       startTui: () => {},
     });
 
-    expect(writes.length).toBeGreaterThan(2);
+    expect(writes).toHaveLength(2);
     const firstFrameLines = (writes[0] ?? "").split("\n");
-    expect(firstFrameLines.every((line) => visibleWidth(line) === 80)).toBe(true);
+    expect(firstFrameLines.every((line) => visibleWidth(line) === 79)).toBe(true);
     const finalFrameLines = (writes.at(-1) ?? "")
       .replace(/\r/g, "")
       // biome-ignore lint/suspicious/noControlCharactersInRegex: 剥离启动帧里的 CSI 光标移动序列。
@@ -108,6 +108,6 @@ describe("startup cover", () => {
       .split("\n")
       .filter((line) => line.length > 0);
     expect(finalFrameLines.length).toBeGreaterThan(0);
-    expect(finalFrameLines.every((line) => visibleWidth(line) === 100)).toBe(true);
+    expect(finalFrameLines.every((line) => visibleWidth(line) === 99)).toBe(true);
   });
 });

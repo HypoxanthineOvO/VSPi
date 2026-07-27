@@ -14,6 +14,18 @@ describe("width-safe terminal primitives", () => {
     expect(stripAnsi(lines[0] ?? "")).toContain("测试");
   });
 
+  it("preserves all frame corners when titles and a left footer overflow", () => {
+    const lines = frame(["body"], 24, plainTheme(), {
+      title: "Sessions with a long title",
+      rightTitle: "999 个会话",
+      footer: "↑↓ 选择 Enter 打开 Shift+F 创建分支 Esc 返回",
+      footerPosition: "left",
+    }).map(stripAnsi);
+    expect(lines[0]).toMatch(/^╭.*╮$/u);
+    expect(lines.at(-1)).toMatch(/^╰.*╯$/u);
+    expect(lines.every((line) => visibleWidth(line) === 24)).toBe(true);
+  });
+
   it("keeps the right value with an ellipsis hint when alignRight overflows", () => {
     const line = alignRight("原始费用超出可用宽度", "$0.0000 USD", 14);
     expect(visibleWidth(line)).toBe(14);

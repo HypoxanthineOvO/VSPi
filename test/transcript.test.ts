@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Attachment, TranscriptMessage } from "../src/domain/types.js";
 import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
-import { buildTranscriptNodes, renderTranscript, renderTranscriptMessage } from "../src/ui/transcript.js";
+import {
+  buildTranscriptNodes,
+  renderTranscript,
+  renderTranscriptMessage,
+  selectTranscriptWindow,
+  TranscriptRenderCache,
+} from "../src/ui/transcript.js";
 import { cellsForText, plainTheme, sgrCells } from "./helpers.js";
 
 const ATTACHMENT: Attachment = {
@@ -37,6 +43,57 @@ function toolMessage(
 }
 
 describe("transcript rendering", () => {
+  it("selects a bounded suffix without splitting tool groups and keeps original message indexes", () => {
+    const messages: TranscriptMessage[] = [
+      ...Array.from({ length: 90 }, (_, index) => ({
+        id: `old-${index}`,
+        role: "assistant" as const,
+        kind: "text" as const,
+        text: `old content ${index}`,
+      })),
+      ...[toolMessage(0), toolMessage(1), toolMessage(2)],
+      { id: "latest", role: "assistant", kind: "text", text: "LATEST_CONTENT" },
+    ];
+
+    const window = selectTranscriptWindow(messages, {
+      width: 80,
+      maxRows: 10_000,
+      maxBlocks: 2,
+      maxCharacters: 1_000_000,
+      collapseCompletedTools: false,
+    });
+
+    expect(window.hiddenBlocks).toBe(90);
+    expect(window.messages.map((message) => message.id)).toEqual(["tool-0", "tool-1", "tool-2", "latest"]);
+    expect(window.nodes).toEqual([
+      { id: "tool-group:turn-1", kind: "toolGroup", messageIndexes: [90, 91, 92] },
+      { id: "latest", kind: "message", messageIndexes: [93] },
+    ]);
+  });
+
+  it("reuses cached blocks across stable frames and invalidates only a replaced message", () => {
+    const cache = new TranscriptRenderCache();
+    const messages: TranscriptMessage[] = Array.from({ length: 3 }, (_, index) => ({
+      id: `cached-${index}`,
+      role: "assistant",
+      kind: "text",
+      text: `cached body ${index}`,
+    }));
+    const options = { cache, thinkingDisplay: "collapsed" as const };
+
+    renderTranscript(messages, 80, plainTheme(), options);
+    expect(cache.stats()).toEqual({ entries: 3, hits: 0, misses: 3 });
+    renderTranscript(messages, 80, plainTheme(), options);
+    expect(cache.stats()).toEqual({ entries: 3, hits: 3, misses: 3 });
+
+    const last = messages[2];
+    expect(last?.kind).toBe("text");
+    if (last?.kind !== "text") return;
+    messages[2] = { ...last, text: "updated streaming body" };
+    renderTranscript(messages, 80, plainTheme(), options);
+    expect(cache.stats()).toEqual({ entries: 3, hits: 5, misses: 4 });
+  });
+
   it("renders interrupted Session state as a quiet standalone marker", () => {
     const lines = renderTranscriptMessage(
       {
@@ -258,7 +315,7 @@ describe("transcript rendering", () => {
       kind: "thinking",
       effort: "high",
       durationMs: 1200,
-      text: "THINKING_BODY",
+      text: "EARLIER_THINKING\n\nLATEST_THINKING",
       collapsed: true,
       streaming: false,
     };
@@ -270,9 +327,11 @@ describe("transcript rendering", () => {
 
     expect(hidden).toEqual(["◇ 思考 · 已隐藏"]);
     expect(collapsed.join("\n")).toContain("Effort High · 1.2s · 已折叠");
-    expect(collapsed.join("\n")).not.toContain("THINKING_BODY");
+    expect(collapsed.join("\n")).toContain("LATEST_THINKING · 2 段");
+    expect(collapsed.join("\n")).not.toContain("EARLIER_THINKING");
     expect(expanded.join("\n")).toContain("Effort High · 1.2s · 已展开");
-    expect(expanded.join("\n")).toContain("THINKING_BODY");
+    expect(expanded.join("\n")).toContain("EARLIER_THINKING");
+    expect(expanded.join("\n")).toContain("LATEST_THINKING");
   });
 
   it("uses a restrained gray base color for expanded Thinking Markdown", () => {

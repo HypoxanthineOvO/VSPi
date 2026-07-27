@@ -50,6 +50,8 @@ interface QuestionToolModule {
   }): {
     name: string;
     label: string;
+    description: string;
+    promptSnippet: string;
     parameters: unknown;
     execute(
       callId: string,
@@ -86,6 +88,8 @@ describe("M5 Question ToolDefinition", () => {
     const schema = JSON.stringify(tool.parameters);
 
     expect(tool).toMatchObject({ name: "question", label: "Question" });
+    expect(tool.description).toMatch(/whenever progress requires a user answer/i);
+    expect(tool.promptSnippet).toMatch(/Do not replace approvals with question/i);
     for (const kind of ["singleChoice", "multiChoice", "ranking", "freeText"]) expect(schema).toContain(kind);
     for (const field of ["questions", "id", "title", "prompt", "options", "description"])
       expect(schema).toContain(field);

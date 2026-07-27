@@ -108,6 +108,9 @@ describe("M7 Pi per-turn Prompt Profile overlay", () => {
     expect(result).toEqual({ systemPrompt: `Original assembled Pi prompt\n\n${VSPI_LANGUAGE_CONTRACT}` });
     expect(VSPI_LANGUAGE_CONTRACT).toMatch(/简体中文为主进行思考/);
     expect(VSPI_LANGUAGE_CONTRACT).toMatch(/不使用 emoji.*标题前缀/);
+    expect(VSPI_LANGUAGE_CONTRACT).toMatch(/后续工作确实依赖用户回答[\s\S]*调用 question 工具/);
+    expect(VSPI_LANGUAGE_CONTRACT).toMatch(/不得只在普通助手正文中提问后停下等待/);
+    expect(VSPI_LANGUAGE_CONTRACT).toMatch(/权限与命令审批始终使用 Approval/);
     expect(result?.message).toBeUndefined();
   });
 

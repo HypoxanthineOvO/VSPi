@@ -47,8 +47,10 @@ export function createQuestionToolDefinition(
   return {
     name: "question",
     label: "Question",
-    description: "Ask one or more structured questions and wait for the user's reviewed answers.",
-    promptSnippet: "Ask structured questions when a user decision is required.",
+    description:
+      "Ask one or more structured questions and wait for reviewed answers. Use this tool whenever progress requires a user answer, including free-text clarification; do not stop after asking that question only in normal assistant text.",
+    promptSnippet:
+      "When further work depends on a user answer, explain the decision context briefly, then call question. Batch related questions. Do not replace approvals with question, ask when a safe assumption is available, or call it after the user authorized autonomous judgment.",
     parameters: QuestionParameters,
     executionMode: "sequential",
     async execute(_toolCallId, raw, signal) {

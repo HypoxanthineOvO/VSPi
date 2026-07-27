@@ -9,6 +9,7 @@ import type { ChatBackend, ChatBackendEvents } from "../src/backend/types.js";
 import { loadSettings, saveSettings } from "../src/config/settings.js";
 import { DEFAULT_SETTINGS } from "../src/domain/fixtures.js";
 import type { AppSettings, Attachment, TranscriptMessage } from "../src/domain/types.js";
+import type { ThinkingTranslator } from "../src/translation/thinking-translator.js";
 import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
 import { renderMarkdown } from "../src/ui/markdown.js";
 import { renderTranscript } from "../src/ui/transcript.js";
@@ -225,6 +226,54 @@ describe("M5 Markdown and streaming rendering", () => {
 });
 
 describe("M5 thinking visibility and persistence", () => {
+  it("translates one completed live Thinking record without replacing its stored source text", async () => {
+    let events: ChatBackendEvents | undefined;
+    const backend = fakeBackend(true).backend;
+    backend.start = vi.fn(async (captured: ChatBackendEvents) => {
+      events = captured;
+    });
+    const translator: ThinkingTranslator = {
+      translate: vi.fn(async () => "正在检查相关页面。"),
+    };
+    const app = new VspiApp(fakeTui(), plainTheme(), backend, {
+      cwd: "/workspace/m5-thinking-translation",
+      settings: {
+        ...DEFAULT_SETTINGS,
+        thinkingDisplay: "expanded",
+        thinkingTranslationEndpoint: "http://127.0.0.1:5000/translate",
+      },
+      attachments: fakeAttachments(),
+      thinkingTranslator: translator,
+      renderOnce: true,
+      onExit: vi.fn(),
+    });
+    await app.start();
+    events?.onMessage({
+      id: "live-thinking",
+      role: "assistant",
+      kind: "thinking",
+      effort: "high",
+      text: "",
+      collapsed: false,
+      streaming: true,
+    });
+    events?.onMessageUpdate("live-thinking", { text: "Inspecting the relevant page.", streaming: true });
+    events?.onMessageUpdate("live-thinking", { text: "Inspecting the relevant page.", streaming: false });
+
+    await vi.waitFor(() => expect(translator.translate).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(plain(app.render(80)).join("\n")).toContain("正在检查相关页面。"));
+    const testable = app as unknown as TestableApp;
+    expect(testable.messages[0]).toMatchObject({
+      text: "Inspecting the relevant page.",
+      translatedText: "正在检查相关页面。",
+      translationStatus: "translated",
+    });
+    const rendered = plain(app.render(80)).join("\n");
+    expect(rendered).toContain("已翻译");
+    expect(rendered).not.toContain("Inspecting the relevant page.");
+    await app.dispose();
+  });
+
   it("keeps a hidden thinking record while Inspect retains stable ids and per-entry expansion", async () => {
     const { app } = await createApp(
       { ...DEFAULT_SETTINGS, bridgeEnabled: false, thinkingDisplay: "hidden", wrapCode: true },
@@ -317,7 +366,7 @@ describe("M5 thinking visibility and persistence", () => {
 
     testable.applyThinkingDisplay("collapsed");
     expect(testable.messages[0]).toMatchObject({ collapsed: true });
-    expect(plain(app.render(80)).join("\n")).not.toContain("VISIBLE_AFTER_APPLY");
+    expect(plain(app.render(80)).join("\n")).toMatch(/已折叠[\s\S]*VISIBLE_AFTER_APPLY/u);
     expect(testable.withThinkingDisplayDefault({ ...thinking, id: "future-thinking" })).toMatchObject({
       collapsed: false,
     });
