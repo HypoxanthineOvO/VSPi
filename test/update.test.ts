@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { compareVersions, installVspiPackage, resolvePackageInstaller, updateVspi } from "../src/update/self-update.js";
 
@@ -151,6 +151,33 @@ describe("VSPi self-update", () => {
       ).resolves.toBeUndefined();
     } finally {
       await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("verifies a Volta install through its bin symlink instead of assuming argv points into dist", async () => {
+    const voltaHome = await mkdtemp(join(tmpdir(), "vspi-volta-entry-"));
+    try {
+      const packageRoot = join(voltaHome, "tools", "image", "packages", "vspi", "lib", "node_modules", "vspi");
+      const entryPath = join(voltaHome, "tools", "image", "packages", "vspi", "bin", "vspi");
+      const manifestPath = join(packageRoot, "package.json");
+      await mkdir(join(packageRoot, "dist"), { recursive: true });
+      await mkdir(dirname(entryPath), { recursive: true });
+      await writeFile(join(packageRoot, "dist", "index.js"), "");
+      await writeFile(manifestPath, JSON.stringify({ name: "vspi", version: "0.3.3" }));
+      await symlink("../lib/node_modules/vspi/dist/index.js", entryPath);
+
+      await expect(
+        installVspiPackage("/tmp/vspi-0.3.4.tgz", "0.3.4", {
+          entryPath,
+          environment: { VOLTA_HOME: voltaHome },
+          execute: async (invocation) => {
+            expect(invocation.manager).toBe("volta");
+            await writeFile(manifestPath, JSON.stringify({ name: "vspi", version: "0.3.4" }));
+          },
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      await rm(voltaHome, { force: true, recursive: true });
     }
   });
 });

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
@@ -145,10 +145,22 @@ async function executeInstaller(invocation: PackageInstallerInvocation, environm
 
 async function entryPackageVersion(entryPath: string): Promise<string | undefined> {
   try {
-    const value = JSON.parse(await readFile(resolve(dirname(entryPath), "..", "package.json"), "utf8")) as unknown;
-    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-    const manifest = value as Record<string, unknown>;
-    return manifest.name === "vspi" && typeof manifest.version === "string" ? manifest.version : undefined;
+    let directory = dirname(await realpath(entryPath));
+    for (let depth = 0; depth < 5; depth += 1) {
+      try {
+        const value = JSON.parse(await readFile(join(directory, "package.json"), "utf8")) as unknown;
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+          const manifest = value as Record<string, unknown>;
+          if (manifest.name === "vspi" && typeof manifest.version === "string") return manifest.version;
+        }
+      } catch {
+        // The executable may be a package-manager symlink several levels below its manifest.
+      }
+      const parent = dirname(directory);
+      if (parent === directory) break;
+      directory = parent;
+    }
+    return undefined;
   } catch {
     return undefined;
   }
