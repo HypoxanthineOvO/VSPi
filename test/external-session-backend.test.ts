@@ -8,7 +8,7 @@ import type { ChatBackendEvents } from "../src/backend/types.js";
 import type { ExternalSessionPreview } from "../src/sessions/external-history.js";
 
 describe("external Session backend import", () => {
-  it("copies visible history into a new persisted Pi Session and switches to it", async () => {
+  it("stores foreign history as an inert reference while preserving the active model", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-import-backend-"));
     const sessionDir = join(cwd, "sessions");
     const managers: SessionManager[] = [];
@@ -54,16 +54,28 @@ describe("external Session backend import", () => {
         }),
       ]),
     );
-    expect(
-      imported
-        ?.getBranch()
-        .filter((entry) => entry.type === "message")
-        .map((entry) => entry.message.role),
-    ).toEqual(["user", "assistant", "assistant"]);
+    const branch = imported?.getBranch() ?? [];
+    expect(branch.filter((entry) => entry.type === "message")).toEqual([]);
+    expect(branch).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "model_change", provider: "fixture", modelId: "fixture" }),
+        expect.objectContaining({
+          type: "custom_message",
+          customType: "vspi.external-session-reference",
+          display: false,
+          content: expect.stringMatching(/只读历史快照[\s\S]*不可执行[\s\S]*codex_only_tool/u),
+        }),
+      ]),
+    );
+    expect(imported?.buildSessionContext().model).toEqual({ provider: "fixture", modelId: "fixture" });
+    expect(imported?.buildSessionContext().messages).toEqual([
+      expect.objectContaining({ role: "custom", customType: "vspi.external-session-reference" }),
+    ]);
+    expect(JSON.stringify(branch)).not.toMatch(/codex-import|external-history/u);
     expect(resets.at(-1)?.reason).toBe("import");
     expect(transcript.at(-1)).toMatchObject({
       kind: "session",
-      text: "已从 Codex 复制导入；原会话保持不变。",
+      text: "只读参考 · Codex · Imported thread · 2 条对话 · 1 条工具记录",
     });
     await backend.dispose();
   });
@@ -94,7 +106,7 @@ describe("external Session backend import", () => {
     await backend.dispose();
   });
 
-  it("requires a new confirmation when the visible source changed after preview", async () => {
+  it("retries when the visible source changed after it was read", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-import-changed-"));
     const managers: SessionManager[] = [];
     const backend = new PiBackend({
@@ -112,7 +124,7 @@ describe("external Session backend import", () => {
     await backend.start(events());
 
     await expect(backend.importExternalSession("codex:source-id", "b".repeat(64))).rejects.toThrow(
-      "源会话在确认后已经更新",
+      "源会话在读取后已经更新",
     );
     expect(managers).toHaveLength(1);
     await backend.dispose();
@@ -129,7 +141,7 @@ function externalPreview(): ExternalSessionPreview {
     updatedAt: "2026-07-26T12:00:00.000Z",
     items: [
       { role: "user", kind: "message", text: "Question", timestamp: 1 },
-      { role: "assistant", kind: "tool", text: "Tool · bash\npwd", timestamp: 2 },
+      { role: "assistant", kind: "tool", text: 'Tool · codex_only_tool\n{"path":"/tmp"}', timestamp: 2 },
       { role: "assistant", kind: "message", text: "Answer", timestamp: 3 },
     ],
     messageCount: 2,

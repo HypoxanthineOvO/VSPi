@@ -8,7 +8,7 @@ import type { ExternalSessionPreview } from "../src/sessions/external-history.js
 import { plainTheme } from "./helpers.js";
 
 describe("external history import UI", () => {
-  it("opens from /import, confirms visible-history risk, and delegates the copy", async () => {
+  it("imports the selected history with one Enter and never opens Question review", async () => {
     const preview = importedPreview();
     const importExternalSession = vi.fn(async () => {});
     const backend = {
@@ -44,13 +44,9 @@ describe("external history import UI", () => {
     expect(app.render(80).join("\n")).toContain("Imported Codex thread");
     app.handleInput("\r");
     await flush();
-    expect(app.render(80).join("\n")).toContain("10 条对话 · 2 条工具记录");
-    app.handleInput("\r");
-    await flush();
-    app.handleInput("\r");
-    await flush();
 
     expect(importExternalSession).toHaveBeenCalledWith("codex:thread", "f".repeat(64));
+    expect(app.render(80).join("\n")).not.toContain("提交答案");
     await app.dispose();
   });
 });

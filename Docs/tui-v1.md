@@ -49,7 +49,7 @@ Plan 背景       #182529
 │                                                                              │
 │ Model  OpenAI / GPT-5.4                                                      │
 │ Backend Pi                                                                   │
-│ Policy Standard · Host                                                 v0.3.2│
+│ Policy Standard · Host                                                 v0.3.3│
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -143,7 +143,7 @@ v0.3 的生产命令清单是：
 
 手动 `/compact` 提供 Pi Native、Execution Continuity、Research Decisions 与 Custom 四种 profile。
 未绑定 Local Plan 默认 Pi Native，绑定 Plan 默认 Execution Continuity；`/compact --list` 可检查当前选择范围。
-v0.3.2 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
+v0.3.3 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
 
 `/plan`、`/prompt`、`/tools` 与 `/policy` 均由 Action Registry 接入真实生产工作区。无 Workflow 时 Plan 使用 workspace-scoped Local Plan；没有活动计划时常驻 frame 与 hint 都不渲染，Shift+Tab 跳过空 Plan，显式 `/plan` 可临时打开入口。显式启用 Workflow 后才只读投影 Workflow Delivery。Prompt 提供 Factory/Fork、分层规则、导入导出与 Effective Prompt；Tools 只读展示当前能力、路由与失败边界。
 
@@ -187,7 +187,7 @@ composer 正文空态为一行，随内容增长，最多显示 10 行；之后�
 
 Plan、Commands、Model、Provider、Sessions、历史导入、Skills、Settings、Usage、Theme、Question、Tools 和图片预览占用同一位置，不互相嵌套；后续面板也不得创建 nested modal。
 
-历史导入面板使用 Codex / Claude Code 水平 Tab、标题/路径搜索与固定列表/详情布局；窄终端降级为单列。两类来源均补充发现未索引的用户主会话，同时排除 Codex subagent rollout 与 Claude Code `agent-*` 记录。Enter 先流式解析完整可见记录，再由 Question 显示对话、工具与 token 估算并确认。解析以预览开始时的字节长度为边界，只接受边界内的完整 JSONL 行；确认后可见指纹变化必须重新预览。导入始终创建新 Pi Session，不改写 Codex/Claude 源文件，不携带隐藏 thinking、system/developer prompt、凭据、权限或内部控制记录。工具参数与输出作为可见历史保留，常见凭据在落盘前脱敏。超过当前上下文 80% 只警告，不静默截断。
+历史导入面板使用 Codex / Claude Code 水平 Tab、标题/路径搜索与固定列表/详情布局；窄终端降级为单列。两类来源均补充发现未索引的用户主会话，同时排除 Codex subagent rollout 与 Claude Code `agent-*` 记录。选中后 Enter 直接流式解析并复制，不调用 Question，也没有“提交答案”二次复核。解析以读取开始时的字节长度为边界，只接受边界内的完整 JSONL 行；写入前可见指纹变化必须放弃本次快照并重试。导入始终创建新 Pi Session，不改写 Codex/Claude 源文件；全部可见历史被编码成一个隐藏显示、参与模型上下文的 `vspi.external-session-reference` custom message。来源模型、Provider、工具名、参数和输出仅为不可执行参考数据，不参与当前模型恢复、不要求工具兼容，也不得重放。新 Session 另存导入时的当前 VSPi model/effort 作为后续运行身份。隐藏 thinking、system/developer prompt、凭据、权限或内部控制记录不进入快照，常见凭据在落盘前脱敏。超过当前上下文 80% 只警告，不静默截断。
 
 Skills 工作区使用“已启用 / 可导入 / 问题”Tab、搜索和列表/详情布局；外层 58 列以下用 Enter 进入详情、Esc 返回。Pi Native ResourceLoader/SettingsManager/DefaultPackageManager 是唯一资源与包真相源。Codex/Claude Code Skill 只登记原始 `SKILL.md` 路径；Git/npm 安装固定 `autoload: false`，extension、prompt、theme 为空，只允许包目录内发现的 Skill pattern。所有 mutation 先通过 Question；安装确认包含“安装并启用 / 仅安装 / 取消”。`skill_list` 与 `skill_manage` 进入模型工具表，但管理调用仍不能绕过 Question。失败安装原子回滚，既有包不被清理，URL 凭据在面板、diagnostic 和错误中脱敏。MCP 保持独立后续版本，不在此工作区注册。
 
