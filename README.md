@@ -1,6 +1,6 @@
 # VSPi
 
-VSPi v0.3.5 是基于 `@earendil-works/pi-tui` 与 `@earendil-works/pi-coding-agent` 的自定义中文 TUI。当前实现已接入统一动作目录、真实 Session runtime、Provider/Model/Effort 真相源、执行 Policy、Question tool、图片附件、外部历史会话导入、Skill 管理、安全自更新、同服务器 Session 前台迁移，以及有界缓存 transcript、可配置的 Thinking 翻译/Markdown 渲染与可选只读 Workflow 投影。
+VSPi v0.3.6 是基于 `@earendil-works/pi-tui` 与 `@earendil-works/pi-coding-agent` 的自定义中文 TUI。当前实现已接入统一动作目录、真实 Session runtime、Provider/Model/Effort 真相源、执行 Policy、Question tool、图片附件、外部历史会话导入、Skill 管理、安全自更新、同服务器 Session 前台迁移，以及有界缓存 transcript、可配置的 Thinking 翻译/Markdown 渲染与可选只读 Workflow 投影。
 
 ## 安装
 
@@ -86,7 +86,7 @@ VSPi 沿用 Pi 的模型、Provider、凭据和 session 目录，不另建 Secre
 
 ## 启动与默认界面
 
-启动序列会先立即写出 initial brand-only 静态帧：它只显示 VSPi 品牌、现有六行块字符 Logo 和静态进度线，不含运行状态或模型声明。应用初始化完成后原位替换一次最终状态帧，不播放多段进度动画；两帧都预留终端最右一列，避免自动换行造成残留。最终帧使用初始化后解析得到的真实 Model、`package.json` 解析出的包版本、真实 Backend 与执行 Policy。真实 pi 显示 `Backend Pi`，显式离线后端显示 `Backend Fixture`；执行边界统一显示 `Policy … · Host`，Policy 只控制审批强度，Backend 与 Policy 是两项独立元数据。
+启动序列会先立即写出一行 VSPi 初始品牌占位，它不含 Logo、运行状态或模型声明；应用初始化完成后清除该行并一次性提交保留现有六行块字符 Logo 的完整最终状态帧，不播放多段进度动画，也不依赖多行光标回退，因此从终端底部启动时不会把旧帧残留在 scrollback。占位行与最终帧都预留终端最右一列，避免自动换行造成残留。最终帧使用初始化后解析得到的真实 Model、`package.json` 解析出的包版本、真实 Backend 与执行 Policy。真实 pi 显示 `Backend Pi`，显式离线后端显示 `Backend Fixture`；执行边界统一显示 `Policy … · Host`，Policy 只控制审批强度，Backend 与 Policy 是两项独立元数据。
 
 完整 Logo 的最终帧连同结尾 newline 会先提交并写入终端 `scrollback`，之后才启动动态 TUI；后续刷新和差分渲染只管理它下方的动态区域，不会擦除、清空或覆盖这个最终帧。启动、`/new` 和它的 alias `/clear` 都遵守同一规则：先把完整 final Splash 写入 scrollback，再建立新的动态区域。启用 reduced motion 时不播放中间帧，但仍遵守相同的初始化屏障与最终帧写入顺序。
 

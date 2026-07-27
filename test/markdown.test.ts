@@ -89,8 +89,10 @@ describe("VSPi Markdown rendering", () => {
       "| TUI | 可用 |",
     ].join("\n");
     const lines = renderMarkdown(source, 36, plainTheme());
+    const raw = lines.join("\n");
     const text = lines.map(stripAnsi).join("\n");
-    expect(text).toContain("项目文档 (https://example.com/docs)");
+    expect(text).toContain("项目文档");
+    expect(raw).toContain("https://example.com/docs");
     expect(text).toContain("✓ 已完成");
     expect(text).toContain("○ 待处理");
     expect(text).not.toContain("[x]");

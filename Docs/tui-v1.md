@@ -32,7 +32,7 @@ Plan 背景       #182529
 
 ## 启动封面
 
-封面使用多行圆角框、`◈` 品牌符号和块字符 VSPi。initial brand-only 初始帧仅显示品牌、现有六行块字符 Logo 与静态进度线，不含运行状态或模型声明；应用初始化完成后只原位替换一次最终状态帧，不播放中间动画。两帧都预留终端最右一列，避免 right-margin autowrap 造成额外物理行；reduced-motion、CI 与 dumb terminal 使用同一初始化屏障。
+封面使用多行圆角框、`◈` 品牌符号和现有六行块字符 Logo。初始化期间只显示一行品牌占位，不含 Logo、运行状态或模型声明；应用初始化完成后清除该行并一次性提交最终状态帧，不播放中间动画，也不使用无法跨越 scrollback 的多行光标回退。占位行与最终帧都预留终端最右一列，避免 right-margin autowrap 造成额外物理行；reduced-motion、CI 与 dumb terminal 使用同一初始化屏障。
 
 最终帧等待应用初始化完成，使用初始化后解析得到的真实 Model，并显示从 `package.json` 读取的包版本、Backend 与独立的执行 Policy。真实后端显示 `Backend Pi`，显式离线后端显示 `Backend Fixture`；Policy 统一表达为 `Policy … · Host`，仅表示审批等级和宿主执行。启动、`/new` 和 alias `/clear` 都必须先把完整最终帧提交并写入终端 `scrollback`，之后才启动新的动态 TUI；后续刷新和差分渲染只拥有其下方的动态区域，不会擦除、清空或覆盖这个最终帧。
 
@@ -49,7 +49,7 @@ Plan 背景       #182529
 │                                                                              │
 │ Model  OpenAI / GPT-5.4                                                      │
 │ Backend Pi                                                                   │
-│ Policy Standard · Host                                                 v0.3.5│
+│ Policy Standard · Host                                                 v0.3.6│
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -129,7 +129,7 @@ Command 响应式规则：40 列使用“身份行 + 描述/source 行”的两�
 
 ## M1 Contextual Hints
 
-contextual hint 只宣告当前真实可用的操作。普通面板 hint 位于 frame 外、composer 上方；Sessions 接管整个主内容区时把 `↑↓ / Enter / Shift+F / Esc` 放入底边并保留 Status，不渲染 Transcript、Plan、Composer 或 Working。Command 的 literal 文案固定为 `↑↓ 选择  Tab 补全  Enter 执行  Esc 关闭`；Plan、Provider、Settings、Usage、Theme、Question 与 Model 使用各自的上下文提示，未接入动作不得出现在 hint 中。
+contextual hint 只宣告当前真实可用的操作。普通面板 hint 位于 frame 外、composer 上方；Sessions 接管主内容区时把 `↑↓ / Enter / Shift+F / Esc` 放入底边并保留 Status，不渲染 Transcript、Plan、Composer 或 Working，同时在终端底部预留一个物理行，避免首次绘制把标题推出视口。Command 的 literal 文案固定为 `↑↓ 选择  Tab 补全  Enter 执行  Esc 关闭`；Plan、Provider、Settings、Usage、Theme、Question 与 Model 使用各自的上下文提示，未接入动作不得出现在 hint 中。
 
 Model 以外层 60 列为 breakpoint：小于 60 列是窄屏列表/详情布局，hint 显示 `←→ 详情`，Right 进入详情、Left 返回；外层 60 列及以上是宽屏双栏，左侧列表、右侧详情，hint 不宣告无效的左右切换。
 

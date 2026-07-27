@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
-import { renderSplash, runStartupSequence, type StartupStatus } from "../src/ui/splash.js";
+import { renderSplash, renderStartupPlaceholder, runStartupSequence, type StartupStatus } from "../src/ui/splash.js";
 import { plainTheme } from "./helpers.js";
 
 const VERSION = "9.8.7-test";
@@ -68,9 +68,10 @@ describe("startup cover", () => {
   });
 
   it("uses a brand-only initialization frame instead of presenting invented runtime state", () => {
-    const text = renderedText(renderSplash(80, plainTheme({ reducedMotion: false }), 0));
+    const text = stripAnsi(renderStartupPlaceholder(79, plainTheme({ reducedMotion: false })));
 
     expect(text).toContain("VSPi");
+    expect(text.split("\n")).toHaveLength(1);
     expect(text).not.toMatch(/\bSafe\b/);
     for (const legacy of LEGACY_COPY) expect(text).not.toContain(legacy);
   });
@@ -99,8 +100,9 @@ describe("startup cover", () => {
     });
 
     expect(writes).toHaveLength(2);
-    const firstFrameLines = (writes[0] ?? "").split("\n");
-    expect(firstFrameLines.every((line) => visibleWidth(line) === 79)).toBe(true);
+    expect((writes[0] ?? "").split("\n")).toHaveLength(1);
+    expect(visibleWidth(writes[0] ?? "")).toBe(79);
+    expect(writes[1]?.startsWith("\r\u001b[2K")).toBe(true);
     const finalFrameLines = (writes.at(-1) ?? "")
       .replace(/\r/g, "")
       // biome-ignore lint/suspicious/noControlCharactersInRegex: 剥离启动帧里的 CSI 光标移动序列。
