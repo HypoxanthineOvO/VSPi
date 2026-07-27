@@ -13,6 +13,7 @@ import { AdaptiveBackend, type BackendMode } from "./backend/adaptive-backend.js
 import { createRuntimeDefaultsService } from "./config/runtime-defaults.js";
 import { loadSettings } from "./config/settings.js";
 import type { TranscriptMessage } from "./domain/types.js";
+import { createStartupLocalPlanBackend } from "./plans/startup.js";
 import { createPolicyConfigService } from "./policy/config-service.js";
 import type { ExecutionPolicyService } from "./policy/execution-policy.js";
 import {
@@ -68,15 +69,23 @@ async function renderOnce(): Promise<void> {
     trustedProject: security.trustedProject,
   });
   await promptProfileService.load();
+  const localPlanBackend = createStartupLocalPlanBackend({
+    workspace,
+    recovery: security.recovery,
+    workflow: security.workflowAdapter,
+  });
   const backend = new AdaptiveBackend(
     workspace,
     resolveBackendMode(),
     security.trustedProject,
     security.recovery,
     executionPolicy,
-    undefined,
+    localPlanBackend,
     { resolve: async (identity) => promptProfileService.resolve(identity) },
-    { continueRecent: startupSessionMode().continueRecent },
+    {
+      continueRecent: startupSessionMode().continueRecent,
+      ...(security.workflowAdapter ? { workflowPlan: workflowAdapter } : {}),
+    },
   );
   const app = new VspiApp(tui, theme, backend, {
     cwd: workspace,
@@ -93,6 +102,7 @@ async function renderOnce(): Promise<void> {
         builtins: BUILTIN_PROVIDERS,
       }),
     runtimeDefaultsFactory: (trustedProject) => createRuntimeDefaultsService({ cwd: workspace, trustedProject }),
+    ...(localPlanBackend ? { planBackend: localPlanBackend } : {}),
     ...(security.workflowAdapter ? { workflowAdapter } : {}),
     promptProfiles: promptProfileService,
     onExit() {},
@@ -130,6 +140,7 @@ async function interactive(): Promise<void> {
   const capabilities = applySettingsToCapabilities(detectTerminalCapabilities(), settings);
   const theme = createTheme(capabilities, settings.theme);
   let closing = false;
+  let foregroundAttached = true;
   const mode = resolveBackendMode();
   const promptProfileService = createPromptProfileService({
     cwd: workspace,
@@ -138,15 +149,23 @@ async function interactive(): Promise<void> {
   });
   await promptProfileService.load();
   const sessionMode = startupSessionMode();
+  const localPlanBackend = createStartupLocalPlanBackend({
+    workspace,
+    recovery: security.recovery,
+    workflow: security.workflowAdapter,
+  });
   const backend = new AdaptiveBackend(
     workspace,
     mode,
     security.trustedProject,
     security.recovery,
     executionPolicy,
-    undefined,
+    localPlanBackend,
     { resolve: async (identity) => promptProfileService.resolve(identity) },
-    { continueRecent: sessionMode.continueRecent },
+    {
+      continueRecent: sessionMode.continueRecent,
+      ...(security.workflowAdapter ? { workflowPlan: workflowAdapter } : {}),
+    },
   );
   const attachments = new AttachmentService(randomUUID(), capabilities, theme);
   const app = new VspiApp(tui, theme, backend, {
@@ -164,9 +183,22 @@ async function interactive(): Promise<void> {
         builtins: BUILTIN_PROVIDERS,
       }),
     runtimeDefaultsFactory: (trustedProject) => createRuntimeDefaultsService({ cwd: workspace, trustedProject }),
+    ...(localPlanBackend ? { planBackend: localPlanBackend } : {}),
     ...(security.workflowAdapter ? { workflowAdapter } : {}),
     promptProfiles: promptProfileService,
     ...(sessionMode.openOnStart ? { openOnStart: sessionMode.openOnStart } : {}),
+    onForegroundRelinquish: () => {
+      if (!foregroundAttached) return;
+      app.getActiveTui().stop();
+      foregroundAttached = false;
+      void terminal.drainInput();
+    },
+    onForegroundResume: () => {
+      if (foregroundAttached || closing) return;
+      app.getActiveTui().start();
+      foregroundAttached = true;
+      app.getActiveTui().requestRender(true);
+    },
     onExit: () => void shutdown(),
   });
 
@@ -335,22 +367,30 @@ async function selfUpdate(): Promise<void> {
 async function runOnce(prompt: string): Promise<void> {
   if (!prompt.trim()) throw new Error('用法：vspi run "<prompt>"');
   const workspace = process.cwd();
-  const { security, executionPolicy } = await startupPolicy(workspace);
+  const { security, executionPolicy, workflowAdapter } = await startupPolicy(workspace);
   const promptProfileService = createPromptProfileService({
     cwd: workspace,
     home: process.env.HOME ?? homedir(),
     trustedProject: security.trustedProject,
   });
   await promptProfileService.load();
+  const localPlanBackend = createStartupLocalPlanBackend({
+    workspace,
+    recovery: security.recovery,
+    workflow: security.workflowAdapter,
+  });
   const backend = new AdaptiveBackend(
     workspace,
     resolveBackendMode(),
     security.trustedProject,
     security.recovery,
     executionPolicy,
-    undefined,
+    localPlanBackend,
     { resolve: async (identity) => promptProfileService.resolve(identity) },
-    { continueRecent: false },
+    {
+      continueRecent: false,
+      ...(security.workflowAdapter ? { workflowPlan: workflowAdapter } : {}),
+    },
   );
   const messages: TranscriptMessage[] = [];
   try {

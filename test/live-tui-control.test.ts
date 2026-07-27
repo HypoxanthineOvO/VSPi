@@ -135,8 +135,6 @@ describe("real TUI live run control", () => {
       terminal.emit("\x1b[Z");
       expect(testable.workspaceFocus).toBe("transcript");
       terminal.emit("\x1b[Z");
-      expect(testable.workspaceFocus).toBe("plan");
-      terminal.emit("\x1b[Z");
       expect(testable.workspaceFocus).toBe("composer");
 
       const beforeNotice = app.render(80);

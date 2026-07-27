@@ -97,11 +97,13 @@ describe("M8 bounded Local Plan capsule", () => {
     expect(readPlan).toHaveBeenCalledWith(PLAN.id);
     expect(result?.systemPrompt).toContain("Pi base prompt");
     expect(result?.systemPrompt).toContain(PLAN.goal);
+    expect(result?.systemPrompt).toContain("plan_update");
+    expect(result?.systemPrompt).toMatch(/用户指令|latest user instruction/i);
     expect(result).not.toHaveProperty("message");
     expect(Object.keys(result ?? {})).toEqual(["systemPrompt"]);
   });
 
-  it("leaves Pi native context untouched when the session has no Plan binding", async () => {
+  it("injects bounded plan-creation guidance when the session has no Plan binding", async () => {
     const { createPlanCapsuleExtension } = await capsuleModule();
     const readPlan = vi.fn(async () => PLAN);
     const handler = register(
@@ -111,7 +113,12 @@ describe("M8 bounded Local Plan capsule", () => {
       }),
     );
 
-    expect(await handler(event())).toBeUndefined();
+    const result = await handler(event());
+    expect(result?.systemPrompt).toContain("Pi base prompt");
+    expect(result?.systemPrompt).toContain("plan_create");
+    expect(result?.systemPrompt).toContain("plan_bind");
+    expect(result?.systemPrompt).toMatch(/简单问答|一次性小改动/);
+    expect(result).not.toHaveProperty("message");
     expect(readPlan).not.toHaveBeenCalled();
   });
 });

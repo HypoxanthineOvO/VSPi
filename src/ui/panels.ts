@@ -373,6 +373,10 @@ export class PanelController {
     return this.state.kind;
   }
 
+  hasPlanContent(): boolean {
+    return Boolean(this.planSnapshot || (this.workflowSnapshot?.status === "ready" && this.workflowSnapshot.delivery));
+  }
+
   open(kind: PanelKind): void {
     this.state = { kind, selected: 0, scroll: 0 };
     if (kind === "commands") this.state.selected = 0;

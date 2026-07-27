@@ -49,7 +49,7 @@ Plan 背景       #182529
 │                                                                              │
 │ Model  OpenAI / GPT-5.4                                                      │
 │ Backend Pi                                                                   │
-│ Policy Standard · Host                                                 v0.3.0│
+│ Policy Standard · Host                                                 v0.3.1│
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -143,9 +143,9 @@ v0.3 的生产命令清单是：
 
 手动 `/compact` 提供 Pi Native、Execution Continuity、Research Decisions 与 Custom 四种 profile。
 未绑定 Local Plan 默认 Pi Native，绑定 Plan 默认 Execution Continuity；`/compact --list` 可检查当前选择范围。
-v0.3.0 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
+v0.3.1 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
 
-`/plan`、`/prompt`、`/tools` 与 `/policy` 均由 Action Registry 接入真实生产工作区。无 Workflow 时 Plan 保持 VSPi 本地界面；显式启用后才只读投影 Workflow Delivery。Prompt 提供 Factory/Fork、分层规则、导入导出与 Effective Prompt；Tools 只读展示当前能力、路由与失败边界。
+`/plan`、`/prompt`、`/tools` 与 `/policy` 均由 Action Registry 接入真实生产工作区。无 Workflow 时 Plan 使用 workspace-scoped Local Plan；没有活动计划时常驻 frame 与 hint 都不渲染，Shift+Tab 跳过空 Plan，显式 `/plan` 可临时打开入口。显式启用 Workflow 后才只读投影 Workflow Delivery。Prompt 提供 Factory/Fork、分层规则、导入导出与 Effective Prompt；Tools 只读展示当前能力、路由与失败边界。
 
 以下用户消息与 Tool 内容都是交互示例，不是新会话预置内容。用户消息不显示名字，使用焦点色竖标与至少三行的全宽表面；Dark 使用 `#202428`/`#F4F7FA`，Light 使用浅色表面，默认 Terminal 不写死前景或背景。短消息也保留上下留白，不绘制额外 frame。40 列、80 列和 120 列下硬换行、长单词和附件摘要保持宽度安全；Inspect 只改变选择态，不改变消息尺寸。Unicode 形状为：
 
@@ -225,7 +225,7 @@ Provider catalog 的优先级是 built-in < Pi global < trusted project。默认
 
 PolicyConfigService 读取全局 `~/.config/vspi/policy.json` 和可信项目 `<workspace>/.vspi/policy.json`。schema 只允许 `policy` 与 `networkAllowlist`；CLI Policy 覆盖全局默认，项目 Policy 只能降低最终等级。项目网络列表与全局列表取交集，不能扩张全局能力。每个网络 target 只允许无 username/password、query、fragment 的 HTTP(S) origin/path；load/save 在 global/project 四条路径都先拒绝，错误和 diagnostic 不得包含原 URL。未 trust 或 Recovery 时不打开项目 Policy 文件。配置拒绝 secret/credential、敏感 header 和 `!command`；项目路径使用 realpath/symlink guard，保存使用 canonical expected hash、writer lock、0600 temporary 与 atomic rename。损坏配置只产生有界 diagnostic，不会自动覆盖。
 
-Pi 的最终 active registry 使用原生 `read/ls/find/grep/bash/edit/write` ToolDefinition；VSPi 只在调用原生 `execute()` 前评估审批，批准后完整委托，因此保留原生图片读取、流式更新、timeout、AbortSignal、截断与 diff。VSPi 自有 `question` 继续提供单选、多选、排序、自由文本和最终检查；模型侧不再注册旧 `plan_*` 双权威工具。
+Pi 的最终 active registry 使用原生 `read/ls/find/grep/bash/edit/write` ToolDefinition；VSPi 只在调用原生 `execute()` 前评估审批，批准后完整委托，因此保留原生图片读取、流式更新、timeout、AbortSignal、截断与 diff。VSPi 自有 `question` 继续提供单选、多选、排序、自由文本和最终检查。普通模式注册结构化 `plan_list/read/create/update/bind`，并通过 expected revision、Session custom entry 和 mutation refresh 保持长期计划；显式 Workflow 模式不注册 Local Plan 工具，只通过每轮 Workflow capsule 提醒 Agent 使用 Workflow authority。
 
 `/tools` 是宿主侧只读能力目录，不进入模型上下文。Files/Search 复用 Pi 原生工具；Git 和 SSH 复用 Pi Bash，但分别使用 `git-write` 与 `ssh` 审批类别；图片由 Pi 原生 image read 和 VSPi attachment session 共同提供。Browser 与 MCP 显示 `Not connected` 且不注册占位 ToolDefinition；Persistent PTY 显示 `Deferred`，当前只承诺一次性 Bash。每项同时显示状态、执行路由和独立失败边界；Up/Down 移动，Esc 返回，40/80/120 列均不得溢出。
 

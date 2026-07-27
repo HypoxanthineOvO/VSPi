@@ -42,7 +42,11 @@ interface PlanBindingPort {
 }
 
 interface PlanToolsModule {
-  createPlanToolDefinitions(options: { backend: PlanBackendPort; binding: PlanBindingPort }): ToolDefinition[];
+  createPlanToolDefinitions(options: {
+    backend: PlanBackendPort;
+    binding: PlanBindingPort;
+    onMutation?: (operation: "create" | "update" | "archive" | "bind", plan?: StoredPlan) => void | Promise<void>;
+  }): ToolDefinition[];
 }
 
 async function loadToolsModule(): Promise<PlanToolsModule | undefined> {
@@ -83,11 +87,15 @@ function bindingMock(): PlanBindingPort {
   return { read: vi.fn(async () => null), bind: vi.fn(async () => undefined) };
 }
 
-async function toolsFor(backend = backendMock(), binding = bindingMock()) {
+async function toolsFor(
+  backend = backendMock(),
+  binding = bindingMock(),
+  onMutation?: (operation: "create" | "update" | "archive" | "bind", plan?: StoredPlan) => void | Promise<void>,
+) {
   const module = await loadToolsModule();
   expect(module, "M6 must expose createPlanToolDefinitions from src/plans/tools.ts").toBeDefined();
   if (!module) throw new Error("Plan tools module is unavailable");
-  const tools = module.createPlanToolDefinitions({ backend, binding });
+  const tools = module.createPlanToolDefinitions({ backend, binding, ...(onMutation ? { onMutation } : {}) });
   return { tools, byName: new Map(tools.map((tool) => [tool.name, tool])), backend, binding };
 }
 
@@ -267,6 +275,22 @@ describe("M6 typed plan tool routing", () => {
     expect(binding.bind).toHaveBeenNthCalledWith(2, null);
     expect(bound).toEqual({ planId: "plan-01", revision: 3 });
     expect(unbound).toEqual({ planId: null });
+  });
+
+  it("reports successful mutations so the runtime can refresh the panel and reset review hooks", async () => {
+    const onMutation = vi.fn();
+    const { byName } = await toolsFor(backendMock(), bindingMock(), onMutation);
+
+    await execute(byName.get("plan_create"), { plan: planToolInput() });
+    await execute(byName.get("plan_update"), {
+      plan_id: "plan-01",
+      expected_revision: 3,
+      plan: planToolInput({ nextAction: "Refresh UI" }),
+    });
+    await execute(byName.get("plan_update"), { plan_id: "plan-01", expected_revision: 4, archive: true });
+    await execute(byName.get("plan_bind"), { plan_id: "plan-01", expected_revision: 3 });
+
+    expect(onMutation.mock.calls.map(([operation]) => operation)).toEqual(["create", "update", "archive", "bind"]);
   });
 
   it("rejects stale bind revisions before touching the binding port", async () => {
