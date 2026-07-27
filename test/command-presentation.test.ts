@@ -94,7 +94,7 @@ describe("command provenance and match emphasis", () => {
       .map(stripAnsi)
       .find((line) => line.includes("/quit"));
 
-    expect(alias).toContain("别名（/exit） → /quit");
+    expect(alias).toContain("/exit  (/quit)");
     expect(canonical).toMatch(/\/quit.*\/exit.*\/q/);
   });
 
@@ -112,7 +112,7 @@ describe("command provenance and match emphasis", () => {
       COMMANDS.push(plugin);
       const ansi = commandPanel("/sh", 80, level);
       const rendered = ansi.map(stripAnsi).join("\n");
-      expect(rendered).toContain("别名（/ship） → /deploy");
+      expect(rendered).toContain("/ship  (/deploy)");
       expect(rendered).toContain("@acme/deploy");
       expectModifierRange(ansi.join("\n"), "/ship", [false, true, true, false, false]);
       expect(emphasizedText(ansi.join("\n"))).toBe("sh");
@@ -189,7 +189,7 @@ describe("command provenance and match emphasis", () => {
       expectModifierRange(rendered, token, [...range]);
       expect(emphasizedText(rendered)).toBe(text);
       expectEverySlashPlain(rendered);
-      if (query.toLowerCase() === "/exit") expect(stripAnsi(rendered)).toContain("别名（/exit） → /quit");
+      if (query.toLowerCase() === "/exit") expect(stripAnsi(rendered)).toContain("/exit  (/quit)");
     },
   );
 

@@ -1390,7 +1390,7 @@ export class PanelController {
     const aliases = match.command.aliases.map((alias) => `/${alias}`);
     const identity =
       match.matchKind === "alias"
-        ? `别名（${matchedToken}） → ${theme.blue(match.canonicalToken)}`
+        ? `${matchedToken}${theme.muted(`  (${match.canonicalToken})`)}`
         : `${matchedToken}${aliases.length > 0 ? theme.muted(`  ${aliases.join(" · ")}`) : ""}`;
     const source = match.source === BUILTIN_COMMAND_SOURCE ? "Built-in" : match.source;
     const action = getActionDefinition(match.command);

@@ -56,6 +56,7 @@ describe("CI release publisher", () => {
             VERSION: "1.2.3",
             FILENAME: "vspi-1.2.3.tgz",
             PACKAGE_URL: `${origin}/packages/vspi-1.2.3.tgz`,
+            LATEST_PACKAGE_URL: `${origin}/packages/vspi-latest.tgz`,
             CI_COMMIT_TAG: "v1.2.3",
             CI_PROJECT_URL: "https://gitlab.example/heyx/vspi",
             CI_API_V4_URL: `${origin}/api/v4`,
@@ -66,13 +67,18 @@ describe("CI release publisher", () => {
       );
 
       expect(result.stdout.trim()).toBe("published v1.2.3");
-      expect(requests).toHaveLength(2);
+      expect(requests).toHaveLength(3);
       const uploadRequest = requests[0];
-      const releaseRequest = requests[1];
-      if (!uploadRequest || !releaseRequest) throw new Error("release publisher did not make both requests");
+      const latestUploadRequest = requests[1];
+      const releaseRequest = requests[2];
+      if (!uploadRequest || !latestUploadRequest || !releaseRequest)
+        throw new Error("release publisher did not make all requests");
       expect(uploadRequest).toMatchObject({ method: "PUT", url: "/packages/vspi-1.2.3.tgz" });
       expect(uploadRequest.headers["job-token"]).toBe("job-token");
       expect(uploadRequest.body).toEqual(tarballBody);
+      expect(latestUploadRequest).toMatchObject({ method: "PUT", url: "/packages/vspi-latest.tgz" });
+      expect(latestUploadRequest.headers["job-token"]).toBe("job-token");
+      expect(latestUploadRequest.body).toEqual(tarballBody);
 
       expect(releaseRequest).toMatchObject({ method: "POST", url: "/api/v4/projects/107/releases" });
       expect(releaseRequest.headers["job-token"]).toBe("job-token");
@@ -87,10 +93,19 @@ describe("CI release publisher", () => {
               direct_asset_path: "/vspi-1.2.3.tgz",
               link_type: "package",
             },
+            {
+              name: "vspi-latest.tgz",
+              url: `${origin}/packages/vspi-latest.tgz`,
+              direct_asset_path: "/vspi-latest.tgz",
+              link_type: "package",
+            },
           ],
         },
       });
       expect(release.description).toContain(sha256);
+      expect(release.description).toContain(
+        "https://gitlab.example/heyx/vspi/-/releases/permalink/latest/downloads/vspi-latest.tgz",
+      );
     } finally {
       await new Promise<void>((resolveClose, rejectClose) =>
         server.close((error) => (error ? rejectClose(error) : resolveClose())),
