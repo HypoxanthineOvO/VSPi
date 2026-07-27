@@ -294,7 +294,18 @@ describe("M2 Pi history hydration", () => {
     await new Promise((resolve) => setImmediate(resolve));
     const channel: SessionHandoffChannel = {
       closed: new Promise(() => {}),
+      successor: {
+        schemaVersion: 1,
+        pid: process.pid,
+        hostname: "test",
+        startedAt: new Date().toISOString(),
+        sessionPath: "/tmp/test-session.jsonl",
+        socketPath: "/tmp/test-session.sock",
+        token: "successor",
+      },
       request: vi.fn(async () => ({})),
+      project: vi.fn(),
+      setCommandHandler: vi.fn(),
     };
     (
       backend as unknown as {

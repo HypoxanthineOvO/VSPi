@@ -9,12 +9,13 @@ const CHILD_SOURCE = `
 import { PiBackend } from './src/backend/pi-backend.ts';
 
 const role = process.env.ROLE;
-const interactionKind = process.env.INTERACTION_KIND || '';
+const scenario = process.env.HANDOFF_SCENARIO || '';
 const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 let abortCalls = 0;
 let managerSeen;
 let finishInteraction;
 const interactionFinished = new Promise(resolve => { finishInteraction = resolve; });
+let emitSessionEvent;
 function summary(manager) {
   return manager.getBranch().filter(entry => entry.type === 'message').map(entry =>
     typeof entry.message.content === 'string' ? entry.message.content : entry.message.model
@@ -29,19 +30,22 @@ function session(manager) {
     sessionManager: manager,
     thinkingLevel: 'medium',
     isStreaming: false,
-    subscribe(callback) { listener = callback; return () => { listener = undefined; }; },
+    subscribe(callback) { listener = callback; emitSessionEvent = callback; return () => { listener = undefined; }; },
     setThinkingLevel() {},
     getAvailableThinkingLevels() { return ['off', 'medium', 'high']; },
     async prompt(text) {
       manager.appendMessage({ role: 'user', content: text, timestamp: Date.now() });
-      if (interactionKind) await interactionFinished;
-      else await new Promise(resolve => setTimeout(resolve, 450));
+      if (['question', 'approval', 'interrupt', 'projection'].includes(scenario) && role === 'A') {
+        await interactionFinished;
+      } else {
+        await new Promise(resolve => setTimeout(resolve, ['queue', 'queue-disconnect'].includes(scenario) && role === 'A' ? 2000 : 700));
+      }
       manager.appendMessage({ role: 'assistant', content: [], api: 'openai-completions', provider: 'fixture', model: role, usage, stopReason: 'stop', timestamp: Date.now() });
     },
     async steer() {},
     async followUp() {},
     clearQueue() { return { steering: [], followUp: [] }; },
-    async abort() { abortCalls += 1; },
+    async abort() { abortCalls += 1; finishInteraction(); },
     async compact() {},
     abortCompaction() {},
     getContextUsage() { return { tokens: 0, contextWindow: 100000, percent: 0 }; },
@@ -68,6 +72,9 @@ const events = {
   onNotice(message) { process.send({ type: 'notice', role, message }); },
   onSessionReady() { markReady(); },
   onSessionWait(waiting) { if (waiting) process.send({ type: 'waiting', role }); },
+  onHandoffProjection(projection) {
+    process.send({ type: 'projection', role, projectionKind: projection.kind });
+  },
   async onHandoffInteraction(interaction) {
     process.send({ type: 'interaction', role, interaction });
     if (interaction.kind === 'question') {
@@ -76,12 +83,22 @@ const events = {
     return { kind: 'approval', response: { type: 'allow-once' } };
   },
   onHandoffPending(relay) {
-    if (!interactionKind) return;
-    const interaction = interactionKind === 'question'
+    if (scenario === 'projection') {
+      const partial = { role: 'assistant', content: [{ type: 'text', text: 'LIVE_FROM_A' }] };
+      emitSessionEvent({ type: 'agent_start' });
+      emitSessionEvent({ type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: 0, partial } });
+      emitSessionEvent({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'LIVE_FROM_A', partial } });
+      emitSessionEvent({ type: 'message_end', message: partial });
+      emitSessionEvent({ type: 'agent_end', messages: [] });
+      finishInteraction();
+      return;
+    }
+    if (scenario !== 'question' && scenario !== 'approval') return;
+    const interaction = scenario === 'question'
       ? { kind: 'question', questions: [{ id: 'handoff-question', title: 'Continue', prompt: 'Continue the tool?', kind: 'singleChoice', options: [{ id: 'continue', label: 'Continue' }] }] }
       : { kind: 'approval', request: { action: { kind: 'file-write', target: '/tmp/result' }, category: 'file-write', policy: 'Safe', requiredPolicy: 'Standard' } };
     void relay.request(interaction).then(response => {
-      managerSeen.appendCustomEntry('vspi.handoff-test', { interactionKind, response });
+      managerSeen.appendCustomEntry('vspi.handoff-test', { scenario, response });
       process.send({ type: 'interaction-response', role, interaction: response });
       finishInteraction();
     });
@@ -100,9 +117,28 @@ if (role === 'A') {
   process.send({ type: 'running', role });
   await pending;
   process.send({ type: 'completed', role, abortCalls, branch: summary(managerSeen) });
+  if (scenario === 'queue-disconnect') {
+    while (summary(managerSeen).length < 6) await new Promise(resolve => setTimeout(resolve, 20));
+    process.send({ type: 'queue-drained', role, abortCalls, branch: summary(managerSeen) });
+    await backend.dispose();
+    process.send({ type: 'disposed', role, abortCalls });
+    setTimeout(() => process.exit(0), 10);
+  }
 } else {
   if (!backend.isSessionReady()) {
     process.send({ type: 'ui-started', role });
+    if (scenario === 'queue' || scenario === 'queue-disconnect') {
+      const queued = await backend.send('B_QUEUED', { attachments: [], effort: 'medium', behavior: 'prompt' });
+      process.send({ type: 'queued', role, delivery: queued.delivery });
+      if (scenario === 'queue-disconnect') {
+        await backend.dispose();
+        process.send({ type: 'disconnected', role });
+        setTimeout(() => process.exit(0), 10);
+      }
+    } else if (scenario === 'interrupt') {
+      const interrupted = await backend.cancel();
+      process.send({ type: 'interrupt-result', role, queuedMessages: interrupted.queuedMessages });
+    }
     await ready;
   }
   process.send({ type: 'acquired', role, abortCalls, branch: summary(managerSeen) });
@@ -119,6 +155,9 @@ type ChildMessage = {
   branch?: string[];
   message?: string;
   interaction?: unknown;
+  projectionKind?: string;
+  delivery?: string;
+  queuedMessages?: string[];
 };
 
 describe("same-host Session handoff", () => {
@@ -226,13 +265,110 @@ describe("same-host Session handoff", () => {
       expect(entries.filter((entry) => entry.type === "message")).toHaveLength(4);
     }, 15_000);
   }
+
+  it("projects live output into the new foreground without aborting the old runtime", async () => {
+    const fixture = await createProcessFixture("projection");
+    const first = startChild("A", fixture.paths, fixture.messages, "projection");
+    await waitFor(fixture.messages, (message) => message.role === "A" && message.type === "running");
+    const second = startChild("B", fixture.paths, fixture.messages, "projection");
+    await waitFor(
+      fixture.messages,
+      (message) => message.role === "B" && message.type === "projection" && message.projectionKind === "message",
+    );
+    await Promise.all([waitForExit(first), waitForExit(second)]);
+
+    expect(
+      fixture.messages.some(
+        (message) => message.role === "B" && message.type === "projection" && message.projectionKind === "message",
+      ),
+    ).toBe(true);
+    expect(fixture.messages.find((message) => message.role === "A" && message.type === "completed")?.abortCalls).toBe(
+      0,
+    );
+  }, 15_000);
+
+  it("keeps new foreground messages queued until the designated successor owns the Session", async () => {
+    const fixture = await createProcessFixture("queue");
+    const first = startChild("A", fixture.paths, fixture.messages, "queue");
+    await waitFor(fixture.messages, (message) => message.role === "A" && message.type === "running");
+    const second = startChild("B", fixture.paths, fixture.messages, "queue");
+    await Promise.all([waitForExit(first), waitForExit(second)]);
+
+    const queued = fixture.messages.find((message) => message.role === "B" && message.type === "queued");
+    const oldCompleted = fixture.messages.find((message) => message.role === "A" && message.type === "completed");
+    const acquired = fixture.messages.find((message) => message.role === "B" && message.type === "acquired");
+    expect(queued?.delivery).toBe("followUp");
+    expect(queued?.at).toBeLessThan(oldCompleted?.at ?? 0);
+    expect(queued?.at).toBeLessThan(acquired?.at ?? 0);
+    expect(oldCompleted?.abortCalls).toBe(0);
+    expect(acquired?.branch).toEqual(["BASE_USER", "BASE", "A_USER", "A", "B_QUEUED", "A"]);
+  }, 20_000);
+
+  it("keeps an accepted queued message when the new foreground disconnects before the safe point", async () => {
+    const fixture = await createProcessFixture("queue-disconnect");
+    const first = startChild("A", fixture.paths, fixture.messages, "queue-disconnect");
+    await waitFor(fixture.messages, (message) => message.role === "A" && message.type === "running");
+    const second = startChild("B", fixture.paths, fixture.messages, "queue-disconnect");
+    await Promise.all([waitForExit(first), waitForExit(second)]);
+
+    expect(fixture.messages.some((message) => message.role === "B" && message.type === "disconnected")).toBe(true);
+    const drained = fixture.messages.find((message) => message.role === "A" && message.type === "queue-drained");
+    expect(drained?.abortCalls).toBe(0);
+    expect(drained?.branch).toEqual(["BASE_USER", "BASE", "A_USER", "A", "B_QUEUED", "A"]);
+  }, 20_000);
+
+  it("interrupts the old runtime only when the new foreground explicitly cancels", async () => {
+    const fixture = await createProcessFixture("interrupt");
+    const first = startChild("A", fixture.paths, fixture.messages, "interrupt");
+    await waitFor(fixture.messages, (message) => message.role === "A" && message.type === "running");
+    const second = startChild("B", fixture.paths, fixture.messages, "interrupt");
+    await Promise.all([waitForExit(first), waitForExit(second)]);
+
+    expect(fixture.messages.some((message) => message.role === "B" && message.type === "interrupt-result")).toBe(true);
+    expect(fixture.messages.find((message) => message.role === "A" && message.type === "completed")?.abortCalls).toBe(
+      1,
+    );
+    expect(fixture.messages.find((message) => message.role === "A" && message.type === "disposed")?.abortCalls).toBe(1);
+  }, 15_000);
 });
+
+async function createProcessFixture(label: string): Promise<{
+  paths: { workspace: string; agentDir: string; sessionDir: string };
+  messages: Array<ChildMessage & { at: number }>;
+}> {
+  const root = await mkdtemp(join(tmpdir(), `vspi-handoff-${label}-`));
+  const paths = {
+    workspace: join(root, "workspace"),
+    agentDir: join(root, "agent"),
+    sessionDir: join(root, "sessions"),
+  };
+  const base = SessionManager.create(paths.workspace, paths.sessionDir);
+  base.appendMessage({ role: "user", content: "BASE_USER", timestamp: Date.now() });
+  base.appendMessage({
+    role: "assistant",
+    content: [],
+    api: "openai-completions",
+    provider: "fixture",
+    model: "BASE",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  });
+  return { paths, messages: [] };
+}
 
 function startChild(
   role: string,
   paths: { workspace: string; agentDir: string; sessionDir: string },
   messages: Array<ChildMessage & { at: number }>,
-  interactionKind = "",
+  scenario = "",
 ): ChildProcess {
   const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", CHILD_SOURCE], {
     cwd: process.cwd(),
@@ -242,7 +378,7 @@ function startChild(
       WORKSPACE: paths.workspace,
       AGENT_DIR: paths.agentDir,
       SESSION_DIR: paths.sessionDir,
-      INTERACTION_KIND: interactionKind,
+      HANDOFF_SCENARIO: scenario,
     },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });

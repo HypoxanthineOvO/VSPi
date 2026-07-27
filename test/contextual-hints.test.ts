@@ -94,6 +94,9 @@ async function renderPanel(
     app.composer.setText(command);
     if (command !== "/") app.handleInput("\r");
     await flush();
+    if (command === "/settings") {
+      await vi.waitFor(() => expect((app as unknown as { panels: PanelController }).panels.kind).toBe("settings"));
+    }
   }
   const ansi = app.render(80);
   return {
@@ -105,17 +108,17 @@ async function renderPanel(
 }
 
 function contextualRow(plain: string[]): { frameBottom: number; hint: string; composerTop: string } {
-  const frameBottom = plain.findIndex((line) => line.startsWith("╰"));
+  const composerTopIndex = plain.findLastIndex((line) => line.startsWith("╭"));
+  const frameBottom = composerTopIndex - 2;
   return {
     frameBottom,
-    hint: plain[frameBottom + 1]?.trim() ?? "",
-    composerTop: plain[frameBottom + 2] ?? "",
+    hint: plain[composerTopIndex - 1]?.trim() ?? "",
+    composerTop: plain[composerTopIndex] ?? "",
   };
 }
 
 describe("contextual panel hints", () => {
   it.each([
-    ["plan", undefined, "Shift+Tab"],
     ["commands", "/", COMMAND_HINT],
     ["models", "/model", "Enter"],
     ["providers", "/providers", "Enter"],
@@ -135,6 +138,18 @@ describe("contextual panel hints", () => {
       expect(result.ansi[row.frameBottom + 1]).toContain(result.mutedSgr);
       expect(result.ansi.every((line) => visibleWidth(line) === 80)).toBe(true);
       expect(result.ansi.length).toBeLessThanOrEqual(24);
+    } finally {
+      await result.app.dispose();
+    }
+  });
+
+  it("does not render a resident Plan frame or hint without an active plan", async () => {
+    const result = await renderPanel(undefined);
+    try {
+      const rendered = result.plain.join("\n");
+      expect(rendered).not.toMatch(/╭ Plan\b/);
+      expect(rendered).not.toContain("Shift+Tab 下一个区域");
+      expect(result.ansi.every((line) => visibleWidth(line) === 80)).toBe(true);
     } finally {
       await result.app.dispose();
     }
@@ -165,10 +180,9 @@ describe("contextual panel hints", () => {
     }
   });
 
-  it("temporarily replaces the fixed hint row without changing layout height", async () => {
+  it("shows a temporary notice row without restoring an empty Plan hint", async () => {
     const result = await renderPanel(undefined);
     const before = result.app.render(80).map(stripAnsi);
-    const beforeHint = contextualRow(before).hint;
     vi.useFakeTimers();
     try {
       (result.app as unknown as { showNotice(text: string, tone: "success"): void }).showNotice(
@@ -176,13 +190,14 @@ describe("contextual panel hints", () => {
         "success",
       );
       const notified = result.app.render(80).map(stripAnsi);
-      expect(notified).toHaveLength(before.length);
-      expect(contextualRow(notified).hint).toContain("已保存到 /workspace/.vspi/settings.json");
+      expect(notified).toHaveLength(before.length + 1);
+      expect(notified.join("\n")).toContain("已保存到 /workspace/.vspi/settings.json");
 
       vi.advanceTimersByTime(3500);
       const restored = result.app.render(80).map(stripAnsi);
       expect(restored).toHaveLength(before.length);
-      expect(contextualRow(restored).hint).toBe(beforeHint);
+      expect(restored.join("\n")).not.toContain("已保存到 /workspace/.vspi/settings.json");
+      expect(restored.join("\n")).not.toContain("Shift+Tab 下一个区域");
     } finally {
       vi.useRealTimers();
       await result.app.dispose();
@@ -202,14 +217,14 @@ describe("contextual panel hints", () => {
         hasItems: true,
         expandable: true,
         inspectDepth: "node",
-      });
+      }).replace("Shift+Tab 进入 Plan", "Shift+Tab 返回输入");
 
       expect(inspected.join("\n")).toContain("Inspect");
       expect(row.hint).toBe(expected);
       expect(row.hint).toContain("Esc 返回输入");
       expect(row.hint).toContain("↑↓ 选择");
       expect(row.hint).toContain("Enter/→ 进入/展开");
-      expect(row.hint).toContain("Shift+Tab 进入 Plan");
+      expect(row.hint).toContain("Shift+Tab 返回输入");
 
       result.app.handleInput("\u001b[C");
       expect(result.app.render(80).map(stripAnsi).join("\n")).toContain("已展开");

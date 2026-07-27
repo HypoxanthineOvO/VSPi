@@ -490,21 +490,21 @@ async function exerciseSessionReset(command: "/new" | "/clear"): Promise<void> {
   const plain = rows.join("\n");
   const firstLogoRows = rows.map((line, index) => (line.includes(LOGO[0]) ? index : -1)).filter((index) => index >= 0);
   const secondSplashStart = firstLogoRows[1] ?? -1;
-  const freshPlanRow = rows.findIndex((line, index) => index > secondSplashStart && line.includes("╭ Plan "));
-  const secondSplash = rows.slice(Math.max(0, secondSplashStart - 3), freshPlanRow).join("\n");
+  const freshComposerRow = rows.findIndex((line, index) => index > secondSplashStart && /^╭─+╮$/u.test(line));
+  const secondSplash = rows.slice(Math.max(0, secondSplashStart - 3), freshComposerRow).join("\n");
 
   expect(backend.newSessionCalls).toHaveBeenCalledOnce();
   expect(firstLogoRows).toHaveLength(2);
   expect(secondSplashStart).toBeGreaterThan(-1);
-  expect(freshPlanRow).toBeGreaterThan(secondSplashStart);
+  expect(freshComposerRow).toBeGreaterThan(secondSplashStart);
   for (const logoLine of LOGO) expect(secondSplash).toContain(logoLine);
   expect(secondSplash).toContain(`Backend ${PI_STATUS.backend}`);
   expect(secondSplash).toContain(`Policy ${PI_STATUS.policy} · ${PI_STATUS.boundary}`);
   expect(secondSplash).toContain(`v${VSPI_VERSION}`);
   expect(secondSplash).toMatch(/╭─+╮[\s\S]*╰─+╯/);
   expect(secondSplash).not.toContain("\u001b");
-  expect(rows.slice(secondSplashStart - 2, freshPlanRow).every((line) => visibleWidth(line) === 80)).toBe(true);
-  expect(plain.match(/╭ Plan /g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+  expect(rows.slice(secondSplashStart - 2, freshComposerRow).every((line) => visibleWidth(line) === 80)).toBe(true);
+  expect(plain).not.toContain("╭ Plan ");
 
   await app.dispose();
   tui.stop();

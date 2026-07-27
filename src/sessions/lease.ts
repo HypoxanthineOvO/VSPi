@@ -1,13 +1,13 @@
 import { createHash, randomBytes } from "node:crypto";
-import { chmod, mkdir, open, readFile, stat, unlink, utimes } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rename, rm, stat, unlink, utimes } from "node:fs/promises";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { hostname } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const HEARTBEAT_MS = 2_000;
 const CONNECT_TIMEOUT_MS = 2_000;
 const WAIT_POLL_MS = 200;
-const MAX_CONTROL_BYTES = 1024 * 1024;
+const MAX_CONTROL_BYTES = 16 * 1024 * 1024;
 
 export interface SessionLeaseOwner {
   pid: number;
@@ -25,6 +25,8 @@ export interface SessionLeaseAcquireOptions {
   onTakeover: (channel: SessionHandoffChannel) => Promise<void> | void;
   onWait?: (owner: SessionLeaseOwner) => void;
   onInteraction?: (interaction: SessionHandoffInteraction, signal?: AbortSignal) => Promise<unknown>;
+  onProjection?: (projection: SessionHandoffProjection) => void;
+  onConnected?: (client: SessionHandoffClient) => void;
 }
 
 export interface SessionHandoffInteraction {
@@ -32,9 +34,27 @@ export interface SessionHandoffInteraction {
   payload: unknown;
 }
 
+export interface SessionHandoffProjection {
+  kind: string;
+  payload?: unknown;
+}
+
+export interface SessionHandoffCommand {
+  kind: "interrupt" | "enqueue";
+  payload?: unknown;
+}
+
+export interface SessionHandoffClient {
+  readonly closed: Promise<void>;
+  command(command: SessionHandoffCommand): Promise<unknown>;
+}
+
 export interface SessionHandoffChannel {
   readonly closed: Promise<void>;
+  readonly successor: SessionLeaseSuccessor;
   request(interaction: SessionHandoffInteraction): Promise<unknown>;
+  project(projection: SessionHandoffProjection): void;
+  setCommandHandler(handler: (command: SessionHandoffCommand) => Promise<unknown>): void;
 }
 
 export interface AcquiredSessionLease {
@@ -42,9 +62,11 @@ export interface AcquiredSessionLease {
   waited: boolean;
 }
 
-interface StoredLeaseOwner extends Omit<SessionLeaseOwner, "heartbeatAt"> {
+export interface SessionLeaseSuccessor extends Omit<SessionLeaseOwner, "heartbeatAt"> {
   schemaVersion: 1;
 }
+
+type StoredLeaseOwner = SessionLeaseSuccessor;
 
 export class SessionLease {
   private heartbeat: NodeJS.Timeout | undefined;
@@ -77,6 +99,30 @@ export class SessionLease {
     await closeServer(this.server);
     await removeIfOwned(this.leasePath, this.owner.token);
     await unlink(this.owner.socketPath).catch(ignoreMissing);
+  }
+
+  async transfer(successor: SessionLeaseSuccessor): Promise<void> {
+    if (this.released) throw new Error("Cannot transfer a released Session lease");
+    if (this.heartbeat) clearInterval(this.heartbeat);
+    this.heartbeat = undefined;
+    const current = await readLeaseOwner(this.leasePath);
+    if (current?.token !== this.owner.token) throw new Error("Session lease ownership changed before transfer");
+    const temporary = `${this.leasePath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+    const handle = await open(temporary, "wx", 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(successor, null, 2)}\n`, "utf8");
+      await handle.sync();
+    } catch (error) {
+      await rm(temporary, { force: true });
+      throw error;
+    } finally {
+      await handle.close();
+    }
+    try {
+      await rename(temporary, this.leasePath);
+    } finally {
+      await rm(temporary, { force: true });
+    }
   }
 }
 
@@ -127,7 +173,7 @@ export async function acquireSessionLease(
           channel.handle(line);
           continue;
         }
-        const request = parseTakeoverRequest(line);
+        const request = parseTakeoverRequest(line, sessionPath, directory);
         if (!request || request.token !== token) {
           socket.end(`${JSON.stringify({ status: "rejected" })}\n`);
           return;
@@ -137,7 +183,7 @@ export async function acquireSessionLease(
           return;
         }
         takeoverStarted = true;
-        channel = new SocketHandoffChannel(socket);
+        channel = new SocketHandoffChannel(socket, request.successor);
         void channel.closed.then(() => {
           takeoverStarted = false;
         });
@@ -186,12 +232,18 @@ export async function acquireSessionLease(
         await unlink(existing.socketPath).catch(ignoreMissing);
         continue;
       }
+      if (existing.token === token) {
+        lease = new SessionLease(sessionPath, leasePath, owner, server);
+        for (const socket of socketsBeforeLease) lease.track(socket);
+        socketsBeforeLease.clear();
+        return { lease, waited };
+      }
       if (requestedOwnerToken !== existing.token) {
         waited = true;
         requestedOwnerToken = existing.token;
         options.onWait?.(existing);
         try {
-          await requestTakeover(existing, options.signal, options.onInteraction);
+          await requestTakeover(existing, owner, options);
         } catch (error) {
           await waitForPoll(options.signal);
           const current = await readLeaseOwner(leasePath);
@@ -255,9 +307,10 @@ async function ownerIsAlive(owner: SessionLeaseOwner): Promise<boolean> {
 
 async function requestTakeover(
   owner: SessionLeaseOwner,
-  signal?: AbortSignal,
-  onInteraction?: SessionLeaseAcquireOptions["onInteraction"],
+  successor: SessionLeaseSuccessor,
+  options: SessionLeaseAcquireOptions,
 ): Promise<void> {
+  const signal = options.signal;
   throwIfAborted(signal);
   await new Promise<void>((resolvePromise, rejectPromise) => {
     const socket = createConnection(owner.socketPath);
@@ -265,6 +318,7 @@ async function requestTakeover(
     let accepted = false;
     let input = "";
     const interactionControllers = new Set<AbortController>();
+    let client: SocketHandoffClient | undefined;
     const timer = setTimeout(() => {
       socket.destroy();
       rejectPromise(new Error("Session owner 未响应接管请求"));
@@ -283,7 +337,9 @@ async function requestTakeover(
       else resolvePromise();
     };
     socket.setEncoding("utf8");
-    socket.once("connect", () => socket.write(`${JSON.stringify({ type: "takeover", token: owner.token })}\n`));
+    socket.once("connect", () =>
+      socket.write(`${JSON.stringify({ type: "takeover", token: owner.token, successor })}\n`),
+    );
     socket.on("data", (chunk) => {
       input += chunk;
       if (Buffer.byteLength(input, "utf8") > MAX_CONTROL_BYTES) {
@@ -300,6 +356,8 @@ async function requestTakeover(
             if (parsed.status === "accepted") {
               accepted = true;
               clearTimeout(timer);
+              client = new SocketHandoffClient(socket);
+              options.onConnected?.(client);
             } else if (parsed.status === "waiting") {
               finish();
               socket.end();
@@ -314,31 +372,39 @@ async function requestTakeover(
           continue;
         }
         const request = parseInteractionRequest(line);
-        if (!request) {
-          socket.destroy(new Error("Session owner 返回了无效交互请求"));
-          return;
+        if (request) {
+          const controller = new AbortController();
+          interactionControllers.add(controller);
+          const interaction = options.onInteraction
+            ? options.onInteraction(request.interaction, controller.signal)
+            : Promise.reject(new Error("Session handoff interaction UI is unavailable"));
+          void Promise.resolve(interaction)
+            .then(
+              (value) => writeControl(socket, { type: "interaction_response", id: request.id, ok: true, value }),
+              (error: unknown) =>
+                writeControl(socket, {
+                  type: "interaction_response",
+                  id: request.id,
+                  ok: false,
+                  error: error instanceof Error ? error.message : "Handoff interaction failed",
+                }),
+            )
+            .finally(() => interactionControllers.delete(controller));
+          continue;
         }
-        const controller = new AbortController();
-        interactionControllers.add(controller);
-        const interaction = onInteraction
-          ? onInteraction(request.interaction, controller.signal)
-          : Promise.reject(new Error("Session handoff interaction UI is unavailable"));
-        void Promise.resolve(interaction)
-          .then(
-            (value) => writeControl(socket, { type: "interaction_response", id: request.id, ok: true, value }),
-            (error: unknown) =>
-              writeControl(socket, {
-                type: "interaction_response",
-                id: request.id,
-                ok: false,
-                error: error instanceof Error ? error.message : "Handoff interaction failed",
-              }),
-          )
-          .finally(() => interactionControllers.delete(controller));
+        const projection = parseProjection(line);
+        if (projection) {
+          options.onProjection?.(projection);
+          continue;
+        }
+        if (client?.handle(line)) continue;
+        socket.destroy(new Error("Session owner 返回了无效控制消息"));
+        return;
       }
     });
     socket.once("close", () => {
       for (const controller of interactionControllers) controller.abort();
+      client?.close(new Error("Session handoff channel closed"));
       if (accepted) finish();
     });
     socket.once("error", (error) => {
@@ -367,10 +433,21 @@ async function removeIfOwned(path: string, token: string): Promise<void> {
   await unlink(path).catch(ignoreMissing);
 }
 
-function parseTakeoverRequest(input: string): { token: string } | undefined {
+function parseTakeoverRequest(
+  input: string,
+  sessionPath: string,
+  directory: string,
+): { token: string; successor: SessionLeaseSuccessor } | undefined {
   try {
-    const parsed = JSON.parse(input) as { type?: unknown; token?: unknown };
-    return parsed.type === "takeover" && typeof parsed.token === "string" ? { token: parsed.token } : undefined;
+    const parsed = JSON.parse(input) as { type?: unknown; token?: unknown; successor?: unknown };
+    if (parsed.type !== "takeover" || typeof parsed.token !== "string" || !isStoredOwner(parsed.successor)) {
+      return undefined;
+    }
+    const successor = parsed.successor;
+    if (successor.sessionPath !== sessionPath || dirname(resolve(successor.socketPath)) !== resolve(directory)) {
+      return undefined;
+    }
+    return { token: parsed.token, successor };
   } catch {
     return undefined;
   }
@@ -383,8 +460,12 @@ class SocketHandoffChannel implements SessionHandoffChannel {
     this.resolveClosed = resolvePromise;
   });
   private sequence = 0;
+  private commandHandler: ((command: SessionHandoffCommand) => Promise<unknown>) | undefined;
 
-  constructor(private readonly socket: Socket) {
+  constructor(
+    private readonly socket: Socket,
+    readonly successor: SessionLeaseSuccessor,
+  ) {
     socket.once("close", () => this.close(new Error("Session handoff channel closed")));
     socket.once("error", (error) => this.close(error));
   }
@@ -398,17 +479,42 @@ class SocketHandoffChannel implements SessionHandoffChannel {
     });
   }
 
+  project(projection: SessionHandoffProjection): void {
+    writeControl(this.socket, { type: "projection", projection });
+  }
+
+  setCommandHandler(handler: (command: SessionHandoffCommand) => Promise<unknown>): void {
+    this.commandHandler = handler;
+  }
+
   handle(line: string): void {
     const response = parseInteractionResponse(line);
-    if (!response) {
+    if (response) {
+      const pending = this.pending.get(response.id);
+      if (!pending) return;
+      this.pending.delete(response.id);
+      if (response.ok) pending.resolve(response.value);
+      else pending.reject(new Error(response.error ?? "Session handoff interaction failed"));
+      return;
+    }
+    const request = parseCommandRequest(line);
+    if (!request) {
       this.close(new Error("Session handoff response is invalid"));
       return;
     }
-    const pending = this.pending.get(response.id);
-    if (!pending) return;
-    this.pending.delete(response.id);
-    if (response.ok) pending.resolve(response.value);
-    else pending.reject(new Error(response.error ?? "Session handoff interaction failed"));
+    const operation = this.commandHandler
+      ? this.commandHandler(request.command)
+      : Promise.reject(new Error("Session handoff command handler is unavailable"));
+    void operation.then(
+      (value) => writeControl(this.socket, { type: "command_response", id: request.id, ok: true, value }),
+      (error: unknown) =>
+        writeControl(this.socket, {
+          type: "command_response",
+          id: request.id,
+          ok: false,
+          error: error instanceof Error ? error.message : "Session handoff command failed",
+        }),
+    );
   }
 
   close(error: Error): void {
@@ -416,6 +522,43 @@ class SocketHandoffChannel implements SessionHandoffChannel {
     this.pending.clear();
     this.resolveClosed();
     if (!this.socket.destroyed) this.socket.destroy();
+  }
+}
+
+class SocketHandoffClient implements SessionHandoffClient {
+  private readonly pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
+  private resolveClosed!: () => void;
+  readonly closed = new Promise<void>((resolvePromise) => {
+    this.resolveClosed = resolvePromise;
+  });
+  private sequence = 0;
+
+  constructor(private readonly socket: Socket) {}
+
+  command(command: SessionHandoffCommand): Promise<unknown> {
+    if (this.socket.destroyed) return Promise.reject(new Error("Session handoff channel is unavailable"));
+    const id = `${process.pid}-command-${++this.sequence}`;
+    return new Promise((resolvePromise, rejectPromise) => {
+      this.pending.set(id, { resolve: resolvePromise, reject: rejectPromise });
+      writeControl(this.socket, { type: "command", id, command });
+    });
+  }
+
+  handle(line: string): boolean {
+    const response = parseCommandResponse(line);
+    if (!response) return false;
+    const pending = this.pending.get(response.id);
+    if (!pending) return true;
+    this.pending.delete(response.id);
+    if (response.ok) pending.resolve(response.value);
+    else pending.reject(new Error(response.error ?? "Session handoff command failed"));
+    return true;
+  }
+
+  close(error: Error): void {
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+    this.resolveClosed();
   }
 }
 
@@ -450,10 +593,67 @@ function parseInteractionResponse(
   }
 }
 
+function parseProjection(line: string): SessionHandoffProjection | undefined {
+  try {
+    const value = JSON.parse(line) as { type?: unknown; projection?: unknown };
+    if (value.type !== "projection" || !isProjection(value.projection)) return undefined;
+    return value.projection;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseCommandRequest(line: string): { id: string; command: SessionHandoffCommand } | undefined {
+  try {
+    const value = JSON.parse(line) as { type?: unknown; id?: unknown; command?: unknown };
+    if (value.type !== "command" || typeof value.id !== "string" || !isCommand(value.command)) return undefined;
+    return { id: value.id, command: value.command };
+  } catch {
+    return undefined;
+  }
+}
+
+function parseCommandResponse(line: string): { id: string; ok: boolean; value?: unknown; error?: string } | undefined {
+  try {
+    const value = JSON.parse(line) as { type?: unknown; id?: unknown; ok?: unknown; value?: unknown; error?: unknown };
+    if (value.type !== "command_response" || typeof value.id !== "string" || typeof value.ok !== "boolean") {
+      return undefined;
+    }
+    return {
+      id: value.id,
+      ok: value.ok,
+      ...(value.value !== undefined ? { value: value.value } : {}),
+      ...(typeof value.error === "string" ? { error: value.error } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function isHandoffInteraction(value: unknown): value is SessionHandoffInteraction {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const interaction = value as { kind?: unknown; payload?: unknown };
   return (interaction.kind === "question" || interaction.kind === "approval") && "payload" in interaction;
+}
+
+function isProjection(value: unknown): value is SessionHandoffProjection {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    "kind" in value &&
+    typeof value.kind === "string"
+  );
+}
+
+function isCommand(value: unknown): value is SessionHandoffCommand {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    "kind" in value &&
+    (value.kind === "interrupt" || value.kind === "enqueue")
+  );
 }
 
 function writeControl(socket: Socket, value: unknown): void {

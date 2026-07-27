@@ -71,12 +71,16 @@ export function createReviewTracker(): ReviewTracker {
   };
 }
 
-export function createReviewReminderExtension(options: { tracker: ReviewTracker }): ExtensionFactory {
+export function createReviewReminderExtension(options: {
+  tracker: ReviewTracker;
+  authority?: "local" | "workflow";
+}): ExtensionFactory {
   return (pi) => {
     pi.on("before_agent_start", async (event) => {
       const review = options.tracker.snapshot();
       if (!review.needsReview) return;
-      const reminder = `<vspi_continuity_reminder hidden="true">Review the active Local Plan before continuing. Reasons: ${review.reasons.join(", ")}.</vspi_continuity_reminder>`;
+      const authority = options.authority === "workflow" ? "Hypo-Workflow Delivery" : "Local Plan";
+      const reminder = `<vspi_continuity_reminder authority="${options.authority ?? "local"}" hidden="true">继续前必须复核 ${authority} 与最新用户指令；如果范围、进度、阻塞或下一步已经变化，使用该权威对应的结构化接口及时更新。Reasons: ${review.reasons.join(", ")}.</vspi_continuity_reminder>`;
       return { systemPrompt: `${event.systemPrompt}\n\n${reminder}` };
     });
   };

@@ -5,6 +5,7 @@ import type { ExecutionPolicyService } from "../policy/execution-policy.js";
 import type { ModelIdentity, ResolvedPromptProfile } from "../prompts/types.js";
 import type { ExternalSessionSource } from "../sessions/external-history.js";
 import type { SkillScope } from "../skills/types.js";
+import type { WorkflowAdapter } from "../workflow/types.js";
 import { FixtureBackend } from "./fixture-backend.js";
 import { PiBackend } from "./pi-backend.js";
 import type {
@@ -34,7 +35,7 @@ export class AdaptiveBackend implements ChatBackend {
     promptProfiles?: {
       resolve(identity: ModelIdentity): Promise<Pick<ResolvedPromptProfile, "profileId" | "overlay">>;
     },
-    startup?: { continueRecent?: boolean },
+    startup?: { continueRecent?: boolean; workflowPlan?: Pick<WorkflowAdapter, "snapshot"> },
   ) {
     this.active =
       mode === "fixture"
@@ -45,6 +46,7 @@ export class AdaptiveBackend implements ChatBackend {
             trustedProject,
             recovery,
             ...(planBackend ? { planBackend } : {}),
+            ...(startup?.workflowPlan ? { workflowPlan: startup.workflowPlan } : {}),
             ...(promptProfiles ? { promptProfiles } : {}),
             ...(executionPolicy ? { executionPolicy } : {}),
           });

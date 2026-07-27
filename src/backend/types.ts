@@ -19,6 +19,7 @@ import type {
   ExternalSessionSummary,
 } from "../sessions/external-history.js";
 import type { SkillCatalogSnapshot, SkillInstallResult, SkillManager, SkillScope } from "../skills/types.js";
+import type { WorkflowSnapshot } from "../workflow/types.js";
 
 export interface RuntimeModelOption extends ModelOption {
   provider: string;
@@ -70,8 +71,31 @@ export type SessionHandoffResponse =
   | { kind: "question"; questions: Question[] }
   | { kind: "approval"; response: ApprovalResponse };
 
+export type SessionHandoffProjection =
+  | { kind: "snapshot-start" }
+  | { kind: "snapshot-message"; message: TranscriptMessage }
+  | {
+      kind: "snapshot-state";
+      modelLabel: string;
+      modelId: string;
+      modelProvider?: string;
+      supportsVision: boolean;
+      effort: EffortLevel;
+      usage: UsageSnapshot;
+      queue: ChatQueueState;
+      busy: boolean;
+    }
+  | { kind: "message"; message: TranscriptMessage }
+  | { kind: "message-update"; id: string; patch: Partial<TranscriptMessage> }
+  | { kind: "busy"; busy: boolean }
+  | { kind: "queue"; queue: ChatQueueState }
+  | { kind: "usage"; usage: UsageSnapshot }
+  | { kind: "queued-consumed"; id: string }
+  | { kind: "notice"; message: string; tone: "info" | "success" | "warning" | "error" };
+
 export interface SessionHandoffRelay {
   request(interaction: SessionHandoffInteraction): Promise<SessionHandoffResponse>;
+  project(projection: SessionHandoffProjection): void;
 }
 
 export interface ChatBackendEvents {
@@ -86,6 +110,7 @@ export interface ChatBackendEvents {
   onQuestion?: (questions: Question[], signal?: AbortSignal) => Promise<Question[]>;
   onPlanBindingChange?: (binding: PlanBinding | undefined) => void;
   onEffectivePrompt?: (segments: EffectivePromptSegment[]) => void;
+  onWorkflowSnapshot?: (snapshot: WorkflowSnapshot) => void;
   onSessionWait?: (waiting: boolean) => void;
   onSessionReady?: () => void;
   onSessionError?: (error: Error) => void;
@@ -93,6 +118,7 @@ export interface ChatBackendEvents {
     interaction: SessionHandoffInteraction,
     signal?: AbortSignal,
   ) => Promise<SessionHandoffResponse>;
+  onHandoffProjection?: (projection: SessionHandoffProjection) => void;
   onHandoffPending?: (relay: SessionHandoffRelay) => void;
   onHandoffCancelled?: () => void;
   onTakeover?: () => void;
@@ -129,6 +155,7 @@ export interface SendOptions {
   attachments: Attachment[];
   effort: EffortLevel;
   behavior: "prompt" | "followUp";
+  clientMessageId?: string;
 }
 
 export interface ChatBackend {

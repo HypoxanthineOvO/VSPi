@@ -18,6 +18,7 @@ import { readVerifiedAttachmentBytes } from "../attachments/store.js";
 import { type CompactOptions, resolveCompactionProfile } from "../continuity/compaction-profiles.js";
 import { createPlanCapsuleExtension } from "../continuity/plan-capsule.js";
 import { createReviewReminderExtension, createReviewTracker } from "../continuity/review-tracker.js";
+import { createWorkflowPlanExtension } from "../continuity/workflow-plan.js";
 import { FX } from "../domain/defaults.js";
 import { modelEffortLevels, normalizeEffortLevel } from "../domain/effort.js";
 import { formatProviderName } from "../domain/providers.js";
@@ -28,7 +29,10 @@ import type {
   SessionOption,
   ThinkingMessage,
   ToolMessage,
+  TranscriptMessage,
+  UsageSnapshot,
 } from "../domain/types.js";
+import { createPlanToolDefinitions } from "../plans/tools.js";
 import type { LocalPlanBackend, PlanBinding } from "../plans/types.js";
 import {
   type ApprovalRequest,
@@ -59,16 +63,20 @@ import {
   acquireSessionLease,
   readSessionLease,
   type SessionHandoffChannel,
+  type SessionHandoffClient,
   type SessionLease,
   type SessionHandoffInteraction as WireSessionHandoffInteraction,
+  type SessionHandoffProjection as WireSessionHandoffProjection,
 } from "../sessions/lease.js";
 import { PiSkillManager } from "../skills/service.js";
 import { createSkillToolDefinitions } from "../skills/tools.js";
 import type { SkillManager, SkillScope } from "../skills/types.js";
+import type { WorkflowAdapter } from "../workflow/types.js";
 import type {
   CancelResult,
   ChatBackend,
   ChatBackendEvents,
+  ChatQueueState,
   ModelSelectionResult,
   NewSessionOptions,
   ProviderAuthInteraction,
@@ -77,6 +85,7 @@ import type {
   SendOptions,
   SendResult,
   SessionHandoffInteraction,
+  SessionHandoffProjection,
   SessionHandoffRelay,
   SessionHandoffResponse,
   SessionResetReason,
@@ -108,6 +117,7 @@ export interface PiRuntimeBackendOptions {
   skillManager?: SkillManager;
   modelRuntime?: ModelRuntimeView;
   planBackend?: LocalPlanBackend;
+  workflowPlan?: Pick<WorkflowAdapter, "snapshot">;
   promptProfiles?: {
     resolve(identity: ModelIdentity): Promise<Pick<ResolvedPromptProfile, "profileId" | "overlay">>;
   };
@@ -240,6 +250,20 @@ export class PiRuntimeBackend implements ChatBackend {
   private sessionLease: SessionLease | undefined;
   private handoffRequested = false;
   private handoffFinalizing = false;
+  private handoffChannel: SessionHandoffChannel | undefined;
+  private handoffClient: SessionHandoffClient | undefined;
+  private waitingForLease = false;
+  private projectedModel:
+    | {
+        label: string;
+        id: string;
+        provider?: string;
+        supportsVision: boolean;
+        effort: EffortLevel;
+      }
+    | undefined;
+  private readonly handoffQueuedPrompts: Array<{ id: string; text: string; options: SendOptions }> = [];
+  private handoffQueueDraining = false;
   private leaseLifecycleReady = false;
   private disposed = false;
   private delayedStartup: Promise<void> | undefined;
@@ -266,19 +290,21 @@ export class PiRuntimeBackend implements ChatBackend {
 
   get modelLabel(): string {
     const model = this.session?.model;
-    return model ? `${formatProviderName(model.provider)} / ${model.name}` : `${formatProviderName("pi")} / 未配置`;
+    return model
+      ? `${formatProviderName(model.provider)} / ${model.name}`
+      : (this.projectedModel?.label ?? `${formatProviderName("pi")} / 未配置`);
   }
 
   get modelId(): string {
-    return this.session?.model?.id ?? "unconfigured";
+    return this.session?.model?.id ?? this.projectedModel?.id ?? "unconfigured";
   }
 
   get modelProvider(): string | undefined {
-    return this.session?.model?.provider;
+    return this.session?.model?.provider ?? this.projectedModel?.provider;
   }
 
   get supportsVision(): boolean {
-    return this.session?.model?.input.includes("image") ?? false;
+    return this.session?.model?.input.includes("image") ?? this.projectedModel?.supportsVision ?? false;
   }
 
   isSessionReady(): boolean {
@@ -286,7 +312,7 @@ export class PiRuntimeBackend implements ChatBackend {
   }
 
   async start(events: ChatBackendEvents): Promise<void> {
-    this.events = events;
+    this.events = this.bridgeEvents(events);
     const manager = this.options.continueRecent
       ? SessionManager.continueRecent(this.options.cwd, this.options.sessionDir)
       : SessionManager.create(this.options.cwd, this.options.sessionDir);
@@ -313,6 +339,40 @@ export class PiRuntimeBackend implements ChatBackend {
     await this.finishStartup(manager, outcome.acquired);
   }
 
+  private bridgeEvents(events: ChatBackendEvents): ChatBackendEvents {
+    return {
+      ...events,
+      onMessage: (message) => {
+        events.onMessage(message);
+        this.projectHandoff({ kind: "message", message: structuredClone(message) });
+      },
+      onMessageUpdate: (id, patch) => {
+        events.onMessageUpdate(id, patch);
+        this.projectHandoff({ kind: "message-update", id, patch: structuredClone(patch) });
+      },
+      onBusy: (busy) => {
+        events.onBusy(busy);
+        this.projectHandoff({ kind: "busy", busy });
+      },
+      onQueueUpdate: (queue) => {
+        events.onQueueUpdate?.(queue);
+        this.projectHandoff({ kind: "queue", queue: { ...queue } });
+      },
+      onUsage: (usage) => {
+        events.onUsage(usage);
+        this.projectHandoff({ kind: "usage", usage: structuredClone(usage) });
+      },
+      onNotice: (message, tone) => {
+        events.onNotice(message, tone);
+        this.projectHandoff({ kind: "notice", message, tone });
+      },
+    };
+  }
+
+  private projectHandoff(projection: SessionHandoffProjection): void {
+    this.handoffChannel?.project(encodeHandoffProjection(projection));
+  }
+
   private async finishStartup(manager: SessionManager, acquired: AcquiredSessionLease | undefined): Promise<void> {
     if (this.disposed) {
       await acquired?.lease.release();
@@ -331,6 +391,9 @@ export class PiRuntimeBackend implements ChatBackend {
         return;
       }
       this.runtime = runtime;
+      this.waitingForLease = false;
+      this.handoffClient = undefined;
+      this.projectedModel = undefined;
       this.trackRuntimeInvalidation(this.runtime);
       this.bindCurrentSession(this.options.continueRecent ? "resume" : "startup");
       this.leaseLifecycleReady = true;
@@ -346,7 +409,30 @@ export class PiRuntimeBackend implements ChatBackend {
   }
 
   async send(text: string, options: SendOptions): Promise<SendResult> {
+    if (!this.isSessionReady() && this.waitingForLease) {
+      if (options.attachments.length > 0 && !this.supportsVision) throw new Error(`${this.modelLabel} 不支持图片输入`);
+      const client = await this.waitForHandoffClient();
+      try {
+        await client.command({
+          kind: "enqueue",
+          payload: {
+            id: options.clientMessageId ?? randomUUID(),
+            text,
+            options: structuredClone(options),
+          },
+        });
+        return { status: "queued", delivery: "followUp" };
+      } catch (error) {
+        await this.delayedStartup;
+        if (this.isSessionReady()) return this.sendActiveRuntime(text, options);
+        throw error;
+      }
+    }
     this.assertHandoffWritable();
+    return this.sendActiveRuntime(text, options);
+  }
+
+  private async sendActiveRuntime(text: string, options: SendOptions): Promise<SendResult> {
     const session = this.requireSession();
     if (options.attachments.length > 0 && !this.supportsVision) throw new Error(`${this.modelLabel} 不支持图片输入`);
     session.setThinkingLevel(options.effort);
@@ -385,7 +471,15 @@ export class PiRuntimeBackend implements ChatBackend {
   }
 
   async cancel(): Promise<CancelResult> {
+    if (!this.isSessionReady() && this.waitingForLease) {
+      const client = await this.waitForHandoffClient();
+      return decodeCancelResult(await client.command({ kind: "interrupt" }));
+    }
     this.assertHandoffWritable();
+    return this.cancelActiveRuntime();
+  }
+
+  private async cancelActiveRuntime(): Promise<CancelResult> {
     const session = this.session;
     const queued = session?.clearQueue?.() ?? { steering: [], followUp: [] };
     const queuedMessages = [...queued.steering, ...queued.followUp].map(stripAttachmentManifest);
@@ -890,20 +984,39 @@ export class PiRuntimeBackend implements ChatBackend {
             readPlan: (planId) => this.options.planBackend?.read(planId) ?? Promise.resolve(undefined),
             onCapsule: (capsule) => {
               const withoutPlan = this.effectivePromptSegments.filter((segment) => segment.source !== "plan");
-              this.effectivePromptSegments = capsule
-                ? [...withoutPlan, { source: "plan", content: capsule }]
-                : withoutPlan;
+              this.effectivePromptSegments = [...withoutPlan, { source: "plan", content: capsule }];
               this.events?.onEffectivePrompt?.(structuredClone(this.effectivePromptSegments));
             },
           })
         : undefined;
-      const reviewReminderExtension = createReviewReminderExtension({ tracker: this.reviewTracker });
+      const workflowPlanExtension = this.options.workflowPlan
+        ? createWorkflowPlanExtension({
+            snapshot: () => this.options.workflowPlan?.snapshot() ?? Promise.reject(new Error("Workflow unavailable")),
+            onCapsule: (capsule, snapshot) => {
+              const withoutPlan = this.effectivePromptSegments.filter((segment) => segment.source !== "plan");
+              this.effectivePromptSegments = [...withoutPlan, { source: "plan", content: capsule }];
+              this.events?.onEffectivePrompt?.(structuredClone(this.effectivePromptSegments));
+              this.events?.onWorkflowSnapshot?.(structuredClone(snapshot));
+            },
+          })
+        : undefined;
+      const reviewReminderExtension =
+        this.options.planBackend || this.options.workflowPlan
+          ? createReviewReminderExtension({
+              tracker: this.reviewTracker,
+              authority: this.options.workflowPlan ? "workflow" : "local",
+            })
+          : undefined;
       const services = await createAgentSessionServices({
         cwd,
         agentDir,
         settingsManager,
         ...(this.options.modelRuntime ? { modelRuntime: this.options.modelRuntime as never } : {}),
-        ...(this.options.recovery || promptProfileExtension || planCapsuleExtension
+        ...(this.options.recovery ||
+        promptProfileExtension ||
+        planCapsuleExtension ||
+        workflowPlanExtension ||
+        reviewReminderExtension
           ? {
               resourceLoaderOptions: {
                 ...(this.options.recovery
@@ -920,6 +1033,7 @@ export class PiRuntimeBackend implements ChatBackend {
                       extensionFactories: [
                         promptProfileExtension,
                         planCapsuleExtension,
+                        workflowPlanExtension,
                         reviewReminderExtension,
                       ].filter((factory) => factory !== undefined),
                     }
@@ -974,6 +1088,19 @@ export class PiRuntimeBackend implements ChatBackend {
             },
           })
         : [];
+      const planTools = this.options.planBackend
+        ? createPlanToolDefinitions({
+            backend: this.options.planBackend,
+            binding: {
+              read: async () => this.getPlanBinding()?.planId ?? null,
+              bind: async (planId) => this.bindPlan(planId ?? undefined),
+            },
+            onMutation: async () => {
+              this.reviewTracker.reset();
+              this.events?.onPlanBindingChange?.(this.getPlanBinding());
+            },
+          })
+        : [];
       this.replacementModelIdentity = undefined;
       this.replacementThinking = undefined;
       return {
@@ -986,8 +1113,21 @@ export class PiRuntimeBackend implements ChatBackend {
           customTools: [
             ...policyTools,
             ...(this.events?.onQuestion ? [question, ...skillTools] : []),
+            ...planTools,
           ] as unknown as ToolDefinition[],
-          tools: ["read", "ls", "find", "grep", "bash", "edit", "write", "question", "skill_list", "skill_manage"],
+          tools: [
+            "read",
+            "ls",
+            "find",
+            "grep",
+            "bash",
+            "edit",
+            "write",
+            "question",
+            "skill_list",
+            "skill_manage",
+            ...planTools.map((tool) => tool.name),
+          ],
         })),
         services,
         diagnostics: services.diagnostics,
@@ -1135,6 +1275,7 @@ export class PiRuntimeBackend implements ChatBackend {
         onWait: (owner) => {
           const firstWait = !waiting;
           waiting = true;
+          this.waitingForLease = true;
           this.events?.onSessionWait?.(true);
           if (firstWait) onFirstWait?.();
           this.events?.onNotice(
@@ -1144,29 +1285,52 @@ export class PiRuntimeBackend implements ChatBackend {
         },
         onTakeover: (channel) => this.requestDeferredHandoff(channel),
         onInteraction: (interaction, signal) => this.handleHandoffInteraction(interaction, signal),
+        onProjection: (projection) => this.handleHandoffProjection(projection),
+        onConnected: (client) => {
+          this.handoffClient = client;
+          void client.closed.then(() => {
+            if (this.handoffClient === client) this.handoffClient = undefined;
+          });
+        },
       });
     } finally {
-      if (waiting && clearWaiting) this.events?.onSessionWait?.(false);
+      if (waiting && clearWaiting) {
+        this.waitingForLease = false;
+        this.events?.onSessionWait?.(false);
+      }
     }
   }
 
   private requestDeferredHandoff(channel: SessionHandoffChannel): void {
     if (this.handoffRequested) return;
     this.handoffRequested = true;
+    this.handoffChannel = channel;
+    channel.setCommandHandler((command) => {
+      if (command.kind === "interrupt") return this.cancelActiveRuntime();
+      if (command.kind === "enqueue") {
+        if (this.handoffFinalizing) throw new Error("Session handoff is already finalizing");
+        this.handoffQueuedPrompts.push(decodeQueuedPrompt(command.payload));
+        this.maybeFinalizeHandoff();
+        return Promise.resolve({ queued: true });
+      }
+      throw new Error("Unsupported Session handoff command");
+    });
     const relay: SessionHandoffRelay = {
       request: async (interaction) => {
         const value = await channel.request(encodeHandoffInteraction(interaction));
         return decodeHandoffResponse(value);
       },
+      project: (projection) => channel.project(encodeHandoffProjection(projection)),
     };
     this.events?.onHandoffPending?.(relay);
     void channel.closed.then(() => {
       if (!this.handoffRequested || this.handoffFinalizing) return;
       this.handoffRequested = false;
+      this.handoffChannel = undefined;
       this.events?.onHandoffCancelled?.();
       this.events?.onNotice("新终端已断开；Session 继续由当前终端持有", "warning");
     });
-    this.events?.onNotice("另一终端正在等待接管；当前任务和队列会继续到安全点", "info");
+    this.events?.onNotice("前台已移交；当前任务会继续，并在安全点完成所有权切换", "info");
     this.maybeFinalizeHandoff();
   }
 
@@ -1179,17 +1343,77 @@ export class PiRuntimeBackend implements ChatBackend {
     return handler(decodeHandoffInteraction(interaction), signal);
   }
 
+  private handleHandoffProjection(projection: WireSessionHandoffProjection): void {
+    const decoded = decodeHandoffProjection(projection);
+    if (decoded.kind === "snapshot-state") {
+      this.projectedModel = {
+        label: decoded.modelLabel,
+        id: decoded.modelId,
+        ...(decoded.modelProvider ? { provider: decoded.modelProvider } : {}),
+        supportsVision: decoded.supportsVision,
+        effort: decoded.effort,
+      };
+    }
+    this.events?.onHandoffProjection?.(decoded);
+  }
+
   private maybeFinalizeHandoff(): void {
-    if (!this.handoffRequested || this.handoffFinalizing || !this.leaseLifecycleReady) return;
+    if (this.handoffFinalizing || this.handoffQueueDraining || !this.leaseLifecycleReady) {
+      return;
+    }
     const active =
       this.activeGeneration !== undefined ||
       this.agentRunning ||
       this.compacting ||
       this.queueState.steering + this.queueState.followUp > 0;
     if (active) return;
+    if (this.handoffQueuedPrompts.length > 0) {
+      void this.drainHandoffQueue();
+      return;
+    }
+    if (!this.handoffRequested) return;
     this.handoffFinalizing = true;
-    if (this.events?.onTakeover) this.events.onTakeover();
-    else void this.dispose();
+    void this.finalizeHandoff();
+  }
+
+  private async finalizeHandoff(): Promise<void> {
+    try {
+      const successor = this.handoffChannel?.successor;
+      if (successor) await this.sessionLease?.transfer(successor);
+      if (this.events?.onTakeover) this.events.onTakeover();
+      else await this.dispose();
+    } catch (error) {
+      this.handoffFinalizing = false;
+      this.handoffRequested = false;
+      this.events?.onHandoffCancelled?.();
+      this.events?.onNotice(`Session 移交失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+    }
+  }
+
+  private async drainHandoffQueue(): Promise<void> {
+    if (this.handoffQueueDraining) return;
+    this.handoffQueueDraining = true;
+    try {
+      while (this.handoffQueuedPrompts.length > 0) {
+        const queued = this.handoffQueuedPrompts.shift();
+        if (!queued) break;
+        this.projectHandoff({ kind: "queued-consumed", id: queued.id });
+        await this.sendActiveRuntime(queued.text, queued.options);
+      }
+    } catch (error) {
+      this.events?.onNotice(`等待消息执行失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+    } finally {
+      this.handoffQueueDraining = false;
+      this.maybeFinalizeHandoff();
+    }
+  }
+
+  private async waitForHandoffClient(): Promise<SessionHandoffClient> {
+    while (this.waitingForLease && !this.disposed) {
+      if (this.handoffClient) return this.handoffClient;
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+    }
+    throw new Error("Session handoff control channel is unavailable");
   }
 
   private assertHandoffWritable(): void {
@@ -1597,6 +1821,163 @@ function decodeHandoffResponse(value: unknown): SessionHandoffResponse {
     return { kind: "approval", response: value.response };
   }
   throw new Error("Session handoff response is invalid");
+}
+
+function encodeHandoffProjection(projection: SessionHandoffProjection): WireSessionHandoffProjection {
+  return { kind: projection.kind, payload: projection };
+}
+
+function decodeHandoffProjection(projection: WireSessionHandoffProjection): SessionHandoffProjection {
+  const value = projection.payload;
+  if (!isObject(value) || value.kind !== projection.kind) throw new Error("Session handoff projection is invalid");
+  if (value.kind === "snapshot-start") return { kind: "snapshot-start" };
+  if ((value.kind === "snapshot-message" || value.kind === "message") && isTranscriptMessage(value.message)) {
+    return { kind: value.kind, message: value.message };
+  }
+  if (
+    value.kind === "snapshot-state" &&
+    typeof value.modelLabel === "string" &&
+    typeof value.modelId === "string" &&
+    (value.modelProvider === undefined || typeof value.modelProvider === "string") &&
+    typeof value.supportsVision === "boolean" &&
+    isEffort(value.effort) &&
+    isUsageSnapshot(value.usage) &&
+    isQueueState(value.queue) &&
+    typeof value.busy === "boolean"
+  ) {
+    return {
+      kind: "snapshot-state",
+      modelLabel: value.modelLabel,
+      modelId: value.modelId,
+      ...(typeof value.modelProvider === "string" ? { modelProvider: value.modelProvider } : {}),
+      supportsVision: value.supportsVision,
+      effort: value.effort,
+      usage: value.usage,
+      queue: value.queue,
+      busy: value.busy,
+    };
+  }
+  if (value.kind === "message-update" && typeof value.id === "string" && isObject(value.patch)) {
+    return { kind: "message-update", id: value.id, patch: value.patch as Partial<TranscriptMessage> };
+  }
+  if (value.kind === "busy" && typeof value.busy === "boolean") return { kind: "busy", busy: value.busy };
+  if (value.kind === "queue" && isQueueState(value.queue)) return { kind: "queue", queue: value.queue };
+  if (value.kind === "usage" && isUsageSnapshot(value.usage)) return { kind: "usage", usage: value.usage };
+  if (value.kind === "queued-consumed" && typeof value.id === "string") {
+    return { kind: "queued-consumed", id: value.id };
+  }
+  if (
+    value.kind === "notice" &&
+    typeof value.message === "string" &&
+    ["info", "success", "warning", "error"].includes(String(value.tone))
+  ) {
+    return {
+      kind: "notice",
+      message: value.message,
+      tone: value.tone as "info" | "success" | "warning" | "error",
+    };
+  }
+  throw new Error("Session handoff projection is invalid");
+}
+
+function decodeCancelResult(value: unknown): CancelResult {
+  if (!isObject(value) || !Array.isArray(value.queuedMessages) || !value.queuedMessages.every(isString)) {
+    throw new Error("Session handoff interrupt response is invalid");
+  }
+  return { queuedMessages: value.queuedMessages };
+}
+
+function decodeQueuedPrompt(value: unknown): { id: string; text: string; options: SendOptions } {
+  if (
+    !isObject(value) ||
+    typeof value.id !== "string" ||
+    typeof value.text !== "string" ||
+    !isSendOptions(value.options)
+  ) {
+    throw new Error("Session handoff queued prompt is invalid");
+  }
+  return { id: value.id, text: value.text, options: value.options };
+}
+
+function isSendOptions(value: unknown): value is SendOptions {
+  return (
+    isObject(value) &&
+    Array.isArray(value.attachments) &&
+    value.attachments.every(isAttachment) &&
+    isEffort(value.effort) &&
+    (value.behavior === "prompt" || value.behavior === "followUp") &&
+    (value.clientMessageId === undefined || typeof value.clientMessageId === "string")
+  );
+}
+
+function isAttachment(value: unknown): value is SendOptions["attachments"][number] {
+  return (
+    isObject(value) &&
+    typeof value.id === "string" &&
+    typeof value.alias === "string" &&
+    ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(String(value.mimeType)) &&
+    Number.isSafeInteger(value.width) &&
+    Number.isSafeInteger(value.height) &&
+    Number.isSafeInteger(value.size) &&
+    typeof value.path === "string" &&
+    ["ready", "uploading", "failed"].includes(String(value.status))
+  );
+}
+
+function isTranscriptMessage(value: unknown): value is TranscriptMessage {
+  if (!isObject(value) || typeof value.id !== "string" || typeof value.kind !== "string") return false;
+  if (value.kind === "text") {
+    return (value.role === "user" || value.role === "assistant") && typeof value.text === "string";
+  }
+  if (value.role !== "assistant") return false;
+  if (value.kind === "thinking") {
+    return typeof value.text === "string" && typeof value.collapsed === "boolean" && isEffort(value.effort);
+  }
+  if (value.kind === "tool") {
+    return (
+      typeof value.name === "string" &&
+      typeof value.summary === "string" &&
+      ["queued", "running", "success", "error", "cancelled"].includes(String(value.status)) &&
+      typeof value.expanded === "boolean"
+    );
+  }
+  if (value.kind === "subagent") {
+    return (
+      typeof value.model === "string" &&
+      typeof value.task === "string" &&
+      isEffort(value.effort) &&
+      ["queued", "running", "success", "error"].includes(String(value.status))
+    );
+  }
+  return value.kind === "session" && typeof value.text === "string";
+}
+
+function isUsageSnapshot(value: unknown): value is UsageSnapshot {
+  return (
+    isObject(value) &&
+    (value.contextTokens === null || typeof value.contextTokens === "number") &&
+    typeof value.contextWindow === "number" &&
+    (value.contextPercent === null || typeof value.contextPercent === "number") &&
+    typeof value.inputTokens === "number" &&
+    typeof value.outputTokens === "number" &&
+    typeof value.costUsd === "number" &&
+    value.currency === "CNY" &&
+    typeof value.source === "string" &&
+    typeof value.asOf === "string" &&
+    typeof value.fxRate === "number"
+  );
+}
+
+function isQueueState(value: unknown): value is ChatQueueState {
+  return isObject(value) && Number.isInteger(value.steering) && Number.isInteger(value.followUp);
+}
+
+function isEffort(value: unknown): value is EffortLevel {
+  return ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(value));
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
 }
 
 function isQuestionList(value: unknown): value is Question[] {

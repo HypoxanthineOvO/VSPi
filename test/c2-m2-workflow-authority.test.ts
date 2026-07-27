@@ -2,23 +2,26 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 describe("C2 M2 single Workflow authority", () => {
-  it("does not wire Local Plan storage or routing into any production entry", async () => {
+  it("wires workspace Local Plan only when Workflow and Recovery are both inactive", async () => {
     const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
+    const startup = await readFile(new URL("../src/plans/startup.ts", import.meta.url), "utf8");
 
-    expect(source).not.toMatch(/createLocalPlanBackend|createDefaultPlanTaskRouter|vspi-local-plans/);
-    expect(source).not.toMatch(/\bplanBackend\s*[,}]/);
-    expect(source).not.toMatch(/\bplanTaskRouter\s*:/);
+    expect(source).toMatch(/createStartupLocalPlanBackend/);
+    expect(startup).toMatch(/createLocalPlanBackend/);
+    expect(startup).toMatch(/vspi-local-plans/);
+    expect(startup).toMatch(/input\.recovery\s*\|\|\s*input\.workflow/);
+    expect(source).toMatch(/localPlanBackend[\s\S]{0,500}workflowPlan:\s*workflowAdapter/);
+    expect(source).not.toMatch(/createDefaultPlanTaskRouter|\bplanTaskRouter\s*:/);
     expect(source).toMatch(/\bworkflowAdapter\s*[,}]/);
   });
 
-  it("keeps historical Local Plan bindings inert unless compatibility storage is explicitly injected", async () => {
+  it("registers structured Local Plan tools only when a Local Plan backend is injected", async () => {
     const source = await readFile(new URL("../src/backend/pi-runtime-backend.ts", import.meta.url), "utf8");
 
     expect(source).toMatch(/getPlanBinding\(\)[\s\S]{0,120}!this\.options\.planBackend/);
     expect(source).toMatch(/bindPlan\([^)]*\)[\s\S]{0,180}Local Plan compatibility is not enabled/);
-    expect(source).not.toMatch(/createPlanToolDefinitions/);
-    const activeTools = /tools:\s*\[([^\]]+)\]/.exec(source)?.[1] ?? "";
-    expect(activeTools).toContain('"question"');
-    expect(activeTools).not.toMatch(/"plan_[^"]+"/);
+    expect(source).toMatch(/this\.options\.planBackend\s*\?\s*createPlanToolDefinitions/);
+    expect(source).toMatch(/\.\.\.planTools\.map\(\(tool\)\s*=>\s*tool\.name\)/);
+    expect(source).toMatch(/authority:\s*this\.options\.workflowPlan\s*\?\s*"workflow"\s*:\s*"local"/);
   });
 });

@@ -75,6 +75,7 @@ const BindParameters = Type.Object(
 export function createPlanToolDefinitions(options: {
   backend: LocalPlanBackend;
   binding: PlanBindingPort;
+  onMutation?: (operation: "create" | "update" | "archive" | "bind", plan?: StoredPlan) => void | Promise<void>;
 }): ToolDefinition[] {
   const execute = <T>(operation: string, handler: () => Promise<T>) => safeExecute(operation, handler);
   return [
@@ -91,20 +92,27 @@ export function createPlanToolDefinitions(options: {
       "Plan Create",
       "Create a local plan with at most three work-item levels.",
       CreateParameters,
-      (raw) => execute("plan create", async () => projectPlan(await options.backend.create(raw.plan as PlanInput))),
+      (raw) =>
+        execute("plan create", async () => {
+          const plan = await options.backend.create(raw.plan as PlanInput);
+          await options.onMutation?.("create", plan);
+          return projectPlan(plan);
+        }),
     ),
     tool("plan_update", "Plan Update", "CAS-update or archive one local plan.", UpdateParameters, (raw) =>
       execute("plan update", async () => {
         if (raw.archive === true) {
-          return projectPlan(await options.backend.archive(raw.plan_id, { expectedRevision: raw.expected_revision }));
+          const plan = await options.backend.archive(raw.plan_id, { expectedRevision: raw.expected_revision });
+          await options.onMutation?.("archive", plan);
+          return projectPlan(plan);
         }
         if (!raw.plan) throw new Error("plan_update requires plan or archive=true");
-        return projectPlan(
-          await options.backend.update(raw.plan_id, {
-            expectedRevision: raw.expected_revision,
-            plan: raw.plan as PlanInput,
-          }),
-        );
+        const plan = await options.backend.update(raw.plan_id, {
+          expectedRevision: raw.expected_revision,
+          plan: raw.plan as PlanInput,
+        });
+        await options.onMutation?.("update", plan);
+        return projectPlan(plan);
       }),
     ),
     tool(
@@ -116,6 +124,7 @@ export function createPlanToolDefinitions(options: {
         execute("plan bind", async () => {
           if (raw.plan_id === null) {
             await options.binding.bind(null);
+            await options.onMutation?.("bind");
             return { planId: null };
           }
           const plan = await options.backend.read(raw.plan_id);
@@ -126,6 +135,7 @@ export function createPlanToolDefinitions(options: {
             );
           }
           await options.binding.bind(plan.id);
+          await options.onMutation?.("bind", plan);
           return { planId: plan.id, revision: plan.revision };
         }),
     ),

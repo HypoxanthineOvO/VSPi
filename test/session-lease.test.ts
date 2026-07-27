@@ -47,6 +47,35 @@ describe("session owner lease", () => {
     expect(await readSessionLease(sessionFile, agentDir)).toBeUndefined();
   });
 
+  it("atomically assigns the lease to the accepted successor instead of reopening a lock race", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vspi-session-transfer-"));
+    const agentDir = join(root, "agent");
+    const sessionFile = join(root, "session.jsonl");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(sessionFile, '{"type":"session","version":3,"id":"transfer-test"}\n');
+    let firstLease: SessionLease | undefined;
+    let assignedToken: string | undefined;
+    firstLease = (
+      await acquireSessionLease(sessionFile, {
+        agentDir,
+        onTakeover: async (channel) => {
+          await firstLease?.transfer(channel.successor);
+          assignedToken = (await readSessionLease(sessionFile, agentDir))?.token;
+          await firstLease?.release();
+        },
+      })
+    ).lease;
+
+    const second = await acquireSessionLease(sessionFile, {
+      agentDir,
+      onTakeover: vi.fn(),
+    });
+
+    expect(assignedToken).toBe(second.lease.owner.token);
+    expect((await readSessionLease(sessionFile, agentDir))?.token).toBe(second.lease.owner.token);
+    await second.lease.release();
+  });
+
   it("relays a pending interaction to the accepted waiting owner before releasing the Session", async () => {
     const root = await mkdtemp(join(tmpdir(), "vspi-session-relay-"));
     const agentDir = join(root, "agent");
@@ -142,6 +171,7 @@ describe("session owner lease", () => {
         agentDir,
         onTakeover: async (channel) => {
           relayedAnswer = await channel.request({ kind: "question", payload: { id: "only-one" } });
+          await activeLease?.transfer(channel.successor);
           await activeLease?.release();
         },
       })
@@ -154,8 +184,9 @@ describe("session owner lease", () => {
     const first = acquireSessionLease(sessionFile, {
       agentDir,
       onInteraction: firstInteraction,
-      onTakeover: async () => {
+      onTakeover: async (channel) => {
         await waitUntil(() => firstLease !== undefined);
+        await firstLease?.transfer(channel.successor);
         await firstLease?.release();
       },
     }).then((acquired) => {
@@ -165,8 +196,9 @@ describe("session owner lease", () => {
     const second = acquireSessionLease(sessionFile, {
       agentDir,
       onInteraction: secondInteraction,
-      onTakeover: async () => {
+      onTakeover: async (channel) => {
         await waitUntil(() => secondLease !== undefined);
+        await secondLease?.transfer(channel.successor);
         await secondLease?.release();
       },
     }).then((acquired) => {
@@ -179,6 +211,8 @@ describe("session owner lease", () => {
     expect(relayedAnswer).toEqual(
       firstInteraction.mock.calls.length === 1 ? { answeredBy: "first" } : { answeredBy: "second" },
     );
+    const finalOwner = await readSessionLease(sessionFile, agentDir);
+    expect([acquired[0].lease.owner.token, acquired[1].lease.owner.token]).toContain(finalOwner?.token);
     await acquired[0].lease.release();
     await acquired[1].lease.release();
   });
@@ -235,7 +269,7 @@ describe("session owner lease", () => {
     await active.lease.release();
   });
 
-  it("requests handoff again when ownership changes while another terminal is waiting", async () => {
+  it("serializes three terminals through atomic ownership transfers without a missing lease", async () => {
     const root = await mkdtemp(join(tmpdir(), "vspi-session-owner-change-"));
     const agentDir = join(root, "agent");
     const sessionFile = join(root, "session.jsonl");
@@ -245,16 +279,31 @@ describe("session owner lease", () => {
     firstLease = (
       await acquireSessionLease(sessionFile, {
         agentDir,
-        onTakeover: () => firstLease?.release(),
+        onTakeover: async (channel) => {
+          await firstLease?.transfer(channel.successor);
+          await firstLease?.release();
+        },
       })
     ).lease;
 
     const ownerTokens: string[] = [];
+    let leaseMissing = false;
+    let monitorLease = true;
+    const monitor = (async () => {
+      while (monitorLease) {
+        if (!(await readSessionLease(sessionFile, agentDir))) leaseMissing = true;
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 1));
+      }
+    })();
     let secondLease: SessionLease | undefined;
     const second = acquireSessionLease(sessionFile, {
       agentDir,
       onWait: (owner) => ownerTokens.push(owner.token),
-      onTakeover: () => secondLease?.release(),
+      onTakeover: async (channel) => {
+        await waitUntil(() => secondLease !== undefined);
+        await secondLease?.transfer(channel.successor);
+        await secondLease?.release();
+      },
     }).then((acquired) => {
       secondLease = acquired.lease;
       return acquired;
@@ -263,16 +312,23 @@ describe("session owner lease", () => {
     const third = acquireSessionLease(sessionFile, {
       agentDir,
       onWait: (owner) => ownerTokens.push(owner.token),
-      onTakeover: () => thirdLease?.release(),
+      onTakeover: async (channel) => {
+        await waitUntil(() => thirdLease !== undefined);
+        await thirdLease?.transfer(channel.successor);
+        await thirdLease?.release();
+      },
     }).then((acquired) => {
       thirdLease = acquired.lease;
       return acquired;
     });
 
     const [secondAcquired, thirdAcquired] = await Promise.all([second, third]);
+    monitorLease = false;
+    await monitor;
     expect(secondAcquired.waited).toBe(true);
     expect(thirdAcquired.waited).toBe(true);
-    expect(new Set(ownerTokens).size).toBeGreaterThanOrEqual(2);
+    expect(new Set(ownerTokens).size).toBe(2);
+    expect(leaseMissing).toBe(false);
     const finalOwner = await readSessionLease(sessionFile, agentDir);
     expect([secondAcquired.lease.owner.token, thirdAcquired.lease.owner.token]).toContain(finalOwner?.token);
     await secondAcquired.lease.release();

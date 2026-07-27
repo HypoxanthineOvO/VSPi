@@ -151,22 +151,64 @@ describe("same-Session foreground handoff", () => {
     const ref: { events?: ChatBackendEvents } = {};
     let ready = false;
     const getModelOptions = vi.fn(async () => []);
+    const cancel = vi.fn(async () => ({ queuedMessages: [] }));
+    const send = vi.fn(async () => ({ status: "queued" as const, delivery: "followUp" as const }));
     const backend = backendWith(ref, {
       isSessionReady: () => ready,
       getModelOptions,
+      cancel,
+      send,
       start: vi.fn(async (events: ChatBackendEvents) => {
         ref.events = events;
         events.onSessionWait?.(true);
       }),
     });
-    const onExit = vi.fn();
-    const app = await createApp(backend, fakeAttachments(), { onExit });
+    const app = await createApp(backend);
     try {
       expect(getModelOptions).not.toHaveBeenCalled();
-      app.handleInput("x");
-      expect(app.composer.getText()).toBe("");
-      app.handleInput("\u0003");
-      expect(onExit).toHaveBeenCalledOnce();
+      ref.events?.onHandoffProjection?.({ kind: "snapshot-start" });
+      ref.events?.onHandoffProjection?.({
+        kind: "snapshot-message",
+        message: { id: "old-output", role: "assistant", kind: "text", text: "OLD_STREAM" },
+      });
+      ref.events?.onHandoffProjection?.({
+        kind: "snapshot-state",
+        modelLabel: "Old Model",
+        modelId: "old-model",
+        modelProvider: "old-provider",
+        supportsVision: false,
+        effort: "high",
+        usage: {
+          contextTokens: 100,
+          contextWindow: 1000,
+          contextPercent: 10,
+          inputTokens: 80,
+          outputTokens: 20,
+          costUsd: 0,
+          currency: "CNY",
+          source: "handoff",
+          asOf: new Date().toISOString(),
+          fxRate: 7.2,
+        },
+        queue: { steering: 0, followUp: 0 },
+        busy: true,
+      });
+      expect((app as unknown as TestableApp).messages).toContainEqual(
+        expect.objectContaining({ id: "old-output", text: "OLD_STREAM" }),
+      );
+      expect(app.startupStatus().model).toBe("Old Model");
+
+      app.composer.setText("WAIT_UNTIL_HANDOFF");
+      app.handleInput("\r");
+      await flush();
+      expect(send).toHaveBeenCalledWith("WAIT_UNTIL_HANDOFF", expect.objectContaining({ behavior: "prompt" }));
+      expect((app as unknown as TestableApp).messages.at(-1)).toMatchObject({
+        text: "WAIT_UNTIL_HANDOFF",
+        delivery: "followUp",
+      });
+      app.handleInput("\u001b");
+      await flush();
+      expect(cancel).toHaveBeenCalledOnce();
 
       ready = true;
       ref.events?.onSessionReset?.({ id: "acquired-session", reason: "resume" });
@@ -199,7 +241,7 @@ describe("same-Session foreground handoff", () => {
     try {
       const original = oldRef.events?.onQuestion?.(questions);
       expect((oldApp as unknown as TestableApp).panels.kind).toBe("question");
-      oldRef.events?.onHandoffPending?.({ request });
+      oldRef.events?.onHandoffPending?.({ request, project: vi.fn() });
       await flush();
       expect(request).toHaveBeenCalledWith({ kind: "question", questions });
       expect((oldApp as unknown as TestableApp).panels.kind).not.toBe("question");
@@ -270,7 +312,7 @@ describe("same-Session foreground handoff", () => {
       requiredPolicy: "Standard" as const,
     };
     try {
-      ref.events?.onHandoffPending?.({ request });
+      ref.events?.onHandoffPending?.({ request, project: vi.fn() });
       const response = approvalBroker.request(approvalRequest);
       await expect(response).resolves.toEqual({ type: "allow-once" });
       expect(request).toHaveBeenCalledWith({ kind: "approval", request: approvalRequest });
@@ -282,7 +324,12 @@ describe("same-Session foreground handoff", () => {
 
   it("restores the old Question panel if the new TUI disconnects before handoff completes", async () => {
     const ref: { events?: ChatBackendEvents } = {};
-    const app = await createApp(backendWith(ref));
+    const onForegroundRelinquish = vi.fn();
+    const onForegroundResume = vi.fn();
+    const app = await createApp(backendWith(ref), fakeAttachments(), {
+      onForegroundRelinquish,
+      onForegroundResume,
+    });
     const question: Question = {
       id: "retry-question",
       title: "Retry",
@@ -299,11 +346,13 @@ describe("same-Session foreground handoff", () => {
     );
     try {
       const original = ref.events?.onQuestion?.([question]);
-      ref.events?.onHandoffPending?.({ request });
+      ref.events?.onHandoffPending?.({ request, project: vi.fn() });
       await flush();
+      expect(onForegroundRelinquish).toHaveBeenCalledOnce();
       rejectRelay(new Error("Session handoff channel closed"));
       ref.events?.onHandoffCancelled?.();
       await flush();
+      expect(onForegroundResume).toHaveBeenCalledOnce();
       expect((app as unknown as TestableApp).panels.kind).toBe("question");
       await (app as unknown as TestableApp).applyPanelEvent({
         type: "questions",
@@ -617,6 +666,28 @@ describe("command panel close", () => {
 });
 
 describe("Plan router question", () => {
+  it("hides the resident Plan surface until a plan exists or the user opens it explicitly", async () => {
+    const app = await createApp(backendWith({}));
+    const testable = app as unknown as TestableApp;
+    try {
+      const initial = app.render(80).map(stripAnsi).join("\n");
+      expect(initial).not.toMatch(/(?:\+|╭) Plan\b/);
+      expect(initial).not.toContain("Shift+Tab 下一个区域");
+
+      await app.runStartupCommand("/plan");
+      const explicit = app.render(80).map(stripAnsi).join("\n");
+      expect(explicit).toMatch(/(?:\+|╭) Plan\b/);
+
+      app.handleInput("\u001b");
+      expect(app.render(80).map(stripAnsi).join("\n")).not.toMatch(/(?:\+|╭) Plan\b/);
+
+      testable.panels.setPlanSnapshot(PLAN);
+      expect(app.render(80).map(stripAnsi).join("\n")).toContain(PLAN.title);
+    } finally {
+      await app.dispose();
+    }
+  });
+
   it("exits the Question overlay before a later Escape can cancel generation", async () => {
     const ref: { events?: ChatBackendEvents } = {};
     const app = await createApp(backendWith(ref));
@@ -849,6 +920,7 @@ describe("rename and inspect Ctrl+C semantics", () => {
       expect(testable.inspectDepth).toBe("node");
 
       ref.events?.onMessage({ id: "later", role: "assistant", kind: "text", text: "later" });
+      testable.panels.setPlanSnapshot(PLAN);
       expect(testable.inspectNodeId).toBe("tool-group:turn-1");
       app.handleInput("\x1b[A");
       expect(testable.inspectNodeId).toBe("thinking");
@@ -866,12 +938,10 @@ describe("rename and inspect Ctrl+C semantics", () => {
     }
   });
 
-  it("skips an empty Transcript in the Shift+Tab focus cycle", async () => {
+  it("skips both Transcript and Plan when neither has content", async () => {
     const app = await createApp(backendWith({}));
     const testable = app as unknown as TestableApp;
     try {
-      app.handleInput("\x1b[Z");
-      expect(testable.workspaceFocus).toBe("plan");
       app.handleInput("\x1b[Z");
       expect(testable.workspaceFocus).toBe("composer");
     } finally {

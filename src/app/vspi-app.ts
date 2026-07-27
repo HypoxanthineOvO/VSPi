@@ -8,6 +8,7 @@ import type {
   NewSessionOptions,
   RuntimeModelOption,
   SessionHandoffInteraction,
+  SessionHandoffProjection,
   SessionHandoffRelay,
   SessionHandoffResponse,
 } from "../backend/types.js";
@@ -95,6 +96,8 @@ export interface VspiAppOptions {
   promptProfiles?: PromptProfileUi;
   selfUpdate?: (currentVersion: string) => Promise<SelfUpdateResult>;
   openOnStart?: "sessions" | "providers";
+  onForegroundRelinquish?: () => void;
+  onForegroundResume?: () => void;
   onExit: () => void;
 }
 
@@ -213,9 +216,10 @@ export class VspiApp implements Component, Focusable {
   private submissionId = 0;
   private activeSubmission: ActiveSubmission | undefined;
   private disposing = false;
-  private sessionWaiting = false;
   private sessionHandoffPending = false;
   private sessionHandoffRelay: SessionHandoffRelay | undefined;
+  private foregroundRelinquished = false;
+  private handoffSnapshotQueued: TranscriptMessage[] = [];
   private startupShellReady = false;
   private backendSessionReady = false;
   private runtimeSurfacePromise: Promise<void> | undefined;
@@ -236,6 +240,7 @@ export class VspiApp implements Component, Focusable {
   private pendingApproval: PendingApproval | undefined;
   private attachmentSessionId: string | undefined;
   private planSnapshot: StoredPlan | undefined;
+  private planPanelExplicit = false;
   private promptProfileSnapshot: PromptProfileSnapshot | undefined;
   private effectivePromptSegments: EffectivePromptSegment[] = [];
 
@@ -320,8 +325,12 @@ export class VspiApp implements Component, Focusable {
           this.effectivePromptSegments = structuredClone(segments);
           if (this.panels.kind === "prompt") void this.refreshPromptPanel();
         },
+        onWorkflowSnapshot: (snapshot) => {
+          if (!this.options.workflowAdapter) return;
+          this.panels.setWorkflowSnapshot(snapshot);
+          this.requestRender();
+        },
         onSessionWait: (waiting) => {
-          this.sessionWaiting = waiting;
           this.setRunActive(waiting);
         },
         onSessionReady: () => {
@@ -331,17 +340,20 @@ export class VspiApp implements Component, Focusable {
         },
         onSessionError: (error) => this.handleRuntimeError(error),
         onHandoffInteraction: (interaction, signal) => this.answerHandoffInteraction(interaction, signal),
+        onHandoffProjection: (projection) => this.applyHandoffProjection(projection),
         onHandoffPending: (relay) => this.beginSessionHandoff(relay),
         onHandoffCancelled: () => this.cancelSessionHandoff(),
         onTakeover: () => {
-          this.messages.push({
-            id: `session-handoff:${Date.now()}`,
-            role: "assistant",
-            kind: "session",
-            text: "Session 已移交到新终端；此终端已退出。",
-          });
-          this.showNotice("Session 已移交；当前终端退出", "info");
-          this.requestRender(true);
+          if (!this.foregroundRelinquished) {
+            this.messages.push({
+              id: `session-handoff:${Date.now()}`,
+              role: "assistant",
+              kind: "session",
+              text: "Session 已移交到新终端；此终端已退出。",
+            });
+            this.showNotice("Session 已移交；当前终端退出", "info");
+            this.requestRender(true);
+          }
           setImmediate(() => this.options.onExit());
         },
         onSessionInvalidating: () => {
@@ -350,7 +362,6 @@ export class VspiApp implements Component, Focusable {
         },
         onSessionReset: (session) => {
           this.sessionTransition = false;
-          this.sessionWaiting = false;
           this.sessionHandoffPending = false;
           this.sessionHandoffRelay = undefined;
           this.attachmentSessionId = session.id;
@@ -444,7 +455,6 @@ export class VspiApp implements Component, Focusable {
   }
 
   private handleRuntimeError(error: unknown): void {
-    this.sessionWaiting = false;
     this.setRunActive(false);
     this.showNotice(`Session 接管失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
   }
@@ -484,14 +494,6 @@ export class VspiApp implements Component, Focusable {
   handleInput(data: string): void {
     if (this.sessionHandoffPending) {
       this.showNotice("Session 正在移交；请在新终端继续", "info");
-      return;
-    }
-    if (this.sessionWaiting && !this.pendingQuestion && !this.pendingApproval && matchesKey(data, Key.ctrl("c"))) {
-      this.options.onExit();
-      return;
-    }
-    if (this.sessionWaiting && !this.pendingQuestion && !this.pendingApproval) {
-      this.showNotice("正在接管 Session；仅迁移中的 Question 或 Approval 可操作", "info");
       return;
     }
     if (this.authDialog) {
@@ -677,6 +679,7 @@ export class VspiApp implements Component, Focusable {
       .filter(isQueuedTranscriptMessage)
       .map((message) => renderQueuedMessage(message, width, this.theme));
     const status = this.renderStatus(width);
+    const planSurfaceVisible = this.panels.kind !== "plan" || this.panels.hasPlanContent() || this.planPanelExplicit;
     const panelRows =
       this.panels.kind === "approval"
         ? Math.min(
@@ -702,15 +705,17 @@ export class VspiApp implements Component, Focusable {
       output.push(...this.preview.render(width));
       output.push(this.notice ? this.renderNotice(width) : this.theme.muted(padLine(this.previewLabel, width)));
     } else {
-      output.push(...this.panels.render(width, panelRows, this.theme, this.usage, this.panelFocused));
+      if (planSurfaceVisible) {
+        output.push(...this.panels.render(width, panelRows, this.theme, this.usage, this.panelFocused));
+      }
       const hint = this.notice
         ? this.renderNotice(width)
         : transcriptFocused
-          ? this.theme.muted(
-              padLine(renderInteractionHint("inspect", "transcript", this.inspectInteractionState()), width),
-            )
-          : this.renderPanelHint(width);
-      output.push(hint);
+          ? this.theme.muted(padLine(this.renderInspectHint(), width))
+          : planSurfaceVisible
+            ? this.renderPanelHint(width)
+            : undefined;
+      if (hint !== undefined) output.push(hint);
     }
     output.push(...activity);
     output.push(...queuedMessages);
@@ -728,6 +733,11 @@ export class VspiApp implements Component, Focusable {
       return this.theme.muted(padLine(renderInteractionHint("panel", "plan", {}), width));
     }
     return this.panels.renderHint(width, this.theme);
+  }
+
+  private renderInspectHint(): string {
+    const hint = renderInteractionHint("inspect", "transcript", this.inspectInteractionState());
+    return this.panels.hasPlanContent() ? hint : hint.replace("Shift+Tab 进入 Plan", "Shift+Tab 返回输入");
   }
 
   private async submit(raw: string, options?: { skipPlanRoute?: boolean }): Promise<void> {
@@ -794,9 +804,16 @@ export class VspiApp implements Component, Focusable {
     this.requestRender();
     if (queuedDuringWork) {
       try {
-        const result = await this.backend.send(text, { attachments, effort: this.effort, behavior });
+        const result = await this.backend.send(text, {
+          attachments,
+          effort: this.effort,
+          behavior,
+          clientMessageId: messageId,
+        });
         this.composer.editor.addToHistory(text);
         const mode = result?.delivery ?? delivery;
+        const queuedMessage = this.messages.find((message) => message.id === messageId);
+        if (queuedMessage?.kind === "text" && mode) queuedMessage.delivery = mode;
         this.showNotice(
           mode === "followUp" ? "已加入 Follow-up，将在当前任务完成后继续" : "已插入，将在下一次模型调用前送达",
           "success",
@@ -956,6 +973,7 @@ export class VspiApp implements Component, Focusable {
   }
 
   private async executeEnabledAction(action: ActionDefinition, raw: string): Promise<void> {
+    if (action.handler !== "plan") this.planPanelExplicit = false;
     if (action.handler === "quit") {
       this.options.onExit();
       return;
@@ -1042,6 +1060,7 @@ export class VspiApp implements Component, Focusable {
     else if (action.handler === "providers") this.panels.open("providers");
     else if (action.handler === "tools") this.panels.open("tools");
     else if (action.handler === "plan") {
+      this.planPanelExplicit = true;
       if (this.options.workflowAdapter) await this.refreshWorkflowSnapshot();
       else await this.refreshPlanSnapshot(this.sessionEpoch);
       this.panels.open("plan");
@@ -1977,17 +1996,45 @@ export class VspiApp implements Component, Focusable {
     if (this.sessionHandoffPending) return;
     this.sessionHandoffPending = true;
     this.sessionHandoffRelay = relay;
+    relay.project({ kind: "snapshot-start" });
+    for (const message of this.messages) {
+      relay.project({ kind: "snapshot-message", message: structuredClone(message) });
+    }
+    relay.project({
+      kind: "snapshot-state",
+      modelLabel: this.modelLabel,
+      modelId: this.backend.modelId,
+      ...(this.backend.modelProvider ? { modelProvider: this.backend.modelProvider } : {}),
+      supportsVision: this.backend.supportsVision,
+      effort: this.effort,
+      usage: structuredClone(this.usage),
+      queue: { ...this.queueState },
+      busy: this.activityActive(),
+    });
     if (this.panels.kind === "question" || this.panels.kind === "approval") this.panels.close();
     if (this.pendingQuestion) void this.relayPendingQuestion(this.pendingQuestion);
     if (this.pendingApproval) void this.relayPendingApproval(this.pendingApproval);
-    this.showNotice("Session 正在移交到新终端；当前任务会无损完成，此终端不再接收输入", "info");
-    this.requestRender();
+    this.messages.push({
+      id: "session-handoff-foreground",
+      role: "assistant",
+      kind: "session",
+      text: "Session 已在另一终端继续；此终端已退出前台。",
+    });
+    this.showNotice("Session 已在另一终端继续", "info");
+    this.requestRender(true);
+    this.foregroundRelinquished = true;
+    setImmediate(() => this.options.onForegroundRelinquish?.());
   }
 
   private cancelSessionHandoff(): void {
     if (!this.sessionHandoffPending) return;
     this.sessionHandoffPending = false;
     this.sessionHandoffRelay = undefined;
+    if (this.foregroundRelinquished) {
+      this.messages = this.messages.filter((message) => message.id !== "session-handoff-foreground");
+      this.foregroundRelinquished = false;
+      this.options.onForegroundResume?.();
+    }
     if (this.pendingQuestion) {
       this.pendingQuestion.relaying = false;
       this.panels.openQuestions(this.pendingQuestion.questions);
@@ -1996,6 +2043,48 @@ export class VspiApp implements Component, Focusable {
       this.panels.openApproval(this.pendingApproval.request);
     }
     this.showNotice("新终端已断开；Session 仍由当前终端继续", "warning");
+    this.requestRender();
+  }
+
+  private applyHandoffProjection(projection: SessionHandoffProjection): void {
+    if (projection.kind === "snapshot-start") {
+      this.handoffSnapshotQueued = this.messages.filter(isQueuedTranscriptMessage);
+      this.messages = [];
+    } else if (projection.kind === "snapshot-message") {
+      this.messages.push(structuredClone(projection.message));
+    } else if (projection.kind === "snapshot-state") {
+      const queued = [...this.handoffSnapshotQueued, ...this.messages.filter(isQueuedTranscriptMessage)];
+      const seen = new Set(this.messages.map((message) => message.id));
+      this.messages.push(...queued.filter((message) => !seen.has(message.id)));
+      this.handoffSnapshotQueued = [];
+      this.modelLabel = projection.modelLabel;
+      this.currentModelIdentity = projection.modelProvider
+        ? { provider: projection.modelProvider, id: projection.modelId }
+        : undefined;
+      this.effort = projection.effort;
+      this.usage = structuredClone(projection.usage);
+      this.queueState = { ...projection.queue };
+      this.setBusy(projection.busy);
+    } else if (projection.kind === "message") {
+      this.messages.push(this.withThinkingDisplayDefault(structuredClone(projection.message)));
+    } else if (projection.kind === "message-update") {
+      const index = this.messages.findIndex((message) => message.id === projection.id);
+      const current = this.messages[index];
+      if (index >= 0 && current) {
+        this.messages[index] = { ...current, ...structuredClone(projection.patch) } as TranscriptMessage;
+      }
+    } else if (projection.kind === "busy") {
+      this.setBusy(projection.busy);
+    } else if (projection.kind === "queue") {
+      this.queueState = { ...projection.queue };
+      this.syncActivityPresentation();
+    } else if (projection.kind === "usage") {
+      this.usage = structuredClone(projection.usage);
+    } else if (projection.kind === "queued-consumed") {
+      this.messages = this.messages.filter((message) => message.id !== projection.id);
+    } else if (projection.kind === "notice") {
+      this.showNotice(projection.message, projection.tone);
+    }
     this.requestRender();
   }
 
@@ -2133,6 +2222,7 @@ export class VspiApp implements Component, Focusable {
   }
 
   private focusComposer(): void {
+    if (!this.panels.hasPlanContent()) this.planPanelExplicit = false;
     this.workspaceFocus = "composer";
     this.panelFocused = false;
     this.inspectIndex = undefined;
@@ -2140,6 +2230,7 @@ export class VspiApp implements Component, Focusable {
   }
 
   private focusPlan(): void {
+    if (!this.panels.hasPlanContent() && !this.planPanelExplicit) return;
     this.workspaceFocus = "plan";
     this.panelFocused = true;
     this.inspectIndex = undefined;
@@ -2176,13 +2267,15 @@ export class VspiApp implements Component, Focusable {
   }
 
   private cycleWorkspaceFocus(): void {
+    const hasPlan = this.panels.hasPlanContent();
     if (this.workspaceFocus === "composer") {
       if (buildTranscriptNodes(this.messages).length > 0) this.focusTranscript();
-      else this.focusPlan();
+      else if (hasPlan) this.focusPlan();
       return;
     }
     if (this.workspaceFocus === "transcript") {
-      this.focusPlan();
+      if (hasPlan) this.focusPlan();
+      else this.focusComposer();
       return;
     }
     this.focusComposer();
@@ -2201,7 +2294,7 @@ export class VspiApp implements Component, Focusable {
       return;
     }
     if (interaction.handler === "cycleWorkspaceFocus") {
-      this.focusPlan();
+      this.cycleWorkspaceFocus();
       return;
     }
 
@@ -2376,6 +2469,7 @@ export class VspiApp implements Component, Focusable {
     this.inspectDepth = "node";
     this.nextBehavior = "prompt";
     this.pendingRouteSubmission = undefined;
+    this.planPanelExplicit = false;
     this.composer.restoreDraft("", []);
     this.preview = undefined;
     this.previewLabel = "";
