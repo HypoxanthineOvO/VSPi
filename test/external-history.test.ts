@@ -163,6 +163,43 @@ describe("external Session history catalog", () => {
     ]);
   });
 
+  it("refreshes the cached catalog when a new Codex rollout appears", async () => {
+    const home = await mkdtemp(join(tmpdir(), "vspi-external-refresh-"));
+    const sessionDir = join(home, ".codex", "sessions", "2026", "07", "27");
+    await mkdir(sessionDir, { recursive: true });
+    const firstId = "019f9cb1-a2fe-7070-88c7-a823d94e5f71";
+    const secondId = "019f9cb1-a2fe-7070-88c7-a823d94e5f72";
+    const rollout = (text: string) =>
+      `${[
+        { type: "session_meta", payload: { cwd: "/workspace", thread_source: "user" } },
+        { type: "event_msg", payload: { type: "user_message", message: text } },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join("\n")}\n`;
+    const indexPath = join(home, ".codex", "session_index.jsonl");
+    await writeFile(join(sessionDir, `rollout-${firstId}.jsonl`), rollout("First"));
+    await writeFile(
+      indexPath,
+      `${JSON.stringify({ id: firstId, thread_name: "First", updated_at: "2026-07-27T10:00:00Z" })}\n`,
+    );
+
+    const catalog = new ExternalSessionCatalog(home);
+    expect((await catalog.list({ source: "codex" })).map((session) => session.sourceId)).toEqual([firstId]);
+
+    await writeFile(join(sessionDir, `rollout-${secondId}.jsonl`), rollout("Second"));
+    await writeFile(
+      indexPath,
+      `${[
+        { id: firstId, thread_name: "First", updated_at: "2026-07-27T10:00:00Z" },
+        { id: secondId, thread_name: "Second", updated_at: "2026-07-27T11:00:00Z" },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join("\n")}\n`,
+    );
+
+    expect((await catalog.list({ source: "codex" })).map((session) => session.sourceId)).toEqual([secondId, firstId]);
+  });
+
   it("does not index symlinked source files", async () => {
     const home = await mkdtemp(join(tmpdir(), "vspi-external-symlink-"));
     const id = "019f9cb1-a2fe-7070-88c7-a823d94e5f77";

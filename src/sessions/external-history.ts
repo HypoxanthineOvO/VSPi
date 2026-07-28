@@ -46,6 +46,11 @@ interface IndexedSession extends ExternalSessionSummary {
   path: string;
 }
 
+interface CachedDiscovery {
+  modifiedAt: number;
+  session: IndexedSession | undefined;
+}
+
 interface CodexIndexEntry {
   id?: unknown;
   thread_name?: unknown;
@@ -78,13 +83,15 @@ const COMMON_API_KEY = /\b(?:sk|xox[baprs]|gh[opusr])[-_][A-Za-z0-9_-]{12,}\b/gu
 
 export class ExternalSessionCatalog {
   private sessions: IndexedSession[] | undefined;
+  private loading: Promise<IndexedSession[]> | undefined;
+  private readonly discovered = new Map<string, CachedDiscovery>();
 
   constructor(private readonly home = homedir()) {}
 
   async list(
     options: { source?: ExternalSessionSource; query?: string; limit?: number } = {},
   ): Promise<ExternalSessionSummary[]> {
-    const sessions = await this.loadIndex();
+    const sessions = await this.loadIndex(true);
     const query = options.query?.trim().toLocaleLowerCase();
     return sessions
       .filter((session) => !options.source || session.source === options.source)
@@ -136,13 +143,20 @@ export class ExternalSessionCatalog {
     this.sessions = undefined;
   }
 
-  private async loadIndex(): Promise<IndexedSession[]> {
-    if (this.sessions) return this.sessions;
-    const [codex, claude] = await Promise.all([this.loadCodexIndex(), this.loadClaudeIndex()]);
-    this.sessions = [...codex, ...claude].sort(
-      (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || left.id.localeCompare(right.id),
-    );
-    return this.sessions;
+  private async loadIndex(refresh = false): Promise<IndexedSession[]> {
+    if (!refresh && this.sessions) return this.sessions;
+    if (this.loading) return this.loading;
+    this.loading = Promise.all([this.loadCodexIndex(), this.loadClaudeIndex()]).then(([codex, claude]) => {
+      this.sessions = [...codex, ...claude].sort(
+        (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || left.id.localeCompare(right.id),
+      );
+      return this.sessions;
+    });
+    try {
+      return await this.loading;
+    } finally {
+      this.loading = undefined;
+    }
   }
 
   private async loadCodexIndex(): Promise<IndexedSession[]> {
@@ -151,11 +165,23 @@ export class ExternalSessionCatalog {
       { path: join(this.home, ".codex", "archived_sessions"), archived: true },
     ];
     const files = new Map<string, { path: string; archived: boolean; modifiedAt: number }>();
-    for (const root of roots) {
-      for (const path of await walkJsonl(root.path)) {
-        const id = codexIdFromFilename(path);
-        if (id) files.set(id, { path, archived: root.archived, modifiedAt: (await stat(path)).mtimeMs });
+    const candidates = (
+      await Promise.all(
+        roots.map(async (root) => (await walkJsonl(root.path)).map((path) => ({ path, archived: root.archived }))),
+      )
+    ).flat();
+    const snapshots = await mapWithConcurrency(candidates, 32, async (candidate) => {
+      try {
+        return { ...candidate, modifiedAt: (await stat(candidate.path)).mtimeMs };
+      } catch (error) {
+        if (hasCode(error, "ENOENT")) return undefined;
+        throw error;
       }
+    });
+    for (const snapshot of snapshots) {
+      if (!snapshot) continue;
+      const id = codexIdFromFilename(snapshot.path);
+      if (id) files.set(id, snapshot);
     }
     const entries = await readJsonLines<CodexIndexEntry>(join(this.home, ".codex", "session_index.jsonl"));
     const latest = new Map<string, CodexIndexEntry>();
@@ -184,18 +210,24 @@ export class ExternalSessionCatalog {
       unindexed,
       24,
       async ([sourceId, file]): Promise<IndexedSession | undefined> => {
+        const cached = this.discovered.get(file.path);
+        if (cached?.modifiedAt === file.modifiedAt) return cached.session;
         const metadata = await discoverCodexSession(file.path);
-        if (!metadata || metadata.threadSource !== "user") return undefined;
-        return {
-          id: `codex:${sourceId}`,
-          source: "codex",
-          sourceId,
-          title: cleanTitle(metadata.title, `Codex ${sourceId.slice(0, 8)}`),
-          ...(metadata.cwd ? { cwd: metadata.cwd } : {}),
-          updatedAt: new Date(file.modifiedAt).toISOString(),
-          ...(file.archived ? { archived: true } : {}),
-          path: file.path,
-        };
+        const session =
+          metadata?.threadSource === "user"
+            ? {
+                id: `codex:${sourceId}`,
+                source: "codex" as const,
+                sourceId,
+                title: cleanTitle(metadata.title, `Codex ${sourceId.slice(0, 8)}`),
+                ...(metadata.cwd ? { cwd: metadata.cwd } : {}),
+                updatedAt: new Date(file.modifiedAt).toISOString(),
+                ...(file.archived ? { archived: true } : {}),
+                path: file.path,
+              }
+            : undefined;
+        this.discovered.set(file.path, { modifiedAt: file.modifiedAt, session });
+        return session;
       },
     );
     sessions.push(...discovered.filter((session): session is IndexedSession => session !== undefined));
@@ -205,9 +237,19 @@ export class ExternalSessionCatalog {
   private async loadClaudeIndex(): Promise<IndexedSession[]> {
     const projectsRoot = join(this.home, ".claude", "projects");
     const files = new Map<string, { path: string; modifiedAt: number }>();
-    for (const path of await walkJsonl(projectsRoot)) {
-      const id = basename(path, ".jsonl");
-      if (/^[0-9a-f-]{20,}$/iu.test(id)) files.set(id, { path, modifiedAt: (await stat(path)).mtimeMs });
+    const paths = await walkJsonl(projectsRoot);
+    const snapshots = await mapWithConcurrency(paths, 32, async (path) => {
+      try {
+        return { path, modifiedAt: (await stat(path)).mtimeMs };
+      } catch (error) {
+        if (hasCode(error, "ENOENT")) return undefined;
+        throw error;
+      }
+    });
+    for (const snapshot of snapshots) {
+      if (!snapshot) continue;
+      const id = basename(snapshot.path, ".jsonl");
+      if (/^[0-9a-f-]{20,}$/iu.test(id)) files.set(id, snapshot);
     }
     const history = await readJsonLines<ClaudeHistoryEntry>(join(this.home, ".claude", "history.jsonl"));
     const latest = new Map<string, ClaudeHistoryEntry>();
@@ -237,17 +279,22 @@ export class ExternalSessionCatalog {
       unindexed,
       24,
       async ([sourceId, file]): Promise<IndexedSession | undefined> => {
+        const cached = this.discovered.get(file.path);
+        if (cached?.modifiedAt === file.modifiedAt) return cached.session;
         const metadata = await discoverClaudeSession(file.path);
-        if (!metadata?.title) return undefined;
-        return {
-          id: `claude:${sourceId}`,
-          source: "claude",
-          sourceId,
-          title: cleanTitle(metadata.title, `Claude Code ${sourceId.slice(0, 8)}`),
-          ...(metadata.cwd ? { cwd: metadata.cwd } : {}),
-          updatedAt: new Date(file.modifiedAt).toISOString(),
-          path: file.path,
-        };
+        const session = metadata?.title
+          ? {
+              id: `claude:${sourceId}`,
+              source: "claude" as const,
+              sourceId,
+              title: cleanTitle(metadata.title, `Claude Code ${sourceId.slice(0, 8)}`),
+              ...(metadata.cwd ? { cwd: metadata.cwd } : {}),
+              updatedAt: new Date(file.modifiedAt).toISOString(),
+              path: file.path,
+            }
+          : undefined;
+        this.discovered.set(file.path, { modifiedAt: file.modifiedAt, session });
+        return session;
       },
     );
     sessions.push(...discovered.filter((session): session is IndexedSession => session !== undefined));

@@ -74,14 +74,23 @@ export function createReviewTracker(): ReviewTracker {
 export function createReviewReminderExtension(options: {
   tracker: ReviewTracker;
   authority?: "local" | "workflow";
+  resolveCheckpoint?: () => Promise<string | undefined>;
 }): ExtensionFactory {
   return (pi) => {
     pi.on("before_agent_start", async (event) => {
       const review = options.tracker.snapshot();
-      if (!review.needsReview) return;
+      const checkpoint = await options.resolveCheckpoint?.();
+      if (!review.needsReview && !checkpoint) return;
       const authority = options.authority === "workflow" ? "Hypo-Workflow Delivery" : "Local Plan";
-      const reminder = `<vspi_continuity_reminder authority="${options.authority ?? "local"}" hidden="true">继续前必须复核 ${authority} 与最新用户指令；如果范围、进度、阻塞或下一步已经变化，使用该权威对应的结构化接口及时更新。Reasons: ${review.reasons.join(", ")}.</vspi_continuity_reminder>`;
-      return { systemPrompt: `${event.systemPrompt}\n\n${reminder}` };
+      const reminders = [
+        ...(review.needsReview
+          ? [
+              `<vspi_continuity_reminder authority="${options.authority ?? "local"}" hidden="true">继续前必须复核 ${authority} 与最新用户指令；如果范围、进度、阻塞或下一步已经变化，使用该权威对应的结构化接口及时更新。Reasons: ${review.reasons.join(", ")}.</vspi_continuity_reminder>`,
+            ]
+          : []),
+        ...(checkpoint ? [checkpoint] : []),
+      ];
+      return { systemPrompt: `${event.systemPrompt}\n\n${reminders.join("\n\n")}` };
     });
   };
 }

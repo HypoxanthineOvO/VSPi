@@ -1,6 +1,7 @@
 import type { TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type { Attachment } from "../src/domain/types.js";
+import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
 import { Composer } from "../src/ui/composer.js";
 import { plainTheme } from "./helpers.js";
 
@@ -75,6 +76,45 @@ describe("composer", () => {
     composer.focused = true;
     composer.addAttachment(attachment);
     expect(composer.render(80).join("\n")).toContain("〔登录页-修改前 · 1440×900 · PNG〕");
+  });
+
+  it("renders Working styles 2 and 3 inside the top border without changing composer height", () => {
+    const composer = new Composer(fakeTui(), plainTheme());
+    const style2 = composer.render(80, {
+      style: 2,
+      frame: 3,
+      elapsedSeconds: 65,
+      reducedMotion: false,
+    });
+    const style3 = composer.render(80, {
+      style: 3,
+      frame: 3,
+      elapsedSeconds: 65,
+      reducedMotion: false,
+    });
+    const reduced = composer.render(80, {
+      style: 3,
+      frame: 5,
+      elapsedSeconds: 65,
+      reducedMotion: true,
+    });
+
+    expect(style2).toHaveLength(3);
+    expect(style3).toHaveLength(3);
+    expect(stripAnsi(style2[0] ?? "")).toContain("⬤ Working 01:05");
+    expect(stripAnsi(style3[0] ?? "")).toMatch(/⬤ Working 01:05 {2}⢿⣟⣷/);
+    expect(stripAnsi(reduced[0] ?? "")).toContain("⬤ Working 01:05  ⣿⣿⣿");
+  });
+
+  it.each([20, 40, 80] as const)("keeps a Working composer exactly %s columns wide", (width) => {
+    const composer = new Composer(fakeTui(), plainTheme());
+    const rendered = composer.render(width, {
+      style: 3,
+      frame: 2,
+      elapsedSeconds: 3_661,
+      reducedMotion: false,
+    });
+    expect(rendered.every((line) => visibleWidth(line) === width)).toBe(true);
   });
 
   it("uses Ctrl+J as an explicit newline without submitting", () => {

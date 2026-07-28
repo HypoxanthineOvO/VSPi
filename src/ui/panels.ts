@@ -1,4 +1,4 @@
-import { decodeKittyPrintable, Input, Key, matchesKey } from "@earendil-works/pi-tui";
+import { Input, Key, matchesKey } from "@earendil-works/pi-tui";
 import {
   BUILTIN_COMMAND_SOURCE,
   type CommandDefinition,
@@ -188,17 +188,6 @@ function usesWideModelLayout(bodyWidth: number): boolean {
   return bodyWidth >= MODEL_WIDE_MIN_BODY_WIDTH;
 }
 
-function printable(data: string): string | undefined {
-  const kitty = decodeKittyPrintable(data);
-  if (kitty) return kitty;
-  const hasControl = Array.from(data).some((character) => {
-    const code = character.codePointAt(0) ?? 0;
-    return code < 32 || code === 127;
-  });
-  if (!hasControl) return data;
-  return undefined;
-}
-
 function panelKey(data: string, key: Parameters<typeof matchesKey>[1]): boolean {
   return data === key || matchesKey(data, key);
 }
@@ -209,6 +198,12 @@ function statusStyle(status: ProviderOption["status"], theme: VspiTheme) {
   if (status === "检测中") return theme.warning;
   if (status === "已配置") return theme.blue;
   return theme.muted;
+}
+
+function workingStyleLabel(style: AppSettings["workingStyle"]): string {
+  if (style === 1) return "1 · 小方块";
+  if (style === 2) return "2 · 大圆";
+  return "3 · 大圆 + 思考格";
 }
 
 function thinkingDisplayLabel(mode: AppSettings["thinkingDisplay"]): string {
@@ -347,8 +342,8 @@ export class PanelController {
   private questionIndex = 0;
   private questionReview = false;
   private questionDirectAnswer = false;
-  private questionHintInline = false;
   private readonly questionInput = new Input();
+  private readonly sharedTextFields = new Map<string, Input>();
   private questions: Question[] = [];
   private approvalRequest: ApprovalRequest | undefined;
   private approvalReasonEditing = false;
@@ -371,6 +366,21 @@ export class PanelController {
       projectInherited: false,
     };
     this.settingsTab = settings.scope === "global" ? 0 : 1;
+  }
+
+  private editSharedTextField(id: string, current: string, data: string, maxLength: number): string {
+    let input = this.sharedTextFields.get(id);
+    if (!input) {
+      input = new Input();
+      input.focused = true;
+      this.sharedTextFields.set(id, input);
+    }
+    if (input.getValue() !== current) input.setValue(current);
+    input.handleInput(data);
+    if (Array.from(input.getValue()).length > maxLength) {
+      input.setValue(Array.from(input.getValue()).slice(0, maxLength).join(""));
+    }
+    return input.getValue();
   }
 
   get kind(): PanelKind {
@@ -594,6 +604,7 @@ export class PanelController {
         this.questionDirectAnswer = false;
         this.questionReview = false;
         this.questionInput.setValue("");
+        this.state.scroll = 0;
         return;
       }
       if (this.providerEditing) {
@@ -675,45 +686,52 @@ export class PanelController {
     else if (this.kind === "policy") [title, body] = ["Policy", this.renderPolicy(bodyWidth, theme)];
     else [title, body] = ["Plan", this.renderPlan(bodyWidth, theme, planFocused)];
 
-    // Question 内容溢出时选项优先：键位提示移到列表末尾随内容滚动，不再固定挤占一行。
-    this.questionHintInline = false;
-    if (this.kind === "question" && body.length > bodyRows) {
-      body = [...body, theme.muted(padLine(this.questionHintText(), bodyWidth))];
-      this.questionHintInline = true;
-    }
-
     if (this.kind === "plan" && this.planPanelCollapsed && this.planItems.length > 0) {
       return [padLine(`${theme.focus("Plan")} · ${theme.blue(theme.bold(this.planDisplayTitle()))}`, width)];
     }
 
-    let footer: string | undefined;
+    let footer = this.kind === "question" ? this.questionHintText() : undefined;
+    let rightTitle: string | undefined;
     if (body.length > bodyRows) {
-      // selectedLine may sit behind a panel gutter; only accept a leading marker after whitespace.
-      const highlightedRows = body
-        .map((line, index) => (/^\s*› /.test(stripAnsi(line)) ? index : -1))
-        .filter((index) => index >= 0);
-      let selectionStart = Math.max(0, Math.min(highlightedRows[0] ?? this.state.selected, body.length - 1));
-      let selectionEnd = highlightedRows.at(-1) ?? selectionStart;
-      if (this.kind === "tools") {
-        selectionStart = Math.min(this.state.selected * 2, body.length - 1);
-        selectionEnd = Math.min(selectionStart + 1, body.length - 1);
-      }
-      this.state.scroll = Math.max(0, Math.min(this.state.scroll, body.length - bodyRows));
-      if (selectionStart < this.state.scroll) this.state.scroll = selectionStart;
-      // 块不高于视口时才对齐块底；超高块保持块顶可见，避免首尾互斥把内容推走。
-      if (selectionEnd - selectionStart < bodyRows && selectionEnd >= this.state.scroll + bodyRows) {
-        this.state.scroll = selectionEnd - bodyRows + 1;
+      if (this.kind === "question" && this.questionReview) {
+        this.state.scroll = Math.max(0, Math.min(this.state.scroll, body.length - bodyRows));
+      } else {
+        // selectedLine may sit behind a panel gutter; only accept a leading marker after whitespace.
+        const highlightedRows = body
+          .map((line, index) => (/^\s*› /.test(stripAnsi(line)) ? index : -1))
+          .filter((index) => index >= 0);
+        let selectionStart = Math.max(0, Math.min(highlightedRows[0] ?? this.state.selected, body.length - 1));
+        let selectionEnd = highlightedRows.at(-1) ?? selectionStart;
+        if (this.kind === "tools") {
+          selectionStart = Math.min(this.state.selected * 2, body.length - 1);
+          selectionEnd = Math.min(selectionStart + 1, body.length - 1);
+        }
+        this.state.scroll = Math.max(0, Math.min(this.state.scroll, body.length - bodyRows));
+        if (selectionStart < this.state.scroll) this.state.scroll = selectionStart;
+        // 块不高于视口时才对齐块底；超高块保持块顶可见，避免首尾互斥把内容推走。
+        if (selectionEnd - selectionStart < bodyRows && selectionEnd >= this.state.scroll + bodyRows) {
+          this.state.scroll = selectionEnd - bodyRows + 1;
+        }
       }
       const total = body.length;
       body = body.slice(this.state.scroll, this.state.scroll + bodyRows);
-      footer = `${this.state.scroll + 1}-${this.state.scroll + body.length} / ${total}`;
+      const range = `${this.state.scroll + 1}-${this.state.scroll + body.length} / ${total}`;
+      if (this.kind === "question") rightTitle = range;
+      else footer = range;
     }
     return frame(body, width, theme, {
       title,
+      ...(rightTitle ? { rightTitle } : {}),
       ...(footer ? { footer } : {}),
+      ...(this.kind === "question" ? { footerPosition: "left" as const } : {}),
       focused: this.kind !== "plan" || planFocused,
       maxBodyLines: bodyRows,
     });
+  }
+
+  sessionsSurfaceHeight(maxRows: number): number {
+    const contentRows = Math.max(1, Math.min(this.sessions.length, 14));
+    return Math.max(3, Math.min(maxRows, contentRows + 2));
   }
 
   renderSessionsSurface(width: number, maxRows: number, theme: VspiTheme): string[] {
@@ -751,9 +769,9 @@ export class PanelController {
     return theme.muted(padLine(contextualHint, width));
   }
 
-  /** True when the panel carries its own hint inside scrollable body content. */
+  /** True when the panel carries its action hint in its fixed frame footer. */
   hintRenderedInline(): boolean {
-    return this.kind === "question" && this.questionHintInline;
+    return this.kind === "question";
   }
 
   private questionHintText(): string {
@@ -766,7 +784,10 @@ export class PanelController {
     const question = this.questions[this.questionIndex];
     if (!question) return hint;
     // 文本输入态下 Shift+S 是字面字符 "S"，跳过不可用，hint 不再宣告。
-    if (this.questionDirectAnswer || question.kind === "freeText") return hint.replace("  Shift+S 跳过", "");
+    if (this.questionDirectAnswer) {
+      return hint.replace("  Shift+S 跳过", "").replace("Enter 确认", "Enter 确认  Esc 返回选项");
+    }
+    if (question.kind === "freeText") return hint.replace("  Shift+S 跳过", "");
     let adjusted = hint;
     if (question.kind === "ranking") adjusted = adjusted.replace("Enter 确认", "Tab 直接回答  Enter 确认");
     if (question.kind !== "multiChoice") adjusted = adjusted.replace("Space 多选  ", "");
@@ -855,22 +876,18 @@ export class PanelController {
       this.modelNarrowDetail = false;
       return;
     }
-    if (matchesKey(data, Key.right)) {
+    const narrow = !usesWideModelLayout(this.lastBodyWidth);
+    if (narrow && matchesKey(data, Key.right)) {
       this.modelNarrowDetail = true;
       return;
     }
-    if (matchesKey(data, Key.left)) {
+    if (narrow && matchesKey(data, Key.left)) {
       this.modelNarrowDetail = false;
       return;
     }
     const models = this.filteredModels();
     const count = this.modelTab === 0 ? models.length : this.modelGroups.length;
     if (this.move(data, count)) return;
-    if (matchesKey(data, Key.backspace) && this.modelTab === 0) {
-      this.modelSearch = this.modelSearch.slice(0, -1);
-      this.state.selected = 0;
-      return;
-    }
     if (matchesKey(data, Key.enter)) {
       if (this.modelTab === 0) {
         const model = models[this.state.selected];
@@ -884,10 +901,12 @@ export class PanelController {
         }
       }
     }
-    const char = printable(data);
-    if (char && this.modelTab === 0) {
-      this.modelSearch += char;
-      this.state.selected = 0;
+    if (this.modelTab === 0) {
+      const next = this.editSharedTextField("model-search", this.modelSearch, data, 500);
+      if (next !== this.modelSearch) {
+        this.modelSearch = next;
+        this.state.selected = 0;
+      }
     }
     return undefined;
   }
@@ -903,14 +922,8 @@ export class PanelController {
         return;
       }
       const key = this.providerField === 0 ? "label" : this.providerField === 1 ? "baseUrl" : undefined;
-      if (key && matchesKey(data, Key.backspace)) {
-        this.providerDraft[key] = this.providerDraft[key].slice(0, -1);
-        return;
-      }
-      const char = printable(data);
-      if (key && char) {
-        this.providerDraft[key] += char;
-        return;
+      if (key) {
+        this.providerDraft[key] = this.editSharedTextField(`provider-${key}`, this.providerDraft[key], data, 2_000);
       }
       if (matchesKey(data, Key.ctrl("s"))) {
         const provider = this.providers.find((item) => item.id === this.activeProviderId);
@@ -997,12 +1010,12 @@ export class PanelController {
       return;
     }
     if (handler === "editImportSearch") {
-      if (panelKey(data, Key.backspace))
-        this.externalImportSearch = Array.from(this.externalImportSearch).slice(0, -1).join("");
-      else {
-        const value = printable(data);
-        if (value) this.externalImportSearch += value;
-      }
+      this.externalImportSearch = this.editSharedTextField(
+        "external-import-search",
+        this.externalImportSearch,
+        data,
+        500,
+      );
       this.state.selected = 0;
       this.state.scroll = 0;
       return;
@@ -1049,9 +1062,7 @@ export class PanelController {
     }
     if (handler === "editSkillText") {
       const current = this.skillAdding ? this.skillAddText : this.skillSearch;
-      const next = panelKey(data, Key.backspace)
-        ? Array.from(current).slice(0, -1).join("")
-        : `${current}${printable(data) ?? ""}`;
+      const next = this.editSharedTextField(this.skillAdding ? "skill-add" : "skill-search", current, data, 2_000);
       if (this.skillAdding) this.skillAddText = next;
       else {
         this.skillSearch = next;
@@ -1103,13 +1114,7 @@ export class PanelController {
         this.settingsEndpointInput = "";
         return;
       }
-      if (panelKey(data, Key.backspace)) {
-        this.settingsEndpointInput = Array.from(this.settingsEndpointInput).slice(0, -1).join("");
-        return;
-      }
-      const value = printable(data);
-      if (value)
-        this.settingsEndpointInput = Array.from(`${this.settingsEndpointInput}${value}`).slice(0, 500).join("");
+      this.settingsEndpointInput = this.editSharedTextField("settings-endpoint", this.settingsEndpointInput, data, 500);
       return;
     }
     if (matchesKey(data, Key.left) || matchesKey(data, Key.right) || matchesKey(data, Key.tab)) {
@@ -1134,6 +1139,12 @@ export class PanelController {
       if (row.key === "theme") {
         const themes: AppSettings["theme"][] = ["VSPi Dark", "VSPi Light", "Terminal"];
         this.settings.theme = themes[(themes.indexOf(this.settings.theme) + 1) % themes.length] ?? "VSPi Dark";
+        this.settingsDirty = true;
+        return;
+      }
+      if (row.key === "workingStyle") {
+        const styles: AppSettings["workingStyle"][] = [1, 2, 3];
+        this.settings.workingStyle = styles[(styles.indexOf(this.settings.workingStyle) + 1) % styles.length] ?? 3;
         this.settingsDirty = true;
         return;
       }
@@ -1174,16 +1185,11 @@ export class PanelController {
 
   private handleApproval(data: string): PanelEvent | undefined {
     if (this.approvalReasonEditing) {
-      if (matchesKey(data, Key.backspace)) {
-        this.approvalReason = Array.from(this.approvalReason).slice(0, -1).join("");
-        return;
-      }
       if (matchesKey(data, Key.enter)) {
         const reason = this.approvalReason.trim();
         return { type: "approval", response: { type: "deny", ...(reason ? { reason } : {}) } };
       }
-      const value = printable(data);
-      if (value) this.approvalReason = Array.from(`${this.approvalReason}${value}`).slice(0, 500).join("");
+      this.approvalReason = this.editSharedTextField("approval-reason", this.approvalReason, data, 500);
       return;
     }
     const request = this.approvalRequest;
@@ -1235,10 +1241,6 @@ export class PanelController {
         this.planNextActionInput = "";
         return;
       }
-      if (panelKey(data, Key.backspace)) {
-        this.planNextActionInput = this.planNextActionInput.slice(0, -1);
-        return;
-      }
       if (panelKey(data, Key.enter) && this.planSnapshot) {
         const event: PanelEvent = {
           type: "planEdit",
@@ -1250,8 +1252,7 @@ export class PanelController {
         this.planActionMenu = false;
         return event;
       }
-      const value = printable(data);
-      if (value) this.planNextActionInput = `${this.planNextActionInput}${value}`.slice(0, 4_000);
+      this.planNextActionInput = this.editSharedTextField("plan-next-action", this.planNextActionInput, data, 4_000);
       return;
     }
     if (this.planActionMenu) {
@@ -1309,10 +1310,6 @@ export class PanelController {
         this.promptImportPath = "";
         return;
       }
-      if (panelKey(data, Key.backspace)) {
-        this.promptImportPath = this.promptImportPath.slice(0, -1);
-        return;
-      }
       if (data === "\r" || data === Key.enter) {
         if (!this.promptImportPath) return;
         const event: PanelEvent = { type: "promptImport", path: this.promptImportPath, scope: "session" };
@@ -1320,8 +1317,7 @@ export class PanelController {
         this.promptImportPath = "";
         return event;
       }
-      const value = printable(data);
-      if (value) this.promptImportPath = `${this.promptImportPath}${value}`.slice(0, 4_096);
+      this.promptImportPath = this.editSharedTextField("prompt-import-path", this.promptImportPath, data, 4_096);
       return;
     }
     const profiles = this.promptSnapshot.profiles;
@@ -1360,10 +1356,16 @@ export class PanelController {
   private handleQuestion(data: string): PanelEvent | undefined {
     if (this.questionReview) {
       if (panelKey(data, Key.enter)) return { type: "questions", questions: structuredClone(this.questions) };
-      if (panelKey(data, Key.left)) {
+      if (panelKey(data, Key.left) || panelKey(data, Key.escape)) {
         this.questionReview = false;
         this.questionIndex = this.questions.length - 1;
+        this.state.scroll = 0;
+        return;
       }
+      if (panelKey(data, Key.up)) this.state.scroll = Math.max(0, this.state.scroll - 1);
+      else if (panelKey(data, Key.down)) this.state.scroll += 1;
+      else if (panelKey(data, Key.pageUp)) this.state.scroll = Math.max(0, this.state.scroll - 8);
+      else if (panelKey(data, Key.pageDown)) this.state.scroll += 8;
       return;
     }
     const question = this.questions[this.questionIndex];
@@ -1385,6 +1387,7 @@ export class PanelController {
       this.questionDirectAnswer = false;
       this.questionInput.setValue("");
       this.state.selected = 0;
+      this.state.scroll = 0;
       return;
     }
     // 跳过键只在选择/排序导航态生效；freeText 输入态下 Shift+S 是字面字符 "S"。
@@ -1444,6 +1447,7 @@ export class PanelController {
     this.questionDirectAnswer = false;
     this.questionInput.setValue("");
     this.state.selected = 0;
+    this.state.scroll = 0;
     if (this.questionIndex >= this.questions.length - 1) this.questionReview = true;
     else this.questionIndex += 1;
   }
@@ -1970,6 +1974,7 @@ export class PanelController {
     key:
       | "theme"
       | "reducedMotion"
+      | "workingStyle"
       | "thinkingDisplay"
       | "thinkingTranslationEndpoint"
       | "wrapCode"
@@ -1980,6 +1985,11 @@ export class PanelController {
     return [
       { group: "外观", label: `主题  ${this.settings.theme}`, key: "theme" },
       { group: "外观", label: `减少动效  ${this.settings.reducedMotion ? "开" : "关"}`, key: "reducedMotion" },
+      {
+        group: "外观",
+        label: `Working 样式  ${workingStyleLabel(this.settings.workingStyle)}`,
+        key: "workingStyle",
+      },
       {
         group: "Transcript",
         label: `thinking 显示模式  ${thinkingDisplayLabel(this.settings.thinkingDisplay)}`,
@@ -2332,7 +2342,6 @@ export class PanelController {
         lines.push(padLine(theme.bold(question.title), width));
         lines.push(theme.muted(padLine(`  ${answer}`, width)));
       }
-      lines.push(theme.selected(padLine(" 提交答案 ", width)));
       return lines;
     }
     const question = this.questions[this.questionIndex];

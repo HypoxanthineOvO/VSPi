@@ -172,6 +172,7 @@ export interface AppSettings {
   scope: "global" | "project";
   theme: "VSPi Dark" | "VSPi Light" | "Terminal";
   reducedMotion: boolean;
+  workingStyle: 1 | 2 | 3;
   thinkingDisplay: "hidden" | "collapsed" | "expanded";
   thinkingTranslationEndpoint: string;
   wrapCode: boolean;

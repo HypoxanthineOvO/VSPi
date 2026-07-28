@@ -1,6 +1,6 @@
 # VSPi 缺陷盘点与修复计划
 
-更新时间：2026-07-27
+更新时间：2026-07-28
 
 ## 状态定义
 
@@ -24,19 +24,19 @@
 - 修复：`compaction_end` 成功且有结果时立即发布 usage；取消、失败和 overflow retry 保持原有状态语义。manual compact 在真实 Pi 事件路径下只由事件收尾，fake session 才走后端兜底。
 - 证据：M8 成功、取消、失败、overflow retry 定向测试与完整测试通过。
 
-### C-03 “压缩过于激进”尚需事件证据
+### C-03 压缩原因与窗口证据
 
-- 状态：`investigate`
-- 已知机制：Pi 默认在 `contextTokens > contextWindow - 16,384` 时压缩；272K 模型的阈值为 255,616。
-- 关键区别：上下文压缩不删除 Session JSONL 历史；“无法往回翻”主要由 Transcript 前景窗口造成。
-- 计划：增加 threshold/overflow 原因、tokens、window、reserve 的可观测测试或诊断；在没有证据前不放宽 Codex 安全边界。
+- 状态：`verified`
+- 机制：Pi 默认在 `contextTokens > contextWindow - reserveTokens` 时压缩；默认 reserve 为 16,384。上下文压缩不删除 Session JSONL 历史。
+- 修复：`compaction_start/end` 现在向 Transcript 写入 Session 诊断，记录原生 `reason`、压缩前后 tokens、context window、reserve 与 retry；threshold/overflow/manual 不再依据相邻的 Approval 猜测。
+- 证据：28,500→12,000 / 32,000、reserve 16,384、reason threshold、retry no 的事件契约测试。
 
 ## 2. Transcript 历史浏览
 
 ### T-01 前景窗口有硬上限但没有加载入口
 
 - 状态：`verified`
-- 修复：`selectTranscriptWindow` 新增 `startNodeId` 锚点模式；Inspect 向上越界时选中上移一条并逐批（20 块）向前扩展，向下越过锚点窗口底部时窗口跟随、接近尾部自动恢复 tail 跟随。窗口在两种模式下都保持有界。
+- 修复：完成消息进入原生 scrollback；Composer `PageUp` 直接进入 Inspect，Inspect 的 `PageUp/PageDown` 按半屏移动，方向键仍支持节点级浏览。完整 Session 历史始终作为 Inspect 数据源。
 - 证据：60/140 条历史可一路向上到第 0 条、到顶安全提示、向下回尾部、渲染帧 ≤ 24 行；M2 旧“限制在窗口内”测试更新为新契约。
 
 ### T-03 渲染输出超过终端高度导致周期性清屏跳顶
@@ -48,9 +48,8 @@
 
 ### T-02 历史加载与模型上下文压缩概念未分离
 
-- 状态：`confirmed`
-- 风险：用户会把“UI 未加载历史”理解为“压缩删除历史”。
-- 方案：Transcript 使用明确的可加载边界；压缩提示只描述模型上下文，不暗示历史被删除。
+- 状态：`verified`
+- 修复：Splash、恢复历史和完成 turn 静态提交到原生 scrollback；live viewport 只渲染流式尾部与 Composer。压缩诊断只描述模型 context，Inspect 始终读取完整 Session。
 
 ## 3. Question
 
@@ -63,10 +62,8 @@
 
 ### Q-02 `Tab 直接回答` 被 App 层 Composer 快捷键抢占
 
-- 状态：`staged`
-- 原因：真实 App 先处理 `Tab 进入 Transcript` 和命令补全，之后才把输入交给 Question。
-- 已暂存方案：非 Plan/Commands 模态面板优先拥有键盘输入。
-- 待验证：已有消息、Composer 有命令草稿、空 Composer、Question 四种题型下的真实 `VspiApp.handleInput()` 路由。
+- 状态：`verified`
+- 修复：Question/Approval 等模态在 App 层先于 Composer 获得完整输入所有权；直接回答、四种题型、命令草稿和已有消息组合均有真实 `VspiApp.handleInput()` 回归。
 
 ### Q-03 长选项标签被截断，description 固定保留
 
@@ -129,22 +126,20 @@
 
 ### A-01 Approval 后出现“折叠”
 
-- 状态：`investigate`
-- 代码结论：Approval 路径只做 deny/allow/elevate 决策并关闭面板，自身不触发压缩，也不改 Transcript 窗口。最可能是后续 tool result 使上下文越过阈值触发 Pi 自动压缩（属预期），或用户看到的是 `collapseTools`/thinking 的 UI 折叠。
-- 建议：下次复现时记录 `compaction_start` 的 reason 与前后 usage；若 reason=threshold 且 usage 刷新正常，则为预期行为而非缺陷。
+- 状态：`verified`
+- 结论：Approval 路径只做 deny/allow/elevate 决策并关闭面板，自身不触发压缩。若后续 tool result 越过阈值，Pi 会以 `reason=threshold` 或 `reason=overflow` 明确报告。
+- 修复：压缩开始/结束诊断记录 reason、前后 usage、window、reserve、retry；Approval 与 compaction 不再通过时间相邻推断因果。
 
 ## 5. 快捷键体系
 
 ### K-01 Registry 不是实际分发的唯一权威
 
-- 状态：`confirmed`
-- 现状：Registry 定义 action/hint，但 `VspiApp.handleInput()`、`PanelController.handleInput()` 和若干子组件仍有独立优先级与直接按键判断。
-- 后果：提示和 Panel 单测正确，真实 TUI 仍可能被上层抢键。
+- 状态：`verified`
+- 修复：App 明确按 Session handoff/Auth/Rename/Preview、Question/Approval、普通 Panel、Transcript、Composer command、Composer editor 的顺序分发；消费后立即返回。
 
 ### K-02 缺少模态层级规则
 
-- 状态：`confirmed`
-- 建议优先级：
+- 状态：`verified`
   1. Session handoff / Auth / Rename / Preview 等顶层模态。
   2. Question / Approval 等阻塞式交互面板。
   3. 当前显式聚焦的普通 Panel。
@@ -155,36 +150,24 @@
 
 ### K-03 catch-all action 掩盖冲突
 
-- 状态：`confirmed`
-- 位置：Question、Approval、Composer edit 使用 `matcher: () => true`。
-- 风险：Registry 内部的第一个匹配和 App 外部优先级共同决定结果，静态检查无法发现抢键。
-- 方案：按状态拆分 editing/navigation/review actions，明确列出可消费键；文本兜底只匹配可打印输入与编辑键。
+- 状态：`verified`
+- 修复：Question、Approval、Composer edit 的 catch-all 已替换为可打印输入、编辑键、bracketed paste 和明确导航键；未知 CSI 不匹配任何 owner。
 
 ### K-04 多个文本字段仍是手写字符串编辑
 
-- 状态：`confirmed`
-- 范围：Provider 文本、Settings endpoint、Attachment rename、Plan nextAction、Prompt import、Skill 搜索/添加、Auth 文本等。
-- 风险：左右光标、Unicode 字素、IME、粘贴、撤销行为不一致。
-- 方案：区分单行 `Input` 和多行 `Editor`，建立共享 TextField 包装，不再逐面板手写。
+- 状态：`verified`
+- 修复：Provider、Settings endpoint、Attachment rename、Plan nextAction、Prompt import、Skill、Auth、Approval 与搜索字段统一复用 Pi TUI `Input` 状态，支持左右光标、Unicode 字素和一致的删除/粘贴行为。
 
 ### K-05 测试只验证 Registry 结构，未验证真实路由
 
-- 状态：`confirmed`
-- 当前覆盖：action 存在、hint 存在、PanelController 直调。
-- 缺口：`VspiApp.handleInput()` 在不同 panel/focus/composer/session 状态下最终由谁消费。
-- 方案：建立按键路由矩阵，至少覆盖 Tab、Shift+Tab、Escape、Enter、方向键、Space、Ctrl+C、Ctrl+V、Alt+Enter、Backspace/Delete 和 Kitty CSI-u。
+- 状态：`verified`
+- 证据：真实 `VspiApp.handleInput()` 覆盖 Tab、Shift+Tab、Escape、Enter、方向键、Space、Ctrl+C、Alt+Enter、PageUp/PageDown、Backspace/Delete 和 Kitty CSI-u；未知 CSI 有负向 owner 测试。
 
 ## 6. 实施顺序
 
-已完成：快捷键路由矩阵与 Question Tab、Question 取消闭环、长选项布局与提示流动、Transcript 边界加载与渲染跳顶、VSPLab 模型继承与 272K 守卫、compaction usage 刷新与 /compact 回显、Plan 四状态/focus/blocker。
+已完成：统一模态 owner、消除 catch-all、共享输入组件、真实按键路由矩阵、Question 全流程、Transcript static/live split、Splash 原生 scrollback、VSPLab 模型继承、运行期 Model 切换、compaction 诊断、Plan 状态与交互命令生命周期。
 
-剩余：
-
-1. 统一模态优先级与输入 action，消除 catch-all 抢键（K-01/K-03）。
-2. 补齐 `VspiApp.handleInput()` 真实按键路由矩阵（K-05）。
-3. 将手写文本字段分批迁移到共享输入组件（K-04）。
-4. A-01 运行时取证（Approval 后 compaction reason/usage）。
-5. 运行 40/80/120 列、24 行终端、Kitty/普通键协议、完整静态检查与全量测试。
+剩余：无已知实现项；发布前只执行最终静态检查、全量测试和真实 PTY smoke。
 
 ## 完成标准
 

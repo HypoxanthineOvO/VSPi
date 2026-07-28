@@ -156,6 +156,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   scope: "project",
   theme: "VSPi Dark",
   reducedMotion: false,
+  workingStyle: 3,
   thinkingDisplay: "collapsed",
   thinkingTranslationEndpoint: "",
   wrapCode: false,

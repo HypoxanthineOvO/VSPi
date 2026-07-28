@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { ProcessTerminal, type Terminal, TUI } from "@earendil-works/pi-tui";
+import { type Terminal, TUI } from "@earendil-works/pi-tui";
 import { runAuthSetup } from "./app/auth-setup.js";
 import { shutdownInteractiveSession, startUiAfterSplash } from "./app/startup.js";
 import { VspiApp } from "./app/vspi-app.js";
@@ -28,6 +28,7 @@ import { createPromptProfileService } from "./prompts/profile-service.js";
 import { BUILTIN_PROVIDERS } from "./providers/builtins.js";
 import { createProviderConfigService } from "./providers/config-service.js";
 import { applySettingsToCapabilities, detectTerminalCapabilities } from "./ui/capabilities.js";
+import { ScrollbackProcessTerminal, ScrollbackTUI } from "./ui/scrollback-terminal.js";
 import { createTheme } from "./ui/theme.js";
 import { updateVspi } from "./update/self-update.js";
 import { VSPI_VERSION } from "./version.js";
@@ -134,8 +135,8 @@ async function interactive(): Promise<void> {
   const workspace = process.cwd();
   const { security, executionPolicy, approvalBroker, yoloAcknowledgementBroker, workflowAdapter } =
     await startupPolicy(workspace);
-  const terminal = new ProcessTerminal();
-  const tui = new TUI(terminal, true);
+  const terminal = new ScrollbackProcessTerminal();
+  const tui = new ScrollbackTUI(terminal, true);
   const settings = await loadSettings(workspace, undefined, { trustedProject: security.trustedProject });
   const capabilities = applySettingsToCapabilities(detectTerminalCapabilities(), settings);
   const theme = createTheme(capabilities, settings.theme);
@@ -226,11 +227,13 @@ async function interactive(): Promise<void> {
       width: terminal.columns,
       theme,
       write: (chunk) => terminal.write(chunk),
+      commitStatic: (lines) => terminal.commitStatic(lines),
       startApp: async () => {
         await app.start();
         return app.startupStatus();
       },
       startTui: async () => {
+        app.commitStableTranscript();
         app.getActiveTui().start();
         if (sessionMode.initialCommand) await app.runStartupCommand(sessionMode.initialCommand);
       },

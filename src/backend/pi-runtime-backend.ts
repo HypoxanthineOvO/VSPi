@@ -94,6 +94,21 @@ import type {
 
 type SessionFactoryResult = { session: AgentSession; modelFallbackMessage?: string };
 
+interface CompactionEvidence {
+  id: string;
+  reason: "manual" | "threshold" | "overflow";
+  beforeTokens: number | null;
+  contextWindow: number;
+  reserveTokens: number | null;
+}
+
+interface PlanReconciliationCheckpoint {
+  taskEpoch: number;
+  planId: string;
+  revision: number;
+  mutationSequence: number;
+}
+
 interface RuntimeOwner {
   readonly session: AgentSession;
   readonly modelFallbackMessage: string | undefined;
@@ -244,9 +259,16 @@ export class PiRuntimeBackend implements ChatBackend {
   private unusableError: Error | undefined;
   private effectivePromptSegments: EffectivePromptSegment[] = [];
   private readonly reviewTracker = createReviewTracker();
-  private planMutatedThisTurn = false;
-  private planReconciliationQueued = false;
+  private taskEpoch = 0;
+  private activeTaskEpoch = 0;
+  private readonly pendingFollowUpTaskEpochs: number[] = [];
+  private planMutationSequence = 0;
+  private planMutatedThisTask = false;
+  private planReconciliationCheckpoint: PlanReconciliationCheckpoint | undefined;
+  private planCheckpointRecordingEpoch: number | undefined;
   private compacting = false;
+  private compactionEvidence: CompactionEvidence | undefined;
+  private compactionEvidenceSequence = 0;
   private compactionMutationBlocked = false;
   private agentRunning = false;
   private queueState = { steering: 0, followUp: 0 };
@@ -448,14 +470,19 @@ export class PiRuntimeBackend implements ChatBackend {
     );
     const manifest = createAttachmentManifest(options.attachments);
     if (text.trim().length > 0) this.reviewTracker.noteMeaningfulTurn();
-    this.planReconciliationQueued = false;
     const payload = `${text}${manifest}`;
     if (session.isStreaming || this.activeGeneration !== undefined || this.compacting) {
       const delivery = options.behavior === "followUp" ? "followUp" : "steer";
-      if (delivery === "followUp") await session.followUp(payload, images);
-      else await session.steer(payload, images);
+      if (delivery === "followUp") {
+        this.pendingFollowUpTaskEpochs.push(++this.taskEpoch);
+        await session.followUp(payload, images);
+      } else {
+        await session.steer(payload, images);
+      }
       return { status: "queued", delivery };
     }
+    this.activeTaskEpoch = ++this.taskEpoch;
+    this.planMutatedThisTask = false;
     this.suppressGenerationEvents = false;
     const generation = ++this.generation;
     this.activeGeneration = generation;
@@ -791,9 +818,13 @@ export class PiRuntimeBackend implements ChatBackend {
   async bindPlan(planId: string | undefined): Promise<void> {
     this.assertHandoffWritable();
     if (!this.options.planBackend) throw new Error("Local Plan compatibility is not enabled");
-    this.assertCompactionStable("change the Local Plan binding");
+    if (this.compacting)
+      throw new Error("Cannot change the Local Plan binding while context compaction is in progress");
     if (planId !== undefined && !/^[A-Za-z0-9._-]{1,96}$/.test(planId)) throw new Error("Invalid Local Plan ID");
     await this.appendPlanBinding(planId);
+    this.planMutationSequence += 1;
+    this.planReconciliationCheckpoint = undefined;
+    this.reviewTracker.reset();
     this.events?.onPlanBindingChange?.(this.getPlanBinding());
   }
 
@@ -1045,6 +1076,9 @@ export class PiRuntimeBackend implements ChatBackend {
           ? createReviewReminderExtension({
               tracker: this.reviewTracker,
               authority: this.options.workflowPlan ? "workflow" : "local",
+              ...(!this.options.workflowPlan && this.options.planBackend
+                ? { resolveCheckpoint: () => this.resolvePlanReconciliationCheckpoint() }
+                : {}),
             })
           : undefined;
       const externalImportCompatibilityExtension = createExternalImportCompatibilityExtension();
@@ -1139,7 +1173,9 @@ export class PiRuntimeBackend implements ChatBackend {
               bind: async (planId) => this.bindPlan(planId ?? undefined),
             },
             onMutation: async (operation) => {
-              if (operation === "update" || operation === "archive") this.planMutatedThisTurn = true;
+              if (operation === "update" || operation === "archive") this.planMutatedThisTask = true;
+              this.planMutationSequence += 1;
+              this.planReconciliationCheckpoint = undefined;
               this.reviewTracker.reset();
               this.events?.onPlanBindingChange?.(this.getPlanBinding());
             },
@@ -1221,8 +1257,14 @@ export class PiRuntimeBackend implements ChatBackend {
     this.queueState = { steering: 0, followUp: 0 };
     this.turn = 0;
     this.reviewTracker.reset();
-    this.planMutatedThisTurn = false;
-    this.planReconciliationQueued = false;
+    this.taskEpoch = 0;
+    this.activeTaskEpoch = 0;
+    this.pendingFollowUpTaskEpochs.length = 0;
+    this.planMutationSequence = 0;
+    this.planMutatedThisTask = false;
+    this.planReconciliationCheckpoint = undefined;
+    this.planCheckpointRecordingEpoch = undefined;
+    this.compactionEvidence = undefined;
     this.compactionMutationBlocked = false;
     if (reason === "resume") this.reviewTracker.noteResume();
     const binding = ++this.binding;
@@ -1696,7 +1738,11 @@ export class PiRuntimeBackend implements ChatBackend {
       this.runningToolIds.clear();
       this.contentSequence = 0;
       this.agentRunning = true;
-      this.planMutatedThisTurn = false;
+      // Overflow compaction retries emit another agent_start for the same logical user task.
+      if (!this.compactionMutationBlocked && this.pendingFollowUpTaskEpochs.length > 0) {
+        this.activeTaskEpoch = this.pendingFollowUpTaskEpochs.shift() ?? this.activeTaskEpoch;
+        this.planMutatedThisTask = false;
+      }
       this.publishActivity();
       return;
     }
@@ -1710,6 +1756,21 @@ export class PiRuntimeBackend implements ChatBackend {
     if (event.type === "compaction_start") {
       this.compacting = true;
       this.compactionMutationBlocked = true;
+      const usage = this.readCompactionUsage();
+      const id = `compaction-${this.binding}-${++this.compactionEvidenceSequence}`;
+      this.compactionEvidence = {
+        id,
+        reason: event.reason,
+        beforeTokens: usage.tokens,
+        contextWindow: usage.contextWindow,
+        reserveTokens: usage.reserveTokens,
+      };
+      this.events?.onMessage({
+        id: `${id}:start`,
+        role: "assistant",
+        kind: "session",
+        text: `上下文压缩开始 · reason ${event.reason} · usage ${formatEvidenceUsage(usage.tokens, usage.contextWindow)} · reserve ${formatEvidenceToken(usage.reserveTokens)}`,
+      });
       this.publishActivity();
       return;
     }
@@ -1718,6 +1779,20 @@ export class PiRuntimeBackend implements ChatBackend {
         this.reviewTracker.noteCompaction();
         this.publishUsage();
       }
+      const after = this.readCompactionUsage();
+      const evidence = this.compactionEvidence;
+      const id = evidence?.id ?? `compaction-${this.binding}-${++this.compactionEvidenceSequence}`;
+      const before = evidence?.beforeTokens ?? null;
+      const window = after.contextWindow || evidence?.contextWindow || 0;
+      const reserve = evidence?.reserveTokens ?? after.reserveTokens;
+      const outcome = event.aborted ? "已取消" : event.errorMessage ? "失败" : "完成";
+      this.events?.onMessage({
+        id: `${id}:end`,
+        role: "assistant",
+        kind: "session",
+        text: `上下文压缩${outcome} · reason ${event.reason} · usage ${formatEvidenceToken(before)}→${formatEvidenceToken(after.tokens)}/${window} · reserve ${formatEvidenceToken(reserve)} · retry ${event.willRetry ? "yes" : "no"}`,
+      });
+      this.compactionEvidence = undefined;
       this.compacting = false;
       this.compactionMutationBlocked = this.activeGeneration !== undefined || event.willRetry;
       this.agentRunning = event.willRetry;
@@ -1733,7 +1808,7 @@ export class PiRuntimeBackend implements ChatBackend {
       for (const id of this.contentIds.values()) this.events.onMessageUpdate(id, { streaming: false });
       if (assistantClaimsCompletion(event.message)) {
         this.reviewTracker.noteCompletionClaim();
-        this.queuePlanReconciliationIfNeeded();
+        this.recordPlanReconciliationCheckpointIfNeeded();
       }
       this.publishUsage();
       return;
@@ -1808,6 +1883,23 @@ export class PiRuntimeBackend implements ChatBackend {
     }
   }
 
+  private readCompactionUsage(): { tokens: number | null; contextWindow: number; reserveTokens: number | null } {
+    const session = this.session;
+    if (!session) return { tokens: null, contextWindow: 0, reserveTokens: null };
+    const context = session.getContextUsage();
+    const settings = (
+      session as unknown as {
+        settingsManager?: { getCompactionReserveTokens?: () => number };
+      }
+    ).settingsManager;
+    const reserve = settings?.getCompactionReserveTokens?.();
+    return {
+      tokens: context?.tokens ?? null,
+      contextWindow: context?.contextWindow ?? session.model?.contextWindow ?? 0,
+      reserveTokens: typeof reserve === "number" && Number.isFinite(reserve) ? reserve : null,
+    };
+  }
+
   private publishUsage(): void {
     const session = this.session;
     if (!session || !this.events) return;
@@ -1831,40 +1923,60 @@ export class PiRuntimeBackend implements ChatBackend {
     });
   }
 
-  private queuePlanReconciliationIfNeeded(): void {
-    if (
-      this.planMutatedThisTurn ||
-      this.planReconciliationQueued ||
-      this.options.workflowPlan ||
-      !this.options.planBackend
-    ) {
-      return;
-    }
+  private recordPlanReconciliationCheckpointIfNeeded(): void {
+    if (this.planMutatedThisTask || this.options.workflowPlan || !this.options.planBackend) return;
     const binding = this.getPlanBinding();
     if (!binding) return;
-    this.planReconciliationQueued = true;
-    void this.queuePlanReconciliation(binding.planId).catch((error: unknown) => {
-      this.planReconciliationQueued = false;
-      this.events?.onNotice(
-        `Plan 对账失败：${error instanceof Error ? error.message : "未知错误"}。请在下一轮先检查 Plan。`,
-        "warning",
-      );
-    });
+    const taskEpoch = this.activeTaskEpoch;
+    if (this.planCheckpointRecordingEpoch === taskEpoch || this.planReconciliationCheckpoint?.taskEpoch === taskEpoch) {
+      return;
+    }
+    const mutationSequence = this.planMutationSequence;
+    this.planCheckpointRecordingEpoch = taskEpoch;
+    void this.options.planBackend
+      .read(binding.planId)
+      .then((plan) => {
+        if (
+          !plan ||
+          plan.archived ||
+          !planHasOpenWork(plan) ||
+          this.planMutatedThisTask ||
+          this.planMutationSequence !== mutationSequence ||
+          this.getPlanBinding()?.planId !== plan.id
+        ) {
+          return;
+        }
+        this.planReconciliationCheckpoint = {
+          taskEpoch,
+          planId: plan.id,
+          revision: plan.revision,
+          mutationSequence,
+        };
+      })
+      .catch((error: unknown) => {
+        this.events?.onNotice(
+          `Plan checkpoint 读取失败：${error instanceof Error ? error.message : "未知错误"}。请在下一轮先检查 Plan。`,
+          "warning",
+        );
+      })
+      .finally(() => {
+        if (this.planCheckpointRecordingEpoch === taskEpoch) this.planCheckpointRecordingEpoch = undefined;
+      });
   }
 
-  private async queuePlanReconciliation(planId: string): Promise<void> {
-    const backend = this.options.planBackend;
-    if (!backend) return;
-    const plan = await backend.read(planId);
-    if (!plan || plan.archived || !planHasOpenWork(plan)) {
-      this.planReconciliationQueued = false;
-      return;
+  private async resolvePlanReconciliationCheckpoint(): Promise<string | undefined> {
+    const checkpoint = this.planReconciliationCheckpoint;
+    if (!checkpoint || !this.options.planBackend) return undefined;
+    this.planReconciliationCheckpoint = undefined;
+    if (
+      checkpoint.mutationSequence !== this.planMutationSequence ||
+      this.getPlanBinding()?.planId !== checkpoint.planId
+    ) {
+      return undefined;
     }
-    if (this.planMutatedThisTurn || this.getPlanBinding()?.planId !== planId) {
-      this.planReconciliationQueued = false;
-      return;
-    }
-    await this.requireSession().followUp(planReconciliationPrompt(plan));
+    const plan = await this.options.planBackend.read(checkpoint.planId);
+    if (!plan || plan.archived || plan.revision !== checkpoint.revision || !planHasOpenWork(plan)) return undefined;
+    return `<vspi_plan_checkpoint task_epoch="${checkpoint.taskEpoch}" plan_id="${plan.id}" expected_revision="${plan.revision}" hidden="true">上一真实用户任务包含完成声明，但绑定的 Local Plan 仍有开放项。把对账作为当前真实用户请求的内部检查点：先依据已有证据同步 Plan，再继续并完成最新用户请求。不要重复已完成工作，不要把对账当成独立任务或回复终点。</vspi_plan_checkpoint>`;
   }
 
   private async findSession(id: string) {
@@ -1893,6 +2005,14 @@ export class PiRuntimeBackend implements ChatBackend {
   }
 }
 
+function formatEvidenceToken(value: number | null): string {
+  return value === null ? "unknown" : String(Math.max(0, Math.round(value)));
+}
+
+function formatEvidenceUsage(tokens: number | null, contextWindow: number): string {
+  return `${formatEvidenceToken(tokens)}/${Math.max(0, Math.round(contextWindow))}`;
+}
+
 function assistantClaimsCompletion(message: unknown): boolean {
   if (!isRecord(message)) return false;
   const text = normalizeContent(message.content)
@@ -1905,13 +2025,6 @@ function planHasOpenWork(plan: StoredPlan): boolean {
   const open = (items: PlanWorkItem[]): boolean =>
     items.some((item) => item.status !== "done" || (item.children ? open(item.children) : false));
   return open(plan.items);
-}
-
-function planReconciliationPrompt(plan: StoredPlan): string {
-  return `<vspi_plan_reconciliation plan_id="${plan.id}" expected_revision="${plan.revision}" hidden="true">
-你刚才已经在正文中声称完成或验证完成，但本轮尚未成功更新绑定的 Local Plan，结构化状态与正文可能不一致。
-不要重复执行已经完成的任务。立即使用 plan_read 读取 ${plan.id}，根据本轮已经产生的证据调用 plan_update：只把有证据的项目标为 done，并同步 focusItemId、blockers 与 nextAction；证据不足的项目保持原状态并修正完成声明。CAS 冲突时重新读取后再更新。完成对账后只需给出简短说明。
-</vspi_plan_reconciliation>`;
 }
 
 function createAttachmentManifest(attachments: SendOptions["attachments"]): string {
@@ -2414,7 +2527,13 @@ function fitRecentItems(items: ExternalTranscriptItem[], minimumIndex: number, b
     tokens += itemTokens;
     first = index;
   }
-  if (first <= minimumIndex || first >= items.length) return first;
+  if (first >= items.length) {
+    for (let index = items.length - 1; index >= minimumIndex; index -= 1) {
+      if (items[index]?.role === "user") return index;
+    }
+    return items.length > minimumIndex ? items.length - 1 : items.length;
+  }
+  if (first <= minimumIndex) return first;
   const nextUser = items.findIndex((item, index) => index >= first && item.role === "user");
   return nextUser >= first ? nextUser : first;
 }

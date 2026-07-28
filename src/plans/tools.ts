@@ -62,9 +62,12 @@ const UpdateParameters = Type.Object(
   {
     plan_id: Id,
     expected_revision: Type.Integer({ minimum: 1 }),
-    plan: Type.Optional(Plan),
-    archive: Type.Optional(Type.Literal(true)),
+    plan: Plan,
   },
+  { additionalProperties: false },
+);
+const ArchiveParameters = Type.Object(
+  { plan_id: Id, expected_revision: Type.Integer({ minimum: 1 }) },
   { additionalProperties: false },
 );
 const BindParameters = Type.Object(
@@ -99,19 +102,20 @@ export function createPlanToolDefinitions(options: {
           return projectPlan(plan);
         }),
     ),
-    tool("plan_update", "Plan Update", "CAS-update or archive one local plan.", UpdateParameters, (raw) =>
+    tool("plan_update", "Plan Update", "CAS-update one local plan.", UpdateParameters, (raw) =>
       execute("plan update", async () => {
-        if (raw.archive === true) {
-          const plan = await options.backend.archive(raw.plan_id, { expectedRevision: raw.expected_revision });
-          await options.onMutation?.("archive", plan);
-          return projectPlan(plan);
-        }
-        if (!raw.plan) throw new Error("plan_update requires plan or archive=true");
         const plan = await options.backend.update(raw.plan_id, {
           expectedRevision: raw.expected_revision,
           plan: raw.plan as PlanInput,
         });
         await options.onMutation?.("update", plan);
+        return projectPlan(plan);
+      }),
+    ),
+    tool("plan_archive", "Plan Archive", "Archive one local plan with CAS protection.", ArchiveParameters, (raw) =>
+      execute("plan archive", async () => {
+        const plan = await options.backend.archive(raw.plan_id, { expectedRevision: raw.expected_revision });
+        await options.onMutation?.("archive", plan);
         return projectPlan(plan);
       }),
     ),

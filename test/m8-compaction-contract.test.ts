@@ -54,6 +54,12 @@ async function harness(compactImpl?: (instructions?: string) => Promise<unknown>
   const abortCompaction = vi.fn();
   const abort = vi.fn(async () => {});
   const followUp = vi.fn(async () => {});
+  let contextTokens = 0;
+  const getContextUsage = vi.fn(() => ({
+    tokens: contextTokens,
+    contextWindow: 32_000,
+    percent: Math.round((contextTokens / 32_000) * 100),
+  }));
   const managers: SessionManager[] = [];
   const planBackend = createLocalPlanBackend({ rootDir: join(cwd, "compatibility-plans") });
   const backend = new PiBackend({
@@ -83,7 +89,8 @@ async function harness(compactImpl?: (instructions?: string) => Promise<unknown>
           abort,
           compact,
           abortCompaction,
-          getContextUsage: vi.fn(() => ({ tokens: 0, contextWindow: 32_000, percent: 0 })),
+          settingsManager: { getCompactionReserveTokens: () => 16_384 },
+          getContextUsage,
           getSessionStats: vi.fn(() => ({
             sessionFile: manager.getSessionFile(),
             sessionId: manager.getSessionId(),
@@ -118,6 +125,9 @@ async function harness(compactImpl?: (instructions?: string) => Promise<unknown>
     planBackend,
     events,
     managers,
+    setContextTokens: (tokens: number) => {
+      contextTokens = tokens;
+    },
     emit: (event: AgentSessionEvent) => listener?.(event),
   };
 }
@@ -376,7 +386,7 @@ describe("M8 compaction mutation barrier", () => {
     },
   );
 
-  it.each(["newSession", "switchSession", "forkSession", "bindPlan"] as const)(
+  it.each(["newSession", "switchSession", "forkSession"] as const)(
     "keeps %s blocked across overflow compaction_end until the retry generation settles",
     async (operation) => {
       const h = await harness();
@@ -403,14 +413,36 @@ describe("M8 compaction mutation barrier", () => {
 
         h.emit({ type: "agent_end", messages: [], willRetry: false } as AgentSessionEvent);
         await expect(invokeMutation(operation, h.api, target)).resolves.toBeUndefined();
-        if (operation === "bindPlan") expect(h.api.getPlanBinding()).toEqual({ planId: "replacement-plan" });
-        else expect(h.managers.length).toBeGreaterThan(1);
+        expect(h.managers.length).toBeGreaterThan(1);
       } finally {
         list.mockRestore();
         await h.backend.dispose();
       }
     },
   );
+
+  it("allows Plan metadata binding after compaction_end while an overflow retry is active", async () => {
+    const h = await harness();
+    try {
+      await h.api.bindPlan("release-plan");
+      const initialSessionId = h.managers[0]?.getSessionId();
+      h.emit({ type: "compaction_start", reason: "overflow" } as AgentSessionEvent);
+      h.emit({
+        type: "compaction_end",
+        reason: "overflow",
+        aborted: false,
+        willRetry: true,
+        result: {},
+      } as AgentSessionEvent);
+
+      await expect(h.api.bindPlan("replacement-plan")).resolves.toBeUndefined();
+      expect(h.api.getPlanBinding()).toEqual({ planId: "replacement-plan" });
+      expect(h.managers).toHaveLength(1);
+      expect(h.managers[0]?.getSessionId()).toBe(initialSessionId);
+    } finally {
+      await h.backend.dispose();
+    }
+  });
 
   it.each(["newSession", "switchSession", "forkSession", "bindPlan"] as const)(
     "allows %s after an overflow retry reaches agent_end",
@@ -439,7 +471,7 @@ describe("M8 compaction mutation barrier", () => {
       }
     },
   );
-  it("queues one internal Plan reconciliation when a completion claim did not update the bound Plan", async () => {
+  it("records a one-shot Plan checkpoint without queueing a synthetic follow-up", async () => {
     const h = await harness();
     try {
       const plan = await h.planBackend.create({
@@ -463,11 +495,135 @@ describe("M8 compaction mutation barrier", () => {
       h.emit({ type: "message_end", message } as AgentSessionEvent);
       h.emit({ type: "message_end", message } as AgentSessionEvent);
 
-      await vi.waitFor(() => expect(h.followUp).toHaveBeenCalledOnce());
-      expect(h.followUp).toHaveBeenCalledWith(
-        expect.stringMatching(/vspi_plan_reconciliation[\s\S]*plan_read[\s\S]*plan_update/u),
+      const state = h.backend as unknown as {
+        planReconciliationCheckpoint?: { planId: string; revision: number };
+        resolvePlanReconciliationCheckpoint(): Promise<string | undefined>;
+      };
+      await vi.waitFor(() => expect(state.planReconciliationCheckpoint).toMatchObject({ planId: plan.id }));
+      await vi.waitFor(() =>
+        expect(
+          (h.backend as unknown as { planCheckpointRecordingEpoch?: number }).planCheckpointRecordingEpoch,
+        ).toBeUndefined(),
       );
-      expect(h.followUp).toHaveBeenCalledWith(expect.stringContaining("不要重复执行"));
+      expect(h.followUp).not.toHaveBeenCalled();
+      await expect(state.resolvePlanReconciliationCheckpoint()).resolves.toMatch(
+        /vspi_plan_checkpoint[\s\S]*内部检查点[\s\S]*继续并完成最新用户请求/u,
+      );
+      await expect(state.resolvePlanReconciliationCheckpoint()).resolves.toBeUndefined();
+    } finally {
+      await h.backend.dispose();
+    }
+  });
+
+  it("invalidates a pending Plan checkpoint when the binding changes", async () => {
+    const h = await harness();
+    try {
+      const plan = await h.planBackend.create({
+        title: "Finish page updates",
+        goal: "Apply and verify the requested page changes",
+        challenges: [],
+        items: [{ id: "verify", title: "Verify desktop and mobile", status: "in_progress" }],
+        focusItemId: "verify",
+        blockers: [],
+        nextAction: "Run browser checks",
+      });
+      await h.api.bindPlan(plan.id);
+      h.emit({ type: "agent_start" } as AgentSessionEvent);
+      h.emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "任务已完成。" }],
+        },
+      } as AgentSessionEvent);
+      const state = h.backend as unknown as {
+        planReconciliationCheckpoint?: { planId: string };
+        resolvePlanReconciliationCheckpoint(): Promise<string | undefined>;
+      };
+      await vi.waitFor(() => expect(state.planReconciliationCheckpoint).toMatchObject({ planId: plan.id }));
+
+      await h.api.bindPlan("replacement-plan");
+
+      expect(state.planReconciliationCheckpoint).toBeUndefined();
+      await expect(state.resolvePlanReconciliationCheckpoint()).resolves.toBeUndefined();
+      expect(h.followUp).not.toHaveBeenCalled();
+    } finally {
+      await h.backend.dispose();
+    }
+  });
+
+  it("invalidates a pending Plan checkpoint when the revision changes", async () => {
+    const h = await harness();
+    try {
+      const input = {
+        title: "Finish page updates",
+        goal: "Apply and verify the requested page changes",
+        challenges: [] as string[],
+        items: [{ id: "verify", title: "Verify desktop and mobile", status: "in_progress" as const }],
+        focusItemId: "verify",
+        blockers: [] as string[],
+        nextAction: "Run browser checks",
+      };
+      const plan = await h.planBackend.create(input);
+      await h.api.bindPlan(plan.id);
+      h.emit({ type: "agent_start" } as AgentSessionEvent);
+      h.emit({
+        type: "message_end",
+        message: { role: "assistant", content: [{ type: "text", text: "任务已完成。" }] },
+      } as AgentSessionEvent);
+      const state = h.backend as unknown as {
+        planReconciliationCheckpoint?: { planId: string };
+        resolvePlanReconciliationCheckpoint(): Promise<string | undefined>;
+      };
+      await vi.waitFor(() => expect(state.planReconciliationCheckpoint).toMatchObject({ planId: plan.id }));
+      await h.planBackend.update(plan.id, {
+        expectedRevision: plan.revision,
+        plan: { ...input, nextAction: "Review updated evidence" },
+      });
+
+      await expect(state.resolvePlanReconciliationCheckpoint()).resolves.toBeUndefined();
+      expect(h.followUp).not.toHaveBeenCalled();
+    } finally {
+      await h.backend.dispose();
+    }
+  });
+
+  it("preserves Plan mutation evidence across an overflow compaction retry", async () => {
+    const h = await harness();
+    try {
+      const plan = await h.planBackend.create({
+        title: "Finish page updates",
+        goal: "Apply and verify the requested page changes",
+        challenges: [],
+        items: [{ id: "verify", title: "Verify desktop and mobile", status: "in_progress" }],
+        focusItemId: "verify",
+        blockers: [],
+        nextAction: "Run browser checks",
+      });
+      await h.api.bindPlan(plan.id);
+      h.emit({ type: "agent_start" } as AgentSessionEvent);
+      (h.backend as unknown as { planMutatedThisTask: boolean }).planMutatedThisTask = true;
+      h.emit({ type: "compaction_start", reason: "overflow" } as AgentSessionEvent);
+      h.emit({
+        type: "compaction_end",
+        reason: "overflow",
+        aborted: false,
+        willRetry: true,
+        result: {},
+      } as AgentSessionEvent);
+      h.emit({ type: "agent_start" } as AgentSessionEvent);
+      h.emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "已完成页面修改和桌面端、移动端验证。" }],
+        },
+      } as AgentSessionEvent);
+
+      expect(h.followUp).not.toHaveBeenCalled();
+      expect(
+        (h.backend as unknown as { planReconciliationCheckpoint?: unknown }).planReconciliationCheckpoint,
+      ).toBeUndefined();
     } finally {
       await h.backend.dispose();
     }
@@ -475,6 +631,34 @@ describe("M8 compaction mutation barrier", () => {
 });
 
 describe("M8 Pi compaction event state machine", () => {
+  it("records native compaction reason, usage, window, reserve, and retry evidence", async () => {
+    const h = await harness();
+    try {
+      h.setContextTokens(28_500);
+      h.emit({ type: "compaction_start", reason: "threshold" } as AgentSessionEvent);
+      h.setContextTokens(12_000);
+      h.emit({
+        type: "compaction_end",
+        reason: "threshold",
+        aborted: false,
+        willRetry: false,
+        result: {},
+      } as AgentSessionEvent);
+
+      const evidence = vi
+        .mocked(h.events.onMessage)
+        .mock.calls.map(([message]) => (message.kind === "session" ? message.text : ""))
+        .filter(Boolean);
+      expect(evidence).toEqual([
+        "上下文压缩开始 · reason threshold · usage 28500/32000 · reserve 16384",
+        "上下文压缩完成 · reason threshold · usage 28500→12000/32000 · reserve 16384 · retry no",
+      ]);
+      expect(evidence.join(" ")).not.toMatch(/approval|批准|审批/i);
+    } finally {
+      await h.backend.dispose();
+    }
+  });
+
   it.each(["threshold", "overflow"] as const)("enters busy state when %s auto compaction starts", async (reason) => {
     const h = await harness();
     try {

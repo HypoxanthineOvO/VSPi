@@ -280,7 +280,8 @@ describe("M5 dynamic Question panel", () => {
     ranking.handleInput(Key.shift("s"));
     const reviewHint = stripAnsi(ranking.renderHint(80, plainTheme()));
     expect(reviewHint).toMatch(/Enter .*提交/);
-    expect(reviewHint).toMatch(/← .*返回/);
+    expect(reviewHint).toMatch(/Esc .*返回/);
+    expect(reviewHint).toMatch(/PgUp\/PgDn .*滚动/);
     expect(reviewHint).not.toMatch(/选择|直接回答|跳过|重排|Space/);
   });
 
@@ -290,7 +291,7 @@ describe("M5 dynamic Question panel", () => {
     const rendered = panelText(panel);
     expect(rendered).toContain("紧凑");
     expect(rendered).not.toContain("…");
-    expect(panel.hintRenderedInline()).toBe(false);
+    expect(panel.hintRenderedInline()).toBe(true);
   });
 
   it("wraps long option labels and descriptions as whole selected blocks without truncation", () => {
@@ -322,7 +323,7 @@ describe("M5 dynamic Question panel", () => {
     expect(selectedRows.join("\n")).toContain("需要完整换行");
   });
 
-  it("moves the key hint into the scrollable body when question content overflows", () => {
+  it("keeps the Question action footer fixed when content overflows", () => {
     const manyOptions = Array.from({ length: 12 }, (_, index) => ({
       id: `opt-${index}`,
       label: `选项 ${index} ${"内容".repeat(10)}`,
@@ -331,12 +332,37 @@ describe("M5 dynamic Question panel", () => {
     const panel = new PanelController(DEFAULT_SETTINGS);
     openQuestions(panel, [{ id: "many", title: "多选项", prompt: "选择", kind: "singleChoice", options: manyOptions }]);
 
-    panel.render(80, 10, plainTheme(), DEFAULT_USAGE);
+    const compact = panel.render(80, 10, plainTheme(), DEFAULT_USAGE).map(stripAnsi);
     expect(panel.hintRenderedInline()).toBe(true);
+    expect(compact.at(-1)).toContain("Enter 确认");
+    expect(compact[0]).toContain("Question");
 
     const roomy = new PanelController(DEFAULT_SETTINGS);
     openQuestions(roomy, [SINGLE_QUESTION]);
-    roomy.render(80, 18, plainTheme(), DEFAULT_USAGE);
-    expect(roomy.hintRenderedInline()).toBe(false);
+    const roomyLines = roomy.render(80, 18, plainTheme(), DEFAULT_USAGE).map(stripAnsi);
+    expect(roomy.hintRenderedInline()).toBe(true);
+    expect(roomyLines.at(-1)).toContain("Enter 确认");
+  });
+
+  it("scrolls long Review content independently while keeping submit and return actions fixed", () => {
+    const questions = Array.from({ length: 20 }, (_, index) => ({
+      id: `question-${index}`,
+      title: `问题 ${index}`,
+      prompt: `提示 ${index}`,
+      kind: "freeText" as const,
+      answer: `回答 ${index}`,
+    }));
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    openQuestions(panel, questions);
+    for (let index = 0; index < questions.length; index += 1) panel.handleInput(Key.enter);
+
+    const before = panel.render(80, 10, plainTheme(), DEFAULT_USAGE).map(stripAnsi);
+    expect(before.join("\n")).toContain("问题 0");
+    expect(before.at(-1)).toContain("Enter 提交");
+    panel.handleInput(Key.pageDown);
+    const after = panel.render(80, 10, plainTheme(), DEFAULT_USAGE).map(stripAnsi);
+    expect(after.join("\n")).not.toContain("问题 0");
+    expect(after.at(-1)).toContain("Esc 返回");
+    expect(panel.handleInput(Key.enter)).toMatchObject({ type: "questions" });
   });
 });

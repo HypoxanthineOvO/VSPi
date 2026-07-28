@@ -8,6 +8,7 @@ export async function startUiAfterSplash(options: {
   width: number;
   theme: VspiTheme;
   write: (chunk: string) => void;
+  commitStatic?: (lines: readonly string[]) => void;
   startApp: () => Promise<StartupStatus> | StartupStatus;
   startTui: () => Promise<void> | void;
 }): Promise<void> {
@@ -16,6 +17,7 @@ export async function startUiAfterSplash(options: {
     getWidth: () => process.stdout.columns || options.width,
     theme: options.theme,
     write: options.write,
+    ...(options.commitStatic ? { commitStatic: options.commitStatic } : {}),
     startApp: options.startApp,
     startTui: options.startTui,
   });

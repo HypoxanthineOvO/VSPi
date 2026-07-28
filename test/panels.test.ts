@@ -229,11 +229,29 @@ describe("panel controller", () => {
     });
   });
 
+  it("cycles the three persisted Working styles and defaults to style 3", () => {
+    const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
+    panel.open("settings");
+    panel.handleInput(DOWN);
+    panel.handleInput(DOWN);
+    expect(text(panel, 80, 18)).toContain("Working 样式  3");
+    panel.handleInput(ENTER);
+    expect(text(panel, 80, 18)).toContain("Working 样式  1");
+    panel.handleInput(ENTER);
+    expect(text(panel, 80, 18)).toContain("Working 样式  2");
+    panel.handleInput(ENTER);
+    expect(text(panel, 80, 18)).toContain("Working 样式  3");
+    expect(panel.handleInput("\u0013")).toMatchObject({
+      type: "settings",
+      settings: { workingStyle: 3 },
+    });
+  });
+
   it("keeps completed-tool collapse low-emphasis, enabled by default, and explicitly applicable", () => {
     const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
     panel.open("settings");
     expect(text(panel, 80, 18)).toContain("完成后收起工具  开");
-    for (let index = 0; index < 5; index += 1) panel.handleInput(DOWN);
+    for (let index = 0; index < 6; index += 1) panel.handleInput(DOWN);
     panel.handleInput(ENTER);
     expect(text(panel, 80, 18)).toContain("完成后收起工具  关");
     expect(panel.handleInput("\u0013")).toMatchObject({
@@ -245,6 +263,7 @@ describe("panel controller", () => {
   it("cycles the thinking display through hidden, collapsed, and expanded before Apply", () => {
     const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global", thinkingDisplay: "hidden" });
     panel.open("settings");
+    panel.handleInput(DOWN);
     panel.handleInput(DOWN);
     panel.handleInput(DOWN);
     expect(text(panel, 80, 18)).toContain("thinking 显示模式  隐藏");
@@ -263,7 +282,7 @@ describe("panel controller", () => {
   it("edits and pastes a Thinking translation endpoint without losing the Settings draft", () => {
     const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
     panel.open("settings");
-    for (let index = 0; index < 3; index += 1) panel.handleInput(DOWN);
+    for (let index = 0; index < 4; index += 1) panel.handleInput(DOWN);
     expect(text(panel, 90, 20)).toContain("思考翻译服务  关");
 
     panel.handleInput(ENTER);

@@ -39,6 +39,10 @@ function normalizeSettings(input: unknown, fallback: AppSettings): AppSettings {
     scope: value.scope === "global" || value.scope === "project" ? value.scope : fallback.scope,
     theme: value.theme && THEME_VALUES.has(value.theme) ? value.theme : fallback.theme,
     reducedMotion: typeof value.reducedMotion === "boolean" ? value.reducedMotion : fallback.reducedMotion,
+    workingStyle:
+      value.workingStyle === 1 || value.workingStyle === 2 || value.workingStyle === 3
+        ? value.workingStyle
+        : fallback.workingStyle,
     thinkingDisplay,
     thinkingTranslationEndpoint:
       typeof value.thinkingTranslationEndpoint === "string"

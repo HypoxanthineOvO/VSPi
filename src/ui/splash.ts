@@ -64,6 +64,7 @@ export interface StartupSequenceOptions {
   width: number;
   theme: VspiTheme;
   write: (chunk: string) => void;
+  commitStatic?: (lines: readonly string[]) => void;
   startApp: () => Promise<StartupStatus> | StartupStatus;
   startTui: () => Promise<void> | void;
   /** 返回当前终端宽度；静态帧与最终状态帧都会调用，以便响应 resize。缺省时固定为 width。 */
@@ -79,12 +80,17 @@ function replacePlaceholder(nextFrame: string[]): string {
   return `\r\x1b[2K${nextFrame.join("\n")}`;
 }
 
+function withAutowrapDisabled(content: string): string {
+  return `\u001b[?7l${content}\u001b[?7h`;
+}
+
 export async function runStartupSequence(options: StartupSequenceOptions): Promise<void> {
   const currentWidth = (): number => Math.max(1, options.getWidth?.() ?? options.width);
-  const safeWidth = (): number => Math.max(4, currentWidth() - 1);
-  options.write(renderStartupPlaceholder(safeWidth(), options.theme));
+  const safeWidth = (): number => Math.max(4, currentWidth());
+  options.write(withAutowrapDisabled(renderStartupPlaceholder(safeWidth(), options.theme)));
   const status = await options.startApp();
   const finalFrame = renderSplash(safeWidth(), options.theme, 1, status);
-  options.write(`${replacePlaceholder(finalFrame)}\n`);
+  if (options.commitStatic) options.commitStatic(finalFrame);
+  else options.write(`${withAutowrapDisabled(replacePlaceholder(finalFrame))}\n`);
   await options.startTui();
 }

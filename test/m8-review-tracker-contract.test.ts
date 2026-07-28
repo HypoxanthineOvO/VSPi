@@ -39,7 +39,10 @@ async function trackerModule() {
   const specifier = "../src/continuity/review-tracker.js";
   return (await import(specifier)) as {
     createReviewTracker(): ReviewTracker;
-    createReviewReminderExtension(options: { tracker: ReviewTracker }): ExtensionFactory;
+    createReviewReminderExtension(options: {
+      tracker: ReviewTracker;
+      resolveCheckpoint?: () => Promise<string | undefined>;
+    }): ExtensionFactory;
   };
 }
 
@@ -110,5 +113,30 @@ describe("M8 continuity review tracker", () => {
     expect(result?.systemPrompt).toMatch(/review|复核|检查/i);
     expect(result).not.toHaveProperty("message");
     expect(Object.keys(result ?? {})).toEqual(["systemPrompt"]);
+  });
+
+  it("injects a resolved checkpoint into the next natural agent start without creating a message", async () => {
+    const { createReviewReminderExtension, createReviewTracker } = await trackerModule();
+    const tracker = createReviewTracker();
+    const checkpoints = ["<vspi_plan_checkpoint>reconcile and continue</vspi_plan_checkpoint>", undefined];
+    const handler = handlerFor(
+      createReviewReminderExtension({
+        tracker,
+        resolveCheckpoint: async () => checkpoints.shift(),
+      }),
+    );
+    const event: BeforeAgentStartEvent = {
+      type: "before_agent_start",
+      prompt: "new real user request",
+      systemPrompt: "Pi base",
+      systemPromptOptions: {},
+    };
+
+    const first = await handler(event);
+    const second = await handler(event);
+
+    expect(first?.systemPrompt).toContain("vspi_plan_checkpoint");
+    expect(first).not.toHaveProperty("message");
+    expect(second).toBeUndefined();
   });
 });
