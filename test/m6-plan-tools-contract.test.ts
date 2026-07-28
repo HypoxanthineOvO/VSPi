@@ -125,10 +125,10 @@ function planToolInput(overrides: Partial<PlanInput> = {}): PlanInput {
 }
 
 describe("M6 typed plan tool schemas", () => {
-  it("returns exactly five Pi ToolDefinitions with executable TypeBox schemas", async () => {
+  it("returns exactly six Pi ToolDefinitions with executable TypeBox schemas", async () => {
     const { tools, byName } = await toolsFor();
     expect(tools.map((tool) => tool.name).sort()).toEqual(
-      ["plan_bind", "plan_create", "plan_list", "plan_read", "plan_update"].sort(),
+      ["plan_archive", "plan_bind", "plan_create", "plan_list", "plan_read", "plan_update"].sort(),
     );
     for (const tool of tools) {
       expect(tool.label).toBeTruthy();
@@ -152,6 +152,12 @@ describe("M6 typed plan tool schemas", () => {
         plan_id: "plan-01",
         expected_revision: 3,
         archive: true,
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(byName.get("plan_archive")?.parameters as never, {
+        plan_id: "plan-01",
+        expected_revision: 3,
       }),
     ).toBe(true);
     expect(
@@ -191,6 +197,7 @@ describe("M6 typed plan tool schemas", () => {
     const { byName } = await toolsFor();
     const createSchema = byName.get("plan_create")?.parameters as never;
     const updateSchema = byName.get("plan_update")?.parameters as never;
+    const archiveSchema = byName.get("plan_archive")?.parameters as never;
     const tooDeep = planToolInput({
       items: [
         {
@@ -226,6 +233,8 @@ describe("M6 typed plan tool schemas", () => {
     ).toBe(false);
     expect(Value.Check(createSchema, { plan: planToolInput(), secret: "must-not-be-accepted" })).toBe(false);
     expect(Value.Check(updateSchema, { plan_id: "plan-01", expected_revision: 0, plan: planToolInput() })).toBe(false);
+    expect(Value.Check(updateSchema, { plan_id: "plan-01", expected_revision: 3, archive: true })).toBe(false);
+    expect(Value.Check(archiveSchema, { plan_id: "plan-01", expected_revision: 0 })).toBe(false);
   });
 });
 
@@ -260,7 +269,7 @@ describe("M6 typed plan tool routing", () => {
     expect(serialized).not.toMatch(/storagePath|apiToken/);
   });
 
-  it("passes expected_revision to update and uses the archive operation for archived plans", async () => {
+  it("passes expected_revision to separate update and archive operations", async () => {
     const backend = backendMock();
     const { byName } = await toolsFor(backend);
     const updatePlan = planToolInput({ nextAction: "Persist exact revision" });
@@ -272,10 +281,9 @@ describe("M6 typed plan tool routing", () => {
       }),
     );
     const archived = resultPayload(
-      await execute(byName.get("plan_update"), {
+      await execute(byName.get("plan_archive"), {
         plan_id: "plan-01",
         expected_revision: 4,
-        archive: true,
       }),
     );
 
@@ -311,7 +319,7 @@ describe("M6 typed plan tool routing", () => {
       expected_revision: 3,
       plan: planToolInput({ nextAction: "Refresh UI" }),
     });
-    await execute(byName.get("plan_update"), { plan_id: "plan-01", expected_revision: 4, archive: true });
+    await execute(byName.get("plan_archive"), { plan_id: "plan-01", expected_revision: 4 });
     await execute(byName.get("plan_bind"), { plan_id: "plan-01", expected_revision: 3 });
 
     expect(onMutation.mock.calls.map(([operation]) => operation)).toEqual(["create", "update", "archive", "bind"]);

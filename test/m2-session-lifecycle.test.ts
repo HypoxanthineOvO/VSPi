@@ -133,7 +133,7 @@ describe("M2 session identity isolation", () => {
     await (app as unknown as TestableApp).submit("/resume");
     const sessions = app.render(80).map(stripAnsi);
     const surface = sessions.join("\n");
-    expect(sessions).toHaveLength(23);
+    expect(sessions).toHaveLength(6);
     expect(surface).toContain("Sessions");
     expect(surface).toContain("2 个会话");
     expect(surface).toContain("当前会话");
@@ -151,28 +151,35 @@ describe("M2 session identity isolation", () => {
     await app.dispose();
   });
 
-  it.each([12, 24, 40])("keeps the Resume title visible with a bottom safety row at %i terminal rows", async (rows) => {
-    const controlled = sessionBackend();
-    vi.mocked(controlled.backend.listSessions).mockResolvedValue(
-      Array.from({ length: 80 }, (_, index) => ({
-        id: `session-${index}`,
-        label: `会话 ${index}`,
-        relativeTime: `${index} 分钟前`,
-        branchDepth: 0,
-      })),
-    );
-    const app = await createApp(controlled.backend, fakeTui(vi.fn(), rows));
+  it.each([
+    [12, 11],
+    [24, 18],
+    [40, 18],
+  ] as const)(
+    "keeps the Resume title visible and caps its adaptive surface at %i terminal rows",
+    async (rows, expectedRows) => {
+      const controlled = sessionBackend();
+      vi.mocked(controlled.backend.listSessions).mockResolvedValue(
+        Array.from({ length: 80 }, (_, index) => ({
+          id: `session-${index}`,
+          label: `会话 ${index}`,
+          relativeTime: `${index} 分钟前`,
+          branchDepth: 0,
+        })),
+      );
+      const app = await createApp(controlled.backend, fakeTui(vi.fn(), rows));
 
-    await (app as unknown as TestableApp).submit("/resume");
-    const rendered = app.render(80).map(stripAnsi);
+      await (app as unknown as TestableApp).submit("/resume");
+      const rendered = app.render(80).map(stripAnsi);
 
-    expect(rendered).toHaveLength(rows - 1);
-    expect(rendered[0]).toMatch(/^╭ Sessions/u);
-    expect(rendered.slice(-2).join("\n")).toContain("Context");
-    expect(rendered.at(-1)).toContain("Policy Standard");
-    expect(rendered.join("\n")).toContain("会话 0");
-    await app.dispose();
-  });
+      expect(rendered).toHaveLength(expectedRows);
+      expect(rendered[0]).toMatch(/^╭ Sessions/u);
+      expect(rendered.slice(-2).join("\n")).toContain("Context");
+      expect(rendered.at(-1)).toContain("Policy Standard");
+      expect(rendered.join("\n")).toContain("会话 0");
+      await app.dispose();
+    },
+  );
 
   it("clears the old transcript before hydrating a switched session", async () => {
     const controlled = sessionBackend();

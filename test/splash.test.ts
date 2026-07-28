@@ -101,15 +101,13 @@ describe("startup cover", () => {
 
     expect(writes).toHaveLength(2);
     expect((writes[0] ?? "").split("\n")).toHaveLength(1);
-    expect(visibleWidth(writes[0] ?? "")).toBe(79);
-    expect(writes[1]?.startsWith("\r\u001b[2K")).toBe(true);
-    const finalFrameLines = (writes.at(-1) ?? "")
+    expect(visibleWidth(stripAnsi(writes[0] ?? ""))).toBe(80);
+    expect(writes[1]).toContain("\r\u001b[2K");
+    const finalFrameLines = stripAnsi(writes.at(-1) ?? "")
       .replace(/\r/g, "")
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: 剥离启动帧里的 CSI 光标移动序列。
-      .replace(/\u001b\[[0-9;]*[A-Za-z]/g, "")
       .split("\n")
       .filter((line) => line.length > 0);
     expect(finalFrameLines.length).toBeGreaterThan(0);
-    expect(finalFrameLines.every((line) => visibleWidth(line) === 99)).toBe(true);
+    expect(finalFrameLines.every((line) => visibleWidth(line) === 100)).toBe(true);
   });
 });

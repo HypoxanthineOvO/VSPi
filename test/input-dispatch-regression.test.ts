@@ -30,6 +30,7 @@ type TestableApp = {
   inspectDepth: "node" | "tool";
   renameAttachmentId?: string;
   renameInput: string;
+  pendingModelLabel?: string;
   notice?: { text: string; tone: string };
 };
 
@@ -447,7 +448,7 @@ describe("busy submission guard", () => {
       const queued = app.render(100).map(stripAnsi).join("\n");
       expect(queued).toContain("SECOND_DRAFT");
       expect(queued).toContain("↪");
-      expect(queued.indexOf("Working")).toBeLessThan(queued.indexOf("SECOND_DRAFT"));
+      expect(queued.indexOf("SECOND_DRAFT")).toBeLessThan(queued.indexOf("Working"));
       expect(queued).not.toMatch(/等待插入|等待当前任务完成/);
 
       app.composer.setText("THIRD_FOLLOW_UP");
@@ -581,7 +582,7 @@ describe("busy submission guard", () => {
     }
   });
 
-  it("animates a quiet Working row without duplicating native queue counts", async () => {
+  it("animates the selected Working surface without duplicating native queue counts", async () => {
     vi.useFakeTimers();
     const ref: { events?: ChatBackendEvents } = {};
     const app = await createApp(backendWith(ref));
@@ -591,11 +592,11 @@ describe("busy submission guard", () => {
       ref.events?.onBusy(true);
       expect(testable.workingFrame).toBe(0);
       const firstFrame = app.render(120).map(stripAnsi).join("\n");
-      expect(firstFrame).toContain("Working ⣾");
+      expect(firstFrame).toContain("○ Working 00:00  ⣾⣻⡿");
       expect(firstFrame).not.toMatch(/▌ Working|插入 2|后续 1|队列 3/);
       vi.advanceTimersByTime(240);
       expect(testable.workingFrame).toBe(1);
-      expect(app.render(120).map(stripAnsi).join("\n")).toContain("Working ⣽");
+      expect(app.render(120).map(stripAnsi).join("\n")).toContain("◉ Working 00:00  ⣽⢿⣟");
     } finally {
       await app.dispose();
       vi.useRealTimers();
@@ -782,6 +783,33 @@ describe("submission queue reconciliation", () => {
 });
 
 describe("transcript history loading", () => {
+  it("enters history directly from Composer PageUp and moves by pages", async () => {
+    const app = await createApp(backendWith({}));
+    const testable = app as unknown as TestableApp;
+    try {
+      for (let index = 0; index < 60; index += 1) {
+        testable.messages.push({
+          id: `page-history-${index}`,
+          role: "assistant",
+          kind: "text",
+          text: `分页历史 ${index}`,
+        });
+      }
+
+      app.handleInput("\u001b[5~");
+      expect(testable.workspaceFocus).toBe("transcript");
+      const firstIndex = Number(testable.inspectNodeId?.split("-").at(-1));
+      expect(firstIndex).toBeLessThan(59);
+      app.handleInput("\u001b[5~");
+      const secondIndex = Number(testable.inspectNodeId?.split("-").at(-1));
+      expect(secondIndex).toBeLessThan(firstIndex);
+      app.handleInput("\u001b[6~");
+      expect(Number(testable.inspectNodeId?.split("-").at(-1))).toBeGreaterThan(secondIndex);
+    } finally {
+      await app.dispose();
+    }
+  });
+
   it("loads earlier history in batches when Inspect moves past the window top", async () => {
     const app = await createApp(backendWith({}));
     const testable = app as unknown as TestableApp;
@@ -894,18 +922,104 @@ describe("session switch race guard", () => {
   });
 });
 
-describe("busy model switching gate", () => {
-  it("rejects model panel selection while a generation is busy", async () => {
+describe("interactive command completion", () => {
+  it("closes Policy after a successful selection and keeps it open after a failure", async () => {
+    const current = {
+      policy: "Standard" as const,
+      boundary: "Host" as const,
+      sandboxed: false as const,
+      recovery: false,
+      sessionAllowlist: [],
+    };
+    const switchPolicy = vi.fn(async (policy: "Safe" | "Standard" | "Auto" | "YOLO") => ({
+      ...current,
+      policy,
+    }));
+    const app = await createApp(backendWith({}), fakeAttachments(), {
+      executionPolicy: { snapshot: () => current, switchPolicy },
+    });
+    const testable = app as unknown as TestableApp;
+    try {
+      testable.panels.open("policy");
+      await testable.applyPanelEvent({ type: "policyChange", policy: "Auto", requiresAcknowledgement: false });
+      expect(switchPolicy).toHaveBeenCalledWith("Auto");
+      expect(testable.panels.kind).toBe("plan");
+
+      switchPolicy.mockRejectedValueOnce(new Error("policy failure sentinel"));
+      testable.panels.open("policy");
+      await testable.applyPanelEvent({ type: "policyChange", policy: "Safe", requiresAcknowledgement: false });
+      expect(testable.panels.kind).toBe("policy");
+      expect(testable.notice).toMatchObject({
+        tone: "error",
+        text: expect.stringContaining("policy failure sentinel"),
+      });
+    } finally {
+      await app.dispose();
+    }
+  });
+
+  it("opens safe local interaction commands during generation and keeps unsafe session commands blocked", async () => {
     const ref: { events?: ChatBackendEvents } = {};
-    const selectModel = vi.fn();
+    const app = await createApp(backendWith(ref));
+    const testable = app as unknown as TestableApp;
+    try {
+      ref.events?.onBusy(true);
+      await testable.submit("/model");
+      expect(testable.panels.kind).toBe("models");
+
+      testable.panels.close();
+      await testable.submit("/sessions");
+      expect(testable.panels.kind).toBe("plan");
+      expect(testable.notice?.text).toContain("需等待当前任务结束");
+      ref.events?.onBusy(false);
+    } finally {
+      await app.dispose();
+    }
+  });
+});
+
+describe("busy model switching", () => {
+  it("applies the selected model to the next call and closes the selector while generation remains active", async () => {
+    const ref: { events?: ChatBackendEvents } = {};
+    const selectModel = vi.fn(async () => ({
+      modelId: MODEL.id,
+      vision: false,
+      contextWindow: 128_000,
+      profileModelId: MODEL.id,
+      effort: "high" as const,
+    }));
     const app = await createApp(backendWith(ref, { selectModel }));
     const testable = app as unknown as TestableApp;
     try {
       ref.events?.onBusy(true);
+      testable.panels.open("models");
       await testable.applyPanelEvent({ type: "model", model: MODEL });
-      expect(selectModel).not.toHaveBeenCalled();
-      expect(testable.notice?.tone).toBe("warning");
-      expect(testable.notice?.text).toContain("生成中");
+      expect(selectModel).toHaveBeenCalledWith("openai", MODEL.id);
+      expect(testable.panels.kind).toBe("plan");
+      expect(testable.pendingModelLabel).toBe("Test Model");
+      expect(testable.notice).toMatchObject({ tone: "success", text: expect.stringContaining("下一次模型调用") });
+      expect(app.render(80).map(stripAnsi).join("\n")).toContain("Next Test Model");
+
+      ref.events?.onBusy(false);
+      expect(testable.pendingModelLabel).toBeUndefined();
+    } finally {
+      await app.dispose();
+    }
+  });
+
+  it("keeps the model selector open when applying the next model fails", async () => {
+    const ref: { events?: ChatBackendEvents } = {};
+    const selectModel = vi.fn(async () => {
+      throw new Error("model failure sentinel");
+    });
+    const app = await createApp(backendWith(ref, { selectModel }));
+    const testable = app as unknown as TestableApp;
+    try {
+      ref.events?.onBusy(true);
+      testable.panels.open("models");
+      await testable.applyPanelEvent({ type: "model", model: MODEL });
+      expect(testable.panels.kind).toBe("models");
+      expect(testable.notice).toMatchObject({ tone: "error", text: expect.stringContaining("model failure sentinel") });
       ref.events?.onBusy(false);
     } finally {
       await app.dispose();
@@ -923,6 +1037,11 @@ describe("rename and inspect Ctrl+C semantics", () => {
       testable.renameInput = "";
       app.handleInput("x".repeat(300));
       expect(Array.from(testable.renameInput)).toHaveLength(200);
+
+      testable.renameInput = "ab";
+      app.handleInput("\u001b[D");
+      app.handleInput("X");
+      expect(testable.renameInput).toBe("aXb");
 
       app.handleInput("\x03");
       expect(onExit).toHaveBeenCalledTimes(1);

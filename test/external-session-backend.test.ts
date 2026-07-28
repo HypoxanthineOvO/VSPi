@@ -109,6 +109,41 @@ describe("external Session backend import", () => {
     await backend.dispose();
   });
 
+  it("keeps the latest user turn in model context when its final response exceeds the import budget", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-import-recent-tail-"));
+    const managers: SessionManager[] = [];
+    const preview = {
+      ...externalPreview(),
+      sourceContextWindow: 4_000,
+      estimatedTokens: 8_000,
+      items: [
+        ...externalPreview().items.slice(0, 3),
+        { role: "user" as const, kind: "message" as const, text: "LATEST_USER_TURN" },
+        { role: "assistant" as const, kind: "message" as const, text: `LATEST_ASSISTANT_${"x".repeat(15_000)}` },
+      ],
+    };
+    const backend = new PiBackend({
+      cwd,
+      sessionLeases: false,
+      externalSessions: {
+        list: vi.fn(async () => [preview]),
+        preview: vi.fn(async () => preview),
+      },
+      sessionFactory: async (manager) => {
+        managers.push(manager);
+        return { session: fakeSession(manager) };
+      },
+    });
+    await backend.start(events());
+
+    await backend.importExternalSession(preview.id, preview.fingerprint);
+
+    const context = JSON.stringify(managers[1]?.buildSessionContext().messages);
+    expect(context).toContain("LATEST_USER_TURN");
+    expect(context).toContain("LATEST_ASSISTANT_");
+    await backend.dispose();
+  });
+
   it("keeps the current Session when preview parsing fails", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-import-failure-"));
     const managers: SessionManager[] = [];

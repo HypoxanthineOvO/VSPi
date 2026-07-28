@@ -6,7 +6,7 @@ import type { AttachmentService, AttachmentServiceEvents } from "../src/attachme
 import type { ChatBackend, ChatBackendEvents } from "../src/backend/types.js";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/domain/fixtures.js";
 import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
-import { VSPI_VERSION } from "../src/version.js";
+import { preserveTerminalScrollback, renderStaticCommit, ScrollbackTUI } from "../src/ui/scrollback-terminal.js";
 import { plainTheme } from "./helpers.js";
 
 const PI_STATUS = {
@@ -17,14 +17,6 @@ const PI_STATUS = {
   version: "9.8.7-test",
 };
 const DYNAMIC_MARKERS = ["╭ Plan ", "输入消息", PI_STATUS.model] as const;
-const LOGO = [
-  "██╗   ██╗███████╗██████╗ ██╗",
-  "██║   ██║██╔════╝██╔══██╗██║",
-  "██║   ██║███████╗██████╔╝██║",
-  "╚██╗ ██╔╝╚════██║██╔═══╝ ██║",
-  " ╚████╔╝ ███████║██║     ██║",
-  "  ╚═══╝  ╚══════╝╚═╝     ╚═╝",
-] as const;
 
 type StartupResult = "success" | "backend-failure" | "attachment-failure";
 
@@ -50,6 +42,7 @@ class VirtualTerminalBuffer {
   private readonly lines: string[][] = [];
   private cursorRow = 0;
   private cursorColumn = 0;
+  private viewportOrigin = 0;
 
   constructor(
     private readonly columns: number,
@@ -92,7 +85,7 @@ class VirtualTerminalBuffer {
         continue;
       }
       if (data[index] === "\n") {
-        this.cursorRow += 1;
+        this.lineFeed();
         this.cursorColumn = 0;
         index += 1;
         continue;
@@ -112,7 +105,16 @@ class VirtualTerminalBuffer {
   }
 
   private viewportTop(): number {
-    return Math.max(0, this.cursorRow - this.rows + 1);
+    return this.viewportOrigin;
+  }
+
+  private lineFeed(): void {
+    const bottom = this.viewportOrigin + this.rows - 1;
+    if (this.cursorRow < bottom) this.cursorRow += 1;
+    else {
+      this.viewportOrigin += 1;
+      this.cursorRow = this.viewportOrigin + this.rows - 1;
+    }
   }
 
   private ensureRow(row: number): string[] {
@@ -128,7 +130,7 @@ class VirtualTerminalBuffer {
 
   private writeCharacter(character: string): void {
     if (this.cursorColumn >= this.columns) {
-      this.cursorRow += 1;
+      this.lineFeed();
       this.cursorColumn = 0;
     }
     const width = Math.max(1, visibleWidth(character));
@@ -143,8 +145,9 @@ class VirtualTerminalBuffer {
   private applyCsi(rawParameters: string, final: string): void {
     const parameters = rawParameters.replace(/^\?/, "").split(";").filter(Boolean).map(Number);
     const first = parameters[0] ?? 0;
-    if (final === "A") this.cursorRow = Math.max(0, this.cursorRow - Math.max(1, first));
-    else if (final === "B") this.cursorRow += Math.max(1, first);
+    if (final === "A") this.cursorRow = Math.max(this.viewportTop(), this.cursorRow - Math.max(1, first));
+    else if (final === "B")
+      this.cursorRow = Math.min(this.viewportTop() + this.rows - 1, this.cursorRow + Math.max(1, first));
     else if (final === "C") this.cursorColumn = Math.min(this.columns, this.cursorColumn + Math.max(1, first));
     else if (final === "D") this.cursorColumn = Math.max(0, this.cursorColumn - Math.max(1, first));
     else if (final === "G") this.cursorColumn = Math.max(0, Math.min(this.columns, Math.max(1, first) - 1));
@@ -205,6 +208,10 @@ class RecordingTerminal implements Terminal {
     }
   }
 
+  commitStatic(lines: readonly string[]): void {
+    this.writeSplash(renderStaticCommit(lines, this.rows));
+  }
+
   start(onInput: (data: string) => void, _onResize: () => void): void {
     this.starts += 1;
     this.onInput = onInput;
@@ -219,10 +226,11 @@ class RecordingTerminal implements Terminal {
   }
 
   write(data: string): void {
+    const preserved = preserveTerminalScrollback(data);
     const source = this.splashWriteDepth > 0 ? "splash" : "tui";
-    this.writes.push({ data, source });
-    this.buffer.write(data);
-    if (source === "tui") this.onDynamicWrite(stripAnsi(data));
+    this.writes.push({ data: preserved, source });
+    this.buffer.write(preserved);
+    if (source === "tui") this.onDynamicWrite(stripAnsi(preserved));
   }
 
   sendInput(data: string): void {
@@ -263,6 +271,12 @@ class ControlledBackend implements ChatBackend {
     events.onUsage(DEFAULT_USAGE);
     if (this.result !== "attachment-failure") await this.gate.promise;
     if (this.result === "backend-failure") throw new Error("backend startup failure sentinel");
+    events.onMessage({
+      id: "persisted-history",
+      role: "assistant",
+      kind: "text",
+      text: "PERSISTED_HISTORY",
+    });
   }
 
   async send(): Promise<void> {}
@@ -327,7 +341,7 @@ async function exerciseStartup(reducedMotion: boolean, result: StartupResult): P
       lifecycle.push("tui:dynamic");
     }
   });
-  const tui = new TUI(terminal, true);
+  const tui = new ScrollbackTUI(terminal, true);
   const backend = new ControlledBackend(result);
   const attachments = new ControlledAttachments(result);
   const theme = plainTheme({ reducedMotion });
@@ -345,12 +359,13 @@ async function exerciseStartup(reducedMotion: boolean, result: StartupResult): P
     theme,
     write: (chunk) => {
       if (terminal.splashWrites.length === 0) lifecycle.push("splash:initial-brand");
-      if (stripAnsi(chunk).includes(PI_STATUS.model)) {
-        finalSplashCount += 1;
-        dynamicBytesAtFinal = terminal.tuiBytes;
-        lifecycle.push("splash:final");
-      }
       terminal.writeSplash(chunk);
+    },
+    commitStatic: (lines) => {
+      finalSplashCount += 1;
+      dynamicBytesAtFinal = terminal.tuiBytes;
+      lifecycle.push("splash:final");
+      terminal.commitStatic(lines);
     },
     startApp: async () => {
       await app.start();
@@ -360,6 +375,7 @@ async function exerciseStartup(reducedMotion: boolean, result: StartupResult): P
     startTui: () => {
       tuiStartCalls += 1;
       lifecycle.push("tui:start");
+      app.commitStableTranscript();
       tui.start();
     },
   });
@@ -380,10 +396,14 @@ async function exerciseStartup(reducedMotion: boolean, result: StartupResult): P
     const finalWrite = terminal.splashWrites.find((chunk) => stripAnsi(chunk).includes(PI_STATUS.model));
     expect.soft(dynamicBytesAtFinal, `${label}: dynamic bytes existed when final splash committed`).toBe(0);
     expect.soft(finalWrite, `${label}: resolved final splash exists`).toBeDefined();
-    expect.soft(finalWrite?.endsWith("\n"), `${label}: final splash terminates with newline`).toBe(true);
+    expect
+      .soft(finalWrite, `${label}: final splash is forced beyond the viewport`)
+      .toContain("\r\n".repeat(terminal.rows));
     expect.soft(tuiStartCalls, `${label}: TUI callback start count`).toBe(1);
     expect.soft(terminal.starts, `${label}: terminal start count`).toBe(1);
     expect.soft(terminal.tuiBytes, `${label}: dynamic terminal bytes after final splash`).toBeGreaterThan(0);
+    expect.soft(terminal.splashWrites.some((chunk) => chunk.includes("PERSISTED_HISTORY"))).toBe(true);
+    expect.soft(stripAnsi(app.render(terminal.columns).join("\n"))).not.toContain("PERSISTED_HISTORY");
     expect
       .soft(terminal.tuiBytes, `${label}: dynamic render must follow the final splash commit`)
       .toBeGreaterThan(dynamicBytesAtFinal);
@@ -456,7 +476,7 @@ async function exerciseShutdown(shutdownInteractiveSession: InteractiveShutdown,
 async function exerciseSessionReset(command: "/new" | "/clear"): Promise<void> {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const terminal = new RecordingTerminal();
-  const tui = new TUI(terminal, true);
+  const tui = new ScrollbackTUI(terminal, true);
   const backend = new ControlledBackend("success");
   const attachments = new ControlledAttachments("success");
   const theme = plainTheme({ reducedMotion: true });
@@ -474,36 +494,35 @@ async function exerciseSessionReset(command: "/new" | "/clear"): Promise<void> {
     width: terminal.columns,
     theme,
     write: (chunk) => terminal.writeSplash(chunk),
+    commitStatic: (lines) => terminal.commitStatic(lines),
     startApp: async () => {
       await app.start();
       return PI_STATUS;
     },
-    startTui: () => tui.start(),
+    startTui: () => {
+      app.commitStableTranscript();
+      tui.start();
+    },
   });
   await flushTuiRender();
 
+  const splashWritesBeforeReset = [...terminal.splashWrites];
+  expect(splashWritesBeforeReset.some((chunk) => chunk.includes("PERSISTED_HISTORY"))).toBe(true);
+  const startsBeforeReset = terminal.starts;
+  const stopsBeforeReset = terminal.stops;
   for (const character of command) terminal.sendInput(character);
   terminal.sendInput("\r");
   await flushTuiRender();
 
   const rows = terminal.buffer.captureRows();
   const plain = rows.join("\n");
-  const firstLogoRows = rows.map((line, index) => (line.includes(LOGO[0]) ? index : -1)).filter((index) => index >= 0);
-  const secondSplashStart = firstLogoRows[1] ?? -1;
-  const freshComposerRow = rows.findIndex((line, index) => index > secondSplashStart && /^╭─+╮$/u.test(line));
-  const secondSplash = rows.slice(Math.max(0, secondSplashStart - 3), freshComposerRow).join("\n");
-
   expect(backend.newSessionCalls).toHaveBeenCalledOnce();
-  expect(firstLogoRows).toHaveLength(2);
-  expect(secondSplashStart).toBeGreaterThan(-1);
-  expect(freshComposerRow).toBeGreaterThan(secondSplashStart);
-  for (const logoLine of LOGO) expect(secondSplash).toContain(logoLine);
-  expect(secondSplash).toContain(`Backend ${PI_STATUS.backend}`);
-  expect(secondSplash).toContain(`Policy ${PI_STATUS.policy} · ${PI_STATUS.boundary}`);
-  expect(secondSplash).toContain(`v${VSPI_VERSION}`);
-  expect(secondSplash).toMatch(/╭─+╮[\s\S]*╰─+╯/);
-  expect(secondSplash).not.toContain("\u001b");
-  expect(rows.slice(secondSplashStart - 2, freshComposerRow).every((line) => visibleWidth(line) === 80)).toBe(true);
+  expect(terminal.splashWrites).toEqual(splashWritesBeforeReset);
+  expect(terminal.starts).toBe(startsBeforeReset);
+  expect(terminal.stops).toBe(stopsBeforeReset);
+  expect(plain).toMatch(/╭─+╮[\s\S]*╰─+╯/u);
+  expect(plain).toContain(PI_STATUS.model);
+  expect(plain).toContain("PERSISTED_HISTORY");
   expect(plain).not.toContain("╭ Plan ");
 
   await app.dispose();
@@ -540,10 +559,7 @@ describe("real terminal startup integration", () => {
     }
   });
 
-  it.each(["/new", "/clear"] as const)(
-    "keeps a second complete %s Splash in real TUI scrollback before the fresh empty UI",
-    async (command) => {
-      await exerciseSessionReset(command);
-    },
-  );
+  it.each(["/new", "/clear"] as const)("does not replay Splash or restart TUI after %s", async (command) => {
+    await exerciseSessionReset(command);
+  });
 });

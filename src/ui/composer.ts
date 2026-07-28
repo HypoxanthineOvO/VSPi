@@ -8,7 +8,7 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import type { Attachment } from "../domain/types.js";
-import { emphasizeVisibleRange, padLine, stripAnsi, visibleWidth } from "./ansi.js";
+import { emphasizeVisibleRange, padLine, stripAnsi, truncateToWidth, visibleWidth } from "./ansi.js";
 import { matchesInteraction } from "./interactions.js";
 import type { VspiTheme } from "./theme.js";
 
@@ -19,6 +19,16 @@ interface EditorStateAccess {
     cursorCol: number;
   };
 }
+
+export interface ComposerActivity {
+  style: 2 | 3;
+  frame: number;
+  elapsedSeconds: number;
+  reducedMotion: boolean;
+}
+
+const BALL_FRAMES = ["○", "◉", "●", "⬤", "●", "◉"] as const;
+const BRAILLE_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"] as const;
 
 export type AttachmentCursorState = "left" | "selected" | "right";
 
@@ -168,7 +178,7 @@ export class Composer implements Component, Focusable {
     this.editor.handleInput(data);
   }
 
-  render(width: number): string[] {
+  render(width: number, activity?: ComposerActivity): string[] {
     const safeWidth = Math.max(4, width);
     const innerWidth = safeWidth - 2;
     const access = this.editor as unknown as EditorStateAccess;
@@ -205,9 +215,13 @@ export class Composer implements Component, Focusable {
     const chars = this.theme.capabilities.unicode
       ? { tl: "╭", tr: "╮", bl: "╰", br: "╯", h: "─", v: "│" }
       : { tl: "+", tr: "+", bl: "+", br: "+", h: "-", v: "|" };
-    const topLabel = hiddenAbove > 0 ? ` ↑ ${hiddenAbove} ` : "";
+    const hiddenLabel = hiddenAbove > 0 ? `↑ ${hiddenAbove}` : "";
+    const activityLabel = activity ? this.workingLabel(activity) : "";
+    const labelParts = [activityLabel, hiddenLabel].filter(Boolean).join("  ");
+    const topLabel = labelParts ? ` ${labelParts} ` : "";
+    const clippedTopLabel = truncateToWidth(topLabel, innerWidth, "…");
     const bottomLabel = hiddenBelow > 0 ? ` ↓ ${hiddenBelow} ` : "";
-    const top = `${chars.tl}${topLabel}${chars.h.repeat(Math.max(0, innerWidth - visibleWidth(topLabel)))}${chars.tr}`;
+    const top = `${chars.tl}${clippedTopLabel}${chars.h.repeat(Math.max(0, innerWidth - visibleWidth(clippedTopLabel)))}${chars.tr}`;
     const bottom = `${chars.bl}${chars.h.repeat(Math.max(0, innerWidth - visibleWidth(bottomLabel)))}${bottomLabel}${chars.br}`;
     return [
       this.theme.focus(padLine(top, safeWidth)),
@@ -218,6 +232,42 @@ export class Composer implements Component, Focusable {
 
   invalidate(): void {
     this.editor.invalidate();
+  }
+
+  private workingLabel(activity: ComposerActivity): string {
+    const unicode = this.theme.capabilities.unicode;
+    const ballValue = unicode
+      ? activity.reducedMotion
+        ? "⬤"
+        : (BALL_FRAMES[activity.frame % BALL_FRAMES.length] ?? BALL_FRAMES[0])
+      : "*";
+    const ball =
+      ballValue === "○"
+        ? this.theme.muted(ballValue)
+        : ballValue === "◉"
+          ? this.theme.blue(ballValue)
+          : this.theme.bold(this.theme.focus(ballValue));
+    const elapsed = this.formatElapsed(activity.elapsedSeconds);
+    if (activity.style === 2) return `${ball} ${this.theme.bold("Working")} ${this.theme.muted(elapsed)}`;
+    const cluster = unicode
+      ? activity.reducedMotion
+        ? this.theme.blue("⣿⣿⣿")
+        : Array.from({ length: 3 }, (_, offset) => {
+            const value = BRAILLE_FRAMES[(activity.frame + offset * 2) % BRAILLE_FRAMES.length] ?? BRAILLE_FRAMES[0];
+            return offset === 1 ? this.theme.focus(value) : this.theme.blue(value);
+          }).join("")
+      : this.theme.muted("...");
+    return `${ball} ${this.theme.bold("Working")} ${this.theme.muted(elapsed)}  ${cluster}`;
+  }
+
+  private formatElapsed(totalSeconds: number): string {
+    const seconds = Math.max(0, Math.floor(totalSeconds));
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remainder = seconds % 60;
+    if (hours > 0)
+      return `${`${hours}`.padStart(2, "0")}:${`${minutes}`.padStart(2, "0")}:${`${remainder}`.padStart(2, "0")}`;
+    return `${`${minutes}`.padStart(2, "0")}:${`${remainder}`.padStart(2, "0")}`;
   }
 
   private marker(attachment: Attachment): string {

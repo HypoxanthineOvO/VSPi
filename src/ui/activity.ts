@@ -10,7 +10,7 @@ export interface ActivityRailInput {
 
 export function renderActivityRail(input: ActivityRailInput, width: number, theme: VspiTheme): string {
   const indicator = theme.focus(theme.bold(input.indicator));
-  const text = truncateToWidth(`${theme.bold("Working")} ${indicator}`, Math.max(1, width), "…");
+  const text = truncateToWidth(`${indicator} ${theme.bold("Working")}`, Math.max(1, width), "…");
   return padLine(text, width);
 }
 

@@ -1,4 +1,4 @@
-import { type Terminal, TUI } from "@earendil-works/pi-tui";
+import type { Terminal } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { VspiApp } from "../src/app/vspi-app.js";
 import type { AttachmentService } from "../src/attachments/service.js";
@@ -6,6 +6,7 @@ import type { ChatBackend, ChatBackendEvents, SendOptions } from "../src/backend
 import { DEFAULT_SETTINGS } from "../src/domain/fixtures.js";
 import { renderActivityRail, renderQueuedMessage } from "../src/ui/activity.js";
 import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
+import { ScrollbackTUI } from "../src/ui/scrollback-terminal.js";
 import { plainTheme } from "./helpers.js";
 
 class ControlledTerminal implements Terminal {
@@ -13,6 +14,7 @@ class ControlledTerminal implements Terminal {
   columns = 80;
   rows = 30;
   stopCount = 0;
+  readonly staticCommits: string[][] = [];
   private input: ((data: string) => void) | undefined;
 
   start(onInput: (data: string) => void): void {
@@ -27,6 +29,9 @@ class ControlledTerminal implements Terminal {
   }
   async drainInput(): Promise<void> {}
   write(): void {}
+  commitStatic(lines: readonly string[]): void {
+    this.staticCommits.push([...lines]);
+  }
   moveBy(): void {}
   hideCursor(): void {}
   showCursor(): void {}
@@ -49,7 +54,7 @@ async function flush(): Promise<void> {
 describe("real TUI live run control", () => {
   it("keeps the composer live, layers Escape, and never exits or replaces the Session", async () => {
     const terminal = new ControlledTerminal();
-    const tui = new TUI(terminal, true);
+    const tui = new ScrollbackTUI(terminal, true);
     let events: ChatBackendEvents | undefined;
     let releasePrimary: (() => void) | undefined;
     const send = vi.fn(async (_text: string, options: SendOptions) => {
@@ -107,7 +112,7 @@ describe("real TUI live run control", () => {
       await flush();
       expect(send).toHaveBeenCalledTimes(1);
       expect(app.focused).toBe(true);
-      expect(stripAnsi(app.render(80).join("\n"))).toContain("Working ●");
+      expect(stripAnsi(app.render(80).join("\n"))).toContain("⬤ Working 00:00");
 
       for (const char of "STEER") terminal.emit(char);
       terminal.emit("\r");
@@ -131,9 +136,12 @@ describe("real TUI live run control", () => {
       expect(newSession).not.toHaveBeenCalled();
       expect(onExit).not.toHaveBeenCalled();
       expect(terminal.stopCount).toBe(0);
+      expect(stripAnsi(terminal.staticCommits.flat().join("\n"))).toContain("PRIMARY");
+      expect(stripAnsi(app.render(80).join("\n"))).not.toContain("PRIMARY");
 
       terminal.emit("\x1b[Z");
       expect(testable.workspaceFocus).toBe("transcript");
+      expect(stripAnsi(app.render(80).join("\n"))).toContain("PRIMARY");
       terminal.emit("\x1b[Z");
       expect(testable.workspaceFocus).toBe("composer");
 
@@ -157,7 +165,7 @@ describe("real TUI live run control", () => {
   it.each([40, 80, 120] as const)("keeps the independent activity rail within %s columns", (width) => {
     const rendered = renderActivityRail({ indicator: "⣾", steering: 2, followUp: 1 }, width, plainTheme());
     expect(visibleWidth(rendered)).toBe(width);
-    expect(stripAnsi(rendered)).toContain("Working ⣾");
+    expect(stripAnsi(rendered)).toContain("⣾ Working");
     expect(stripAnsi(rendered)).not.toMatch(/▌|插入|后续|队列/);
   });
 

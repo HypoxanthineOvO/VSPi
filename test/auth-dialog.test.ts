@@ -23,6 +23,18 @@ describe("provider authentication dialog", () => {
     expect(dialog.render(60, plainTheme()).map(stripAnsi).join("\n")).not.toContain("sk-private-value");
   });
 
+  it("supports cursor editing in ordinary authentication text fields", async () => {
+    const dialog = new AuthDialog("自定义中转站", vi.fn(), vi.fn());
+    const result = dialog.prompt({ type: "text", message: "名称" });
+    dialog.handleInput("中文（）");
+    dialog.handleInput("\u001b[D");
+    dialog.handleInput("补");
+    dialog.handleInput("\u001b[C");
+    dialog.handleInput("充");
+    dialog.handleInput("\r");
+    await expect(result).resolves.toBe("中文（补）充");
+  });
+
   it("accepts chunked bracketed paste in secret prompts without treating pasted newlines as submit", async () => {
     const dialog = new AuthDialog("自定义中转站", vi.fn(), vi.fn());
     const result = dialog.prompt({ type: "secret", message: "API Key" });

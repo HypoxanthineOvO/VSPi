@@ -1,6 +1,6 @@
 {
   "name": "vspi",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "A Chinese terminal UI for Pi coding agents with optional read-only Hypo-Workflow integration.",
   "homepage": "https://gitlab.vsplab.cn/heyx/vspi",
   "repository": {
@@ -30,6 +30,7 @@
     "check": "tsc --noEmit && biome check src test scripts",
     "check:fix": "biome check --write src test scripts",
     "harness:check": "tsx scripts/harness-check.ts",
+    "mock:working": "tsx scripts/working-mock.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "smoke": "VSPi_FIXTURE=1 VSPi_REDUCED_MOTION=1 tsx src/index.ts --render-once"

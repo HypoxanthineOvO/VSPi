@@ -144,5 +144,22 @@ describe("M1 unified interaction registry", () => {
       registry.actions.filter((action) => action.surface === "panel").map((action) => action.context),
     );
     for (const context of ["plan", "sessions", "commands"]) expect(panelContexts).toContain(context);
+
+    const unknownCsi = "\u001b[99~";
+    for (const [surface, context, state] of [
+      ["panel", "approval", { approvalReasonEditing: true }],
+      ["panel", "question", { questionMode: "freeText" }],
+      ["composer", "main", { composerEmpty: true }],
+    ] as const) {
+      const ownsUnknown = registry.actions
+        .filter((action) => action.surface === surface && action.context === context)
+        .some((action) => action.matches(unknownCsi, state));
+      expect(ownsUnknown, `${surface}/${context} must not swallow unknown CSI input`).toBe(false);
+    }
+    expect(
+      registry.actions
+        .filter((action) => action.surface === "panel" && action.context === "question")
+        .some((action) => action.matches("回答", { questionMode: "freeText" })),
+    ).toBe(true);
   });
 });

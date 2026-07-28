@@ -1,4 +1,4 @@
-import { decodeKittyPrintable, Key, matchesKey } from "@earendil-works/pi-tui";
+import { Input, Key, matchesKey } from "@earendil-works/pi-tui";
 import type { ProviderAuthEvent, ProviderAuthInteraction, ProviderAuthPrompt } from "../backend/types.js";
 import { isRemoteTerminal } from "../providers/login.js";
 import { frame, padLine, wrapTextWithAnsi } from "./ansi.js";
@@ -20,6 +20,7 @@ export class AuthDialog implements ProviderAuthInteraction {
   private messages: Array<{ text: string; tone: "text" | "muted" | "focus" | "warning" }> = [];
   private pending: PendingPrompt | undefined;
   private input = "";
+  private readonly textInput = new Input();
   private pasteBuffer = "";
   private inBracketedPaste = false;
   private selected = 0;
@@ -111,18 +112,13 @@ export class AuthDialog implements ProviderAuthInteraction {
       this.requestRender();
       return;
     }
-    if (matchesKey(data, Key.backspace)) this.input = Array.from(this.input).slice(0, -1).join("");
-    else if (matchesKey(data, Key.enter)) {
+    if (matchesKey(data, Key.enter)) {
       if (this.input) this.resolvePending(this.input);
       return;
-    } else {
-      const rawPrintable = Array.from(data).every((character) => {
-        const code = character.codePointAt(0) ?? 0;
-        return code >= 32 && code !== 127;
-      });
-      const printable = decodeKittyPrintable(data) ?? (rawPrintable ? data : "");
-      if (printable) this.input += printable;
     }
+    if (this.textInput.getValue() !== this.input) this.textInput.setValue(this.input);
+    this.textInput.handleInput(data);
+    this.input = this.textInput.getValue();
     this.requestRender();
   }
 
@@ -151,9 +147,14 @@ export class AuthDialog implements ProviderAuthInteraction {
           if (index === this.selected && option.description) body.push(theme.muted(`    ${option.description}`));
         });
       } else {
-        const visible = prompt.type === "secret" ? "•".repeat(Array.from(this.input).length) : this.input;
-        const placeholder = !visible && prompt.placeholder ? theme.muted(prompt.placeholder) : visible;
-        body.push(theme.selected(padLine(`  ${placeholder}${theme.inverse(" ")}`, bodyWidth)));
+        if (this.textInput.getValue() !== this.input) this.textInput.setValue(this.input);
+        const inputValue = this.input;
+        const visible =
+          prompt.type === "secret"
+            ? `${"•".repeat(Array.from(inputValue).length)}${theme.inverse(" ")}`
+            : (this.textInput.render(Math.max(1, bodyWidth - 2))[0] ?? "");
+        const placeholder = !inputValue && prompt.placeholder ? theme.muted(prompt.placeholder) : visible;
+        body.push(theme.selected(padLine(`  ${placeholder}`, bodyWidth)));
       }
     } else if (body.length === 0) {
       body.push(theme.muted(this.purpose === "配置" ? "正在保存配置…" : "正在建立登录…"));
@@ -204,7 +205,10 @@ export class AuthDialog implements ProviderAuthInteraction {
     }
 
     const pasted = sanitizeSingleLinePaste(this.pasteBuffer.slice(0, endIndex));
-    if (pasted) this.input += pasted;
+    if (pasted) {
+      this.input += pasted;
+      this.textInput.setValue(this.input);
+    }
     const remaining = this.pasteBuffer.slice(endIndex + endMarker.length);
     this.pasteBuffer = "";
     this.inBracketedPaste = false;
@@ -215,6 +219,7 @@ export class AuthDialog implements ProviderAuthInteraction {
 
   private resetInput(): void {
     this.input = "";
+    this.textInput.setValue("");
     this.pasteBuffer = "";
     this.inBracketedPaste = false;
   }

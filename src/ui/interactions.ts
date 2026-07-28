@@ -111,6 +111,55 @@ const printable = (value: string): boolean => {
   });
 };
 
+const EDITING_KEYS: readonly KeyId[] = [
+  Key.backspace,
+  Key.delete,
+  Key.left,
+  Key.right,
+  Key.up,
+  Key.down,
+  Key.home,
+  Key.end,
+  Key.pageUp,
+  Key.pageDown,
+  Key.ctrl("a"),
+  Key.ctrl("b"),
+  Key.ctrl("d"),
+  Key.ctrl("e"),
+  Key.ctrl("f"),
+  Key.ctrl("h"),
+  Key.ctrl("k"),
+  Key.ctrl("u"),
+  Key.ctrl("w"),
+  Key.ctrl("y"),
+  Key.ctrl("z"),
+  Key.alt("b"),
+  Key.alt("f"),
+  Key.alt("backspace"),
+];
+
+const QUESTION_KEYS: readonly KeyId[] = [
+  Key.tab,
+  Key.enter,
+  Key.shift("s"),
+  Key.left,
+  Key.right,
+  Key.up,
+  Key.down,
+  Key.ctrl(Key.up),
+  Key.ctrl(Key.down),
+  Key.alt(Key.up),
+  Key.alt(Key.down),
+  Key.pageUp,
+  Key.pageDown,
+  Key.space,
+];
+
+const matchesAnyKey = (value: string, keys: readonly KeyId[]): boolean => keys.some((key) => matchesKey(value, key));
+
+const editingInput = (value: string): boolean =>
+  printable(value) || value.startsWith("\u001b[200~") || matchesAnyKey(value, EDITING_KEYS);
+
 const actions: InteractionDefinition[] = [
   keyAction({
     id: "panel.plan.move",
@@ -232,8 +281,8 @@ const actions: InteractionDefinition[] = [
     id: "panel.external-import.source",
     surface: "panel",
     context: "externalImport",
-    keys: ["Tab", "Left", "Right"],
-    keyValues: [Key.tab, Key.left, Key.right],
+    keys: ["Tab"],
+    keyValues: [Key.tab],
     handler: "switchImportSource",
     hint: "Tab 切换来源",
   }),
@@ -241,9 +290,9 @@ const actions: InteractionDefinition[] = [
     id: "panel.external-import.search",
     surface: "panel",
     context: "externalImport",
-    keys: ["Text", "Backspace"],
+    keys: ["Text", "Editing keys"],
     handler: "editImportSearch",
-    matcher: (value) => printable(value) || matchesKey(value, Key.backspace),
+    matcher: editingInput,
     hint: "输入搜索",
   }),
   keyAction({
@@ -376,9 +425,9 @@ const actions: InteractionDefinition[] = [
     id: "panel.skills.text",
     surface: "panel",
     context: "skills",
-    keys: ["Text", "Backspace"],
+    keys: ["Text", "Editing keys"],
     handler: "editSkillText",
-    matcher: (value) => printable(value) || matchesKey(value, Key.backspace),
+    matcher: editingInput,
     enabled: (state) => state.skillViewing !== true,
     hint: (state) => (state.skillAdding === true ? "输入文字" : "输入搜索"),
   }),
@@ -426,7 +475,7 @@ const actions: InteractionDefinition[] = [
     context: "approval",
     keys: ["Enter", "Text", "Backspace"],
     handler: "selectApproval",
-    matcher: () => true,
+    matcher: (value) => editingInput(value) || matchesKey(value, Key.enter),
     hint: (state) => (state.approvalReasonEditing ? "Enter 拒绝并提交理由" : "Enter 选择"),
   }),
   keyAction({
@@ -461,9 +510,9 @@ const actions: InteractionDefinition[] = [
     id: "panel.models.search",
     surface: "panel",
     context: "models",
-    keys: ["Text", "Backspace"],
+    keys: ["Text", "Editing keys"],
     handler: "editModelSearch",
-    matcher: (value) => printable(value) || matchesKey(value, Key.backspace),
+    matcher: editingInput,
   }),
   keyAction({
     id: "panel.providers.list-move",
@@ -509,9 +558,9 @@ const actions: InteractionDefinition[] = [
     id: "panel.providers.edit-text",
     surface: "panel",
     context: "providers",
-    keys: ["Text"],
+    keys: ["Text", "Editing keys"],
     handler: "editProvider",
-    matcher: printable,
+    matcher: editingInput,
     enabled: (state) => state.providerEditing === true && state.providerField !== 2,
     hint: "输入文字",
   }),
@@ -607,13 +656,15 @@ const actions: InteractionDefinition[] = [
       "Ctrl+Down",
       "Alt+Up",
       "Alt+Down",
+      "PageUp",
+      "PageDown",
       "Space",
       "Text",
     ],
     handler: "answerQuestion",
-    matcher: () => true,
+    matcher: (value) => editingInput(value) || matchesAnyKey(value, QUESTION_KEYS),
     hint: (state) => {
-      if (state.questionMode === "review") return "Enter 提交  ← 返回";
+      if (state.questionMode === "review") return "Enter 提交  Esc 返回  ↑↓/PgUp/PgDn 滚动";
       if (state.questionMode === "freeText") return "Enter 确认  ←→ 移动光标";
       if (state.questionMode === "ranking") return "↑↓ 选择  Ctrl/Alt+↑↓ 重排  Enter 确认  ←→ 切题  Shift+S 跳过";
       return "↑↓ 选择  Space 多选  Tab 直接回答  Enter 确认  ←→ 切题  Shift+S 跳过";
@@ -697,7 +748,7 @@ const actions: InteractionDefinition[] = [
     context: "main",
     keys: ["Text", "Editing keys"],
     handler: "editComposer",
-    matcher: () => true,
+    matcher: (value) => editingInput(value) || matchesAnyKey(value, [Key.tab, Key.enter, Key.shift("enter")]),
   }),
   keyAction({
     id: "composer.attachment-left",
@@ -783,9 +834,9 @@ const actions: InteractionDefinition[] = [
     id: "composer.rename-edit",
     surface: "composer",
     context: "rename",
-    keys: ["Text"],
+    keys: ["Text", "Editing keys"],
     handler: "editRename",
-    matcher: printable,
+    matcher: editingInput,
   }),
   keyAction({
     id: "inspect.close",
@@ -809,11 +860,11 @@ const actions: InteractionDefinition[] = [
     id: "inspect.move",
     surface: "inspect",
     context: "transcript",
-    keys: ["Up", "Down"],
-    keyValues: [Key.up, Key.down],
+    keys: ["Up", "Down", "PageUp", "PageDown"],
+    keyValues: [Key.up, Key.down, Key.pageUp, Key.pageDown],
     handler: "moveInspect",
     enabled: hasItems,
-    hint: "↑↓ 选择",
+    hint: "↑↓/PgUp/PgDn 浏览",
   }),
   keyAction({
     id: "inspect.toggle",

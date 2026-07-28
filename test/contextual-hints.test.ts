@@ -142,7 +142,7 @@ describe("contextual panel hints", () => {
     }
   });
 
-  it("lets Sessions own the full content area and keeps its hint in the bottom border", async () => {
+  it("lets Sessions own a content-adaptive surface and keeps its hint in the bottom border", async () => {
     const result = await renderPanel("/sessions");
     try {
       const rendered = result.plain.join("\n");
@@ -151,7 +151,7 @@ describe("contextual panel hints", () => {
       expect(rendered).toContain("暂无会话");
       expect(result.plain.find((line) => line.startsWith("╰"))).toContain("Esc 返回");
       expect(rendered).not.toContain("输入消息");
-      expect(result.ansi).toHaveLength(23);
+      expect(result.ansi).toHaveLength(5);
       expect(result.ansi.every((line) => visibleWidth(line) === 80)).toBe(true);
     } finally {
       await result.app.dispose();
@@ -219,6 +219,29 @@ describe("contextual panel hints", () => {
     }
   });
 
+  it("keeps Progress visible until an explicit result replaces it", async () => {
+    const result = await renderPanel(undefined);
+    const testable = result.app as unknown as {
+      showProgress(text: string): void;
+      showNotice(text: string, tone: "success"): void;
+    };
+    vi.useFakeTimers();
+    try {
+      testable.showProgress("正在扫描历史…");
+      expect(result.app.render(80).map(stripAnsi).join("\n")).toContain("◌ 正在扫描历史…");
+      vi.advanceTimersByTime(10_000);
+      expect(result.app.render(80).map(stripAnsi).join("\n")).toContain("正在扫描历史…");
+
+      testable.showNotice("扫描完成", "success");
+      expect(result.app.render(80).map(stripAnsi).join("\n")).toContain("✓ 扫描完成");
+      vi.advanceTimersByTime(3_500);
+      expect(result.app.render(80).map(stripAnsi).join("\n")).not.toContain("扫描完成");
+    } finally {
+      vi.useRealTimers();
+      await result.app.dispose();
+    }
+  });
+
   it("switches the rendered contextual hint to the Inspect transcript registry after empty-composer Tab", async () => {
     const result = await renderPanel(undefined, backendWithInspectableMessage());
     try {
@@ -237,7 +260,7 @@ describe("contextual panel hints", () => {
       expect(inspected.join("\n")).toContain("Inspect");
       expect(row.hint).toBe(expected);
       expect(row.hint).toContain("Esc 返回输入");
-      expect(row.hint).toContain("↑↓ 选择");
+      expect(row.hint).toContain("↑↓/PgUp/PgDn 浏览");
       expect(row.hint).toContain("Enter/→ 进入/展开");
       expect(row.hint).toContain("Shift+Tab 返回输入");
 

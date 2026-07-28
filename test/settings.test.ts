@@ -21,6 +21,19 @@ describe("settings persistence", () => {
     expect(layers.projectInherited).toBe(false);
   });
 
+  it("inherits the global Working style when an older project layer omits it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vspi-settings-working-inheritance-"));
+    const home = join(root, "home");
+    await saveSettings(root, { ...DEFAULT_SETTINGS, scope: "global", workingStyle: 1 }, home);
+    const projectPath = settingsPaths(root, home).project;
+    await mkdir(dirname(projectPath), { recursive: true });
+    await writeFile(projectPath, `${JSON.stringify({ scope: "project", reducedMotion: true })}\n`);
+
+    const layers = await loadSettingsLayers(root, home, { trustedProject: true });
+    expect(layers.global.workingStyle).toBe(1);
+    expect(layers.project?.workingStyle).toBe(1);
+  });
+
   it("applies project settings over global settings and writes atomically with private permissions", async () => {
     const root = await mkdtemp(join(tmpdir(), "vspi-settings-"));
     const home = await mkdtemp(join(tmpdir(), "vspi-home-"));
@@ -62,8 +75,22 @@ describe("settings persistence", () => {
     );
     await expect(loadSettings(root, home)).resolves.toMatchObject({
       collapseTools: true,
+      workingStyle: 3,
       thinkingTranslationEndpoint: "",
     });
+  });
+
+  it("preserves valid Working styles and normalizes missing or invalid values to style 3", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vspi-settings-working-style-"));
+    const home = join(root, "home");
+    const path = settingsPaths(root, home).global;
+    await mkdir(dirname(path), { recursive: true });
+
+    await writeFile(path, `${JSON.stringify({ workingStyle: 1 })}\n`);
+    await expect(loadSettings(root, home)).resolves.toMatchObject({ workingStyle: 1 });
+
+    await writeFile(path, `${JSON.stringify({ workingStyle: 4 })}\n`);
+    await expect(loadSettings(root, home)).resolves.toMatchObject({ workingStyle: 3 });
   });
 
   it("migrates legacy thinking booleans and gives the new enum precedence", async () => {
