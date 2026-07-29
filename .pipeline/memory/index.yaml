@@ -1,0 +1,1788 @@
+active_by_dedupe_key:
+  adoption_brief: decision-0969e78217dfc8ba86c55a0f9b25069a
+  cycle.vspi-tui-v1.feedback.4f0a53dac508ca81: feedback-da6226ef6e521d26d9d0450ff05b4db0
+  cycle.vspi-tui-v1.feedback.59ca3879c2754ad1: feedback-8514d7f0d8a05202dfb6508c06d00248
+  cycle.vspi-tui-v1.feedback.68c2739abc2b5cb2: feedback-a48b3363d40d3c1d583cb0b182121e66
+  cycle.vspi-tui-v1.feedback.7aeaa2e55cb17cbd: feedback-8cb9ce7a3fed5d5739c91b169a385dd9
+  cycle.vspi-tui-v1.feedback.a4536cf5a20774de: feedback-3e32c4ab8e560f29f532662278de4d87
+  cycle.vspi-tui-v1.feedback.a46dbbee077088c5: feedback-bf0c8330b8356e5ff14f20b4235030f5
+  cycle.vspi-tui-v1.feedback.b8889f634cbf1297: feedback-13bbda7f257b5e1ea9c9dd89dcb17e84
+  cycle.vspi-tui-v1.feedback.ff40cfb6c4e06804: feedback-309edec7a60dd4c1b493b13fc7e46c81
+  cycle.vspi-tui-v1.plan: decision-8eda07b9c2d337c7b503bf07c7fa9c5b
+  cycle.vspi-v0-1-0-usability.feedback.00b9bb4cff9999bd: feedback-0209cf10017937b9ce7356aaca5eece2
+  cycle.vspi-v0-1-0-usability.feedback.a8cc7b4a225d894c: feedback-9cbc9f1c205a32a3455b2328c2c4e31a
+  cycle.vspi-v0-1-0-usability.plan: decision-8d34bd77ce05ef6f025ea3e659aa23fb
+  cycle.vspi-v0-2-0-workflow-integration.feedback.048085098adea83d: feedback-4948393d7732416a0ce0a032a4aefcaf
+  cycle.vspi-v0-2-0-workflow-integration.feedback.244a565c768b3033: feedback-2975a350a7865f4fc29f1218b5bff36d
+  cycle.vspi-v0-2-0-workflow-integration.feedback.32820b10def09cf8: feedback-1694ce4177ffbff5fc094ce6a0f3bb2e
+  cycle.vspi-v0-2-0-workflow-integration.feedback.55619d25e5f5bb42: feedback-6dd5bdf9c4602ca33671e84eac929b12
+  cycle.vspi-v0-2-0-workflow-integration.feedback.5564cba94a948ca7: feedback-f96f2c8291940282abab00cb1b68795c
+  cycle.vspi-v0-2-0-workflow-integration.feedback.5d5692392e6ba9a7: feedback-04b0b14ffc2b6a81d5cd30ab95fb6f18
+  cycle.vspi-v0-2-0-workflow-integration.feedback.8c4e651de718eafe: feedback-717a9c188e0da4bad1c683a4c5ce2e53
+  cycle.vspi-v0-2-0-workflow-integration.feedback.984b4eaf663b3721: feedback-1c1db9560547552fdd3dda4f2bca1295
+  cycle.vspi-v0-2-0-workflow-integration.feedback.c138c34d690d31c6: feedback-0dade055f803cb4ce3ce638f585147d2
+  cycle.vspi-v0-2-0-workflow-integration.feedback.d7cb7cdd55fe1163: feedback-e9962731ff5317cc8437036c350ae060
+  cycle.vspi-v0-2-0-workflow-integration.feedback.db56b25af6649ab5: feedback-8d2214604b348e7175b229e01cffedce
+  cycle.vspi-v0-2-0-workflow-integration.feedback.dc3a0f94d1467e35: feedback-237bcdb65718f5b6164c08ac47cdc94d
+  cycle.vspi-v0-2-0-workflow-integration.feedback.dccc1d0a2004dda9: feedback-b9047e6d784e40bea91fe9161db5225e
+  cycle.vspi-v0-2-0-workflow-integration.feedback.e421a40a0878253a: feedback-691d9dde92464dd0fa25d3171733cce5
+  cycle.vspi-v0-2-0-workflow-integration.feedback.e7ded37362b1722e: feedback-2888bdf80dca47139286cc5d09dc1b78
+  cycle.vspi-v0-2-0-workflow-integration.plan: decision-9444032afd7437985166c6395ac0657d
+  decision.vspi.external-session-import-detail: decision-a82b0e062b7ad9ffef82d6ce5e3b7d43
+  decision.vspi.mcp-tool-exposure: decision-dadcdf82568a01d80eeccfe8ee8432db
+  decision.vspi.post-0.2.5-feature-order: decision-62c857d1de35f40189c98a9a9a542bc5
+  decision.vspi.pty-debug-playbook: decision-fef54ead775588f8899dba4b09dd65fd
+  decision.vspi.release-history-authority: decision-742e18820d6fb2c8634af1a38a93c583
+  decision.vspi.skill-install-default-scope: decision-fc08c040b86a57bf2800480f6c5e4baa
+  feedback.vspi.release-ledger.v0.1.0: feedback-7da490d7b5b02157c2be6d408c609c43
+  feedback.vspi.release-ledger.v0.2.0: feedback-05b2c0d4fb86a081d2871fc9f08a58e2
+  feedback.vspi.release-ledger.v0.2.1-v0.2.7: feedback-286ce0c0ce667f86cdf15febe3fc54eb
+  feedback.vspi.release-ledger.v0.3.0-v0.3.7: feedback-60093381731f723a648627fef2347991
+  feedback.vspi.release-ledger.v0.3.8-v0.3.11: feedback-0a04be071178907334e0e47b60963e0b
+  feedback.vspi.status-layout-fixed-tracks: feedback-7cc38e004361e3431e700a74e251d0e0
+  goal.vspi-live-run-control.feedback.3f4c4ce3670b5fb2: feedback-2dc39de0dbbb77493cac3135e83d2a25
+  goal.vspi-live-run-control.feedback.557a36ec9b6ed4be: feedback-89ed9f5b6872a5259a96a681d88ae282
+  goal.vspi-live-run-control.feedback.5ae10d550e18b724: feedback-dc147863d143b0fbd2fb60550d0d6596
+  goal.vspi-live-run-control.feedback.771996a5e1a5efc7: feedback-3082d500ee579c89e32e3594ff56b38f
+  goal.vspi-live-run-control.feedback.bf4a41fa17dcef69: feedback-66872838bdbce1337743646dc69c7c2f
+  goal.vspi-live-run-control.plan: decision-57219f2f7d5c683600d21c16d9f6534a
+  preference.vspi.ui-native-mock-first: preference-afdb1404971fcf8baed40924374a0d1e
+  project_intent: requirement-7aa27ad8d6ea8ff47370425b826abd54
+  requirement.vspi.effective-model-context: requirement-20a9cf868d16c64e5b00e67052ba3e6e
+  requirement.vspi.external-session-import: requirement-e9d688a0505fffb6626c54cc08f0d3ef
+  requirement.vspi.interactive-panel-density: requirement-101351de724bb1025bd13fda2f4dba70
+  requirement.vspi.model-picker-recent: requirement-80e6d448ecc68c4229ce7209ac7fbbad
+  requirement.vspi.question-interaction-depth: requirement-062a4899aad721f16efe298ef24365a3
+  requirement.vspi.skill-mcp-management: requirement-8fa3774fbc6fce3c20d507c1a0b55e90
+  requirement.vspi.test-validation-discipline: requirement-41375d415c1c7b031bdc0aa1f8bddb81
+  requirement.vspi.update-command: requirement-34bdc2f91c02121e80d098696e6b19dd
+authority_role: derived
+records:
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-23T04:21:46.818Z
+    dedupe_key: cycle.vspi-tui-v1.plan
+    id: decision-0893f7eb55067ac1cb0180c59e7259f0
+    kind: decision
+    path: .pipeline/memory/records/cycle-25b09be1f9a9/decision/decision-0893f7eb55067ac1cb0180c59e7259f0.md
+    scope:
+      ref: vspi-tui-v1
+      type: cycle
+    semantic_hash: 0893f7eb55067ac1cb0180c59e7259f0063228660aa2a320edc1d769a22a2afe
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-tui-v1:revision:2
+        type: delivery_plan
+    supersedes:
+      - decision-b044b80dda4ec71a62b5125962d23b3a
+    updated_at: 2026-07-23T04:21:46.818Z
+  - active: true
+    confidence: high
+    created_at: 2026-07-22T14:41:56.991Z
+    dedupe_key: adoption_brief
+    id: decision-0969e78217dfc8ba86c55a0f9b25069a
+    kind: decision
+    path: .pipeline/memory/records/project-49b39c23e829/decision/decision-0969e78217dfc8ba86c55a0f9b25069a.md
+    scope:
+      ref: project:VSPi
+      type: project
+    semantic_hash: 0969e78217dfc8ba86c55a0f9b25069a15987341b41402954ca9dc71cb432963
+    source_refs:
+      - locator: request.intent
+        ref: init
+        type: user_request
+    supersedes: []
+    updated_at: 2026-07-22T14:41:56.991Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-23T04:26:08.544Z
+    dedupe_key: cycle.vspi-tui-v1.plan
+    id: decision-1c7d01437a8796a9be84642ce6d6f421
+    kind: decision
+    path: .pipeline/memory/records/cycle-25b09be1f9a9/decision/decision-1c7d01437a8796a9be84642ce6d6f421.md
+    scope:
+      ref: vspi-tui-v1
+      type: cycle
+    semantic_hash: 1c7d01437a8796a9be84642ce6d6f42174890496d49afdb355af541d215e9411
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-tui-v1:revision:3
+        type: delivery_plan
+    supersedes:
+      - decision-0893f7eb55067ac1cb0180c59e7259f0
+    updated_at: 2026-07-23T04:26:08.544Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-25T07:10:44.106Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.plan
+    id: decision-34f87a27e2b000355b93e85eb14e7ebb
+    kind: decision
+    path: .pipeline/memory/records/cycle-4165928aca5b/decision/decision-34f87a27e2b000355b93e85eb14e7ebb.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: 34f87a27e2b000355b93e85eb14e7ebb5bb1a772e16027b624d0588f8088f081
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-v0-2-0-workflow-integration:revision:8
+        type: delivery_plan
+    supersedes:
+      - decision-bc7ae00b98900dfb50c99a9db522e013
+    updated_at: 2026-07-25T07:10:44.106Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-25T10:21:31.835Z
+    dedupe_key: goal.vspi-live-run-control.plan
+    id: decision-57219f2f7d5c683600d21c16d9f6534a
+    kind: decision
+    path: .pipeline/memory/records/goal-33f80bd2158a/decision/decision-57219f2f7d5c683600d21c16d9f6534a.md
+    scope:
+      ref: vspi-live-run-control
+      type: goal
+    semantic_hash: 57219f2f7d5c683600d21c16d9f6534a014c6e35d8d51fb75cec7500d4b71684
+    source_refs:
+      - locator: compiled-plan
+        ref: goal:vspi-live-run-control:revision:3
+        type: delivery_plan
+    supersedes:
+      - decision-f0677f2e7c84f47ee410ea2a34954434
+    updated_at: 2026-07-25T10:21:31.835Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-24T16:32:21.716Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.plan
+    id: decision-5a7bb7573abaa22b1e23d58c51980dad
+    kind: decision
+    path: .pipeline/memory/records/cycle-4165928aca5b/decision/decision-5a7bb7573abaa22b1e23d58c51980dad.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: 5a7bb7573abaa22b1e23d58c51980dadd440c62c6f1e6355605457199a512913
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-v0-2-0-workflow-integration:revision:4
+        type: delivery_plan
+    supersedes:
+      - decision-ff351e9d4433699ce4b2d64ffea2bc3d
+    updated_at: 2026-07-24T16:32:21.716Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-26T15:13:20.962Z
+    dedupe_key: decision.vspi.post-0.2.5-feature-order
+    id: decision-62c857d1de35f40189c98a9a9a542bc5
+    kind: decision
+    path: .pipeline/memory/records/project-33aa1007aa14/decision/decision-62c857d1de35f40189c98a9a9a542bc5.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 62c857d1de35f40189c98a9a9a542bc550ab047c49a5241ebaa0656aec2ec1b1
+    source_refs:
+      - locator: 2026-07-26-v0.2.6-v0.2.7-mcp-order
+        ref: current-chat
+        type: session
+    supersedes: []
+    updated_at: 2026-07-26T15:13:20.962Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-22T16:28:13.790Z
+    dedupe_key: cycle.vspi-tui-v1.plan
+    id: decision-67927170f6d59e15a12ea00f7b92ed69
+    kind: decision
+    path: .pipeline/memory/records/cycle-25b09be1f9a9/decision/decision-67927170f6d59e15a12ea00f7b92ed69.md
+    scope:
+      ref: vspi-tui-v1
+      type: cycle
+    semantic_hash: 67927170f6d59e15a12ea00f7b92ed694070840397ced67e9e17b5a061df25b2
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-tui-v1:revision:0
+        type: delivery_plan
+    supersedes: []
+    updated_at: 2026-07-22T16:28:13.790Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-29T08:39:18.782Z
+    dedupe_key: decision.vspi.release-history-authority
+    id: decision-742e18820d6fb2c8634af1a38a93c583
+    kind: decision
+    path: .pipeline/memory/records/project-33aa1007aa14/decision/decision-742e18820d6fb2c8634af1a38a93c583.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 742e18820d6fb2c8634af1a38a93c58317e2019bb2925d7792dc3aad8be6d3c6
+    source_refs:
+      - locator: 2026-07-29-release-history-reconstruction
+        ref: 019facfe-b13f-7d90-9625-039b7171cf17
+        type: session
+      - locator: release-tags-v0.2.0-through-v0.3.11
+        ref: branch:main
+        type: git
+    supersedes: []
+    updated_at: 2026-07-29T08:39:18.782Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-23T14:17:08.891Z
+    dedupe_key: cycle.vspi-v0-1-0-usability.plan
+    id: decision-8d34bd77ce05ef6f025ea3e659aa23fb
+    kind: decision
+    path: .pipeline/memory/records/cycle-381d64ffcd29/decision/decision-8d34bd77ce05ef6f025ea3e659aa23fb.md
+    scope:
+      ref: vspi-v0-1-0-usability
+      type: cycle
+    semantic_hash: 8d34bd77ce05ef6f025ea3e659aa23fb8cfc76189ccd6e7193d7de44d835c39b
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-v0-1-0-usability:revision:2
+        type: delivery_plan
+    supersedes:
+      - decision-97e22cda868fbfc2ddf1a7779beedcc6
+    updated_at: 2026-07-23T14:17:08.891Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-23T07:03:27.953Z
+    dedupe_key: cycle.vspi-tui-v1.plan
+    id: decision-8eda07b9c2d337c7b503bf07c7fa9c5b
+    kind: decision
+    path: .pipeline/memory/records/cycle-25b09be1f9a9/decision/decision-8eda07b9c2d337c7b503bf07c7fa9c5b.md
+    scope:
+      ref: vspi-tui-v1
+      type: cycle
+    semantic_hash: 8eda07b9c2d337c7b503bf07c7fa9c5bc4c2891629e099731328a10734fb61ae
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-tui-v1:revision:5
+        type: delivery_plan
+    supersedes:
+      - decision-d0627add08c0c097bda321efacca7984
+    updated_at: 2026-07-23T07:03:27.953Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-25T07:22:21.210Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.plan
+    id: decision-9444032afd7437985166c6395ac0657d
+    kind: decision
+    path: .pipeline/memory/records/cycle-4165928aca5b/decision/decision-9444032afd7437985166c6395ac0657d.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: 9444032afd7437985166c6395ac0657d6cfe859766747325974600089f34c95c
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-v0-2-0-workflow-integration:revision:9
+        type: delivery_plan
+    supersedes:
+      - decision-34f87a27e2b000355b93e85eb14e7ebb
+    updated_at: 2026-07-25T07:22:21.210Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-23T13:52:06.579Z
+    dedupe_key: cycle.vspi-v0-1-0-usability.plan
+    id: decision-97e22cda868fbfc2ddf1a7779beedcc6
+    kind: decision
+    path: .pipeline/memory/records/cycle-381d64ffcd29/decision/decision-97e22cda868fbfc2ddf1a7779beedcc6.md
+    scope:
+      ref: vspi-v0-1-0-usability
+      type: cycle
+    semantic_hash: 97e22cda868fbfc2ddf1a7779beedcc63b9ac1d522cd99c53fc66f7cd14f79ce
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-v0-1-0-usability:revision:1
+        type: delivery_plan
+    supersedes:
+      - decision-b37683552d11450914284f2e7321d46e
+    updated_at: 2026-07-23T13:52:06.579Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-24T09:49:59.076Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.plan
+    id: decision-99c581d354bfa95e19d3f16da15f5c48
+    kind: decision
+    path: .pipeline/memory/records/cycle-4165928aca5b/decision/decision-99c581d354bfa95e19d3f16da15f5c48.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: 99c581d354bfa95e19d3f16da15f5c487fc02b66e8020ba67860f373a2d0aeda
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-v0-2-0-workflow-integration:revision:1
+        type: delivery_plan
+    supersedes:
+      - decision-ee559d9b1df2d45707b52c80e60f876b
+    updated_at: 2026-07-24T09:49:59.076Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-24T14:34:50.382Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.plan
+    id: decision-a023de2288f3238875f20e04f70dc948
+    kind: decision
+    path: .pipeline/memory/records/cycle-4165928aca5b/decision/decision-a023de2288f3238875f20e04f70dc948.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: a023de2288f3238875f20e04f70dc948d3946151c1899622d7606e47c4567910
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-v0-2-0-workflow-integration:revision:2
+        type: delivery_plan
+    supersedes:
+      - decision-99c581d354bfa95e19d3f16da15f5c48
+    updated_at: 2026-07-24T14:34:50.382Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-26T15:06:34.551Z
+    dedupe_key: decision.vspi.external-session-import-detail
+    id: decision-a82b0e062b7ad9ffef82d6ce5e3b7d43
+    kind: decision
+    path: .pipeline/memory/records/project-33aa1007aa14/decision/decision-a82b0e062b7ad9ffef82d6ce5e3b7d43.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: a82b0e062b7ad9ffef82d6ce5e3b7d43d50d9a6e51a83439a4e4c8c85ad0bb7d
+    source_refs:
+      - locator: 2026-07-26-v0.3-design-decisions
+        ref: current-chat
+        type: session
+    supersedes: []
+    updated_at: 2026-07-26T15:06:34.551Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-25T08:33:45.768Z
+    dedupe_key: goal.vspi-live-run-control.plan
+    id: decision-af0dffd0b340a15784ba86a694c13b28
+    kind: decision
+    path: .pipeline/memory/records/goal-33f80bd2158a/decision/decision-af0dffd0b340a15784ba86a694c13b28.md
+    scope:
+      ref: vspi-live-run-control
+      type: goal
+    semantic_hash: af0dffd0b340a15784ba86a694c13b28bb2530e49316356ace45ad9f53ded908
+    source_refs:
+      - locator: compiled-plan
+        ref: goal:vspi-live-run-control:revision:0
+        type: delivery_plan
+    supersedes: []
+    updated_at: 2026-07-25T08:33:45.768Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-23T01:58:56.609Z
+    dedupe_key: cycle.vspi-tui-v1.plan
+    id: decision-b044b80dda4ec71a62b5125962d23b3a
+    kind: decision
+    path: .pipeline/memory/records/cycle-25b09be1f9a9/decision/decision-b044b80dda4ec71a62b5125962d23b3a.md
+    scope:
+      ref: vspi-tui-v1
+      type: cycle
+    semantic_hash: b044b80dda4ec71a62b5125962d23b3a88fc81eb8618465684da4de053198a37
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-tui-v1:revision:1
+        type: delivery_plan
+    supersedes:
+      - decision-67927170f6d59e15a12ea00f7b92ed69
+    updated_at: 2026-07-23T01:58:56.609Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-23T10:40:06.079Z
+    dedupe_key: cycle.vspi-v0-1-0-usability.plan
+    id: decision-b37683552d11450914284f2e7321d46e
+    kind: decision
+    path: .pipeline/memory/records/cycle-381d64ffcd29/decision/decision-b37683552d11450914284f2e7321d46e.md
+    scope:
+      ref: vspi-v0-1-0-usability
+      type: cycle
+    semantic_hash: b37683552d11450914284f2e7321d46e094bdf40529185de568e9b7b42d21281
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-v0-1-0-usability:revision:0
+        type: delivery_plan
+    supersedes: []
+    updated_at: 2026-07-23T10:40:06.079Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-25T03:58:33.835Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.plan
+    id: decision-b8914dccf4f709762381abeb08e0d370
+    kind: decision
+    path: .pipeline/memory/records/cycle-4165928aca5b/decision/decision-b8914dccf4f709762381abeb08e0d370.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: b8914dccf4f709762381abeb08e0d370c9b0a260c7457b48a3f6b60e5aef5d2d
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-v0-2-0-workflow-integration:revision:5
+        type: delivery_plan
+    supersedes:
+      - decision-5a7bb7573abaa22b1e23d58c51980dad
+    updated_at: 2026-07-25T03:58:33.835Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-25T04:40:01.218Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.plan
+    id: decision-b8ef01334883f6d99f724008fc6f9287
+    kind: decision
+    path: .pipeline/memory/records/cycle-4165928aca5b/decision/decision-b8ef01334883f6d99f724008fc6f9287.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: b8ef01334883f6d99f724008fc6f9287154e26cece327c294118692808450b69
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-v0-2-0-workflow-integration:revision:6
+        type: delivery_plan
+    supersedes:
+      - decision-b8914dccf4f709762381abeb08e0d370
+    updated_at: 2026-07-25T04:40:01.218Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-25T05:33:49.537Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.plan
+    id: decision-bc7ae00b98900dfb50c99a9db522e013
+    kind: decision
+    path: .pipeline/memory/records/cycle-4165928aca5b/decision/decision-bc7ae00b98900dfb50c99a9db522e013.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: bc7ae00b98900dfb50c99a9db522e0138dc333eacdef775e7aa2b0c503cdf579
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-v0-2-0-workflow-integration:revision:7
+        type: delivery_plan
+    supersedes:
+      - decision-b8ef01334883f6d99f724008fc6f9287
+    updated_at: 2026-07-25T05:33:49.537Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-25T09:31:44.839Z
+    dedupe_key: goal.vspi-live-run-control.plan
+    id: decision-c333e5efe46be866faf28757c94176ad
+    kind: decision
+    path: .pipeline/memory/records/goal-33f80bd2158a/decision/decision-c333e5efe46be866faf28757c94176ad.md
+    scope:
+      ref: vspi-live-run-control
+      type: goal
+    semantic_hash: c333e5efe46be866faf28757c94176ad62e4089873635ce0d92a09624a38f394
+    source_refs:
+      - locator: compiled-plan
+        ref: goal:vspi-live-run-control:revision:1
+        type: delivery_plan
+    supersedes:
+      - decision-af0dffd0b340a15784ba86a694c13b28
+    updated_at: 2026-07-25T09:31:44.839Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-23T04:30:31.360Z
+    dedupe_key: cycle.vspi-tui-v1.plan
+    id: decision-d0627add08c0c097bda321efacca7984
+    kind: decision
+    path: .pipeline/memory/records/cycle-25b09be1f9a9/decision/decision-d0627add08c0c097bda321efacca7984.md
+    scope:
+      ref: vspi-tui-v1
+      type: cycle
+    semantic_hash: d0627add08c0c097bda321efacca798420c5a90a19d5027ff83b8fde687889da
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-tui-v1:revision:4
+        type: delivery_plan
+    supersedes:
+      - decision-1c7d01437a8796a9be84642ce6d6f421
+    updated_at: 2026-07-23T04:30:31.360Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-26T15:06:34.551Z
+    dedupe_key: decision.vspi.mcp-tool-exposure
+    id: decision-dadcdf82568a01d80eeccfe8ee8432db
+    kind: decision
+    path: .pipeline/memory/records/project-33aa1007aa14/decision/decision-dadcdf82568a01d80eeccfe8ee8432db.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: dadcdf82568a01d80eeccfe8ee8432db169054e8f297ae463798420d83381e55
+    source_refs:
+      - locator: 2026-07-26-v0.3-design-decisions
+        ref: current-chat
+        type: session
+    supersedes: []
+    updated_at: 2026-07-26T15:06:34.551Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-24T09:45:37.966Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.plan
+    id: decision-ee559d9b1df2d45707b52c80e60f876b
+    kind: decision
+    path: .pipeline/memory/records/cycle-4165928aca5b/decision/decision-ee559d9b1df2d45707b52c80e60f876b.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: ee559d9b1df2d45707b52c80e60f876be85b8fea5ecc0c61f2ab724a0fac27ff
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-v0-2-0-workflow-integration:revision:0
+        type: delivery_plan
+    supersedes: []
+    updated_at: 2026-07-24T09:45:37.966Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-25T09:36:26.200Z
+    dedupe_key: goal.vspi-live-run-control.plan
+    id: decision-f0677f2e7c84f47ee410ea2a34954434
+    kind: decision
+    path: .pipeline/memory/records/goal-33f80bd2158a/decision/decision-f0677f2e7c84f47ee410ea2a34954434.md
+    scope:
+      ref: vspi-live-run-control
+      type: goal
+    semantic_hash: f0677f2e7c84f47ee410ea2a349544348062c73e4eeca04e4f5199e7381da9ff
+    source_refs:
+      - locator: compiled-plan
+        ref: goal:vspi-live-run-control:revision:2
+        type: delivery_plan
+    supersedes:
+      - decision-c333e5efe46be866faf28757c94176ad
+    updated_at: 2026-07-25T09:36:26.200Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-26T15:06:34.551Z
+    dedupe_key: decision.vspi.skill-install-default-scope
+    id: decision-fc08c040b86a57bf2800480f6c5e4baa
+    kind: decision
+    path: .pipeline/memory/records/project-33aa1007aa14/decision/decision-fc08c040b86a57bf2800480f6c5e4baa.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: fc08c040b86a57bf2800480f6c5e4baaf21ea72b2ac4296a54646d8245bc6858
+    source_refs:
+      - locator: 2026-07-26-v0.3-design-decisions
+        ref: current-chat
+        type: session
+    supersedes: []
+    updated_at: 2026-07-26T15:06:34.551Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-29T16:00:00.000+08:00
+    dedupe_key: decision.vspi.pty-debug-playbook
+    id: decision-fef54ead775588f8899dba4b09dd65fd
+    kind: decision
+    path: .pipeline/memory/records/project-33aa1007aa14/decision/decision-fef54ead775588f8899dba4b09dd65fd.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: fef54ead775588f8899dba4b09dd65fd5dc8949ea37eaf0730ba51a9c3a76068
+    source_refs:
+      - locator: 2026-07-29-testing-debugging-maintain
+        ref: current-chat
+        type: session
+      - locator: repository-debug-playbook
+        ref: Docs/testing-and-debugging.md
+        type: file
+    supersedes: []
+    updated_at: 2026-07-29T16:00:00.000+08:00
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-24T15:36:31.049Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.plan
+    id: decision-ff351e9d4433699ce4b2d64ffea2bc3d
+    kind: decision
+    path: .pipeline/memory/records/cycle-4165928aca5b/decision/decision-ff351e9d4433699ce4b2d64ffea2bc3d.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: ff351e9d4433699ce4b2d64ffea2bc3dc373f4ef7d4a1d4bf05a866f0bd1254c
+    source_refs:
+      - locator: compiled-plan
+        ref: cycle:vspi-v0-2-0-workflow-integration:revision:3
+        type: delivery_plan
+    supersedes:
+      - decision-a023de2288f3238875f20e04f70dc948
+    updated_at: 2026-07-24T15:36:31.049Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-23T13:52:06.579Z
+    dedupe_key: cycle.vspi-v0-1-0-usability.feedback.00b9bb4cff9999bd
+    id: feedback-0209cf10017937b9ce7356aaca5eece2
+    kind: feedback
+    path: .pipeline/memory/records/cycle-381d64ffcd29/feedback/feedback-0209cf10017937b9ce7356aaca5eece2.md
+    scope:
+      ref: vspi-v0-1-0-usability
+      type: cycle
+    semantic_hash: 0209cf10017937b9ce7356aaca5eece2929bca938324ace21388b6088ab6b727
+    source_refs:
+      - locator: revision
+        ref: actor:user:workspace-owner
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-23T13:52:06.579Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-25T03:57:25.939Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.feedback.5d5692392e6ba9a7
+    id: feedback-04b0b14ffc2b6a81d5cd30ab95fb6f18
+    kind: feedback
+    path: .pipeline/memory/records/cycle-4165928aca5b/feedback/feedback-04b0b14ffc2b6a81d5cd30ab95fb6f18.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: 04b0b14ffc2b6a81d5cd30ab95fb6f18e53fe2438a01798e8e2993b7c856e19c
+    source_refs:
+      - locator: delivery.reject
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-25T03:57:25.939Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-29T08:39:18.782Z
+    dedupe_key: feedback.vspi.release-ledger.v0.2.0
+    id: feedback-05b2c0d4fb86a081d2871fc9f08a58e2
+    kind: feedback
+    path: .pipeline/memory/records/project-33aa1007aa14/feedback/feedback-05b2c0d4fb86a081d2871fc9f08a58e2.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 05b2c0d4fb86a081d2871fc9f08a58e2450ae6b11ee62e95d8711f9352f0c384
+    source_refs:
+      - locator: 29b6541246c643d7c7e0cde187004e19f46dc42e
+        ref: tag:v0.2.0
+        type: git
+      - locator: accepted-runtime
+        ref: vspi-v0-2-0-workflow-integration
+        type: delivery
+      - locator: accepted-runtime
+        ref: vspi-live-run-control
+        type: delivery
+      - locator: v0.2.0-release
+        ref: 019f9486-7c29-7f83-9972-e5e6c8950ca7
+        type: session
+    supersedes: []
+    updated_at: 2026-07-29T08:39:18.782Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-29T08:39:18.782Z
+    dedupe_key: feedback.vspi.release-ledger.v0.3.8-v0.3.11
+    id: feedback-0a04be071178907334e0e47b60963e0b
+    kind: feedback
+    path: .pipeline/memory/records/project-33aa1007aa14/feedback/feedback-0a04be071178907334e0e47b60963e0b.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 0a04be071178907334e0e47b60963e0b1014b05f65390e7dffc79bd33f83f05b
+    source_refs:
+      - locator: 8fc43f4f8d7c3bb66f9a3f5d1c87684f2e48c2c2
+        ref: tag:v0.3.8
+        type: git
+      - locator: ad3001ab7658cc65443a457214e0267b5b41c656
+        ref: tag:v0.3.9
+        type: git
+      - locator: prebuilt-pty-release-image
+        ref: commit:1b816a8e5c3c46cf6c062fb8d076a85a8ed8c6f5
+        type: git
+      - locator: 43f8ecd5ba580c923080a94fd3dec1a62291482d
+        ref: tag:v0.3.10
+        type: git
+      - locator: 0e4836b7cedda1aef0dd90c1277f4a497405893d
+        ref: tag:v0.3.11
+        type: git
+      - locator: v0.3.8-through-v0.3.11
+        ref: 019fa8ec-1b97-7672-a8f4-cc297148f372
+        type: session
+    supersedes: []
+    updated_at: 2026-07-29T08:39:18.782Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-25T04:40:01.218Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.feedback.c138c34d690d31c6
+    id: feedback-0dade055f803cb4ce3ce638f585147d2
+    kind: feedback
+    path: .pipeline/memory/records/cycle-4165928aca5b/feedback/feedback-0dade055f803cb4ce3ce638f585147d2.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: 0dade055f803cb4ce3ce638f585147d201762399a60e51ec491eb469f1ba05b4
+    source_refs:
+      - locator: revision
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-25T04:40:01.218Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-23T04:26:08.544Z
+    dedupe_key: cycle.vspi-tui-v1.feedback.b8889f634cbf1297
+    id: feedback-13bbda7f257b5e1ea9c9dd89dcb17e84
+    kind: feedback
+    path: .pipeline/memory/records/cycle-25b09be1f9a9/feedback/feedback-13bbda7f257b5e1ea9c9dd89dcb17e84.md
+    scope:
+      ref: vspi-tui-v1
+      type: cycle
+    semantic_hash: 13bbda7f257b5e1ea9c9dd89dcb17e844a617beab7cb4adce8c524769e9ec943
+    source_refs:
+      - locator: revision
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-23T04:26:08.544Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-25T07:10:06.304Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.feedback.32820b10def09cf8
+    id: feedback-1694ce4177ffbff5fc094ce6a0f3bb2e
+    kind: feedback
+    path: .pipeline/memory/records/cycle-4165928aca5b/feedback/feedback-1694ce4177ffbff5fc094ce6a0f3bb2e.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: 1694ce4177ffbff5fc094ce6a0f3bb2eaa04923e93c48eeafe39e0615b6d0999
+    source_refs:
+      - locator: delivery.reject
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-25T07:10:06.304Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-25T07:22:21.210Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.feedback.984b4eaf663b3721
+    id: feedback-1c1db9560547552fdd3dda4f2bca1295
+    kind: feedback
+    path: .pipeline/memory/records/cycle-4165928aca5b/feedback/feedback-1c1db9560547552fdd3dda4f2bca1295.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: 1c1db9560547552fdd3dda4f2bca12954b0ae314be00a8f820df83be0383c0aa
+    source_refs:
+      - locator: revision
+        ref: actor:user:heyx
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-25T07:22:21.210Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-25T04:38:45.128Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.feedback.dc3a0f94d1467e35
+    id: feedback-237bcdb65718f5b6164c08ac47cdc94d
+    kind: feedback
+    path: .pipeline/memory/records/cycle-4165928aca5b/feedback/feedback-237bcdb65718f5b6164c08ac47cdc94d.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: 237bcdb65718f5b6164c08ac47cdc94de21b237c845fed7f48893d57efa405eb
+    source_refs:
+      - locator: delivery.reject
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-25T04:38:45.128Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-29T08:39:18.782Z
+    dedupe_key: feedback.vspi.release-ledger.v0.2.1-v0.2.7
+    id: feedback-286ce0c0ce667f86cdf15febe3fc54eb
+    kind: feedback
+    path: .pipeline/memory/records/project-33aa1007aa14/feedback/feedback-286ce0c0ce667f86cdf15febe3fc54eb.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 286ce0c0ce667f86cdf15febe3fc54eb17b029f3b48755a0dd85862a6fbd59a8
+    source_refs:
+      - locator: d488b5252492815d0a97bc5ebd2d4471cb64a659
+        ref: tag:v0.2.1
+        type: git
+      - locator: 59361d79cc2d0ed2d3d2cb6ba43457f112721cae
+        ref: tag:v0.2.2
+        type: git
+      - locator: 066005b640773a58ae739182d102349bf3af2937
+        ref: tag:v0.2.3
+        type: git
+      - locator: 18bc703259b4069f6de8a74e84d61533b0ded854
+        ref: tag:v0.2.4
+        type: git
+      - locator: 44bd9674163d1f478b3e514d8f86ba3d68fab4c9
+        ref: tag:v0.2.5
+        type: git
+      - locator: f79e186e1051bad029c4e00f5aadbc748a83b66f
+        ref: tag:v0.2.6
+        type: git
+      - locator: e7c363d1525aeddf00348579afebe40aab1875e1
+        ref: tag:v0.2.7
+        type: git
+      - locator: v0.2.1-through-v0.2.7
+        ref: 019f9486-7c29-7f83-9972-e5e6c8950ca7
+        type: session
+    supersedes: []
+    updated_at: 2026-07-29T08:39:18.782Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-25T07:10:44.106Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.feedback.e7ded37362b1722e
+    id: feedback-2888bdf80dca47139286cc5d09dc1b78
+    kind: feedback
+    path: .pipeline/memory/records/cycle-4165928aca5b/feedback/feedback-2888bdf80dca47139286cc5d09dc1b78.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: 2888bdf80dca47139286cc5d09dc1b78de79586f27b73681fcaefac094ce467b
+    source_refs:
+      - locator: revision
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-25T07:10:44.106Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-24T16:31:22.169Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.feedback.244a565c768b3033
+    id: feedback-2975a350a7865f4fc29f1218b5bff36d
+    kind: feedback
+    path: .pipeline/memory/records/cycle-4165928aca5b/feedback/feedback-2975a350a7865f4fc29f1218b5bff36d.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: 2975a350a7865f4fc29f1218b5bff36dfab4a1b28b1bd8486f72035cac9df1a4
+    source_refs:
+      - locator: stone.reject
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-24T16:31:22.169Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-25T09:30:03.226Z
+    dedupe_key: goal.vspi-live-run-control.feedback.3f4c4ce3670b5fb2
+    id: feedback-2dc39de0dbbb77493cac3135e83d2a25
+    kind: feedback
+    path: .pipeline/memory/records/goal-33f80bd2158a/feedback/feedback-2dc39de0dbbb77493cac3135e83d2a25.md
+    scope:
+      ref: vspi-live-run-control
+      type: goal
+    semantic_hash: 2dc39de0dbbb77493cac3135e83d2a258319f270e3971e8d87a769440de7532d
+    source_refs:
+      - locator: delivery.reject
+        ref: actor:user:heyx
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-25T09:30:03.226Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-25T09:31:44.839Z
+    dedupe_key: goal.vspi-live-run-control.feedback.771996a5e1a5efc7
+    id: feedback-3082d500ee579c89e32e3594ff56b38f
+    kind: feedback
+    path: .pipeline/memory/records/goal-33f80bd2158a/feedback/feedback-3082d500ee579c89e32e3594ff56b38f.md
+    scope:
+      ref: vspi-live-run-control
+      type: goal
+    semantic_hash: 3082d500ee579c89e32e3594ff56b38f3e92ac9793d922f7b7aaa97081e29185
+    source_refs:
+      - locator: revision
+        ref: actor:user:heyx
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-25T09:31:44.839Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-23T01:56:11.048Z
+    dedupe_key: cycle.vspi-tui-v1.feedback.ff40cfb6c4e06804
+    id: feedback-309edec7a60dd4c1b493b13fc7e46c81
+    kind: feedback
+    path: .pipeline/memory/records/cycle-25b09be1f9a9/feedback/feedback-309edec7a60dd4c1b493b13fc7e46c81.md
+    scope:
+      ref: vspi-tui-v1
+      type: cycle
+    semantic_hash: 309edec7a60dd4c1b493b13fc7e46c810c2effe1f81c4638862030b1b266c0c5
+    source_refs:
+      - locator: reject
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-23T01:56:11.048Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-26T09:48:25.207Z
+    dedupe_key: feedback.vspi.status-layout-fixed-tracks
+    id: feedback-36a85019af5becf313cfafda0ffc58bb
+    kind: feedback
+    path: .pipeline/memory/records/project-33aa1007aa14/feedback/feedback-36a85019af5becf313cfafda0ffc58bb.md
+    scope:
+      ref: VSPi
+      type: project
+    semantic_hash: 36a85019af5becf313cfafda0ffc58bb158396af4c9142bc7d0a1d33d1815ff9
+    source_refs:
+      - locator: 2026-07-26-working-plan-status-clarification
+        ref: current-chat
+        type: session
+    supersedes:
+      - feedback-db31efd26e2215b19a90826d64584e69
+    updated_at: 2026-07-26T09:48:25.207Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-23T04:30:31.360Z
+    dedupe_key: cycle.vspi-tui-v1.feedback.a4536cf5a20774de
+    id: feedback-3e32c4ab8e560f29f532662278de4d87
+    kind: feedback
+    path: .pipeline/memory/records/cycle-25b09be1f9a9/feedback/feedback-3e32c4ab8e560f29f532662278de4d87.md
+    scope:
+      ref: vspi-tui-v1
+      type: cycle
+    semantic_hash: 3e32c4ab8e560f29f532662278de4d87ce1c5c92f1bf509cd9a97456b09ece58
+    source_refs:
+      - locator: revision
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-23T04:30:31.360Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-24T04:47:56.123Z
+    dedupe_key: feedback.vspi.status-layout-fixed-tracks
+    id: feedback-44198afddd97a657ea2cdab8cd574ed3
+    kind: feedback
+    path: .pipeline/memory/records/delivery-381d64ffcd29/feedback/feedback-44198afddd97a657ea2cdab8cd574ed3.md
+    scope:
+      ref: vspi-v0-1-0-usability
+      type: delivery
+    semantic_hash: 44198afddd97a657ea2cdab8cd574ed358fac708901ca3cadbbbcac3207cf44a
+    source_refs:
+      - locator: 2026-07-24-status-layout-screenshot
+        ref: current-chat
+        type: session
+    supersedes: []
+    updated_at: 2026-07-24T04:47:56.123Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-25T05:33:49.537Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.feedback.048085098adea83d
+    id: feedback-4948393d7732416a0ce0a032a4aefcaf
+    kind: feedback
+    path: .pipeline/memory/records/cycle-4165928aca5b/feedback/feedback-4948393d7732416a0ce0a032a4aefcaf.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: 4948393d7732416a0ce0a032a4aefcaf26939728daced5b1d7d60e35573fa079
+    source_refs:
+      - locator: revision
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-25T05:33:49.537Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-29T08:39:18.782Z
+    dedupe_key: feedback.vspi.release-ledger.v0.3.0-v0.3.7
+    id: feedback-60093381731f723a648627fef2347991
+    kind: feedback
+    path: .pipeline/memory/records/project-33aa1007aa14/feedback/feedback-60093381731f723a648627fef2347991.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 60093381731f723a648627fef234799109978f71ed3c0f916f6235d5e68ec988
+    source_refs:
+      - locator: cb11c204028696bf55128ffc204fecf0c508e2bb
+        ref: tag:v0.3.0
+        type: git
+      - locator: 9e79dc55e3a16b8e8d31a1c65549b67f5c8d9721
+        ref: tag:v0.3.1
+        type: git
+      - locator: a6a319fa248aec0b0ab75410ac42f0268a8fc74d
+        ref: tag:v0.3.2
+        type: git
+      - locator: 6bc942fb1568fc5d062127572a4d6287c55594f0
+        ref: tag:v0.3.3
+        type: git
+      - locator: b80fac8004a4bbdcf4de99a15423052ba9a8b7fc
+        ref: tag:v0.3.4
+        type: git
+      - locator: 948d4ec19607de517c0194b6460e5977c7810af1
+        ref: tag:v0.3.5
+        type: git
+      - locator: 5f12a283a66698237cec7fe50afe6bff676908df
+        ref: tag:v0.3.6
+        type: git
+      - locator: 85324031d1841768fc8129e1563ced3f2e506bbf
+        ref: tag:v0.3.7
+        type: git
+      - locator: v0.3.0-through-v0.3.7
+        ref: 019f9486-7c29-7f83-9972-e5e6c8950ca7
+        type: session
+    supersedes: []
+    updated_at: 2026-07-29T08:39:18.782Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-25T09:36:26.200Z
+    dedupe_key: goal.vspi-live-run-control.feedback.bf4a41fa17dcef69
+    id: feedback-66872838bdbce1337743646dc69c7c2f
+    kind: feedback
+    path: .pipeline/memory/records/goal-33f80bd2158a/feedback/feedback-66872838bdbce1337743646dc69c7c2f.md
+    scope:
+      ref: vspi-live-run-control
+      type: goal
+    semantic_hash: 66872838bdbce1337743646dc69c7c2f5e145c854f5a9f9d695f7fadab1e7802
+    source_refs:
+      - locator: revision
+        ref: actor:user:heyx
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-25T09:36:26.200Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-25T05:32:08.672Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.feedback.e421a40a0878253a
+    id: feedback-691d9dde92464dd0fa25d3171733cce5
+    kind: feedback
+    path: .pipeline/memory/records/cycle-4165928aca5b/feedback/feedback-691d9dde92464dd0fa25d3171733cce5.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: 691d9dde92464dd0fa25d3171733cce5a73b928ab1d33550e7fbeff558116d5c
+    source_refs:
+      - locator: stone.reject
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-25T05:32:08.672Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-25T03:58:33.835Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.feedback.55619d25e5f5bb42
+    id: feedback-6dd5bdf9c4602ca33671e84eac929b12
+    kind: feedback
+    path: .pipeline/memory/records/cycle-4165928aca5b/feedback/feedback-6dd5bdf9c4602ca33671e84eac929b12.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: 6dd5bdf9c4602ca33671e84eac929b12c9cfff621c7e1d88ce80663d8ec1c9a3
+    source_refs:
+      - locator: revision
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-25T03:58:33.835Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-24T14:34:50.382Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.feedback.8c4e651de718eafe
+    id: feedback-717a9c188e0da4bad1c683a4c5ce2e53
+    kind: feedback
+    path: .pipeline/memory/records/cycle-4165928aca5b/feedback/feedback-717a9c188e0da4bad1c683a4c5ce2e53.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: 717a9c188e0da4bad1c683a4c5ce2e531a7193bacef11b14ea90ba202b9bdb51
+    source_refs:
+      - locator: revision
+        ref: actor:user:workspace-user
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-24T14:34:50.382Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-26T10:34:00.875Z
+    dedupe_key: feedback.vspi.status-layout-fixed-tracks
+    id: feedback-7cc38e004361e3431e700a74e251d0e0
+    kind: feedback
+    path: .pipeline/memory/records/project-33aa1007aa14/feedback/feedback-7cc38e004361e3431e700a74e251d0e0.md
+    scope:
+      ref: VSPi
+      type: project
+    semantic_hash: 7cc38e004361e3431e700a74e251d0e045f61604746166e70cd9036153991700
+    source_refs:
+      - locator: 2026-07-26-approval-context-branch-plan-feedback
+        ref: current-chat
+        type: session
+    supersedes:
+      - feedback-ab1742539cee36f0f27b27c36c48aad2
+    updated_at: 2026-07-26T10:34:00.875Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-29T08:39:18.782Z
+    dedupe_key: feedback.vspi.release-ledger.v0.1.0
+    id: feedback-7da490d7b5b02157c2be6d408c609c43
+    kind: feedback
+    path: .pipeline/memory/records/project-33aa1007aa14/feedback/feedback-7da490d7b5b02157c2be6d408c609c43.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 7da490d7b5b02157c2be6d408c609c439b84c8ab7d36ba415b4873738e3fc7f2
+    source_refs:
+      - locator: package-version-0.1.0
+        ref: commit:c0f5829b91dc1a95e79962013a76135c37d278b0
+        type: git
+      - locator: accepted-runtime
+        ref: vspi-tui-v1
+        type: delivery
+      - locator: accepted-runtime
+        ref: vspi-v0-1-0-usability
+        type: delivery
+      - locator: initial-tui-cycle
+        ref: 019f8a42-4eca-7a70-be1e-585c379ac619
+        type: session
+      - locator: v0.1.0-continuation
+        ref: 019f929a-aa73-7f21-bca6-7e7132741d28
+        type: session
+    supersedes: []
+    updated_at: 2026-07-29T08:39:18.782Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-23T07:03:27.953Z
+    dedupe_key: cycle.vspi-tui-v1.feedback.59ca3879c2754ad1
+    id: feedback-8514d7f0d8a05202dfb6508c06d00248
+    kind: feedback
+    path: .pipeline/memory/records/cycle-25b09be1f9a9/feedback/feedback-8514d7f0d8a05202dfb6508c06d00248.md
+    scope:
+      ref: vspi-tui-v1
+      type: cycle
+    semantic_hash: 8514d7f0d8a05202dfb6508c06d0024824466fc156b1b3b984c57e80a8193c69
+    source_refs:
+      - locator: revision
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-23T07:03:27.953Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-25T10:21:31.835Z
+    dedupe_key: goal.vspi-live-run-control.feedback.557a36ec9b6ed4be
+    id: feedback-89ed9f5b6872a5259a96a681d88ae282
+    kind: feedback
+    path: .pipeline/memory/records/goal-33f80bd2158a/feedback/feedback-89ed9f5b6872a5259a96a681d88ae282.md
+    scope:
+      ref: vspi-live-run-control
+      type: goal
+    semantic_hash: 89ed9f5b6872a5259a96a681d88ae282e7ebbc4605561c99270f9760d4e18ec2
+    source_refs:
+      - locator: revision
+        ref: actor:user:heyx
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-25T10:21:31.835Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-23T04:21:46.818Z
+    dedupe_key: cycle.vspi-tui-v1.feedback.7aeaa2e55cb17cbd
+    id: feedback-8cb9ce7a3fed5d5739c91b169a385dd9
+    kind: feedback
+    path: .pipeline/memory/records/cycle-25b09be1f9a9/feedback/feedback-8cb9ce7a3fed5d5739c91b169a385dd9.md
+    scope:
+      ref: vspi-tui-v1
+      type: cycle
+    semantic_hash: 8cb9ce7a3fed5d5739c91b169a385dd94760e89b3b280d2b08d415bec78c8ba5
+    source_refs:
+      - locator: revision
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-23T04:21:46.818Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-24T14:32:27.677Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.feedback.db56b25af6649ab5
+    id: feedback-8d2214604b348e7175b229e01cffedce
+    kind: feedback
+    path: .pipeline/memory/records/cycle-4165928aca5b/feedback/feedback-8d2214604b348e7175b229e01cffedce.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: 8d2214604b348e7175b229e01cffedcede9c4be6fd97f6136704ae8808777688
+    source_refs:
+      - locator: stone.reject
+        ref: actor:user:workspace-user
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-24T14:32:27.677Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-23T14:17:08.891Z
+    dedupe_key: cycle.vspi-v0-1-0-usability.feedback.a8cc7b4a225d894c
+    id: feedback-9cbc9f1c205a32a3455b2328c2c4e31a
+    kind: feedback
+    path: .pipeline/memory/records/cycle-381d64ffcd29/feedback/feedback-9cbc9f1c205a32a3455b2328c2c4e31a.md
+    scope:
+      ref: vspi-v0-1-0-usability
+      type: cycle
+    semantic_hash: 9cbc9f1c205a32a3455b2328c2c4e31ab63738bc3eb4ebd7fdc4389af11d8c23
+    source_refs:
+      - locator: revision
+        ref: actor:user:workspace-owner
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-23T14:17:08.891Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-23T01:58:56.609Z
+    dedupe_key: cycle.vspi-tui-v1.feedback.68c2739abc2b5cb2
+    id: feedback-a48b3363d40d3c1d583cb0b182121e66
+    kind: feedback
+    path: .pipeline/memory/records/cycle-25b09be1f9a9/feedback/feedback-a48b3363d40d3c1d583cb0b182121e66.md
+    scope:
+      ref: vspi-tui-v1
+      type: cycle
+    semantic_hash: a48b3363d40d3c1d583cb0b182121e66dd19ea5f3ea5a2715bb8f12e7c2adec2
+    source_refs:
+      - locator: revision
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-23T01:58:56.609Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-26T10:22:55.228Z
+    dedupe_key: feedback.vspi.status-layout-fixed-tracks
+    id: feedback-ab1742539cee36f0f27b27c36c48aad2
+    kind: feedback
+    path: .pipeline/memory/records/project-33aa1007aa14/feedback/feedback-ab1742539cee36f0f27b27c36c48aad2.md
+    scope:
+      ref: VSPi
+      type: project
+    semantic_hash: ab1742539cee36f0f27b27c36c48aad2abdaa7d9a5dbc85720a4f43cf1039ba0
+    source_refs:
+      - locator: 2026-07-26-native-tty-component-feedback
+        ref: current-chat
+        type: session
+    supersedes:
+      - feedback-c9b3e339c6c3f13935ced61f6fe90114
+    updated_at: 2026-07-26T10:22:55.228Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-24T16:32:21.716Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.feedback.dccc1d0a2004dda9
+    id: feedback-b9047e6d784e40bea91fe9161db5225e
+    kind: feedback
+    path: .pipeline/memory/records/cycle-4165928aca5b/feedback/feedback-b9047e6d784e40bea91fe9161db5225e.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: b9047e6d784e40bea91fe9161db5225e9104be367b609178e1319f2bf379dd0c
+    source_refs:
+      - locator: revision
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-24T16:32:21.716Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-23T04:20:44.366Z
+    dedupe_key: cycle.vspi-tui-v1.feedback.a46dbbee077088c5
+    id: feedback-bf0c8330b8356e5ff14f20b4235030f5
+    kind: feedback
+    path: .pipeline/memory/records/cycle-25b09be1f9a9/feedback/feedback-bf0c8330b8356e5ff14f20b4235030f5.md
+    scope:
+      ref: vspi-tui-v1
+      type: cycle
+    semantic_hash: bf0c8330b8356e5ff14f20b4235030f51cd53425982fc00153e94aeeeca258fa
+    source_refs:
+      - locator: reject
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-23T04:20:44.366Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-26T10:07:05.421Z
+    dedupe_key: feedback.vspi.status-layout-fixed-tracks
+    id: feedback-c9b3e339c6c3f13935ced61f6fe90114
+    kind: feedback
+    path: .pipeline/memory/records/project-33aa1007aa14/feedback/feedback-c9b3e339c6c3f13935ced61f6fe90114.md
+    scope:
+      ref: VSPi
+      type: project
+    semantic_hash: c9b3e339c6c3f13935ced61f6fe901148e0ed119f528335f03bf7bbc40d7f745
+    source_refs:
+      - locator: 2026-07-26-native-tty-density-status-feedback
+        ref: current-chat
+        type: session
+    supersedes:
+      - feedback-36a85019af5becf313cfafda0ffc58bb
+    updated_at: 2026-07-26T10:07:05.421Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-23T07:00:56.021Z
+    dedupe_key: cycle.vspi-tui-v1.feedback.4f0a53dac508ca81
+    id: feedback-da6226ef6e521d26d9d0450ff05b4db0
+    kind: feedback
+    path: .pipeline/memory/records/cycle-25b09be1f9a9/feedback/feedback-da6226ef6e521d26d9d0450ff05b4db0.md
+    scope:
+      ref: vspi-tui-v1
+      type: cycle
+    semantic_hash: da6226ef6e521d26d9d0450ff05b4db006453cc0bb47e168a48f1ec300bc01e4
+    source_refs:
+      - locator: reject
+        ref: actor:user:operator
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-23T07:00:56.021Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-24T05:32:53.098Z
+    dedupe_key: feedback.vspi.status-layout-fixed-tracks
+    id: feedback-db31efd26e2215b19a90826d64584e69
+    kind: feedback
+    path: .pipeline/memory/records/delivery-381d64ffcd29/feedback/feedback-db31efd26e2215b19a90826d64584e69.md
+    scope:
+      ref: vspi-v0-1-0-usability
+      type: delivery
+    secret_refs: []
+    semantic_hash: db31efd26e2215b19a90826d64584e69059c9e158e0dd103ca866014b1b78c90
+    source_refs:
+      - locator: 2026-07-24-status-spacing-path-label
+        ref: current-chat
+        type: session
+    supersedes:
+      - feedback-44198afddd97a657ea2cdab8cd574ed3
+    updated_at: 2026-07-24T05:32:53.098Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-25T10:20:50.172Z
+    dedupe_key: goal.vspi-live-run-control.feedback.5ae10d550e18b724
+    id: feedback-dc147863d143b0fbd2fb60550d0d6596
+    kind: feedback
+    path: .pipeline/memory/records/goal-33f80bd2158a/feedback/feedback-dc147863d143b0fbd2fb60550d0d6596.md
+    scope:
+      ref: vspi-live-run-control
+      type: goal
+    semantic_hash: dc147863d143b0fbd2fb60550d0d6596a0ddab68d7459b61fe87d148a47c31e2
+    source_refs:
+      - locator: delivery.reject
+        ref: actor:user:heyx
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-25T10:20:50.172Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-24T15:36:31.049Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.feedback.d7cb7cdd55fe1163
+    id: feedback-e9962731ff5317cc8437036c350ae060
+    kind: feedback
+    path: .pipeline/memory/records/cycle-4165928aca5b/feedback/feedback-e9962731ff5317cc8437036c350ae060.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: e9962731ff5317cc8437036c350ae060902245b253107ebabcda969010e5333b
+    source_refs:
+      - locator: revision
+        ref: actor:user:workspace-user
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-24T15:36:31.049Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-24T09:49:59.076Z
+    dedupe_key: cycle.vspi-v0-2-0-workflow-integration.feedback.5564cba94a948ca7
+    id: feedback-f96f2c8291940282abab00cb1b68795c
+    kind: feedback
+    path: .pipeline/memory/records/cycle-4165928aca5b/feedback/feedback-f96f2c8291940282abab00cb1b68795c.md
+    scope:
+      ref: vspi-v0-2-0-workflow-integration
+      type: cycle
+    semantic_hash: f96f2c8291940282abab00cb1b68795ccf1f64fe7479fe0c6cf0798eeab1eec2
+    source_refs:
+      - locator: revision
+        ref: actor:user:workspace-owner
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-07-24T09:49:59.076Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-26T12:00:03.939Z
+    dedupe_key: preference.vspi.ui-native-mock-first
+    id: preference-afdb1404971fcf8baed40924374a0d1e
+    kind: preference
+    path: .pipeline/memory/records/project-33aa1007aa14/preference/preference-afdb1404971fcf8baed40924374a0d1e.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: afdb1404971fcf8baed40924374a0d1e8c33f96ade6f4e1b56c3fecc136a905b
+    source_refs:
+      - locator: 2026-07-26-native-tty-mock-process-accepted
+        ref: current-chat
+        type: session
+    supersedes: []
+    updated_at: 2026-07-26T12:00:03.939Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-26T10:22:55.228Z
+    dedupe_key: requirement.vspi.question-interaction-depth
+    id: requirement-062a4899aad721f16efe298ef24365a3
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-062a4899aad721f16efe298ef24365a3.md
+    scope:
+      ref: VSPi
+      type: project
+    semantic_hash: 062a4899aad721f16efe298ef24365a338bcd8e6491f2efb3fec0c2408cf9845
+    source_refs:
+      - locator: 2026-07-26-native-tty-component-feedback
+        ref: current-chat
+        type: session
+    supersedes:
+      - requirement-af8bfc3a57f131729a2179756a1200d3
+    updated_at: 2026-07-26T10:22:55.228Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-26T08:02:41.685Z
+    dedupe_key: requirement.vspi.question-interaction-depth
+    id: requirement-0bbf3ac27c8ab46c4a1aff9c489bede6
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-0bbf3ac27c8ab46c4a1aff9c489bede6.md
+    scope:
+      ref: VSPi
+      type: project
+    semantic_hash: 0bbf3ac27c8ab46c4a1aff9c489bede6e32e5115d41c6fe3b3d40f33b605631d
+    source_refs:
+      - locator: 2026-07-26-next-version-question-update
+        ref: current-chat
+        type: session
+    supersedes: []
+    updated_at: 2026-07-26T08:02:41.685Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-26T11:55:30.972Z
+    dedupe_key: requirement.vspi.interactive-panel-density
+    id: requirement-101351de724bb1025bd13fda2f4dba70
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-101351de724bb1025bd13fda2f4dba70.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 101351de724bb1025bd13fda2f4dba70548d61dde989a0ab5d460b5a9a64af5d
+    source_refs:
+      - locator: 2026-07-26-panel-spacing-model-plan-refinement
+        ref: current-chat
+        type: session
+    supersedes:
+      - requirement-d350a326aebf15cee022d4ca8d85482e
+    updated_at: 2026-07-26T11:55:30.972Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-26T10:34:00.875Z
+    dedupe_key: requirement.vspi.effective-model-context
+    id: requirement-20a9cf868d16c64e5b00e67052ba3e6e
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-20a9cf868d16c64e5b00e67052ba3e6e.md
+    scope:
+      ref: VSPi
+      type: project
+    semantic_hash: 20a9cf868d16c64e5b00e67052ba3e6ee0e976cd2a21fcdbcea2f5355e7f1245
+    source_refs:
+      - locator: 2026-07-26-approval-context-branch-plan-feedback
+        ref: current-chat
+        type: session
+    supersedes: []
+    updated_at: 2026-07-26T10:34:00.875Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-26T08:02:41.685Z
+    dedupe_key: requirement.vspi.update-command
+    id: requirement-34bdc2f91c02121e80d098696e6b19dd
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-34bdc2f91c02121e80d098696e6b19dd.md
+    scope:
+      ref: VSPi
+      type: project
+    semantic_hash: 34bdc2f91c02121e80d098696e6b19dddb1aa70fdda1d6b59b50575bf2e1b525
+    source_refs:
+      - locator: 2026-07-26-next-version-question-update
+        ref: current-chat
+        type: session
+    supersedes: []
+    updated_at: 2026-07-26T08:02:41.685Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-26T08:11:59.339Z
+    dedupe_key: requirement.vspi.interactive-panel-density
+    id: requirement-358c59892ea47160bd195305ea3ecf13
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-358c59892ea47160bd195305ea3ecf13.md
+    scope:
+      ref: VSPi
+      type: project
+    semantic_hash: 358c59892ea47160bd195305ea3ecf1329aee787426ee157300b7abd32adb8ff
+    source_refs:
+      - locator: 2026-07-26-wireframe-density-clarification
+        ref: current-chat
+        type: session
+    supersedes: []
+    updated_at: 2026-07-26T08:11:59.339Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-29T16:00:00.000+08:00
+    dedupe_key: requirement.vspi.test-validation-discipline
+    id: requirement-41375d415c1c7b031bdc0aa1f8bddb81
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-41375d415c1c7b031bdc0aa1f8bddb81.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 41375d415c1c7b031bdc0aa1f8bddb81c1346e63ce1e9498c79dfb79241c9d93
+    source_refs:
+      - locator: 2026-07-29-testing-debugging-maintain
+        ref: current-chat
+        type: session
+      - locator: repository-debug-playbook
+        ref: Docs/testing-and-debugging.md
+        type: file
+    supersedes: []
+    updated_at: 2026-07-29T16:00:00.000+08:00
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-26T08:11:59.339Z
+    dedupe_key: requirement.vspi.question-interaction-depth
+    id: requirement-425d1183157473cee73d160be5970a70
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-425d1183157473cee73d160be5970a70.md
+    scope:
+      ref: VSPi
+      type: project
+    semantic_hash: 425d1183157473cee73d160be5970a707bfc346e4697c799de373da1a61b7585
+    source_refs:
+      - locator: 2026-07-26-wireframe-density-clarification
+        ref: current-chat
+        type: session
+    supersedes:
+      - requirement-0bbf3ac27c8ab46c4a1aff9c489bede6
+    updated_at: 2026-07-26T08:11:59.339Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-26T10:22:55.228Z
+    dedupe_key: requirement.vspi.interactive-panel-density
+    id: requirement-4ec7c0718ad2d8da33763e040c25d2b6
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-4ec7c0718ad2d8da33763e040c25d2b6.md
+    scope:
+      ref: VSPi
+      type: project
+    semantic_hash: 4ec7c0718ad2d8da33763e040c25d2b6fad34a53d38a440fabc8254dfd282414
+    source_refs:
+      - locator: 2026-07-26-native-tty-component-feedback
+        ref: current-chat
+        type: session
+    supersedes:
+      - requirement-67fde9f993577eb71275eead9f9c03cd
+    updated_at: 2026-07-26T10:22:55.228Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-26T10:07:05.421Z
+    dedupe_key: requirement.vspi.interactive-panel-density
+    id: requirement-67fde9f993577eb71275eead9f9c03cd
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-67fde9f993577eb71275eead9f9c03cd.md
+    scope:
+      ref: VSPi
+      type: project
+    semantic_hash: 67fde9f993577eb71275eead9f9c03cd407320b23971557cd38f40a768aa739b
+    source_refs:
+      - locator: 2026-07-26-native-tty-density-status-feedback
+        ref: current-chat
+        type: session
+    supersedes:
+      - requirement-98835412db3b1cb35d3aacd8c4909f11
+    updated_at: 2026-07-26T10:07:05.421Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-22T14:41:56.991Z
+    dedupe_key: project_intent
+    id: requirement-7aa27ad8d6ea8ff47370425b826abd54
+    kind: requirement
+    path: .pipeline/memory/records/project-49b39c23e829/requirement/requirement-7aa27ad8d6ea8ff47370425b826abd54.md
+    scope:
+      ref: project:VSPi
+      type: project
+    semantic_hash: 7aa27ad8d6ea8ff47370425b826abd54f0dd68bdf120e6250668d2bc03235593
+    source_refs:
+      - locator: request.intent
+        ref: init
+        type: user_request
+    supersedes: []
+    updated_at: 2026-07-22T14:41:56.991Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-26T10:22:55.228Z
+    dedupe_key: requirement.vspi.model-picker-recent
+    id: requirement-80e6d448ecc68c4229ce7209ac7fbbad
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-80e6d448ecc68c4229ce7209ac7fbbad.md
+    scope:
+      ref: VSPi
+      type: project
+    semantic_hash: 80e6d448ecc68c4229ce7209ac7fbbadfcbb08b7832e9ccb382169fc6afb866b
+    source_refs:
+      - locator: 2026-07-26-native-tty-component-feedback
+        ref: current-chat
+        type: session
+    supersedes: []
+    updated_at: 2026-07-26T10:22:55.228Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-26T14:48:52.631Z
+    dedupe_key: requirement.vspi.skill-mcp-management
+    id: requirement-8fa3774fbc6fce3c20d507c1a0b55e90
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-8fa3774fbc6fce3c20d507c1a0b55e90.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 8fa3774fbc6fce3c20d507c1a0b55e907e0fdfb04b538703ed0e0bc1276322fc
+    source_refs:
+      - locator: 2026-07-26-v0.3-skill-mcp-management
+        ref: current-chat
+        type: session
+    supersedes: []
+    updated_at: 2026-07-26T14:48:52.631Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-26T09:17:02.634Z
+    dedupe_key: requirement.vspi.interactive-panel-density
+    id: requirement-9714a3a81831cd03dec8943e06b51b8a
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-9714a3a81831cd03dec8943e06b51b8a.md
+    scope:
+      ref: VSPi
+      type: project
+    semantic_hash: 9714a3a81831cd03dec8943e06b51b8a2d440a3d70ae2da29b7f36e50516f5e6
+    source_refs:
+      - locator: 2026-07-26-mock-spatial-layer-feedback
+        ref: current-chat
+        type: session
+    supersedes:
+      - requirement-358c59892ea47160bd195305ea3ecf13
+    updated_at: 2026-07-26T09:17:02.634Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-26T09:48:25.207Z
+    dedupe_key: requirement.vspi.interactive-panel-density
+    id: requirement-98835412db3b1cb35d3aacd8c4909f11
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-98835412db3b1cb35d3aacd8c4909f11.md
+    scope:
+      ref: VSPi
+      type: project
+    semantic_hash: 98835412db3b1cb35d3aacd8c4909f11db52dfba4a68374d9352b98d98254ecd
+    source_refs:
+      - locator: 2026-07-26-working-plan-status-clarification
+        ref: current-chat
+        type: session
+    supersedes:
+      - requirement-9714a3a81831cd03dec8943e06b51b8a
+    updated_at: 2026-07-26T09:48:25.207Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-26T10:44:56.352Z
+    dedupe_key: requirement.vspi.interactive-panel-density
+    id: requirement-aba0169a5c698bb5539131b2d634d5a4
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-aba0169a5c698bb5539131b2d634d5a4.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: aba0169a5c698bb5539131b2d634d5a49a912a55536505dc3464b329c291ae78
+    source_refs:
+      - locator: 2026-07-26-working-queue-plan-mock-feedback
+        ref: current-chat
+        type: session
+    supersedes:
+      - requirement-b5632341374b9eda4562c59c56e1e5e9
+    updated_at: 2026-07-26T10:44:56.352Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-26T09:17:02.634Z
+    dedupe_key: requirement.vspi.question-interaction-depth
+    id: requirement-af8bfc3a57f131729a2179756a1200d3
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-af8bfc3a57f131729a2179756a1200d3.md
+    scope:
+      ref: VSPi
+      type: project
+    semantic_hash: af8bfc3a57f131729a2179756a1200d3cb6f623da27bced9695ac47ce702d8ed
+    source_refs:
+      - locator: 2026-07-26-mock-spatial-layer-feedback
+        ref: current-chat
+        type: session
+    supersedes:
+      - requirement-425d1183157473cee73d160be5970a70
+    updated_at: 2026-07-26T09:17:02.634Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-26T10:34:00.875Z
+    dedupe_key: requirement.vspi.interactive-panel-density
+    id: requirement-b5632341374b9eda4562c59c56e1e5e9
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-b5632341374b9eda4562c59c56e1e5e9.md
+    scope:
+      ref: VSPi
+      type: project
+    semantic_hash: b5632341374b9eda4562c59c56e1e5e943ec81d4d1a6138236f53ecc2a02f525
+    source_refs:
+      - locator: 2026-07-26-approval-context-branch-plan-feedback
+        ref: current-chat
+        type: session
+    supersedes:
+      - requirement-4ec7c0718ad2d8da33763e040c25d2b6
+    updated_at: 2026-07-26T10:34:00.875Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-26T11:43:09.236Z
+    dedupe_key: requirement.vspi.interactive-panel-density
+    id: requirement-d350a326aebf15cee022d4ca8d85482e
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-d350a326aebf15cee022d4ca8d85482e.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: d350a326aebf15cee022d4ca8d85482ebd0e958f07f182dea12973a4ec08efbd
+    source_refs:
+      - locator: 2026-07-26-chat-spacing-queue-icon-plan-progress
+        ref: current-chat
+        type: session
+    supersedes:
+      - requirement-d964d07c3a6671ab7b3702649d3734f6
+    updated_at: 2026-07-26T11:43:09.236Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-07-26T11:08:40.405Z
+    dedupe_key: requirement.vspi.interactive-panel-density
+    id: requirement-d964d07c3a6671ab7b3702649d3734f6
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-d964d07c3a6671ab7b3702649d3734f6.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: d964d07c3a6671ab7b3702649d3734f65f5eecb46724960f82ac9dd800da4d34
+    source_refs:
+      - locator: 2026-07-26-plan-nested-hierarchy-correction
+        ref: current-chat
+        type: session
+    supersedes:
+      - requirement-aba0169a5c698bb5539131b2d634d5a4
+    updated_at: 2026-07-26T11:08:40.405Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-07-26T14:48:52.631Z
+    dedupe_key: requirement.vspi.external-session-import
+    id: requirement-e9d688a0505fffb6626c54cc08f0d3ef
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-e9d688a0505fffb6626c54cc08f0d3ef.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: e9d688a0505fffb6626c54cc08f0d3ef3af65a535a40afbca92b52e9f2923259
+    source_refs:
+      - locator: 2026-07-26-v0.3-external-session-import
+        ref: current-chat
+        type: session
+    supersedes: []
+    updated_at: 2026-07-26T14:48:52.631Z
+schema_version: '1'
