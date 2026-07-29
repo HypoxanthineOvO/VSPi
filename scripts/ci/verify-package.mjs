@@ -27,14 +27,24 @@ if (packedPackage.name !== projectPackage.name || packedPackage.version !== proj
 }
 if (packedPackage.bin?.vspi !== "dist/index.js") fail("packed CLI entry point is invalid");
 if (Object.hasOwn(packedPackage.scripts ?? {}, "prepare")) fail("packed package must not define prepare");
+if (packedPackage.scripts?.postinstall !== "node scripts/patch-pi-brace-expansion.mjs") {
+  fail("packed postinstall does not point to the guarded Pi dependency patch");
+}
 
 const files = new Map((packed.files ?? []).map((file) => [file.path, file]));
-for (const required of ["package.json", "README.md", "dist/index.js", "dist/index.d.ts"]) {
+for (const required of [
+  "package.json",
+  "README.md",
+  "dist/index.js",
+  "dist/index.d.ts",
+  "scripts/patch-pi-brace-expansion.mjs",
+]) {
   if (!files.has(required)) fail(`required file is missing: ${required}`);
 }
 if ((files.get("dist/index.js")?.mode & 0o111) === 0) fail("dist/index.js is not executable");
 
-const allowed = /^(?:package\.json|README\.md|dist\/|Docs\/tui-v1\.md$|Docs\/harness\/)/;
+const allowed =
+  /^(?:package\.json|README\.md|dist\/|Docs\/tui-v1\.md$|Docs\/harness\/|scripts\/patch-pi-brace-expansion\.mjs$)/;
 for (const path of files.keys()) {
   if (!allowed.test(path)) fail(`unexpected file in package: ${path}`);
   if (/^(?:src|test|node_modules|\.git)(?:\/|$)/.test(path)) fail(`private source leaked: ${path}`);

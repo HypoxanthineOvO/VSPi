@@ -1,6 +1,6 @@
 {
   "name": "vspi",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "description": "A Chinese terminal UI for Pi coding agents with optional read-only Hypo-Workflow integration.",
   "homepage": "https://gitlab.vsplab.cn/heyx/vspi",
   "repository": {
