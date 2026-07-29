@@ -58,9 +58,9 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.0",
+    "@homebridge/node-pty-prebuilt-multiarch": "0.14.1",
     "@types/node": "24.1.0",
     "@xterm/headless": "6.0.0",
-    "node-pty": "1.1.0",
     "tsx": "4.20.3",
     "typescript": "5.9.2",
     "vitest": "3.2.7"

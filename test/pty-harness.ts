@@ -1,5 +1,5 @@
+import { type IPty, spawn } from "@homebridge/node-pty-prebuilt-multiarch";
 import { Terminal } from "@xterm/headless";
-import { type IPty, spawn } from "node-pty";
 
 export interface PtyHarnessOptions {
   cwd: string;
