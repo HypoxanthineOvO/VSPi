@@ -4,7 +4,7 @@ dist/
 *.log
 .DS_Store
 tmp/
-.pipeline/memory/
+.pipeline/memory/inbox/
 .pipeline/runtime/
 .pipeline/snapshots/
 .artifacts/
