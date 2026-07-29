@@ -283,6 +283,52 @@ describe("M8 compaction profiles", () => {
       await h.backend.dispose();
     }
   });
+
+  it("queues one hidden continuation after every successful threshold compaction in the same task", async () => {
+    const h = await harness();
+    try {
+      const state = h.backend as unknown as { activeGeneration?: number; activeTaskEpoch: number };
+      state.activeGeneration = 1;
+      state.activeTaskEpoch = 7;
+
+      for (let index = 0; index < 2; index += 1) {
+        h.emit({ type: "compaction_start", reason: "threshold" } as AgentSessionEvent);
+        h.emit({
+          type: "compaction_end",
+          reason: "threshold",
+          aborted: false,
+          willRetry: false,
+          result: {},
+        } as AgentSessionEvent);
+      }
+
+      expect(h.followUp).toHaveBeenCalledTimes(2);
+      expect(h.followUp).toHaveBeenLastCalledWith(expect.stringMatching(/compaction_continuation[\s\S]*继续同一个/u));
+    } finally {
+      await h.backend.dispose();
+    }
+  });
+
+  it("does not duplicate Pi's built-in overflow retry with a hidden continuation", async () => {
+    const h = await harness();
+    try {
+      const state = h.backend as unknown as { activeGeneration?: number; activeTaskEpoch: number };
+      state.activeGeneration = 1;
+      state.activeTaskEpoch = 8;
+      h.emit({ type: "compaction_start", reason: "overflow" } as AgentSessionEvent);
+      h.emit({
+        type: "compaction_end",
+        reason: "overflow",
+        aborted: false,
+        willRetry: true,
+        result: {},
+      } as AgentSessionEvent);
+
+      expect(h.followUp).not.toHaveBeenCalled();
+    } finally {
+      await h.backend.dispose();
+    }
+  });
 });
 
 function sessionInfo(manager: SessionManager): SessionInfo {

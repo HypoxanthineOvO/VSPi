@@ -102,15 +102,20 @@ export function createPlanToolDefinitions(options: {
           return projectPlan(plan);
         }),
     ),
-    tool("plan_update", "Plan Update", "CAS-update one local plan.", UpdateParameters, (raw) =>
-      execute("plan update", async () => {
-        const plan = await options.backend.update(raw.plan_id, {
-          expectedRevision: raw.expected_revision,
-          plan: raw.plan as PlanInput,
-        });
-        await options.onMutation?.("update", plan);
-        return projectPlan(plan);
-      }),
+    tool(
+      "plan_update",
+      "Plan Update",
+      "CAS-update one local plan. This records progress only; it never completes or stops the current user task.",
+      UpdateParameters,
+      (raw) =>
+        execute("plan update", async () => {
+          const plan = await options.backend.update(raw.plan_id, {
+            expectedRevision: raw.expected_revision,
+            plan: raw.plan as PlanInput,
+          });
+          await options.onMutation?.("update", plan);
+          return projectPlan(plan);
+        }),
     ),
     tool("plan_archive", "Plan Archive", "Archive one local plan with CAS protection.", ArchiveParameters, (raw) =>
       execute("plan archive", async () => {

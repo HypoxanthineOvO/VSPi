@@ -269,6 +269,7 @@ export class VspiApp implements Component, Focusable {
   private pendingApproval: PendingApproval | undefined;
   private attachmentSessionId: string | undefined;
   private planSnapshot: StoredPlan | undefined;
+  private planRefreshSequence = 0;
   private planPanelExplicit = false;
   private promptProfileSnapshot: PromptProfileSnapshot | undefined;
   private effectivePromptSegments: EffectivePromptSegment[] = [];
@@ -715,7 +716,9 @@ export class VspiApp implements Component, Focusable {
       // on terminals that commit a pending bottom-margin wrap.
       const availableRows = Math.max(3, terminalRows - status.length - notice.length - 1);
       const surfaceRows = this.panels.sessionsSurfaceHeight(availableRows);
-      return [...this.panels.renderSessionsSurface(width, surfaceRows, this.theme), ...notice, ...status];
+      const surface = this.panels.renderSessionsSurface(width, surfaceRows, this.theme);
+      const padding = Math.max(0, terminalRows - surface.length - notice.length - status.length - 1);
+      return [...surface, ...Array.from({ length: padding }, () => padLine("", width)), ...notice, ...status];
     }
     const transcriptFocused = this.workspaceFocus === "transcript";
     const activityActive = this.activityActive();
@@ -772,19 +775,6 @@ export class VspiApp implements Component, Focusable {
       collapseCompletedTools: this.options.settings.collapseTools,
       cache: this.transcriptRenderCache,
     });
-    if (transcriptWindow.hiddenBlocks > 0) {
-      output.unshift(
-        this.theme.muted(padLine(`  ◇ 更早的 ${transcriptWindow.hiddenBlocks} 条内容暂未显示`, width)),
-        "",
-      );
-    }
-    if (transcriptWindow.truncatedTailBlocks > 0) {
-      output.push(
-        this.theme.muted(
-          padLine(`  ◇ 更新的 ${transcriptWindow.truncatedTailBlocks} 条内容未显示 · ↓ 回到最新`, width),
-        ),
-      );
-    }
     if (output.length > 0) output.push("");
     if (previewLines) {
       output.push(...previewLines);
@@ -1485,6 +1475,7 @@ export class VspiApp implements Component, Focusable {
             if (!this.backend.forkSession) throw new Error("当前后端不支持会话分支");
             await this.backend.forkSession(event.session.id);
             this.completeOneShotPanel();
+            this.commitStableTranscript();
             return;
           }
         } catch (error) {
@@ -1498,6 +1489,7 @@ export class VspiApp implements Component, Focusable {
         await this.backend.switchSession(event.session.id);
         if (this.sessionEpoch === epoch) this.sessionTransition = false;
         this.completeOneShotPanel();
+        this.commitStableTranscript();
       } catch (error) {
         this.sessionTransition = false;
         this.showNotice(`会话切换失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
@@ -1510,6 +1502,7 @@ export class VspiApp implements Component, Focusable {
         await this.backend.forkSession(event.session.id);
         if (this.sessionEpoch === epoch) this.sessionTransition = false;
         this.completeOneShotPanel();
+        this.commitStableTranscript();
       } catch (error) {
         this.sessionTransition = false;
         this.showNotice(`会话分支失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
@@ -1534,6 +1527,7 @@ export class VspiApp implements Component, Focusable {
         await this.backend.importExternalSession(event.session.id, preview.fingerprint);
         if (this.sessionEpoch === epoch) this.sessionTransition = false;
         this.completeOneShotPanel();
+        this.commitStableTranscript();
         if (contextWarning) this.showNotice(contextWarning, "warning");
         else this.showNotice("外部会话已导入", "success");
       } catch (error) {
@@ -1812,25 +1806,39 @@ export class VspiApp implements Component, Focusable {
   }
 
   private async refreshPlanSnapshot(epoch: number): Promise<void> {
+    const refreshSequence = ++this.planRefreshSequence;
     const binding = this.backend.getPlanBinding?.();
     if (!binding || !this.options.planBackend) {
-      if (epoch === this.sessionEpoch) {
+      if (epoch === this.sessionEpoch && refreshSequence === this.planRefreshSequence) {
         this.planSnapshot = undefined;
         if (!this.options.workflowAdapter) this.panels.setPlanSnapshot(undefined);
+        this.requestRender();
       }
       return;
     }
     try {
       const plan = await this.options.planBackend.read(binding.planId);
-      if (epoch !== this.sessionEpoch || this.backend.getPlanBinding?.()?.planId !== binding.planId) return;
+      if (
+        epoch !== this.sessionEpoch ||
+        refreshSequence !== this.planRefreshSequence ||
+        this.backend.getPlanBinding?.()?.planId !== binding.planId
+      )
+        return;
       this.planSnapshot = plan ? structuredClone(plan) : undefined;
       if (!this.options.workflowAdapter) this.panels.setPlanSnapshot(this.planSnapshot);
       if (!plan) this.showNotice(`绑定的 Local Plan ${binding.planId} 不存在`, "warning");
+      this.requestRender();
     } catch (error) {
-      if (epoch !== this.sessionEpoch || this.backend.getPlanBinding?.()?.planId !== binding.planId) return;
+      if (
+        epoch !== this.sessionEpoch ||
+        refreshSequence !== this.planRefreshSequence ||
+        this.backend.getPlanBinding?.()?.planId !== binding.planId
+      )
+        return;
       this.planSnapshot = undefined;
       if (!this.options.workflowAdapter) this.panels.setPlanSnapshot(undefined);
       this.showNotice(`Local Plan 读取失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+      this.requestRender();
     }
   }
 
@@ -2008,6 +2016,7 @@ export class VspiApp implements Component, Focusable {
         await this.refreshPlanSnapshot(this.sessionEpoch);
         return;
       }
+      this.planRefreshSequence += 1;
       this.planSnapshot = structuredClone(updated);
       this.panels.setPlanSnapshot(updated);
       this.showNotice(`Local Plan 已更新到 r${updated.revision}`, "success");
@@ -2493,10 +2502,7 @@ export class VspiApp implements Component, Focusable {
     this.inspectToolId = undefined;
     this.inspectDepth = "node";
     this.inspectIndex = target.messageIndexes[0];
-    const start = Math.max(0, firstGlobal - 20);
-    this.transcriptStartNodeId = all[start]?.id;
-    // The anchored budget may not reach the selection when blocks are tall; reconcile keeps it visible.
-    this.reconcileTranscriptStart();
+    this.transcriptStartNodeId = target.id;
     return true;
   }
 
@@ -2513,8 +2519,7 @@ export class VspiApp implements Component, Focusable {
       if (window.truncatedTailBlocks === 0) this.transcriptStartNodeId = undefined;
       return;
     }
-    const start = Math.max(0, selectedGlobal - 5);
-    this.transcriptStartNodeId = all[start]?.id;
+    this.transcriptStartNodeId = all[selectedGlobal]?.id;
   }
 
   /** Rows the transcript may occupy without pushing the whole frame past the visible viewport. */
@@ -2593,9 +2598,8 @@ export class VspiApp implements Component, Focusable {
     const interaction = matchingInteraction("inspect", "transcript", data, this.inspectInteractionState());
     if (!interaction) return;
     if (interaction.handler === "moveInspect" && (matchesKey(data, Key.pageUp) || matchesKey(data, Key.pageDown))) {
-      const direction = matchesKey(data, Key.pageUp) ? "\u001b[A" : "\u001b[B";
-      const steps = Math.max(5, Math.floor(this.transcriptViewportRows(this.tui.terminal.columns) / 2));
-      for (let index = 0; index < steps; index += 1) this.handleInspectInput(direction);
+      this.pageTranscript(matchesKey(data, Key.pageUp) ? -1 : 1);
+      this.requestRender();
       return;
     }
     if (interaction.handler === "closeInspect") {
@@ -2670,6 +2674,27 @@ export class VspiApp implements Component, Focusable {
       }
     }
     this.requestRender();
+  }
+
+  /** Move by one currently visible batch; anchoring the target loads the adjacent history batch. */
+  private pageTranscript(direction: -1 | 1): void {
+    const all = buildTranscriptNodes(this.messages);
+    const selectedGlobal = all.findIndex((node) => node.id === this.inspectNodeId);
+    if (selectedGlobal < 0 || all.length === 0) return;
+    const visibleNodes = this.currentTranscriptWindow().nodes.length;
+    const distance = Math.max(5, visibleNodes);
+    const targetGlobal = Math.max(0, Math.min(all.length - 1, selectedGlobal + direction * distance));
+    if (targetGlobal === selectedGlobal) {
+      this.showNotice(direction < 0 ? "已到最早内容" : "已到最新内容", "info");
+      return;
+    }
+    const target = all[targetGlobal];
+    if (!target) return;
+    this.inspectNodeId = target.id;
+    this.inspectToolId = undefined;
+    this.inspectDepth = "node";
+    this.inspectIndex = target.messageIndexes[0];
+    this.transcriptStartNodeId = targetGlobal >= all.length - 1 ? undefined : target.id;
   }
 
   private handleToolInspectInput(data: string, node: TranscriptNode): void {

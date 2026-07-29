@@ -799,12 +799,12 @@ describe("transcript history loading", () => {
       app.handleInput("\u001b[5~");
       expect(testable.workspaceFocus).toBe("transcript");
       const firstIndex = Number(testable.inspectNodeId?.split("-").at(-1));
-      expect(firstIndex).toBeLessThan(59);
+      expect(firstIndex).toBeLessThan(55);
       app.handleInput("\u001b[5~");
       const secondIndex = Number(testable.inspectNodeId?.split("-").at(-1));
-      expect(secondIndex).toBeLessThan(firstIndex);
+      expect(secondIndex).toBeLessThan(firstIndex - 4);
       app.handleInput("\u001b[6~");
-      expect(Number(testable.inspectNodeId?.split("-").at(-1))).toBeGreaterThan(secondIndex);
+      expect(Number(testable.inspectNodeId?.split("-").at(-1))).toBeGreaterThan(secondIndex + 4);
     } finally {
       await app.dispose();
     }

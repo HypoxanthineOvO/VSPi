@@ -99,6 +99,8 @@ describe("M8 bounded Local Plan capsule", () => {
     expect(result?.systemPrompt).toContain(PLAN.goal);
     expect(result?.systemPrompt).toContain("plan_update");
     expect(result?.systemPrompt).toMatch(/用户指令|latest user instruction/i);
+    expect(result?.systemPrompt).toMatch(/不是本轮工作的终点|never overrides newer evidence/i);
+    expect(result?.systemPrompt).toMatch(/未修复 bug|重开相关项/u);
     expect(result).not.toHaveProperty("message");
     expect(Object.keys(result ?? {})).toEqual(["systemPrompt"]);
   });

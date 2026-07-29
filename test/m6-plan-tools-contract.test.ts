@@ -136,6 +136,7 @@ describe("M6 typed plan tool schemas", () => {
       expect(tool.parameters).toMatchObject({ type: "object", additionalProperties: false });
       expect(tool.execute).toBeTypeOf("function");
     }
+    expect(byName.get("plan_update")?.description).toMatch(/records progress only|never completes|never.*stops/i);
 
     expect(Value.Check(byName.get("plan_list")?.parameters as never, {})).toBe(true);
     expect(Value.Check(byName.get("plan_read")?.parameters as never, { plan_id: "plan-01" })).toBe(true);

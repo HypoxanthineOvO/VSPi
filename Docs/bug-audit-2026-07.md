@@ -36,7 +36,7 @@
 ### T-01 前景窗口有硬上限但没有加载入口
 
 - 状态：`verified`
-- 修复：完成消息进入原生 scrollback；Composer `PageUp` 直接进入 Inspect，Inspect 的 `PageUp/PageDown` 按半屏移动，方向键仍支持节点级浏览。完整 Session 历史始终作为 Inspect 数据源。
+- 修复：完成消息进入原生 scrollback；Composer `PageUp` 直接进入 Inspect，Inspect 的 `PageUp/PageDown` 每次至少跨五个节点或一个当前可视批次并自动加载相邻历史，方向键仍支持节点级浏览。界面不显示无法交互的隐藏数量占位，完整 Session 历史始终作为 Inspect 数据源。
 - 证据：60/140 条历史可一路向上到第 0 条、到顶安全提示、向下回尾部、渲染帧 ≤ 24 行；M2 旧“限制在窗口内”测试更新为新契约。
 
 ### T-03 渲染输出超过终端高度导致周期性清屏跳顶

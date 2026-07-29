@@ -49,7 +49,7 @@ Plan 背景       #182529
 │                                                                              │
 │ Model  OpenAI / GPT-5.4                                                      │
 │ Backend Pi                                                                   │
-│ Policy Standard · Host                                                 v0.3.8│
+│ Policy Standard · Host                                                 v0.3.9│
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -143,7 +143,8 @@ v0.3 的生产命令清单是：
 
 手动 `/compact` 提供 Pi Native、Execution Continuity、Research Decisions 与 Custom 四种 profile。
 未绑定 Local Plan 默认 Pi Native，绑定 Plan 默认 Execution Continuity；`/compact --list` 可检查当前选择范围。
-v0.3.8 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
+v0.3.9 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
+成功的 threshold 自动压缩若发生在当前 generation 内，每次完成后都必须注入隐藏 continuation 并继续同一用户任务；Pi 已声明 `willRetry` 的 overflow 不重复注入，手动压缩、失败和取消也不续跑。Plan 更新或把最后一项标为 done 只同步状态，不得替代实际修复与验证；最新用户指令揭示遗漏时必须重开或新增工作项。
 
 `/plan`、`/prompt`、`/tools` 与 `/policy` 均由 Action Registry 接入真实生产工作区。无 Workflow 时 Plan 使用 workspace-scoped Local Plan；没有活动计划时常驻 frame 与 hint 都不渲染，Shift+Tab 跳过空 Plan，显式 `/plan` 可临时打开入口。显式启用 Workflow 后才只读投影 Workflow Delivery。Prompt 提供 Factory/Fork、分层规则、导入导出与 Effective Prompt；Tools 只读展示当前能力、路由与失败边界。
 
@@ -227,7 +228,7 @@ PolicyConfigService 读取全局 `~/.config/vspi/policy.json` 和可信项目 `<
 
 Pi 的最终 active registry 使用原生 `read/ls/find/grep/bash/edit/write` ToolDefinition；VSPi 只在调用原生 `execute()` 前评估审批，批准后完整委托，因此保留原生图片读取、流式更新、timeout、AbortSignal、截断与 diff。VSPi 自有 `question` 继续提供单选、多选、排序、自由文本和最终检查。普通模式注册结构化 `plan_list/read/create/update/archive/bind`；`plan_update` 与 `plan_archive` 分离，避免 Provider 将可选归档参数提升为必填后误归档，并通过 expected revision、Session custom entry 和 mutation refresh 保持长期计划；显式 Workflow 模式不注册 Local Plan 工具，只通过每轮 Workflow capsule 提醒 Agent 使用 Workflow authority。
 
-`/tools` 是宿主侧只读能力目录，不进入模型上下文。Files/Search 复用 Pi 原生工具；Git 和 SSH 复用 Pi Bash，但分别使用 `git-write` 与 `ssh` 审批类别；图片由 Pi 原生 image read 和 VSPi attachment session 共同提供。Browser 与 MCP 显示 `Not connected` 且不注册占位 ToolDefinition；Persistent PTY 显示 `Deferred`，当前只承诺一次性 Bash。每项同时显示状态、执行路由和独立失败边界；Up/Down 移动，Esc 返回，40/80/120 列均不得溢出。
+`/tools` 是宿主侧只读能力目录，不进入模型上下文。Files/Search 复用 Pi 原生工具；Git 和 SSH 复用 Pi Bash，但分别使用 `git-write` 与 `ssh` 审批类别；图片由 Pi 原生 image read 和 VSPi attachment session 共同提供。Browser 与 MCP 显示 `Not connected` 且不注册占位 ToolDefinition；产品内 Persistent PTY 显示 `Deferred`，当前只承诺一次性 Bash。测试层必须用 `node-pty` 与 headless xterm 启动真实 CLI，覆盖按键、resize、可视屏幕和原生 scrollback；内存 Terminal mock 只用于局部状态机测试。每项同时显示状态、执行路由和独立失败边界；Up/Down 移动，Esc 返回，40/80/120 列均不得溢出。
 
 Workflow 采用默认关闭、显式 `--workflow` 启用的可选只读 Provider。默认启动不读取 Workflow 环境变量或项目状态，Plan 保持 VSPi 自己的干净界面；显式开启后才投影 Delivery。Core 未配置或读取失败时 Plan 显示有界不可用状态。Adapter 只调用 Delivery `resume` 形成 workspace 级投影并拒绝 Receipt-bearing mutation。
 
