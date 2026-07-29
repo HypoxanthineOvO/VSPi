@@ -1,6 +1,6 @@
 {
   "name": "vspi",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "A Chinese terminal UI for Pi coding agents with optional read-only Hypo-Workflow integration.",
   "homepage": "https://gitlab.vsplab.cn/heyx/vspi",
   "repository": {
@@ -18,7 +18,8 @@
     "dist",
     "README.md",
     "Docs/tui-v1.md",
-    "Docs/harness"
+    "Docs/harness",
+    "scripts/patch-pi-brace-expansion.mjs"
   ],
   "scripts": {
     "dev": "tsx src/index.ts",
@@ -26,12 +27,14 @@
     "bridge": "tsx src/index.ts bridge",
     "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json && chmod +x dist/index.js",
     "prepack": "npm run build",
+    "postinstall": "node scripts/patch-pi-brace-expansion.mjs",
     "pretest": "npm run build",
     "check": "tsc --noEmit && biome check src test scripts",
     "check:fix": "biome check --write src test scripts",
     "harness:check": "tsx scripts/harness-check.ts",
     "mock:working": "tsx scripts/working-mock.ts",
     "test": "vitest run",
+    "test:pty": "vitest run test/pty-scrollback.test.ts test/pty-continuity.test.ts",
     "test:watch": "vitest",
     "smoke": "VSPi_FIXTURE=1 VSPi_REDUCED_MOTION=1 tsx src/index.ts --render-once"
   },
@@ -47,6 +50,7 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.82.1",
     "@earendil-works/pi-tui": "0.82.1",
+    "brace-expansion": "5.0.8",
     "chalk": "5.6.2",
     "highlight.js": "10.7.3",
     "marked": "18.0.5",
@@ -55,8 +59,13 @@
   "devDependencies": {
     "@biomejs/biome": "2.2.0",
     "@types/node": "24.1.0",
+    "@xterm/headless": "6.0.0",
+    "node-pty": "1.1.0",
     "tsx": "4.20.3",
     "typescript": "5.9.2",
     "vitest": "3.2.7"
+  },
+  "overrides": {
+    "brace-expansion": "5.0.8"
   }
 }

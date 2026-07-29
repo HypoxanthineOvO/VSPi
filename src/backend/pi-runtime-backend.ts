@@ -269,6 +269,7 @@ export class PiRuntimeBackend implements ChatBackend {
   private compacting = false;
   private compactionEvidence: CompactionEvidence | undefined;
   private compactionEvidenceSequence = 0;
+  private compactionTaskEpoch: number | undefined;
   private compactionMutationBlocked = false;
   private agentRunning = false;
   private queueState = { steering: 0, followUp: 0 };
@@ -1756,6 +1757,7 @@ export class PiRuntimeBackend implements ChatBackend {
     if (event.type === "compaction_start") {
       this.compacting = true;
       this.compactionMutationBlocked = true;
+      this.compactionTaskEpoch = this.activeGeneration === undefined ? undefined : this.activeTaskEpoch;
       const usage = this.readCompactionUsage();
       const id = `compaction-${this.binding}-${++this.compactionEvidenceSequence}`;
       this.compactionEvidence = {
@@ -1775,7 +1777,8 @@ export class PiRuntimeBackend implements ChatBackend {
       return;
     }
     if (event.type === "compaction_end") {
-      if (!event.aborted && event.result) {
+      const succeeded = !event.aborted && !event.errorMessage && event.result !== undefined;
+      if (succeeded) {
         this.reviewTracker.noteCompaction();
         this.publishUsage();
       }
@@ -1793,9 +1796,23 @@ export class PiRuntimeBackend implements ChatBackend {
         text: `上下文压缩${outcome} · reason ${event.reason} · usage ${formatEvidenceToken(before)}→${formatEvidenceToken(after.tokens)}/${window} · reserve ${formatEvidenceToken(reserve)} · retry ${event.willRetry ? "yes" : "no"}`,
       });
       this.compactionEvidence = undefined;
+      const compactionTaskEpoch = this.compactionTaskEpoch;
+      this.compactionTaskEpoch = undefined;
       this.compacting = false;
       this.compactionMutationBlocked = this.activeGeneration !== undefined || event.willRetry;
       this.agentRunning = event.willRetry;
+      if (succeeded && !event.willRetry && event.reason !== "manual" && compactionTaskEpoch !== undefined) {
+        void this.session
+          ?.followUp(
+            '<vspi_compaction_continuation hidden="true">上下文压缩已完成。立即继续同一个最新用户任务：先根据压缩摘要、工作区事实和绑定计划核对尚未完成的实现与验证，然后直接执行。计划复核、plan_update 或把计划项标为 done 都不是停止条件；只有用户要求的结果已实际完成并有相应验证证据时才能结束。</vspi_compaction_continuation>',
+          )
+          .catch((error: unknown) => {
+            this.events?.onNotice(
+              `压缩后自动续跑失败：${error instanceof Error ? error.message : "未知错误"}`,
+              "warning",
+            );
+          });
+      }
       this.publishActivity();
       return;
     }

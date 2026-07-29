@@ -19,6 +19,7 @@ type TestableApp = {
   submit(raw: string): Promise<void>;
   applyPanelEvent(event: PanelEvent): Promise<void>;
   messages: TranscriptMessage[];
+  committedMessageCount: number;
   busy: boolean;
   inspectNodeId?: string;
   currentTranscriptWindow(width?: number): TranscriptWindow;
@@ -108,7 +109,7 @@ describe("M2 session identity isolation", () => {
     expect(window.hiddenBlocks).toBeGreaterThan(0);
 
     const rendered = app.render(80).map(stripAnsi).join("\n");
-    expect(rendered).toContain(`更早的 ${window.hiddenBlocks} 条内容暂未显示`);
+    expect(rendered).not.toMatch(/更早的 \d+ 条|已折叠 \d+ 条/u);
     expect(rendered).toContain("HISTORY_CONTENT_139");
     expect(rendered).not.toContain("HISTORY_CONTENT_0");
 
@@ -133,7 +134,7 @@ describe("M2 session identity isolation", () => {
     await (app as unknown as TestableApp).submit("/resume");
     const sessions = app.render(80).map(stripAnsi);
     const surface = sessions.join("\n");
-    expect(sessions).toHaveLength(6);
+    expect(sessions).toHaveLength(23);
     expect(surface).toContain("Sessions");
     expect(surface).toContain("2 个会话");
     expect(surface).toContain("当前会话");
@@ -153,8 +154,8 @@ describe("M2 session identity isolation", () => {
 
   it.each([
     [12, 11],
-    [24, 18],
-    [40, 18],
+    [24, 23],
+    [40, 39],
   ] as const)(
     "keeps the Resume title visible and caps its adaptive surface at %i terminal rows",
     async (rows, expectedRows) => {
@@ -180,6 +181,53 @@ describe("M2 session identity isolation", () => {
       await app.dispose();
     },
   );
+
+  it("commits resumed history to native scrollback before returning to Composer", async () => {
+    const controlled = sessionBackend();
+    const tui = fakeTui() as TUI & { commitStatic: ReturnType<typeof vi.fn> };
+    tui.commitStatic = vi.fn();
+    const app = await createApp(controlled.backend, tui);
+    const testable = app as unknown as TestableApp;
+    const session: SessionOption = {
+      id: "restored-static-session",
+      label: "Restored static",
+      relativeTime: "刚刚",
+      branchDepth: 0,
+    };
+
+    await testable.applyPanelEvent({ type: "session", session });
+
+    expect(tui.commitStatic).toHaveBeenCalledOnce();
+    expect(tui.commitStatic.mock.calls[0]?.[0].map(stripAnsi).join("\n")).toContain(
+      "TRANSCRIPT_restored-static-session",
+    );
+    expect(testable.committedMessageCount).toBe(testable.messages.length);
+    expect(testable.currentTranscriptWindow(80).hiddenBlocks).toBe(0);
+    expect(testable.currentTranscriptWindow(80).messages).toEqual([]);
+    await app.dispose();
+  });
+
+  it("keeps tall restored nodes reachable while Inspect pages through hundreds of entries", async () => {
+    const controlled = sessionBackend();
+    const app = await createApp(controlled.backend);
+    const testable = app as unknown as TestableApp;
+    testable.messages = Array.from({ length: 300 }, (_, index) => ({
+      id: `restored-history-${index}`,
+      role: "user",
+      kind: "text",
+      text: `恢复历史 ${index}`,
+    }));
+
+    expect(testable.focusTranscript()).toBe(true);
+    for (let guard = 0; guard < 400 && testable.inspectNodeId !== "restored-history-0"; guard += 1) {
+      app.handleInput("\u001b[5~");
+    }
+
+    expect(testable.inspectNodeId).toBe("restored-history-0");
+    expect(app.render(80).map(stripAnsi).join("\n")).toContain("恢复历史 0");
+    expect(app.render(80).length).toBeLessThanOrEqual(24);
+    await app.dispose();
+  });
 
   it("clears the old transcript before hydrating a switched session", async () => {
     const controlled = sessionBackend();
