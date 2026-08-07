@@ -1,0 +1,427 @@
+---
+authority_role: record
+confidence: confirmed
+created_at: 2026-08-01T06:41:05.228Z
+dedupe_key: goal.vspi-persistent-goal-runner.plan
+id: decision-ab205a44cb46e78bc6766831ffaa98c3
+kind: decision
+schema_version: '1'
+scope:
+  ref: vspi-persistent-goal-runner
+  type: goal
+semantic_hash: ab205a44cb46e78bc6766831ffaa98c30824e314f91a9da7f623614d8e0efc7d
+source_refs:
+  - locator: compiled-plan
+    ref: goal:vspi-persistent-goal-runner:revision:4
+    type: delivery_plan
+supersedes:
+  - decision-6e1c2b538e3e79851203f5e376f97975
+updated_at: 2026-08-01T06:41:05.228Z
+---
+# VSPi 持久 Goal Runner、终端瀑布与带标尺 Mock-first 恢复修订
+
+VSPi 通过 `/goal` 提供项目持久、可恢复且有安全边界的长期任务执行：模型维护 Working Plan 与 Progress Markers，普通阶段总结不会终止未完成 Goal，只有真实完成、阻塞、暂停、取消或预算边界能够停止自动续跑。 同时修正启动与 Transcript 的物理终端布局，使 Splash、内容、Composer 和状态行按真实瀑布连续增长与滚动。 Question 交互区与主 Composer 之间保留稳定视觉间隔，避免等待态的双输入区域拥挤。 新增可运行的真实终端 Mock 作为时序、坐标与性能 oracle；流式发送保持增量，Resume 通过原子 surface epoch 恢复，不再重播启动内容或打乱动画与框。 Mock 外增加不污染子 PTY 尺寸的可交互检查壳，以稳定 Frame ID、行号、变化标记和可选列标尺支持用户逐帧定位问题。
+
+```json
+{
+  "acceptance_criteria": [
+    {
+      "id": "goal-command-contract",
+      "statement": "`/goal <request>` 创建并启动一个 workspace 持久 Goal；`/goal status|pause|resume|cancel|accept` 提供明确控制，同一 Session 只绑定一个 Goal，同一 Goal 同时只有一个执行 owner。",
+      "verification": "命令解析、CAS 状态转换、并发 owner、重复命令、非法转换和跨 Session 绑定测试通过。"
+    },
+    {
+      "id": "user-authoritative-contract",
+      "statement": "Goal Contract 保存用户目标与完成标准，模型和 Working Plan 更新不能静默删除、缩小或替换该 Contract；只有明确用户操作能够修改、取消或接受。",
+      "verification": "权限与状态机测试证明模型工具不能改写 Contract，用户修改具有显式 revision，并覆盖陈旧 revision 冲突。"
+    },
+    {
+      "id": "working-plan-markers",
+      "statement": "每个 Goal 引用一个可变 Local Plan，并维护紧凑 Progress Markers，记录当前项、已完成工作、证据、下一项和最近有效进展；Plan 更新和 Marker 记录均不是完成信号。",
+      "verification": "持久化、重启、CAS 冲突、500 项边界、checkpoint 压缩与 Plan 普通模式兼容测试通过。"
+    },
+    {
+      "id": "automatic-continuation",
+      "statement": "Goal 为 executing 且完成标准未满足时，模型普通 final response 或阶段总结会通过 Pi 原生 followUp 继续同一任务，不要求用户重复发送继续，也不通过递归 send 制造重入。",
+      "verification": "Backend 事件测试覆盖正常 final、连续多轮、流式队列、steer/followUp、重复 agent_end、取消竞态和无递归 generation。"
+    },
+    {
+      "id": "structured-stop-states",
+      "statement": "结构化 goal_complete 只把 Goal 置为 pending_acceptance；goal_block 记录阻塞、已尝试方案和所需用户输入；paused、stalled、cancelled 与 completed 在状态和界面上明确区分。",
+      "verification": "工具 schema、状态转换、伪完成、开放 Plan、缺失证据、真实阻塞、用户接受与拒绝恢复测试通过。"
+    },
+    {
+      "id": "budget-and-stall-safety",
+      "statement": "自动执行具有可配置的轮次、用量与无进展边界；达到边界时暂停或 stalled 并通知用户，绝不静默继续计费或伪报完成。",
+      "verification": "确定性虚拟时钟与 usage 测试覆盖所有预算、阈值、重置、恢复和连续无进展行为。"
+    },
+    {
+      "id": "session-continuity",
+      "statement": "Goal、Plan、Marker 与执行状态跨 compaction、resume、fork 和安全 handoff 保留；退出进程或失去 owner 时停止生成，恢复必须显式且不会重复执行已完成工作。",
+      "verification": "SessionManager、compaction、进程 handoff、lease、restart 和恢复测试证明单 owner、无重复 followUp 与一致 checkpoint。"
+    },
+    {
+      "id": "worker-integration",
+      "statement": "Goal Runner 可以使用 Task Agent 与持久 Teammate lane 作为 Worker，但 Goal Contract、停止权和最终状态仍由 root Goal authority 管理；模型 fallback 不改变 Goal 语义。",
+      "verification": "集成测试覆盖 Task Agent、Teammate lane、sticky fallback、取消传播、Worker 失败与 root Goal 继续或阻塞。"
+    },
+    {
+      "id": "goal-visibility",
+      "statement": "Transcript、Status 与 `/goal` 面板展示目标、状态、当前项、进度、有效模型、自动轮次、预算、最近 Marker、阻塞和下一动作，40/80/120 列均不溢出。",
+      "verification": "面板、Transcript、交互、ANSI 宽度、长文本和真实 PTY 测试通过。"
+    },
+    {
+      "id": "compatibility-boundary",
+      "statement": "普通聊天和普通 `/plan` 保持被动语义；Recovery 禁用 Goal 自动续跑；Policy、Question、Skill、Subagent、Session cancel 与 Workflow 只读投影不回归。",
+      "verification": "现有合同测试、Recovery、Policy、Question、Skill、Plan、Subagent、Session lifecycle 和 handoff 回归全部通过。"
+    },
+    {
+      "id": "question-composer-spacing",
+      "statement": "Question Tool 工作区与主 Composer 之间始终保留一行稳定的 interaction gutter，Question frame、footer 或 contextual hint 不得紧贴 Composer；等待用户回答时不伪造 Working 动画，四种题型及直接回答、Review 状态均保持清晰分区。",
+      "verification": "布局测试在 40、80、120 列和短/高终端断言 Question 最后一行与 Composer 顶框之间恰有可见空行且无重叠；真实 PTY 验证等待期间无虚假 Working 动画、焦点和键盘路由不变。"
+    },
+    {
+      "id": "terminal-waterfall-continuity",
+      "statement": "Splash、Transcript、Panel、Working、Composer 与 Status 共享明确的 surface epoch：空闲内容自然向下增长，触底后由 linefeed 推动；高终端不补顶、不固定 Composer，稳定前缀只有在完全离屏后才从活动布局 rebase，任何可见内容不得凭空消失。",
+      "verification": "Mock trace 与真实 PTY 在 20、40、60 行断言每个 epoch 的 surface 起点、baseY、viewportY、cursorY、组件行序和单调滚动；普通帧禁止 CSI 2J/H/3J 和合成整屏换行。"
+    },
+    {
+      "id": "streaming-render-performance",
+      "statement": "一次 generation 活动期间 Transcript 尾部保持 append-only，不因三屏保留阈值在流式 delta 中删除顶部节点；三屏裁剪只在稳定边界执行。初始绘制后，普通发送、流式 token、Working tick 与完成结算不得触发 change-above-viewport 全屏重绘。",
+      "verification": "60 行 Mock 连续至少 12 轮并包含超过三屏的单轮输出；除首次绘制外 full redraw 为 0，每个增量不包含清屏/Home，单次写入不超过一个 viewport 的有界预算，后续轮次输出量不得从稳定基线突增 2 倍以上。"
+    },
+    {
+      "id": "resume-surface-epoch",
+      "statement": "Resume 选择是原子 surface epoch 切换：picker 之后先静默收集 Session reset、历史、usage、Plan 与附件状态，再一次性呈现恢复尾部；不得重播 Splash、启动动画或 picker，不得在 hydration 中启动 Working。短历史从新 surface 顶部自然排列，长历史落在最新尾部，Composer 紧随最新内容且位于 Status 之前。",
+      "verification": "Mock 覆盖空、短、长 Session 和异步分批 hydration；逐帧 trace 只允许 picker 与最终 restored 两个可见稳定态，断言恢复首行不是 Splash/picker、最新消息 < Composer < Status、viewportY=baseY、cursor 位于 Composer，并在恢复后首次发送仍无全屏重绘。"
+    },
+    {
+      "id": "regression-quality",
+      "statement": "Mock oracle 必须先通过，随后 TypeScript、Biome、目标 Vitest、全量 Vitest、build、render-once、package install、真实 PTY、输出性能预算与依赖审计全部通过；本地 `vspi` 只在同一套 Mock 合同通过后刷新。",
+      "verification": "证据记录 Mock 的 before/after trace、坐标表、full redraw 计数、字节预算、全量测试结果和本地命令 smoke，并由 Goal Core 校验文件 SHA-256。"
+    },
+    {
+      "id": "terminal-mock-oracle",
+      "statement": "仓库提供可直接运行的 `npm run mock:terminal`：子 PTY 使用真实 VspiApp、ScrollbackTUI、Composer、Panel 与 Status，仅替换确定性 Backend；交互与 trace 模式重放 startup、连续长流式发送、Question、Resume picker、异步 Resume hydration、恢复后发送和 resize。",
+      "verification": "先让 Mock 在 20、40、60 行真实 PTY 和 headless xterm 中失败复现 revision 2，再以同一场景验证修复；失败时输出首个错误 frame 及前后快照、坐标、控制序列、重绘次数和字节量。"
+    },
+    {
+      "id": "terminal-inspector-shell",
+      "statement": "交互 Mock 在子 PTY 外提供可配置检查壳；`--rows` 与 `--cols` 精确控制子终端尺寸，默认左侧 4 列显示可见行号，变化行有独立标记。顶部显示稳定 Frame ID、phase、child 尺寸、baseY、viewportY 与 cursorY；用户可暂停、前后逐帧查看，并用 Frame ID + 行号反馈。",
+      "verification": "80×40 子 PTY 在外壳中仍向 VSPi 报告严格 80 列与 40 行；外壳显示 `01 │` 至 `40 │` 且不进入子 PTY 字节流。变化标记、暂停、前后帧与 trace JSON 使用相同 Frame ID。可选列标尺默认关闭，启用后不改变子 PTY 尺寸。"
+    }
+  ],
+  "constraints": [
+    "无中间 Stone；确认开始后连续实现，最终统一人工验收。",
+    "复用 Pi Native AgentSession、followUp、SessionManager 与现有 VSPi Local Plan，不新增第三方运行时或通过 CLI 子进程模拟 Agent。",
+    "Goal authority 与 Working Plan 分离：模型可修改 Plan，但不可修改用户 Contract。",
+    "v1 只在前台 VSPi 进程自动执行；退出、显式暂停、取消、预算或失去 owner 都停止生成，不实现后台 daemon 或定时任务。",
+    "不实现云同步、多写者 Goal、自动模型恢复或独立 worktree；模型显式切换与既有 sticky fallback 语义保持不变。",
+    "模型上下文只暴露 Goal 的真实状态、可用结构化接口和硬停止边界，不注入任务拆解教程或领域工作流。",
+    "保留当前 dirty worktree 中用户已有 Session、PTY 与 Subagent 修改，不回滚、不覆盖，不提交、不推送、不发布、不调用真实付费模型。",
+    "既有 accepted Delivery 的受保护证据不直接移动或修改；本 Goal 的验证证据必须写在 Record Store 外，避免扩大已知 Workflow 索引冲突。",
+    "首次进程启动采用确定性策略：只清理一次当前 viewport，随后由同一 TUI 瀑布 surface 渲染 Splash、Composer 与 Status；普通运行不再清屏回 Home 或制造整屏空行。",
+    "不把 Composer 或 Status 固定在 viewport 底部；只有自然内容高度达到终端底部后，新增行才推动旧内容越过屏幕上端。",
+    "Question Tool 工作区与主 Composer 之间使用一行稳定 interaction gutter；不得用虚假 Working 动画表示等待，也不得通过固定底部布局制造间距。",
+    "新增长期保留的 `npm run mock:terminal` 开发工具：交互模式供人工观察，`--trace` 模式供 CI；两者必须复用生产 VspiApp 与 ScrollbackTUI，只允许 Backend、时钟和脚本输入为 Mock。",
+    "在 Mock 的失败基线、目标帧序和性能预算建立之前，不修改生产瀑布与 Resume 状态机；生产修复后不得为通过测试而维护另一套 Mock 布局实现。",
+    "活动 generation 使用 append-only 动态尾部；约三屏保留在 generation 完成、取消或其他稳定边界执行，Session/Inspect 始终保留完整逻辑历史。",
+    "Resume hydration 必须抑制中间 render，等待 Session 历史、usage、Plan 和附件切换稳定后只发布一个 restored frame；允许一次显式 viewport epoch reset，但禁止清除原生 scrollback、重播 startupSurface 或使用通用 requestRender(true) 反复全量重放。",
+    "Working tick 在内容不变时不得改变任何 frame、Composer 或 Status 的行坐标；Question 等待态和 Resume hydration 态不得出现 Working。",
+    "Terminal Inspector 的行号、变化标记、Frame header 和可选列标尺只能由父级外壳绘制，禁止注入子 PTY 或占用 VSPi 的 rows/columns；外壳不足以容纳目标尺寸时必须明确报错或降级滚动观察，不能静默 resize 子终端。",
+    "交互 Mock 保留有界帧历史并支持暂停、前一帧、后一帧；默认行标尺开启、列标尺关闭，标尺状态不得影响录制的子终端 frame hash。"
+  ],
+  "delivery_kind": "goal",
+  "design": {
+    "acceptance_criteria": [
+      {
+        "id": "goal-command-contract",
+        "statement": "`/goal <request>` 创建并启动一个 workspace 持久 Goal；`/goal status|pause|resume|cancel|accept` 提供明确控制，同一 Session 只绑定一个 Goal，同一 Goal 同时只有一个执行 owner。",
+        "verification": "命令解析、CAS 状态转换、并发 owner、重复命令、非法转换和跨 Session 绑定测试通过。"
+      },
+      {
+        "id": "user-authoritative-contract",
+        "statement": "Goal Contract 保存用户目标与完成标准，模型和 Working Plan 更新不能静默删除、缩小或替换该 Contract；只有明确用户操作能够修改、取消或接受。",
+        "verification": "权限与状态机测试证明模型工具不能改写 Contract，用户修改具有显式 revision，并覆盖陈旧 revision 冲突。"
+      },
+      {
+        "id": "working-plan-markers",
+        "statement": "每个 Goal 引用一个可变 Local Plan，并维护紧凑 Progress Markers，记录当前项、已完成工作、证据、下一项和最近有效进展；Plan 更新和 Marker 记录均不是完成信号。",
+        "verification": "持久化、重启、CAS 冲突、500 项边界、checkpoint 压缩与 Plan 普通模式兼容测试通过。"
+      },
+      {
+        "id": "automatic-continuation",
+        "statement": "Goal 为 executing 且完成标准未满足时，模型普通 final response 或阶段总结会通过 Pi 原生 followUp 继续同一任务，不要求用户重复发送继续，也不通过递归 send 制造重入。",
+        "verification": "Backend 事件测试覆盖正常 final、连续多轮、流式队列、steer/followUp、重复 agent_end、取消竞态和无递归 generation。"
+      },
+      {
+        "id": "structured-stop-states",
+        "statement": "结构化 goal_complete 只把 Goal 置为 pending_acceptance；goal_block 记录阻塞、已尝试方案和所需用户输入；paused、stalled、cancelled 与 completed 在状态和界面上明确区分。",
+        "verification": "工具 schema、状态转换、伪完成、开放 Plan、缺失证据、真实阻塞、用户接受与拒绝恢复测试通过。"
+      },
+      {
+        "id": "budget-and-stall-safety",
+        "statement": "自动执行具有可配置的轮次、用量与无进展边界；达到边界时暂停或 stalled 并通知用户，绝不静默继续计费或伪报完成。",
+        "verification": "确定性虚拟时钟与 usage 测试覆盖所有预算、阈值、重置、恢复和连续无进展行为。"
+      },
+      {
+        "id": "session-continuity",
+        "statement": "Goal、Plan、Marker 与执行状态跨 compaction、resume、fork 和安全 handoff 保留；退出进程或失去 owner 时停止生成，恢复必须显式且不会重复执行已完成工作。",
+        "verification": "SessionManager、compaction、进程 handoff、lease、restart 和恢复测试证明单 owner、无重复 followUp 与一致 checkpoint。"
+      },
+      {
+        "id": "worker-integration",
+        "statement": "Goal Runner 可以使用 Task Agent 与持久 Teammate lane 作为 Worker，但 Goal Contract、停止权和最终状态仍由 root Goal authority 管理；模型 fallback 不改变 Goal 语义。",
+        "verification": "集成测试覆盖 Task Agent、Teammate lane、sticky fallback、取消传播、Worker 失败与 root Goal 继续或阻塞。"
+      },
+      {
+        "id": "goal-visibility",
+        "statement": "Transcript、Status 与 `/goal` 面板展示目标、状态、当前项、进度、有效模型、自动轮次、预算、最近 Marker、阻塞和下一动作，40/80/120 列均不溢出。",
+        "verification": "面板、Transcript、交互、ANSI 宽度、长文本和真实 PTY 测试通过。"
+      },
+      {
+        "id": "compatibility-boundary",
+        "statement": "普通聊天和普通 `/plan` 保持被动语义；Recovery 禁用 Goal 自动续跑；Policy、Question、Skill、Subagent、Session cancel 与 Workflow 只读投影不回归。",
+        "verification": "现有合同测试、Recovery、Policy、Question、Skill、Plan、Subagent、Session lifecycle 和 handoff 回归全部通过。"
+      },
+      {
+        "id": "question-composer-spacing",
+        "statement": "Question Tool 工作区与主 Composer 之间始终保留一行稳定的 interaction gutter，Question frame、footer 或 contextual hint 不得紧贴 Composer；等待用户回答时不伪造 Working 动画，四种题型及直接回答、Review 状态均保持清晰分区。",
+        "verification": "布局测试在 40、80、120 列和短/高终端断言 Question 最后一行与 Composer 顶框之间恰有可见空行且无重叠；真实 PTY 验证等待期间无虚假 Working 动画、焦点和键盘路由不变。"
+      },
+      {
+        "id": "terminal-waterfall-continuity",
+        "statement": "Splash、Transcript、Panel、Working、Composer 与 Status 共享明确的 surface epoch：空闲内容自然向下增长，触底后由 linefeed 推动；高终端不补顶、不固定 Composer，稳定前缀只有在完全离屏后才从活动布局 rebase，任何可见内容不得凭空消失。",
+        "verification": "Mock trace 与真实 PTY 在 20、40、60 行断言每个 epoch 的 surface 起点、baseY、viewportY、cursorY、组件行序和单调滚动；普通帧禁止 CSI 2J/H/3J 和合成整屏换行。"
+      },
+      {
+        "id": "streaming-render-performance",
+        "statement": "一次 generation 活动期间 Transcript 尾部保持 append-only，不因三屏保留阈值在流式 delta 中删除顶部节点；三屏裁剪只在稳定边界执行。初始绘制后，普通发送、流式 token、Working tick 与完成结算不得触发 change-above-viewport 全屏重绘。",
+        "verification": "60 行 Mock 连续至少 12 轮并包含超过三屏的单轮输出；除首次绘制外 full redraw 为 0，每个增量不包含清屏/Home，单次写入不超过一个 viewport 的有界预算，后续轮次输出量不得从稳定基线突增 2 倍以上。"
+      },
+      {
+        "id": "resume-surface-epoch",
+        "statement": "Resume 选择是原子 surface epoch 切换：picker 之后先静默收集 Session reset、历史、usage、Plan 与附件状态，再一次性呈现恢复尾部；不得重播 Splash、启动动画或 picker，不得在 hydration 中启动 Working。短历史从新 surface 顶部自然排列，长历史落在最新尾部，Composer 紧随最新内容且位于 Status 之前。",
+        "verification": "Mock 覆盖空、短、长 Session 和异步分批 hydration；逐帧 trace 只允许 picker 与最终 restored 两个可见稳定态，断言恢复首行不是 Splash/picker、最新消息 < Composer < Status、viewportY=baseY、cursor 位于 Composer，并在恢复后首次发送仍无全屏重绘。"
+      },
+      {
+        "id": "regression-quality",
+        "statement": "Mock oracle 必须先通过，随后 TypeScript、Biome、目标 Vitest、全量 Vitest、build、render-once、package install、真实 PTY、输出性能预算与依赖审计全部通过；本地 `vspi` 只在同一套 Mock 合同通过后刷新。",
+        "verification": "证据记录 Mock 的 before/after trace、坐标表、full redraw 计数、字节预算、全量测试结果和本地命令 smoke，并由 Goal Core 校验文件 SHA-256。"
+      },
+      {
+        "id": "terminal-mock-oracle",
+        "statement": "仓库提供可直接运行的 `npm run mock:terminal`：子 PTY 使用真实 VspiApp、ScrollbackTUI、Composer、Panel 与 Status，仅替换确定性 Backend；交互与 trace 模式重放 startup、连续长流式发送、Question、Resume picker、异步 Resume hydration、恢复后发送和 resize。",
+        "verification": "先让 Mock 在 20、40、60 行真实 PTY 和 headless xterm 中失败复现 revision 2，再以同一场景验证修复；失败时输出首个错误 frame 及前后快照、坐标、控制序列、重绘次数和字节量。"
+      },
+      {
+        "id": "terminal-inspector-shell",
+        "statement": "交互 Mock 在子 PTY 外提供可配置检查壳；`--rows` 与 `--cols` 精确控制子终端尺寸，默认左侧 4 列显示可见行号，变化行有独立标记。顶部显示稳定 Frame ID、phase、child 尺寸、baseY、viewportY 与 cursorY；用户可暂停、前后逐帧查看，并用 Frame ID + 行号反馈。",
+        "verification": "80×40 子 PTY 在外壳中仍向 VSPi 报告严格 80 列与 40 行；外壳显示 `01 │` 至 `40 │` 且不进入子 PTY 字节流。变化标记、暂停、前后帧与 trace JSON 使用相同 Frame ID。可选列标尺默认关闭，启用后不改变子 PTY 尺寸。"
+      }
+    ],
+    "constraints": [
+      "无中间 Stone；确认开始后连续实现，最终统一人工验收。",
+      "复用 Pi Native AgentSession、followUp、SessionManager 与现有 VSPi Local Plan，不新增第三方运行时或通过 CLI 子进程模拟 Agent。",
+      "Goal authority 与 Working Plan 分离：模型可修改 Plan，但不可修改用户 Contract。",
+      "v1 只在前台 VSPi 进程自动执行；退出、显式暂停、取消、预算或失去 owner 都停止生成，不实现后台 daemon 或定时任务。",
+      "不实现云同步、多写者 Goal、自动模型恢复或独立 worktree；模型显式切换与既有 sticky fallback 语义保持不变。",
+      "模型上下文只暴露 Goal 的真实状态、可用结构化接口和硬停止边界，不注入任务拆解教程或领域工作流。",
+      "保留当前 dirty worktree 中用户已有 Session、PTY 与 Subagent 修改，不回滚、不覆盖，不提交、不推送、不发布、不调用真实付费模型。",
+      "既有 accepted Delivery 的受保护证据不直接移动或修改；本 Goal 的验证证据必须写在 Record Store 外，避免扩大已知 Workflow 索引冲突。",
+      "首次进程启动采用确定性策略：只清理一次当前 viewport，随后由同一 TUI 瀑布 surface 渲染 Splash、Composer 与 Status；普通运行不再清屏回 Home 或制造整屏空行。",
+      "不把 Composer 或 Status 固定在 viewport 底部；只有自然内容高度达到终端底部后，新增行才推动旧内容越过屏幕上端。",
+      "Question Tool 工作区与主 Composer 之间使用一行稳定 interaction gutter；不得用虚假 Working 动画表示等待，也不得通过固定底部布局制造间距。",
+      "新增长期保留的 `npm run mock:terminal` 开发工具：交互模式供人工观察，`--trace` 模式供 CI；两者必须复用生产 VspiApp 与 ScrollbackTUI，只允许 Backend、时钟和脚本输入为 Mock。",
+      "在 Mock 的失败基线、目标帧序和性能预算建立之前，不修改生产瀑布与 Resume 状态机；生产修复后不得为通过测试而维护另一套 Mock 布局实现。",
+      "活动 generation 使用 append-only 动态尾部；约三屏保留在 generation 完成、取消或其他稳定边界执行，Session/Inspect 始终保留完整逻辑历史。",
+      "Resume hydration 必须抑制中间 render，等待 Session 历史、usage、Plan 和附件切换稳定后只发布一个 restored frame；允许一次显式 viewport epoch reset，但禁止清除原生 scrollback、重播 startupSurface 或使用通用 requestRender(true) 反复全量重放。",
+      "Working tick 在内容不变时不得改变任何 frame、Composer 或 Status 的行坐标；Question 等待态和 Resume hydration 态不得出现 Working。",
+      "Terminal Inspector 的行号、变化标记、Frame header 和可选列标尺只能由父级外壳绘制，禁止注入子 PTY 或占用 VSPi 的 rows/columns；外壳不足以容纳目标尺寸时必须明确报错或降级滚动观察，不能静默 resize 子终端。",
+      "交互 Mock 保留有界帧历史并支持暂停、前一帧、后一帧；默认行标尺开启、列标尺关闭，标尺状态不得影响录制的子终端 frame hash。"
+    ],
+    "evidence": [
+      {
+        "ref": "current-chat-2026-07-31",
+        "summary": "用户确认 `/goal` 应维护用户权威 Contract、模型可变 Working Plan、Progress Markers、自动续跑和可恢复 blocked，而不是在阶段总结后停止。",
+        "type": "user-decision"
+      },
+      {
+        "ref": "src/plans/local-plan-backend.ts",
+        "summary": "现有 workspace 隔离 Local Plan 已提供 revision、CAS、持久工作项、focus、blocker 和原子 HEAD。",
+        "type": "repository"
+      },
+      {
+        "ref": "src/plans/tools.ts",
+        "summary": "现有结构化 Plan tools 明确 Plan 更新只记录进度，不完成或停止当前用户任务。",
+        "type": "repository"
+      },
+      {
+        "ref": "src/backend/pi-runtime-backend.ts",
+        "summary": "当前 Pi runtime 已具备 native followUp、task epoch、compaction 自动续跑、完成声明检测、Plan checkpoint、Session lease 和 handoff 边界。",
+        "type": "repository"
+      },
+      {
+        "ref": "src/continuity/review-tracker.ts",
+        "summary": "现有 review tracker 能检测轮次、工作事件、重复失败、压缩与完成声明，可扩展为 Goal progress/stall 信号。",
+        "type": "repository"
+      },
+      {
+        "ref": "src/agents/manager.ts",
+        "summary": "Task Agent 与 Teammate 已提供持久 lane、状态、取消、模型 fallback 和 root 权限边界，可作为 Goal Worker。",
+        "type": "repository"
+      },
+      {
+        "ref": "ERR_RECORD_SCHEMA_INVALID-2026-07-31",
+        "summary": "上一 accepted Goal 的 evidence Markdown 位于 Record Store 下，导致 Maintain 索引扫描失败；新 Goal 证据必须使用独立 `.pipeline/evidence` 路径。",
+        "type": "workflow-diagnostic"
+      },
+      {
+        "ref": "goal-runner-implement",
+        "summary": "Worker routing critical (high_blast_radius); execution remains solo-verified because the change is tightly coupled and deterministic tests provide a strong oracle.",
+        "type": "task-assessment"
+      },
+      {
+        "ref": "user-feedback-2026-08-01",
+        "summary": "本地验收发现 Splash 需向上滚动才可见、Composer 被固定在底部，高终端中的旧内容不是自然越界而是凭空消失；用户要求真实瀑布挤压和约三屏活动保留。",
+        "type": "user-feedback"
+      },
+      {
+        "ref": "terminal-waterfall-root-cause",
+        "summary": "src/ui/scrollback-terminal.ts 的 renderStaticCommit 通过 terminal.rows 个换行与 CLEAR_VIEWPORT_HOME 主动把 Splash 推出 viewport；src/app/vspi-app.ts 在高终端向顶部补空行固定动态 surface；相关测试把这一错误行为编码为预期。",
+        "type": "repository"
+      },
+      {
+        "ref": "user-feedback-question-spacing-2026-08-01",
+        "summary": "用户补充指出 Question Tool 与主输入框距离过近，中间缺少视觉间隔，等待态显得拥挤。",
+        "type": "user-feedback"
+      },
+      {
+        "ref": "question-layout-root-cause",
+        "summary": "VspiApp 当前按 Question panel、contextual hint、activity、Composer 连续拼接；默认 Working 样式不提供独立分隔行，因此 Question 与 Composer 没有稳定 gutter。",
+        "type": "repository"
+      },
+      {
+        "ref": "user-feedback-performance-resume-mock-2026-08-01",
+        "summary": "用户明确拒绝 revision 2：发送超级卡，Resume 落点仍错误且动画与框混乱；要求先提供可运行的终端 Mock，并持续以该替身迭代到真实运行结果正确。",
+        "type": "user-feedback"
+      },
+      {
+        "ref": "terminal-performance-probe-60x80-12-turns",
+        "summary": "确定性 Fixture 在 60 行终端前 11 轮每轮约 11-14 KB，第 12 轮升至 45,988 bytes，并出现两次 `firstChanged < viewportTop` 全屏重绘（prev 167 lines，viewportTop 107）。",
+        "type": "runtime-probe"
+      },
+      {
+        "ref": "resume-surface-probe-98x62",
+        "summary": "Resume picker 位于 baseY 0；选择后恢复 surface 跳到 baseY 62，并重放 startupSurface 标记。当前 requestRender(true) 把恢复历史、Plan、Composer 与 Status 全量重放，既有测试只检查可见性和 viewportY=baseY，未约束 epoch 起点和帧序。",
+        "type": "runtime-probe"
+      },
+      {
+        "ref": "scripts/working-mock.ts",
+        "summary": "仓库已有单一 Working 动画样式 Mock 的先例，但它未复用 VspiApp、未覆盖真实瀑布、发送和 Resume；revision 3 将新增完整终端 flow Mock，而不是扩大这份静态样式展示。",
+        "type": "repository"
+      },
+      {
+        "ref": "user-terminal-inspector-ruler-2026-08-01",
+        "summary": "用户要求亲自运行和调整 Mock，并在目标终端外增加 3-4 列行号壳；这样可以用行号指出隐藏或错位内容，而无需复制终端文本。列标尺是否显示可作为可选能力。",
+        "type": "user-decision"
+      }
+    ],
+    "outcome": "VSPi 通过 `/goal` 提供项目持久、可恢复且有安全边界的长期任务执行：模型维护 Working Plan 与 Progress Markers，普通阶段总结不会终止未完成 Goal，只有真实完成、阻塞、暂停、取消或预算边界能够停止自动续跑。 同时修正启动与 Transcript 的物理终端布局，使 Splash、内容、Composer 和状态行按真实瀑布连续增长与滚动。 Question 交互区与主 Composer 之间保留稳定视觉间隔，避免等待态的双输入区域拥挤。 新增可运行的真实终端 Mock 作为时序、坐标与性能 oracle；流式发送保持增量，Resume 通过原子 surface epoch 恢复，不再重播启动内容或打乱动画与框。 Mock 外增加不污染子 PTY 尺寸的可交互检查壳，以稳定 Frame ID、行号、变化标记和可选列标尺支持用户逐帧定位问题。"
+  },
+  "evidence": [
+    {
+      "ref": "current-chat-2026-07-31",
+      "summary": "用户确认 `/goal` 应维护用户权威 Contract、模型可变 Working Plan、Progress Markers、自动续跑和可恢复 blocked，而不是在阶段总结后停止。",
+      "type": "user-decision"
+    },
+    {
+      "ref": "src/plans/local-plan-backend.ts",
+      "summary": "现有 workspace 隔离 Local Plan 已提供 revision、CAS、持久工作项、focus、blocker 和原子 HEAD。",
+      "type": "repository"
+    },
+    {
+      "ref": "src/plans/tools.ts",
+      "summary": "现有结构化 Plan tools 明确 Plan 更新只记录进度，不完成或停止当前用户任务。",
+      "type": "repository"
+    },
+    {
+      "ref": "src/backend/pi-runtime-backend.ts",
+      "summary": "当前 Pi runtime 已具备 native followUp、task epoch、compaction 自动续跑、完成声明检测、Plan checkpoint、Session lease 和 handoff 边界。",
+      "type": "repository"
+    },
+    {
+      "ref": "src/continuity/review-tracker.ts",
+      "summary": "现有 review tracker 能检测轮次、工作事件、重复失败、压缩与完成声明，可扩展为 Goal progress/stall 信号。",
+      "type": "repository"
+    },
+    {
+      "ref": "src/agents/manager.ts",
+      "summary": "Task Agent 与 Teammate 已提供持久 lane、状态、取消、模型 fallback 和 root 权限边界，可作为 Goal Worker。",
+      "type": "repository"
+    },
+    {
+      "ref": "ERR_RECORD_SCHEMA_INVALID-2026-07-31",
+      "summary": "上一 accepted Goal 的 evidence Markdown 位于 Record Store 下，导致 Maintain 索引扫描失败；新 Goal 证据必须使用独立 `.pipeline/evidence` 路径。",
+      "type": "workflow-diagnostic"
+    },
+    {
+      "ref": "goal-runner-implement",
+      "summary": "Worker routing critical (high_blast_radius); execution remains solo-verified because the change is tightly coupled and deterministic tests provide a strong oracle.",
+      "type": "task-assessment"
+    },
+    {
+      "ref": "user-feedback-2026-08-01",
+      "summary": "本地验收发现 Splash 需向上滚动才可见、Composer 被固定在底部，高终端中的旧内容不是自然越界而是凭空消失；用户要求真实瀑布挤压和约三屏活动保留。",
+      "type": "user-feedback"
+    },
+    {
+      "ref": "terminal-waterfall-root-cause",
+      "summary": "src/ui/scrollback-terminal.ts 的 renderStaticCommit 通过 terminal.rows 个换行与 CLEAR_VIEWPORT_HOME 主动把 Splash 推出 viewport；src/app/vspi-app.ts 在高终端向顶部补空行固定动态 surface；相关测试把这一错误行为编码为预期。",
+      "type": "repository"
+    },
+    {
+      "ref": "user-feedback-question-spacing-2026-08-01",
+      "summary": "用户补充指出 Question Tool 与主输入框距离过近，中间缺少视觉间隔，等待态显得拥挤。",
+      "type": "user-feedback"
+    },
+    {
+      "ref": "question-layout-root-cause",
+      "summary": "VspiApp 当前按 Question panel、contextual hint、activity、Composer 连续拼接；默认 Working 样式不提供独立分隔行，因此 Question 与 Composer 没有稳定 gutter。",
+      "type": "repository"
+    },
+    {
+      "ref": "user-feedback-performance-resume-mock-2026-08-01",
+      "summary": "用户明确拒绝 revision 2：发送超级卡，Resume 落点仍错误且动画与框混乱；要求先提供可运行的终端 Mock，并持续以该替身迭代到真实运行结果正确。",
+      "type": "user-feedback"
+    },
+    {
+      "ref": "terminal-performance-probe-60x80-12-turns",
+      "summary": "确定性 Fixture 在 60 行终端前 11 轮每轮约 11-14 KB，第 12 轮升至 45,988 bytes，并出现两次 `firstChanged < viewportTop` 全屏重绘（prev 167 lines，viewportTop 107）。",
+      "type": "runtime-probe"
+    },
+    {
+      "ref": "resume-surface-probe-98x62",
+      "summary": "Resume picker 位于 baseY 0；选择后恢复 surface 跳到 baseY 62，并重放 startupSurface 标记。当前 requestRender(true) 把恢复历史、Plan、Composer 与 Status 全量重放，既有测试只检查可见性和 viewportY=baseY，未约束 epoch 起点和帧序。",
+      "type": "runtime-probe"
+    },
+    {
+      "ref": "scripts/working-mock.ts",
+      "summary": "仓库已有单一 Working 动画样式 Mock 的先例，但它未复用 VspiApp、未覆盖真实瀑布、发送和 Resume；revision 3 将新增完整终端 flow Mock，而不是扩大这份静态样式展示。",
+      "type": "repository"
+    },
+    {
+      "ref": "user-terminal-inspector-ruler-2026-08-01",
+      "summary": "用户要求亲自运行和调整 Mock，并在目标终端外增加 3-4 列行号壳；这样可以用行号指出隐藏或错位内容，而无需复制终端文本。列标尺是否显示可作为可选能力。",
+      "type": "user-decision"
+    }
+  ],
+  "id": "vspi-persistent-goal-runner",
+  "outcome": "VSPi 通过 `/goal` 提供项目持久、可恢复且有安全边界的长期任务执行：模型维护 Working Plan 与 Progress Markers，普通阶段总结不会终止未完成 Goal，只有真实完成、阻塞、暂停、取消或预算边界能够停止自动续跑。 同时修正启动与 Transcript 的物理终端布局，使 Splash、内容、Composer 和状态行按真实瀑布连续增长与滚动。 Question 交互区与主 Composer 之间保留稳定视觉间隔，避免等待态的双输入区域拥挤。 新增可运行的真实终端 Mock 作为时序、坐标与性能 oracle；流式发送保持增量，Resume 通过原子 surface epoch 恢复，不再重播启动内容或打乱动画与框。 Mock 外增加不污染子 PTY 尺寸的可交互检查壳，以稳定 Frame ID、行号、变化标记和可选列标尺支持用户逐帧定位问题。",
+  "revision": 4,
+  "schema_version": "1",
+  "status": "draft",
+  "title": "VSPi 持久 Goal Runner、终端瀑布与带标尺 Mock-first 恢复修订",
+  "plan_hash": "52710ca0c17616ae55abe3523ae5979b51dd528b7cc19913d18109703e348ae0"
+}
+```
