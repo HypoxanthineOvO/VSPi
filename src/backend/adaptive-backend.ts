@@ -1,7 +1,9 @@
+import type { AgentRole, AgentSnapshot } from "../agents/types.js";
 import type { CompactOptions } from "../continuity/compaction-profiles.js";
 import type { EffortLevel, ModelGroup, ProviderOption, SessionOption } from "../domain/types.js";
+import type { GoalBackend, GoalLimits } from "../goals/types.js";
 import type { LocalPlanBackend } from "../plans/types.js";
-import type { ExecutionPolicyService } from "../policy/execution-policy.js";
+import type { ExecutionPolicyService, PolicyLevel, PolicySnapshot } from "../policy/execution-policy.js";
 import type { ModelIdentity, ResolvedPromptProfile } from "../prompts/types.js";
 import type { ExternalSessionSource } from "../sessions/external-history.js";
 import type { SkillScope } from "../skills/types.js";
@@ -36,6 +38,7 @@ export class AdaptiveBackend implements ChatBackend {
       resolve(identity: ModelIdentity): Promise<Pick<ResolvedPromptProfile, "profileId" | "overlay">>;
     },
     startup?: { continueRecent?: boolean; workflowPlan?: Pick<WorkflowAdapter, "snapshot"> },
+    goalBackend?: GoalBackend,
   ) {
     this.active =
       mode === "fixture"
@@ -46,6 +49,7 @@ export class AdaptiveBackend implements ChatBackend {
             trustedProject,
             recovery,
             ...(planBackend ? { planBackend } : {}),
+            ...(goalBackend ? { goalBackend } : {}),
             ...(startup?.workflowPlan ? { workflowPlan: startup.workflowPlan } : {}),
             ...(promptProfiles ? { promptProfiles } : {}),
             ...(executionPolicy ? { executionPolicy } : {}),
@@ -161,6 +165,39 @@ export class AdaptiveBackend implements ChatBackend {
     await this.active.bindPlan(planId);
   }
 
+  getGoalBinding() {
+    return this.active.getGoalBinding?.();
+  }
+
+  async getGoal() {
+    return this.active.getGoal?.();
+  }
+
+  async createGoal(request: string, limits?: Partial<GoalLimits>) {
+    if (!this.active.createGoal) throw new Error("当前后端不支持 Goal");
+    return this.active.createGoal(request, limits);
+  }
+
+  async pauseGoal() {
+    if (!this.active.pauseGoal) throw new Error("当前后端不支持 Goal pause");
+    return this.active.pauseGoal();
+  }
+
+  async resumeGoal() {
+    if (!this.active.resumeGoal) throw new Error("当前后端不支持 Goal resume");
+    return this.active.resumeGoal();
+  }
+
+  async cancelGoal() {
+    if (!this.active.cancelGoal) throw new Error("当前后端不支持 Goal cancel");
+    return this.active.cancelGoal();
+  }
+
+  async acceptGoal() {
+    if (!this.active.acceptGoal) throw new Error("当前后端不支持 Goal accept");
+    return this.active.acceptGoal();
+  }
+
   getEffectivePromptSegments() {
     return this.active.getEffectivePromptSegments?.() ?? [];
   }
@@ -189,6 +226,42 @@ export class AdaptiveBackend implements ChatBackend {
   async setEffort(level: EffortLevel): Promise<void> {
     if (!this.active.setEffort) throw new Error("当前后端不支持 Effort 切换");
     await this.active.setEffort(level);
+  }
+
+  async setPolicy(policy: PolicyLevel): Promise<PolicySnapshot> {
+    if (!this.active.setPolicy) throw new Error("当前后端不支持 Session Policy 持久化");
+    return this.active.setPolicy(policy);
+  }
+
+  getAgentSnapshot(): AgentSnapshot {
+    return (
+      this.active.getAgentSnapshot?.() ?? {
+        enabled: false,
+        projectTrusted: false,
+        recovery: false,
+        limits: { maxDepth: 5, maxAgentsPerTree: 128, maxConcurrency: 16 },
+        pools: [],
+        active: [],
+        recent: [],
+        teammates: [],
+        diagnostic: "当前后端不支持 Subagent",
+      }
+    );
+  }
+
+  async switchTeammateModel(id: string, model: string): Promise<void> {
+    if (!this.active.switchTeammateModel) throw new Error("当前后端不支持 Teammate 模型切换");
+    await this.active.switchTeammateModel(id, model);
+  }
+
+  async resetTeammateLane(id: string, lane?: string): Promise<void> {
+    if (!this.active.resetTeammateLane) throw new Error("当前后端不支持 Teammate lane 重置");
+    await this.active.resetTeammateLane(id, lane);
+  }
+
+  async setAgentPoolRole(provider: string, role: AgentRole, model: string): Promise<void> {
+    if (!this.active.setAgentPoolRole) throw new Error("当前后端不支持 Agent Pool 配置");
+    await this.active.setAgentPoolRole(provider, role, model);
   }
 
   isProjectTrusted(): boolean {

@@ -49,7 +49,7 @@
 ### T-02 历史加载与模型上下文压缩概念未分离
 
 - 状态：`verified`
-- 修复：Splash、恢复历史和完成 turn 静态提交到原生 scrollback；live viewport 只渲染流式尾部与 Composer。压缩诊断只描述模型 context，Inspect 始终读取完整 Session。
+- 2026-08-01 修订：此前把 Splash 和完成 turn 静态提交到 scrollback 的方案会预先推出 Splash，并在高终端用 padding 固定 Composer，已废弃。当前使用统一物理瀑布；普通模式保留三屏活动窗口，完全越界的稳定前缀只做坐标 rebase，Inspect 使用单屏窗口并读取完整 Session。
 
 ## 3. Question
 
@@ -165,7 +165,7 @@
 
 ## 6. 实施顺序
 
-已完成：统一模态 owner、消除 catch-all、共享输入组件、真实按键路由矩阵、Question 全流程、Transcript static/live split、Splash 原生 scrollback、VSPLab 模型继承、运行期 Model 切换、compaction 诊断、Plan 状态与交互命令生命周期。
+已完成：统一模态 owner、消除 catch-all、共享输入组件、真实按键路由矩阵、Question 全流程、统一终端瀑布、三屏活动窗口与 offscreen rebase、VSPLab 模型继承、运行期 Model 切换、compaction 诊断、Plan 状态与交互命令生命周期。
 
 剩余：无已知实现项；发布前只执行最终静态检查、全量测试和真实 PTY smoke。
 

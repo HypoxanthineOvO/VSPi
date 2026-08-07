@@ -1,3 +1,4 @@
+import type { AgentRole, AgentSnapshot } from "../agents/types.js";
 import type { CompactOptions } from "../continuity/compaction-profiles.js";
 import type {
   Attachment,
@@ -10,8 +11,9 @@ import type {
   TranscriptMessage,
   UsageSnapshot,
 } from "../domain/types.js";
+import type { GoalBinding, GoalLimits, StoredGoal } from "../goals/types.js";
 import type { PlanBinding } from "../plans/types.js";
-import type { ApprovalRequest, ApprovalResponse } from "../policy/execution-policy.js";
+import type { ApprovalRequest, ApprovalResponse, PolicyLevel, PolicySnapshot } from "../policy/execution-policy.js";
 import type { EffectivePromptSegment } from "../prompts/effective-prompt.js";
 import type {
   ExternalSessionPreview,
@@ -109,8 +111,10 @@ export interface ChatBackendEvents {
   onSessionReset?: (session: SessionReset) => void;
   onQuestion?: (questions: Question[], signal?: AbortSignal) => Promise<Question[]>;
   onPlanBindingChange?: (binding: PlanBinding | undefined) => void;
+  onGoalChange?: (goal: StoredGoal | undefined) => void;
   onEffectivePrompt?: (segments: EffectivePromptSegment[]) => void;
   onWorkflowSnapshot?: (snapshot: WorkflowSnapshot) => void;
+  onAgentSnapshot?: (snapshot: AgentSnapshot) => void;
   onSessionWait?: (waiting: boolean) => void;
   onSessionReady?: () => void;
   onSessionError?: (error: Error) => void;
@@ -191,6 +195,13 @@ export interface ChatBackend {
   removeSkill?(id: string): Promise<void>;
   getPlanBinding?(): PlanBinding | undefined;
   bindPlan?(planId: string | undefined): Promise<void>;
+  getGoalBinding?(): GoalBinding | undefined;
+  getGoal?(): Promise<StoredGoal | undefined>;
+  createGoal?(request: string, limits?: Partial<GoalLimits>): Promise<StoredGoal>;
+  pauseGoal?(): Promise<StoredGoal>;
+  resumeGoal?(): Promise<StoredGoal>;
+  cancelGoal?(): Promise<StoredGoal>;
+  acceptGoal?(): Promise<StoredGoal>;
   getEffectivePromptSegments?(): EffectivePromptSegment[];
   getModelOptions?(): Promise<RuntimeModelOption[]>;
   getModelGroups?(): Promise<ModelGroup[]>;
@@ -198,6 +209,11 @@ export interface ChatBackend {
   selectModel?(provider: string, id: string): Promise<ModelSelectionResult>;
   getEffortOptions?(): Promise<EffortLevel[]>;
   setEffort?(level: EffortLevel): Promise<void>;
+  setPolicy?(policy: PolicyLevel): Promise<PolicySnapshot>;
+  getAgentSnapshot?(): AgentSnapshot;
+  switchTeammateModel?(id: string, model: string): Promise<void>;
+  resetTeammateLane?(id: string, lane?: string): Promise<void>;
+  setAgentPoolRole?(provider: string, role: AgentRole, model: string): Promise<void>;
   isProjectTrusted?(): boolean;
   runProviderProbe?(
     providerId: string,

@@ -46,6 +46,11 @@ export class PtyHarness {
     this.process.write(data);
   }
 
+  userInput(data: string): void {
+    this.terminal.input(data, true);
+    this.process.write(data);
+  }
+
   resize(columns: number, rows: number): void {
     this.process.resize(columns, rows);
     this.terminal.resize(columns, rows);

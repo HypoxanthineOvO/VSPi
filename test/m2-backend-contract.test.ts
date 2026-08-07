@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -14,6 +14,7 @@ import { FixtureBackend } from "../src/backend/fixture-backend.js";
 import { PiBackend } from "../src/backend/pi-backend.js";
 import type { ChatBackendEvents } from "../src/backend/types.js";
 import type { TranscriptMessage } from "../src/domain/types.js";
+import { createExecutionPolicyService } from "../src/policy/execution-policy.js";
 import type { SessionHandoffChannel } from "../src/sessions/lease.js";
 
 function emptyStats(sessionId = "session-id"): SessionStats {
@@ -125,6 +126,124 @@ describe("M2 truthful backend selection", () => {
 });
 
 describe("M2 Pi history hydration", () => {
+  it("persists the Session Policy and restores it before publishing a resumed reset", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vspi-m2-policy-resume-"));
+    const cwd = join(root, "project");
+    const sessionDir = join(root, "sessions");
+    const manager = SessionManager.create(cwd, sessionDir);
+    manager.appendMessage({ role: "user", content: "POLICY_RESUME_SENTINEL", timestamp: 1 });
+
+    const firstPolicy = createExecutionPolicyService({ workspace: cwd, policy: "Standard" });
+    const firstBackend = new PiBackend({
+      cwd,
+      sessionDir,
+      continueRecent: true,
+      executionPolicy: firstPolicy,
+      sessionFactory: async (restored) => {
+        const fake = fakePiSession(restored.buildSessionContext().messages, {
+          sessionId: restored.getSessionId(),
+        }).session;
+        return { session: Object.assign(fake, { sessionManager: restored }) };
+      },
+    });
+    await firstBackend.start(eventRecorder().events);
+    await firstBackend.setPolicy("Auto");
+    expect(firstPolicy.snapshot().policy).toBe("Auto");
+    await firstBackend.dispose();
+
+    const resumedPolicy = createExecutionPolicyService({ workspace: cwd, policy: "Standard" });
+    const observedAtReset: string[] = [];
+    const resumedEvents = eventRecorder().events;
+    resumedEvents.onSessionReset = () => observedAtReset.push(resumedPolicy.snapshot().policy);
+    const resumedBackend = new PiBackend({
+      cwd,
+      sessionDir,
+      continueRecent: true,
+      executionPolicy: resumedPolicy,
+      sessionFactory: async (restored) => {
+        const fake = fakePiSession(restored.buildSessionContext().messages, {
+          sessionId: restored.getSessionId(),
+        }).session;
+        return { session: Object.assign(fake, { sessionManager: restored }) };
+      },
+    });
+    await resumedBackend.start(resumedEvents);
+
+    expect(observedAtReset).toEqual(["Auto"]);
+    expect(resumedPolicy.snapshot().policy).toBe("Auto");
+    await resumedBackend.dispose();
+
+    const recoveryPolicy = createExecutionPolicyService({ workspace: cwd, policy: "Standard", recovery: true });
+    const recoveryBackend = new PiBackend({
+      cwd,
+      sessionDir,
+      continueRecent: true,
+      recovery: true,
+      executionPolicy: recoveryPolicy,
+      sessionFactory: async (restored) => {
+        const fake = fakePiSession(restored.buildSessionContext().messages, {
+          sessionId: restored.getSessionId(),
+        }).session;
+        return { session: Object.assign(fake, { sessionManager: restored }) };
+      },
+    });
+    await recoveryBackend.start(eventRecorder().events);
+    expect(recoveryPolicy.snapshot().policy).toBe("Standard");
+    await recoveryBackend.dispose();
+  });
+
+  it("restores the selected Session Policy when Resume switches away from a fresh Standard session", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vspi-m2-policy-picker-"));
+    const cwd = join(root, "project");
+    const sessionDir = join(root, "sessions");
+    await mkdir(cwd);
+    await mkdir(sessionDir);
+    const target = SessionManager.create(cwd, sessionDir);
+    target.appendMessage({ role: "user", content: "POLICY_PICKER_SENTINEL", timestamp: 1 });
+    target.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "ready" }],
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "m2-model",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    target.appendCustomEntry("vspi.execution-policy", { version: 1, policy: "Auto" });
+
+    const policy = createExecutionPolicyService({ workspace: cwd, policy: "Standard" });
+    const observedAtReset: Array<{ id: string; policy: string }> = [];
+    const events = eventRecorder().events;
+    events.onSessionReset = (session) => observedAtReset.push({ id: session.id, policy: policy.snapshot().policy });
+    const backend = new PiBackend({
+      cwd,
+      sessionDir,
+      executionPolicy: policy,
+      sessionFactory: async (manager) => {
+        const fake = fakePiSession(manager.buildSessionContext().messages, {
+          sessionId: manager.getSessionId(),
+        }).session;
+        return { session: Object.assign(fake, { sessionManager: manager }) };
+      },
+    });
+
+    await backend.start(events);
+    expect(policy.snapshot().policy).toBe("Standard");
+    await backend.switchSession(target.getSessionId());
+
+    expect(policy.snapshot().policy).toBe("Auto");
+    expect(observedAtReset.at(-1)).toEqual({ id: target.getSessionId(), policy: "Auto" });
+    await backend.dispose();
+  });
+
   it("marks an interrupted resumed turn without retrying the final user message", async () => {
     const interrupted = {
       role: "user",

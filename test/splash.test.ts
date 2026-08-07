@@ -76,9 +76,10 @@ describe("startup cover", () => {
     for (const legacy of LEGACY_COPY) expect(text).not.toContain(legacy);
   });
 
-  it("renders one static frame and one final frame at the current safe width after a resize", async () => {
+  it("hands one final frame at the current safe width to the unified TUI surface after a resize", async () => {
     let currentWidth = 80;
     const writes: string[] = [];
+    let startupSurface: readonly string[] = [];
     const status: StartupStatus = {
       model: "OpenAI / GPT-5.4",
       backend: "Pi",
@@ -96,17 +97,16 @@ describe("startup cover", () => {
         currentWidth = 100;
       },
       startApp: () => status,
-      startTui: () => {},
+      startTui: (surface) => {
+        startupSurface = surface;
+      },
     });
 
     expect(writes).toHaveLength(2);
     expect((writes[0] ?? "").split("\n")).toHaveLength(1);
     expect(visibleWidth(stripAnsi(writes[0] ?? ""))).toBe(80);
-    expect(writes[1]).toContain("\r\u001b[2K");
-    const finalFrameLines = stripAnsi(writes.at(-1) ?? "")
-      .replace(/\r/g, "")
-      .split("\n")
-      .filter((line) => line.length > 0);
+    expect(writes[1]).toContain("\u001b[2J\u001b[H");
+    const finalFrameLines = startupSurface.map(stripAnsi);
     expect(finalFrameLines.length).toBeGreaterThan(0);
     expect(finalFrameLines.every((line) => visibleWidth(line) === 100)).toBe(true);
   });

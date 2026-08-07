@@ -60,7 +60,7 @@ describe("responsive layout", () => {
     }
   });
 
-  it("keeps the full frame within the terminal height even with a long busy transcript", async () => {
+  it("keeps a three-screen transcript budget plus stable bottom chrome for a long busy transcript", async () => {
     const tui = fakeTui(24);
     const app = new VspiApp(tui, plainTheme(), new FixtureBackend(), {
       cwd: "/workspace/project",
@@ -112,8 +112,92 @@ describe("responsive layout", () => {
     });
 
     const frame = app.render(80);
-    expect(frame.length).toBeLessThanOrEqual(24);
+    expect(frame.length).toBeLessThanOrEqual(24 * 3 + 16);
     expect(frame.every((line) => visibleWidth(line) <= 80)).toBe(true);
+    await app.dispose();
+  });
+
+  it("replaces the main Composer with Question and keeps one gutter before Status", async () => {
+    for (const width of [40, 80, 120]) {
+      const app = new VspiApp(fakeTui(24), plainTheme({ unicode: width >= 80 }), new FixtureBackend(), {
+        cwd: "/workspace/question-gutter",
+        settings: DEFAULT_SETTINGS,
+        attachments: fakeAttachments(),
+        renderOnce: true,
+        onExit: vi.fn(),
+      });
+      await app.start();
+      app.focused = true;
+      app.composer.setText("draft survives Question");
+      const testable = app as unknown as { panels: PanelController };
+      testable.panels.openQuestions([
+        {
+          id: "spacing",
+          title: "Spacing",
+          prompt: "Choose one",
+          kind: "singleChoice",
+          options: [{ id: "yes", label: "Yes" }],
+        },
+      ]);
+
+      const frame = app.render(width).map(stripAnsi);
+      const questionStart = frame.findIndex((line) => line.includes("Question"));
+      const questionBottom = frame.findIndex((line, index) => index > questionStart && /^[+╰]/u.test(line));
+      expect(questionStart).toBeGreaterThanOrEqual(0);
+      expect(questionBottom).toBeGreaterThan(questionStart);
+      expect(frame[questionBottom + 1]?.trim()).toBe("");
+      expect(frame.slice(questionStart, questionBottom + 2).join("\n")).not.toContain("draft survives Question");
+      expect(frame.slice(questionStart, questionBottom + 2).join("\n")).not.toContain("输入消息");
+      expect(app.composer.focused).toBe(false);
+
+      testable.panels.handleInput("\u001b");
+      const restored = app.render(width).map(stripAnsi).join("\n");
+      expect(restored).toContain("draft survives Question");
+      expect(app.composer.focused).toBe(true);
+      await app.dispose();
+    }
+  });
+
+  it("keeps Question, Composer, and Status coordinates fixed while a notice is visible", async () => {
+    const app = new VspiApp(fakeTui(40), plainTheme({ unicode: true }), new FixtureBackend(), {
+      cwd: "/workspace/question-notice",
+      settings: DEFAULT_SETTINGS,
+      attachments: fakeAttachments(),
+      renderOnce: true,
+      onExit: vi.fn(),
+    });
+    await app.start();
+    const testable = app as unknown as {
+      panels: PanelController;
+      showNotice(text: string, tone: "warning"): void;
+    };
+    testable.panels.openQuestions([
+      {
+        id: "notice-spacing",
+        title: "Notice spacing",
+        prompt: "Keep the geometry stable",
+        kind: "singleChoice",
+        options: [
+          { id: "yes", label: "Yes" },
+          { id: "no", label: "No" },
+        ],
+      },
+    ]);
+    const before = app.render(80).map(stripAnsi);
+    testable.showNotice("首选模型额度不足，已使用 fallback", "warning");
+    const after = app.render(80).map(stripAnsi);
+    const coordinates = (frame: string[]) => ({
+      question: frame.findIndex((line) => line.includes("Question 1 / 1")),
+      questionBottom: frame.findIndex((line, index) => index > 0 && line.startsWith("╰")),
+      statusLast: frame.length - 1,
+    });
+
+    expect(after).toHaveLength(before.length);
+    expect(coordinates(after)).toEqual(coordinates(before));
+    expect(after.join("\n")).toContain("! 警告 · 首选模型额度不足，已使用 fallback");
+    expect(after.join("\n")).not.toContain("输入消息");
+    expect(after.at(-1)).toContain("Offline Fixture");
+    expect(after.at(-1)).toContain("/workspace/question-notice");
     await app.dispose();
   });
 

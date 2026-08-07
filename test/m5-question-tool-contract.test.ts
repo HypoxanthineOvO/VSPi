@@ -317,10 +317,9 @@ describe("M5 dynamic Question panel", () => {
     for (const fragment of ["需要完整换行展示而不是被截断", "这段描述也必须完整保留"]) {
       expect(rendered).toContain(fragment);
     }
-    // 选中块的所有行共享选中标记（›），滚动定位以块为单位
-    const selectedRows = raw.map(stripAnsi).filter((line) => line.includes("› "));
-    expect(selectedRows.length).toBeGreaterThan(1);
-    expect(selectedRows.join("\n")).toContain("需要完整换行");
+    expect(rendered).not.toContain("┃");
+    expect(rendered).toContain("› (●)");
+    expect(rendered).not.toMatch(/[┌┐└┘]/u);
   });
 
   it("keeps the Question action footer fixed when content overflows", () => {
@@ -334,13 +333,16 @@ describe("M5 dynamic Question panel", () => {
 
     const compact = panel.render(80, 10, plainTheme(), DEFAULT_USAGE).map(stripAnsi);
     expect(panel.hintRenderedInline()).toBe(true);
+    expect(compact.at(-2)?.slice(1, -1).trim()).toBe("");
     expect(compact.at(-1)).toContain("Enter 确认");
     expect(compact[0]).toContain("Question");
+    expect(compact.join("\n")).toContain("多选项");
 
     const roomy = new PanelController(DEFAULT_SETTINGS);
     openQuestions(roomy, [SINGLE_QUESTION]);
     const roomyLines = roomy.render(80, 18, plainTheme(), DEFAULT_USAGE).map(stripAnsi);
     expect(roomy.hintRenderedInline()).toBe(true);
+    expect(roomyLines.at(-2)?.slice(1, -1).trim()).toBe("");
     expect(roomyLines.at(-1)).toContain("Enter 确认");
   });
 

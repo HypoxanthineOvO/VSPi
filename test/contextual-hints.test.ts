@@ -151,7 +151,7 @@ describe("contextual panel hints", () => {
       expect(rendered).toContain("暂无会话");
       expect(result.plain.find((line) => line.startsWith("╰"))).toContain("Esc 返回");
       expect(rendered).not.toContain("输入消息");
-      expect(result.ansi).toHaveLength(23);
+      expect(result.ansi).toHaveLength(24);
       expect(result.ansi.every((line) => visibleWidth(line) === 80)).toBe(true);
     } finally {
       await result.app.dispose();
@@ -195,7 +195,7 @@ describe("contextual panel hints", () => {
     }
   });
 
-  it("shows a temporary notice row without restoring an empty Plan hint", async () => {
+  it("projects a temporary notice into Status without adding a layout row", async () => {
     const result = await renderPanel(undefined);
     const before = result.app.render(80).map(stripAnsi);
     vi.useFakeTimers();
@@ -205,10 +205,13 @@ describe("contextual panel hints", () => {
         "success",
       );
       const notified = result.app.render(80).map(stripAnsi);
-      expect(notified).toHaveLength(before.length + 1);
+      expect(notified).toHaveLength(before.length);
       expect(notified.join("\n")).toContain("已保存到 /workspace/.vspi/settings.json");
+      expect(notified.join("\n")).toContain("✓ 完成 ·");
+      expect(notified.at(-1)).toContain("Offline Fixture");
+      expect(notified.at(-1)).toContain("/workspace/contextual-hints");
 
-      vi.advanceTimersByTime(3500);
+      vi.advanceTimersByTime(2_500);
       const restored = result.app.render(80).map(stripAnsi);
       expect(restored).toHaveLength(before.length);
       expect(restored.join("\n")).not.toContain("已保存到 /workspace/.vspi/settings.json");
@@ -228,13 +231,13 @@ describe("contextual panel hints", () => {
     vi.useFakeTimers();
     try {
       testable.showProgress("正在扫描历史…");
-      expect(result.app.render(80).map(stripAnsi).join("\n")).toContain("◌ 正在扫描历史…");
+      expect(result.app.render(80).map(stripAnsi).join("\n")).toContain("◌ 进行中 · 正在扫描历史…");
       vi.advanceTimersByTime(10_000);
       expect(result.app.render(80).map(stripAnsi).join("\n")).toContain("正在扫描历史…");
 
       testable.showNotice("扫描完成", "success");
-      expect(result.app.render(80).map(stripAnsi).join("\n")).toContain("✓ 扫描完成");
-      vi.advanceTimersByTime(3_500);
+      expect(result.app.render(80).map(stripAnsi).join("\n")).toContain("✓ 完成 · 扫描完成");
+      vi.advanceTimersByTime(2_500);
       expect(result.app.render(80).map(stripAnsi).join("\n")).not.toContain("扫描完成");
     } finally {
       vi.useRealTimers();

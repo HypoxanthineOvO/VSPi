@@ -46,6 +46,41 @@ class ScenarioBackend extends PiBackend {
     this.appEvents?.onPlanBindingChange?.(this.getPlanBinding());
   }
 
+  showQuestion(): void {
+    void this.appEvents?.onQuestion?.([
+      {
+        id: "pty-question",
+        title: "Question spacing",
+        prompt: "Verify the interaction gutter",
+        kind: "singleChoice",
+        options: [{ id: "yes", label: "Continue" }],
+      },
+    ]);
+  }
+
+  override async listSessions() {
+    return [
+      {
+        id: "pty-resume-session",
+        label: "PTY Resume Session",
+        relativeTime: "刚刚",
+        branchDepth: 0,
+      },
+    ];
+  }
+
+  override async switchSession(id: string): Promise<void> {
+    this.appEvents?.onSessionReset?.({ id, reason: "resume" });
+    for (let index = 0; index < 24; index += 1) {
+      this.appEvents?.onMessage({
+        id: `resume-history-${index}`,
+        role: "assistant",
+        kind: "text",
+        text: `RESUMED_HISTORY_${index}`,
+      });
+    }
+  }
+
   override async getModelOptions() {
     return [
       {
@@ -229,27 +264,27 @@ for (let guard = 0; guard < 100; guard += 1) {
   if ((app as unknown as { planSnapshot?: StoredPlan }).planSnapshot) break;
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
+if (process.env.VSPI_PTY_QUESTION !== "1") app.setStartupSurface(["PTY_SCENARIO_INPUT_READY"]);
 tui.start();
-setTimeout(() => {
-  tui.commitStatic(["PTY_SCENARIO_INPUT_READY"]);
-}, 100);
+if (process.env.VSPI_PTY_QUESTION === "1") setTimeout(() => backend.showQuestion(), 100);
 
-setTimeout(async () => {
-  plan = await planBackend.update(plan.id, {
-    expectedRevision: plan.revision,
-    plan: { ...plan, title: "PLAN_STALE_REFRESH" },
-  });
-  planBackend.delayNextRead(350);
-  backend.notifyPlanChanged();
+if (process.env.VSPI_PTY_QUESTION !== "1")
   setTimeout(async () => {
     plan = await planBackend.update(plan.id, {
       expectedRevision: plan.revision,
-      plan: { ...plan, title: "PLAN_LATEST_REFRESH" },
+      plan: { ...plan, title: "PLAN_STALE_REFRESH" },
     });
-    planBackend.delayNextRead(10);
+    planBackend.delayNextRead(350);
     backend.notifyPlanChanged();
-  }, 30);
-}, 500);
+    setTimeout(async () => {
+      plan = await planBackend.update(plan.id, {
+        expectedRevision: plan.revision,
+        plan: { ...plan, title: "PLAN_LATEST_REFRESH" },
+      });
+      planBackend.delayNextRead(10);
+      backend.notifyPlanChanged();
+    }, 30);
+  }, 500);
 
 process.once("SIGTERM", () => void shutdown());
 process.once("SIGHUP", () => void shutdown());

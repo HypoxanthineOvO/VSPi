@@ -333,8 +333,7 @@ async function flushTuiRender(): Promise<void> {
 async function exerciseStartup(reducedMotion: boolean, result: StartupResult): Promise<void> {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const lifecycle: string[] = [];
-  let finalSplashCount = 0;
-  let dynamicBytesAtFinal = -1;
+  let startupSurface: readonly string[] | undefined;
   let tuiStartCalls = 0;
   const terminal = new RecordingTerminal((plain) => {
     if (DYNAMIC_MARKERS.some((marker) => plain.includes(marker)) && lifecycle.at(-1) !== "tui:dynamic") {
@@ -361,21 +360,17 @@ async function exerciseStartup(reducedMotion: boolean, result: StartupResult): P
       if (terminal.splashWrites.length === 0) lifecycle.push("splash:initial-brand");
       terminal.writeSplash(chunk);
     },
-    commitStatic: (lines) => {
-      finalSplashCount += 1;
-      dynamicBytesAtFinal = terminal.tuiBytes;
-      lifecycle.push("splash:final");
-      terminal.commitStatic(lines);
-    },
     startApp: async () => {
       await app.start();
       lifecycle.push("app:resolved");
       return PI_STATUS;
     },
-    startTui: () => {
+    startTui: (surface) => {
       tuiStartCalls += 1;
+      startupSurface = surface;
+      app.setStartupSurface(surface);
+      lifecycle.push("splash:final");
       lifecycle.push("tui:start");
-      app.commitStableTranscript();
       tui.start();
     },
   });
@@ -383,7 +378,7 @@ async function exerciseStartup(reducedMotion: boolean, result: StartupResult): P
   await flushTuiRender();
   const label = `${reducedMotion ? "reduced" : "animated"}/${result}`;
   expect.soft(terminal.tuiBytes, `${label}: dynamic terminal bytes before final splash`).toBe(0);
-  expect.soft(finalSplashCount, `${label}: final splash while initialization is pending`).toBe(0);
+  expect.soft(startupSurface, `${label}: final splash while initialization is pending`).toBeUndefined();
   expect.soft(tuiStartCalls, `${label}: TUI callback starts while initialization is pending`).toBe(0);
   expect.soft(terminal.starts, `${label}: terminal starts while initialization is pending`).toBe(0);
 
@@ -393,20 +388,19 @@ async function exerciseStartup(reducedMotion: boolean, result: StartupResult): P
   if (result === "success") {
     await startup;
     await flushTuiRender();
-    const finalWrite = terminal.splashWrites.find((chunk) => stripAnsi(chunk).includes(PI_STATUS.model));
-    expect.soft(dynamicBytesAtFinal, `${label}: dynamic bytes existed when final splash committed`).toBe(0);
-    expect.soft(finalWrite, `${label}: resolved final splash exists`).toBeDefined();
+    expect.soft(startupSurface, `${label}: resolved final splash exists`).toBeDefined();
     expect
-      .soft(finalWrite, `${label}: final splash is forced beyond the viewport`)
-      .toContain("\r\n".repeat(terminal.rows));
+      .soft(stripAnsi(startupSurface?.join("\n") ?? ""), `${label}: final model is in the TUI surface`)
+      .toContain(PI_STATUS.model);
+    expect
+      .soft(terminal.splashWrites.join(""), `${label}: startup does not manufacture full-screen linefeeds`)
+      .not.toContain("\r\n".repeat(terminal.rows));
     expect.soft(tuiStartCalls, `${label}: TUI callback start count`).toBe(1);
     expect.soft(terminal.starts, `${label}: terminal start count`).toBe(1);
     expect.soft(terminal.tuiBytes, `${label}: dynamic terminal bytes after final splash`).toBeGreaterThan(0);
-    expect.soft(terminal.splashWrites.some((chunk) => chunk.includes("PERSISTED_HISTORY"))).toBe(true);
-    expect.soft(stripAnsi(app.render(terminal.columns).join("\n"))).not.toContain("PERSISTED_HISTORY");
-    expect
-      .soft(terminal.tuiBytes, `${label}: dynamic render must follow the final splash commit`)
-      .toBeGreaterThan(dynamicBytesAtFinal);
+    expect.soft(terminal.splashWrites.some((chunk) => chunk.includes("PERSISTED_HISTORY"))).toBe(false);
+    expect.soft(stripAnsi(app.render(terminal.columns).join("\n"))).toContain("PERSISTED_HISTORY");
+    expect.soft(terminal.splashWrites.some((chunk) => stripAnsi(chunk).includes(PI_STATUS.model))).toBe(false);
     expect
       .soft(lifecycle, `${label}: startup lifecycle`)
       .toEqual(["splash:initial-brand", "app:resolved", "splash:final", "tui:start", "tui:dynamic"]);
@@ -417,7 +411,7 @@ async function exerciseStartup(reducedMotion: boolean, result: StartupResult): P
     await vi.advanceTimersByTimeAsync(10_000);
     await flushMicrotasks();
     expect.soft(terminal.tuiBytes, `${label}: lifetime dynamic terminal bytes after failure`).toBe(0);
-    expect.soft(finalSplashCount, `${label}: lifetime final splash count after failure`).toBe(0);
+    expect.soft(startupSurface, `${label}: lifetime final splash after failure`).toBeUndefined();
     expect.soft(tuiStartCalls, `${label}: lifetime TUI callback starts after failure`).toBe(0);
     expect.soft(terminal.starts, `${label}: lifetime terminal starts after failure`).toBe(0);
   }
@@ -494,20 +488,19 @@ async function exerciseSessionReset(command: "/new" | "/clear"): Promise<void> {
     width: terminal.columns,
     theme,
     write: (chunk) => terminal.writeSplash(chunk),
-    commitStatic: (lines) => terminal.commitStatic(lines),
     startApp: async () => {
       await app.start();
       return PI_STATUS;
     },
-    startTui: () => {
-      app.commitStableTranscript();
+    startTui: (surface) => {
+      app.setStartupSurface(surface);
       tui.start();
     },
   });
   await flushTuiRender();
 
   const splashWritesBeforeReset = [...terminal.splashWrites];
-  expect(splashWritesBeforeReset.some((chunk) => chunk.includes("PERSISTED_HISTORY"))).toBe(true);
+  expect(splashWritesBeforeReset.some((chunk) => chunk.includes("PERSISTED_HISTORY"))).toBe(false);
   const startsBeforeReset = terminal.starts;
   const stopsBeforeReset = terminal.stops;
   for (const character of command) terminal.sendInput(character);
@@ -522,7 +515,7 @@ async function exerciseSessionReset(command: "/new" | "/clear"): Promise<void> {
   expect(terminal.stops).toBe(stopsBeforeReset);
   expect(plain).toMatch(/╭─+╮[\s\S]*╰─+╯/u);
   expect(plain).toContain(PI_STATUS.model);
-  expect(plain).toContain("PERSISTED_HISTORY");
+  expect(plain).not.toContain("PERSISTED_HISTORY");
   expect(plain).not.toContain("╭ Plan ");
 
   await app.dispose();

@@ -440,7 +440,7 @@ const actions: InteractionDefinition[] = [
     handler: "closeSkillPanel",
     hint: (state) => (state.skillAdding === true || state.skillViewing === true ? "Esc 返回" : "Esc 关闭"),
   }),
-  ...(["models", "settings", "theme", "policy", "effort", "approval", "tools"] as const).map((context) =>
+  ...(["models", "settings", "theme", "policy", "effort", "approval", "tools", "agents"] as const).map((context) =>
     keyAction({
       id: `panel.${context}.move`,
       surface: "panel",
@@ -670,17 +670,18 @@ const actions: InteractionDefinition[] = [
       return "↑↓ 选择  Space 多选  Tab 直接回答  Enter 确认  ←→ 切题  Shift+S 跳过";
     },
   }),
-  ...(["models", "settings", "usage", "theme", "question", "approval", "effort", "policy", "tools"] as const).map(
-    (context) =>
-      keyAction({
-        id: `panel.${context}.close`,
-        surface: "panel",
-        context,
-        keys: ["Escape"],
-        keyValues: [Key.escape],
-        handler: "closePanel",
-        hint: "Esc 关闭",
-      }),
+  ...(
+    ["models", "settings", "usage", "theme", "question", "approval", "effort", "policy", "tools", "agents"] as const
+  ).map((context) =>
+    keyAction({
+      id: `panel.${context}.close`,
+      surface: "panel",
+      context,
+      keys: ["Escape"],
+      keyValues: [Key.escape],
+      handler: "closePanel",
+      hint: "Esc 关闭",
+    }),
   ),
   keyAction({
     id: "composer.cancel",

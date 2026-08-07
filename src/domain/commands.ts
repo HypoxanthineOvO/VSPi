@@ -15,6 +15,7 @@ export type ActionHandler =
   | "compact"
   | "update"
   | "plan"
+  | "goal"
   | "models"
   | "providers"
   | "login"
@@ -25,6 +26,7 @@ export type ActionHandler =
   | "effort"
   | "policy"
   | "tools"
+  | "agents"
   | "usage"
   | "theme"
   | "quit";
@@ -147,6 +149,15 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
     availability: "enabled",
   },
   {
+    id: "goal",
+    aliases: [],
+    label: "/goal",
+    description: "创建、续跑与查看持久 Goal",
+    group: "VSPi",
+    handler: "goal",
+    availability: "enabled",
+  },
+  {
     id: "prompt",
     aliases: [],
     label: "/prompt",
@@ -171,6 +182,15 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
     description: "设置思考强度",
     group: "VSPi",
     handler: "effort",
+    availability: "enabled",
+  },
+  {
+    id: "agents",
+    aliases: ["subagents", "teammates"],
+    label: "/agents",
+    description: "查看 Subagent 与 Teammate 状态",
+    group: "VSPi",
+    handler: "agents",
     availability: "enabled",
   },
   {

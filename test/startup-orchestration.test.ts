@@ -46,13 +46,16 @@ describe("startup orchestration", () => {
 
     expect(chunks).toHaveLength(2);
     expect(stripAnsi(chunks[0] ?? "").split("\n")).toHaveLength(1);
-    expect(chunks[1]).toContain("\r\u001b[2K");
-    expect(chunks.filter((chunk) => stripAnsi(chunk).includes(PI_STATUS.model))).toHaveLength(1);
+    expect(chunks[1]).toContain("\u001b[2J\u001b[H");
+    expect(chunks.some((chunk) => stripAnsi(chunk).includes(PI_STATUS.model))).toBe(false);
     for (const chunk of chunks) {
       for (const line of stripAnsi(chunk).split("\n"))
         expect(visibleWidth(line.replace("\r", ""))).toBeLessThanOrEqual(80);
     }
     expect(startTui).toHaveBeenCalledOnce();
+    const surface = startTui.mock.calls[0]?.[0] as readonly string[];
+    expect(stripAnsi(surface.join("\n"))).toContain(PI_STATUS.model);
+    expect(surface.every((line) => visibleWidth(line) === 80)).toBe(true);
   });
 
   it.each([
@@ -76,10 +79,12 @@ describe("startup orchestration", () => {
         lifecycle.push("app:resolved");
         return status;
       });
-      const startTui = vi.fn(() => {
+      const startTui = vi.fn((surface: readonly string[]) => {
         appWasResolvedAtTuiStart = appResolved;
-        outputAtTuiStart = plainOutput(chunks);
+        lifecycle.push("splash:final");
+        outputAtTuiStart = `${plainOutput(chunks)}${stripAnsi(surface.join("\n"))}\n`;
         lifecycle.push("tui:start");
+        chunks.push(`${surface.join("\n")}\n`);
         chunks.push("当前计划为空\n");
       });
 
@@ -88,7 +93,6 @@ describe("startup orchestration", () => {
         theme,
         write: (chunk) => {
           chunks.push(chunk);
-          if (stripAnsi(chunk).includes(PI_STATUS.model)) lifecycle.push("splash:final");
         },
         startApp,
         startTui,
@@ -141,8 +145,8 @@ describe("startup orchestration", () => {
 
     appReady.resolve(PI_STATUS);
     await startup;
-    expect(plainOutput(chunks)).toContain(PI_STATUS.model);
     expect(startTui).toHaveBeenCalledOnce();
+    expect(stripAnsi((startTui.mock.calls[0]?.[0] as readonly string[]).join("\n"))).toContain(PI_STATUS.model);
   });
 
   it.each([

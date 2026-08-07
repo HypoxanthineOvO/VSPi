@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   preserveTerminalScrollback,
+  renderStaticAppend,
   renderStaticCommit,
+  renderStaticReplacement,
+  renderSurfaceEpochBreak,
   ScrollbackTUI,
   type StaticCommitTerminal,
 } from "../src/ui/scrollback-terminal.js";
@@ -22,6 +25,16 @@ class RecordingStaticTerminal implements StaticCommitTerminal {
   commitStatic(lines: readonly string[]): void {
     this.commits.push([...lines]);
     this.write(renderStaticCommit(lines, this.rows));
+  }
+  appendStatic(lines: readonly string[]): void {
+    this.commits.push([...lines]);
+    this.write(renderStaticAppend(lines));
+  }
+  replaceStatic(lines: readonly string[]): void {
+    this.write(renderStaticReplacement(lines, this.rows));
+  }
+  beginSurfaceEpoch(lineOffset = 0): void {
+    this.write(renderSurfaceEpochBreak(lineOffset));
   }
   moveBy(): void {}
   hideCursor(): void {}
@@ -56,21 +69,60 @@ describe("scrollback-preserving terminal", () => {
     expect(renderStaticCommit([], 4)).toBe("");
   });
 
-  it("resets pi-tui differential state and redraws live content after a static commit", async () => {
+  it("appends completed transcript without manufacturing a viewport of blank lines", () => {
+    const output = renderStaticAppend(["turn-a", "turn-b"]);
+    expect(output).toContain("\u001b[2J\u001b[Hturn-a\r\nturn-b\r\n");
+    expect(output.match(/\r\n/g)).toHaveLength(2);
+  });
+
+  it("clears a previous Session without manufacturing a screen of blank scrollback", () => {
+    const output = renderStaticReplacement([], 24);
+    expect(output).toContain("\u001b[2J\u001b[H\u001b[3J");
+    expect(output).not.toContain("\r\n");
+  });
+
+  it("starts an append-only surface epoch without clear or Home controls", () => {
+    const output = renderSurfaceEpochBreak();
+    expect(output).toBe("\u001b[?2026h\r\n\u001b[?2026l");
+    expect(output).not.toContain("\u001b[2J");
+    expect(output).not.toContain("\u001b[3J");
+    expect(output).not.toContain("\u001b[H");
+    expect(renderSurfaceEpochBreak(3)).toContain("\u001b[3B\r\n");
+    expect(renderSurfaceEpochBreak(-2)).toContain("\u001b[2A\r\n");
+  });
+
+  it("rebases an offscreen rendered prefix without clearing or rewriting the viewport", async () => {
     vi.useFakeTimers();
     const terminal = new RecordingStaticTerminal();
     const tui = new ScrollbackTUI(terminal, true);
-    tui.addChild({ render: () => ["live-frame"], invalidate() {} });
+    let frame = ["finished-turn", "tail-1", "tail-2", "tail-3", "tail-4", "tail-5", "live-frame"];
+    tui.addChild({ render: () => frame, invalidate() {} });
     tui.start();
     await vi.runAllTimersAsync();
 
-    tui.commitStatic(["finished-turn"]);
+    const writesBefore = terminal.writes.length;
+    frame = frame.slice(1);
+    expect(tui.commitStatic(["finished-turn"])).toBe(true);
     await vi.runAllTimersAsync();
 
-    expect(terminal.commits).toEqual([["finished-turn"]]);
-    const afterCommit = terminal.writes.slice(terminal.writes.findIndex((chunk) => chunk.includes("finished-turn")));
-    expect(afterCommit.some((chunk) => chunk.includes("live-frame"))).toBe(true);
+    expect(terminal.commits).toEqual([]);
+    const afterCommit = terminal.writes.slice(writesBefore);
+    expect(afterCommit).toEqual([]);
+    expect(afterCommit.join("")).not.toContain("\u001b[2J");
     expect(afterCommit.join("")).not.toContain("\u001b[3J");
+    expect(afterCommit.join("")).not.toContain("\u001b[H");
+    tui.stop();
+  });
+
+  it("does not rebase a prefix that is still inside the visible viewport", async () => {
+    vi.useFakeTimers();
+    const terminal = new RecordingStaticTerminal();
+    const tui = new ScrollbackTUI(terminal, true);
+    tui.addChild({ render: () => ["visible-prefix", "live-frame"], invalidate() {} });
+    tui.start();
+    await vi.runAllTimersAsync();
+
+    expect(tui.commitStatic(["visible-prefix"])).toBe(false);
     tui.stop();
   });
 });

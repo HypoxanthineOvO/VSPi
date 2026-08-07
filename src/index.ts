@@ -13,6 +13,7 @@ import { AdaptiveBackend, type BackendMode } from "./backend/adaptive-backend.js
 import { createRuntimeDefaultsService } from "./config/runtime-defaults.js";
 import { loadSettings } from "./config/settings.js";
 import type { TranscriptMessage } from "./domain/types.js";
+import { createStartupGoalBackend } from "./goals/startup.js";
 import { createStartupLocalPlanBackend } from "./plans/startup.js";
 import { createPolicyConfigService } from "./policy/config-service.js";
 import type { ExecutionPolicyService } from "./policy/execution-policy.js";
@@ -75,6 +76,11 @@ async function renderOnce(): Promise<void> {
     recovery: security.recovery,
     workflow: security.workflowAdapter,
   });
+  const goalBackend = createStartupGoalBackend({
+    workspace,
+    recovery: security.recovery,
+    workflow: security.workflowAdapter,
+  });
   const backend = new AdaptiveBackend(
     workspace,
     resolveBackendMode(),
@@ -87,6 +93,7 @@ async function renderOnce(): Promise<void> {
       continueRecent: startupSessionMode().continueRecent,
       ...(security.workflowAdapter ? { workflowPlan: workflowAdapter } : {}),
     },
+    goalBackend,
   );
   const app = new VspiApp(tui, theme, backend, {
     cwd: workspace,
@@ -119,7 +126,8 @@ async function renderOnce(): Promise<void> {
         await app.start();
         return app.startupStatus();
       },
-      startTui: () => {
+      startTui: (startupSurface) => {
+        app.setStartupSurface(startupSurface);
         process.stdout.write(`${app.render(terminal.columns).join("\n")}\n`);
       },
     });
@@ -155,6 +163,11 @@ async function interactive(): Promise<void> {
     recovery: security.recovery,
     workflow: security.workflowAdapter,
   });
+  const goalBackend = createStartupGoalBackend({
+    workspace,
+    recovery: security.recovery,
+    workflow: security.workflowAdapter,
+  });
   const backend = new AdaptiveBackend(
     workspace,
     mode,
@@ -167,6 +180,7 @@ async function interactive(): Promise<void> {
       continueRecent: sessionMode.continueRecent,
       ...(security.workflowAdapter ? { workflowPlan: workflowAdapter } : {}),
     },
+    goalBackend,
   );
   const attachments = new AttachmentService(randomUUID(), capabilities, theme);
   const app = new VspiApp(tui, theme, backend, {
@@ -227,13 +241,12 @@ async function interactive(): Promise<void> {
       width: terminal.columns,
       theme,
       write: (chunk) => terminal.write(chunk),
-      commitStatic: (lines) => terminal.commitStatic(lines),
       startApp: async () => {
         await app.start();
         return app.startupStatus();
       },
-      startTui: async () => {
-        app.commitStableTranscript();
+      startTui: async (startupSurface) => {
+        app.setStartupSurface(startupSurface);
         app.getActiveTui().start();
         if (sessionMode.initialCommand) await app.runStartupCommand(sessionMode.initialCommand);
       },
@@ -382,6 +395,11 @@ async function runOnce(prompt: string): Promise<void> {
     recovery: security.recovery,
     workflow: security.workflowAdapter,
   });
+  const goalBackend = createStartupGoalBackend({
+    workspace,
+    recovery: security.recovery,
+    workflow: security.workflowAdapter,
+  });
   const backend = new AdaptiveBackend(
     workspace,
     resolveBackendMode(),
@@ -394,6 +412,7 @@ async function runOnce(prompt: string): Promise<void> {
       continueRecent: false,
       ...(security.workflowAdapter ? { workflowPlan: workflowAdapter } : {}),
     },
+    goalBackend,
   );
   const messages: TranscriptMessage[] = [];
   try {

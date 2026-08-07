@@ -383,4 +383,33 @@ describe("transcript rendering", () => {
     expect(lines.every((line) => visibleWidth(line) <= 40)).toBe(true);
     expect(stripAnsi(lines.at(-1) ?? "")).toMatch(/▋$/);
   });
+
+  it("renders Subagent context, lane, model, and fallback status within narrow widths", () => {
+    const message: TranscriptMessage = {
+      id: "subagent-1",
+      role: "assistant",
+      kind: "subagent",
+      model: "openai/gpt-5",
+      preferredModel: "kimi/k2",
+      effort: "high",
+      contextMode: "lane",
+      task: "Audit a deliberately long implementation task without overflowing the terminal",
+      status: "success",
+      agentKind: "teammate",
+      teammateId: "frontend",
+      lane: "main",
+      depth: 1,
+      fallbackReason: "quota_exhausted",
+    };
+    const full = stripAnsi(renderTranscriptMessage(message, 160, plainTheme()).join("\n"));
+    expect(full).toContain("frontend");
+    expect(full).toContain("preferred kimi/k2");
+    expect(full).toContain("lane main");
+    expect(full).toContain("fallback quota_exhausted");
+    for (const width of [40, 80, 120]) {
+      expect(renderTranscriptMessage(message, width, plainTheme()).every((line) => visibleWidth(line) <= width)).toBe(
+        true,
+      );
+    }
+  });
 });

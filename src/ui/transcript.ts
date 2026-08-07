@@ -1,6 +1,6 @@
 import { effortLabel } from "../domain/effort.js";
 import type { TranscriptMessage } from "../domain/types.js";
-import { padLine, stripAnsi, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./ansi.js";
+import { frame, padLine, stripAnsi, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./ansi.js";
 import { type DiffLine, renderDiff } from "./diff.js";
 import { renderMarkdown } from "./markdown.js";
 import type { VspiTheme } from "./theme.js";
@@ -350,10 +350,35 @@ export function renderTranscriptMessage(
         ? theme.success("✓")
         : message.status === "error"
           ? theme.error("×")
-          : theme.focus("●");
-    lines = [
-      `${theme.muted("└─")} ${symbol} ${theme.blue(message.model)} · ${effortLabel(message.effort)} · ${message.task} · ${message.status}`,
+          : message.status === "cancelled"
+            ? theme.warning("−")
+            : theme.focus("●");
+    const identity = message.agentKind === "teammate" ? (message.teammateId ?? "teammate") : "task";
+    const lane = message.lane ? ` · lane ${message.lane}` : "";
+    const preferred =
+      message.preferredModel && message.preferredModel !== message.model
+        ? ` · preferred ${message.preferredModel}`
+        : "";
+    const fallback = message.fallbackReason ? ` · fallback ${message.fallbackReason}` : "";
+    const context = message.contextMode ? ` · ${message.contextMode}` : "";
+    const agentRole = message.agentRole ? ` · ${message.agentRole}` : "";
+    const metadata = `${symbol} ${identity}${agentRole} · ${theme.blue(message.model)}${preferred} · ${effortLabel(message.effort)}${context}${lane}${fallback}`;
+    const bodyWidth = Math.max(1, width - 2);
+    const body = [
+      padLine(metadata, bodyWidth),
+      ...wrapTextWithAnsi(message.task, bodyWidth).slice(0, 2),
+      ...(message.outputPreview
+        ? [theme.muted(truncateToWidth(message.outputPreview, bodyWidth, "…"))]
+        : message.status === "running"
+          ? [theme.muted("Working...")]
+          : []),
     ];
+    lines = frame(body, width, theme, {
+      title: "Subagent",
+      rightTitle: message.status,
+      focused: selected,
+      maxBodyLines: body.length,
+    });
   }
 
   if (selected) return renderSelectedLines(lines, width, theme);

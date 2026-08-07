@@ -43,7 +43,7 @@ npx vitest run test/pty-scrollback.test.ts
 - `waitFor()` 搜索的是整个 scrollback，只能证明内容曾经写入。等待流式输出稳定后，再用 `screenText()` 断言当前屏幕。
 - `scrollbackText()` 用于证明历史仍存在、无不可交互的“已折叠 N 条”等占位。
 - 模拟会改变 xterm viewport 的真实用户按键时使用 `userInput()`；仅向子进程发送原始输入时使用 `write()`。
-- resize 同时作用于 PTY 和 headless xterm。至少覆盖正常、矮屏和窄屏；关键 takeover 面板还要覆盖高终端。
+- resize 同时作用于 PTY 和 headless xterm。启动瀑布至少覆盖 20、40、60 行，另覆盖窄屏；关键 takeover 面板还要覆盖高终端。
 - 异步刷新后留出短暂 settle 时间，再读取坐标，避免在输出队列中途采样。
 - 每个 harness 都在 `finally` 中关闭。
 
@@ -57,6 +57,9 @@ npx vitest run test/pty-scrollback.test.ts
 TUI 连续性回归至少覆盖以下场景：
 
 - 完成一轮后，最新回答、Composer、status 顺序连续，没有巨大空白，viewport 留在底部。
+- 启动后 Splash 与 Composer 必须同时位于当前 viewport；高终端不得预先制造整屏 scrollback，也不得把 Composer padding 到底部。
+- 普通 Composer 瀑布可增长到三个终端高度；Inspect 必须回到单屏，选中的历史节点始终可见。
+- Question footer/hint 与 Composer 之间必须恰有一行 gutter，等待答案时不能出现虚假 Working。
 - Resume 选择器在空列表、普通高度、矮屏和高屏下都有稳定最小/可用高度；选中后显示历史尾部，而不是历史顶部。
 - Resume 后 `PageUp` 能逐页到最早历史，内容不会被永久折叠，也不依赖鼠标点击展开。
 - 连续触发两次 threshold compaction，每次结束后 Agent 都继续原任务并产生后续 sentinel。
@@ -103,7 +106,7 @@ Session 相关测试必须让 create/list/open/switch 使用同一个显式 `ses
 stty -F /dev/pts/<n> size
 ```
 
-大面积空白、status 缺失或光标停在旧面板底部，通常需要同时检查渲染帧高度和物理 viewport。遇到跳顶或原生历史消失时，搜索清屏序列 `CSI 2J/H/3J` 及 pi-tui 的 `previousLines`、`cursorRow`、`fullRender` 路径；应用内状态正确并不代表终端物理 buffer 正确。
+大面积空白、status 缺失或光标停在旧面板底部，通常需要同时检查活动瀑布高度和物理 viewport。遇到跳顶或原生历史消失时，搜索清屏序列 `CSI 2J/H/3J` 及 pi-tui 的 `previousLines`、`cursorRow`、`previousViewportTop`、`fullRender` 路径；稳定前缀只有在完全越过 viewport 后才能 rebase。应用内状态正确并不代表终端物理 buffer 正确。
 
 ### 3.4 异步与连续性
 

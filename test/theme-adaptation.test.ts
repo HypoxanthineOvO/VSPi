@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderMarkdown } from "../src/ui/markdown.js";
 import { createTheme } from "../src/ui/theme.js";
-import { capabilities } from "./helpers.js";
+import { capabilities, sgrCells } from "./helpers.js";
 
 describe("terminal background adaptation", () => {
   it("uses terminal-owned foreground and background in Terminal mode", () => {
@@ -14,6 +14,11 @@ describe("terminal background adaptation", () => {
     expect(rendered).not.toMatch(/(?:38|48);2;/);
     expect(rendered).not.toContain("\u001b[30m");
     expect(rendered).not.toContain("\u001b[40m");
+    const selected = theme.selected("selected");
+    const selectedCells = sgrCells(selected);
+    expect(selectedCells.every((cell) => !cell.modifiers.has(7))).toBe(true);
+    expect(selectedCells.every((cell) => cell.background === undefined)).toBe(true);
+    expect(selectedCells.every((cell) => cell.modifiers.has(1))).toBe(true);
   });
 
   it("offers an explicit light palette for terminals with a light background", () => {

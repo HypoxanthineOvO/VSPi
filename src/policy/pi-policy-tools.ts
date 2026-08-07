@@ -1,5 +1,7 @@
-import { resolve } from "node:path";
+import { lstat, realpath } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import {
+  type BashOperations,
   createBashToolDefinition,
   createEditToolDefinition,
   createFindToolDefinition,
@@ -25,6 +27,10 @@ type PolicyToolOverrides = {
 export function createPolicyToolOverrides(options: {
   workspace: string;
   executionPolicy: Pick<ExecutionPolicyService, "evaluate">;
+  workspaceBoundary?: boolean;
+  bashOperations?: BashOperations;
+  preflight?: (action: PolicyAction) => void | Promise<void>;
+  executionBoundary?: <T>(action: PolicyAction, operation: () => Promise<T>) => Promise<T>;
 }): PolicyToolOverrides {
   const workspace = resolve(options.workspace);
   const native = {
@@ -32,7 +38,7 @@ export function createPolicyToolOverrides(options: {
     ls: createLsToolDefinition(workspace),
     find: createFindToolDefinition(workspace),
     grep: createGrepToolDefinition(workspace),
-    bash: createBashToolDefinition(workspace),
+    bash: createBashToolDefinition(workspace, options.bashOperations ? { operations: options.bashOperations } : {}),
     edit: createEditToolDefinition(workspace),
     write: createWriteToolDefinition(workspace),
   };
@@ -84,12 +90,46 @@ export function createPolicyToolOverrides(options: {
     return {
       ...tool,
       async execute(toolCallId, input, signal, onUpdate, context) {
-        const decision = await options.executionPolicy.evaluate(actionFor(input), signal);
-        if (!decision.allowed) throw new Error(decision.reason);
-        return tool.execute(toolCallId, input, signal, onUpdate, context);
+        const action = actionFor(input);
+        const operation = async () => {
+          if (options.workspaceBoundary && (action.kind === "file-read" || action.kind === "file-write")) {
+            await assertWorkspaceTarget(workspace, action.target);
+          }
+          await options.preflight?.(action);
+          const decision = await options.executionPolicy.evaluate(action, signal);
+          if (!decision.allowed) throw new Error(decision.reason);
+          return tool.execute(toolCallId, input, signal, onUpdate, context);
+        };
+        return options.executionBoundary ? options.executionBoundary(action, operation) : operation();
       },
     };
   }
+}
+
+async function assertWorkspaceTarget(workspace: string, target: string | undefined): Promise<void> {
+  if (!target) throw new Error("Tool target is missing");
+  const candidate = resolve(workspace, target);
+  assertContained(workspace, candidate);
+  let existing = candidate;
+  while (true) {
+    try {
+      const stats = await lstat(existing);
+      if (stats.isSymbolicLink()) throw new Error("Subagent workspace boundary rejects symbolic links");
+      assertContained(await realpath(workspace), await realpath(existing));
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = dirname(existing);
+      if (parent === existing) throw new Error("Subagent workspace boundary could not resolve the target");
+      existing = parent;
+    }
+  }
+}
+
+function assertContained(workspace: string, candidate: string): void {
+  const relation = relative(workspace, candidate);
+  if (relation === "" || (!relation.startsWith("..") && !isAbsolute(relation))) return;
+  throw new Error("Subagent tool target is outside the workspace boundary");
 }
 
 export function classifyBash(command: string): PolicyAction {

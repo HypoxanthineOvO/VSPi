@@ -1,4 +1,5 @@
 import { Input, Key, matchesKey } from "@earendil-works/pi-tui";
+import type { AgentRunSnapshot, AgentSnapshot } from "../agents/types.js";
 import {
   BUILTIN_COMMAND_SOURCE,
   type CommandDefinition,
@@ -21,6 +22,7 @@ import type {
   SessionOption,
   UsageSnapshot,
 } from "../domain/types.js";
+import type { StoredGoal } from "../goals/types.js";
 import type { PlanStatus, StoredPlan } from "../plans/types.js";
 import {
   type ApprovalRequest,
@@ -62,6 +64,7 @@ import type { VspiTheme } from "./theme.js";
 
 export type PanelKind =
   | "plan"
+  | "goal"
   | "prompt"
   | "commands"
   | "models"
@@ -76,6 +79,7 @@ export type PanelKind =
   | "approval"
   | "effort"
   | "tools"
+  | "agents"
   | "policy";
 
 export type PanelEvent =
@@ -184,8 +188,22 @@ const DELIVERY_KIND_LABELS: Record<string, string> = {
   goal: "目标",
 };
 
+const GOAL_STATE_LABELS: Record<StoredGoal["state"], string> = {
+  executing: "执行中",
+  paused: "已暂停",
+  blocked: "已阻塞",
+  stalled: "无进展停止",
+  pending_acceptance: "等待验收",
+  completed: "已完成",
+  cancelled: "已取消",
+};
+
 function usesWideModelLayout(bodyWidth: number): boolean {
   return bodyWidth >= MODEL_WIDE_MIN_BODY_WIDTH;
+}
+
+function capitalize(value: string): string {
+  return value.slice(0, 1).toLocaleUpperCase() + value.slice(1);
 }
 
 function panelKey(data: string, key: Parameters<typeof matchesKey>[1]): boolean {
@@ -317,6 +335,8 @@ export class PanelController {
   private providerDraft = { label: "", baseUrl: "https://", protocol: "OpenAI compatible" };
   private planItems: PlanItem[] = [];
   private planSnapshot: StoredPlan | undefined;
+  private goalSnapshot: StoredGoal | undefined;
+  private goalModelLabel = "Root Session model";
   private workflowSnapshot: WorkflowSnapshot | undefined;
   private planPanelCollapsed = false;
   private planActionMenu = false;
@@ -343,6 +363,8 @@ export class PanelController {
   private questionReview = false;
   private questionDirectAnswer = false;
   private readonly questionInput = new Input();
+  private questionSelectionRange: [number, number] | undefined;
+  private questionPinnedRows = 0;
   private readonly sharedTextFields = new Map<string, Input>();
   private questions: Question[] = [];
   private approvalRequest: ApprovalRequest | undefined;
@@ -356,10 +378,23 @@ export class PanelController {
     recovery: false,
     sessionAllowlist: [],
   };
+  private agentSnapshot: AgentSnapshot = {
+    enabled: false,
+    projectTrusted: false,
+    recovery: false,
+    limits: { maxDepth: 5, maxAgentsPerTree: 128, maxConcurrency: 16 },
+    pools: [],
+    active: [],
+    recent: [],
+    teammates: [],
+    diagnostic: "Subagent runtime is not ready",
+  };
+  private agentTab: "map" | "transcript" | "tools" | "pools" = "map";
+  private agentSelectedRunId: string | undefined;
 
   constructor(settings: AppSettings) {
     this.settings = { ...settings };
-    this.questionInput.focused = true;
+    this.questionInput.focused = false;
     this.settingsLayers = {
       global: { ...settings, scope: "global" },
       ...(settings.scope === "project" ? { project: { ...settings, scope: "project" } } : {}),
@@ -544,6 +579,13 @@ export class PanelController {
     this.state.scroll = 0;
   }
 
+  setGoalSnapshot(snapshot: StoredGoal | undefined, modelLabel?: string): void {
+    this.goalSnapshot = snapshot ? structuredClone(snapshot) : undefined;
+    if (modelLabel) this.goalModelLabel = modelLabel;
+    this.state.selected = 0;
+    this.state.scroll = 0;
+  }
+
   setWorkflowSnapshot(snapshot: WorkflowSnapshot): void {
     this.workflowSnapshot = structuredClone(snapshot);
     this.planSnapshot = undefined;
@@ -581,6 +623,16 @@ export class PanelController {
     if (this.kind === "policy") this.state.selected = Math.max(0, POLICY_LEVELS.indexOf(snapshot.policy));
   }
 
+  setAgentSnapshot(snapshot: AgentSnapshot): void {
+    const selected = this.selectedAgentRun()?.id ?? this.agentSelectedRunId;
+    this.agentSnapshot = structuredClone(snapshot);
+    const runs = this.agentRuns();
+    const selectedIndex = selected ? runs.findIndex((run) => run.id === selected) : -1;
+    this.state.selected =
+      selectedIndex >= 0 ? selectedIndex : Math.min(this.state.selected, Math.max(0, runs.length - 1));
+    this.agentSelectedRunId = runs[this.state.selected]?.id;
+  }
+
   setCommandQuery(query: string): void {
     this.commandQuery = query;
     if (query.startsWith("/")) {
@@ -593,6 +645,7 @@ export class PanelController {
 
   handleInput(data: string): PanelEvent | undefined {
     if (this.kind === "settings" && this.settingsEndpointEditing) return this.handleSettings(data);
+    if (this.kind === "agents") return this.handleAgents(data);
     const interactionState = this.interactionState();
     if (matchesInteraction("panel", this.kind, "closePanel", data, interactionState)) {
       if (this.kind === "approval" && this.approvalReasonEditing) {
@@ -669,6 +722,7 @@ export class PanelController {
     let title: string;
     let body: string[];
     if (this.kind === "commands") [title, body] = ["命令", this.renderCommands(bodyWidth, theme)];
+    else if (this.kind === "goal") [title, body] = ["Goal", this.renderGoal(bodyWidth, theme)];
     else if (this.kind === "prompt") [title, body] = ["Prompt Profile", this.renderPrompt(bodyWidth, theme)];
     else if (this.kind === "models") [title, body] = ["Model", this.renderModels(bodyWidth, theme)];
     else if (this.kind === "providers") [title, body] = ["Provider", this.renderProviders(bodyWidth, theme)];
@@ -683,6 +737,8 @@ export class PanelController {
     else if (this.kind === "approval") [title, body] = ["需要批准", this.renderApproval(bodyWidth, theme)];
     else if (this.kind === "effort") [title, body] = ["Effort", this.renderEffort(bodyWidth, theme)];
     else if (this.kind === "tools") [title, body] = ["Tools", this.renderTools(bodyWidth, theme)];
+    else if (this.kind === "agents")
+      [title, body] = [`Agents · ${capitalize(this.agentTab)}`, this.renderAgents(bodyWidth, theme)];
     else if (this.kind === "policy") [title, body] = ["Policy", this.renderPolicy(bodyWidth, theme)];
     else [title, body] = ["Plan", this.renderPlan(bodyWidth, theme, planFocused)];
 
@@ -690,35 +746,57 @@ export class PanelController {
       return [padLine(`${theme.focus("Plan")} · ${theme.blue(theme.bold(this.planDisplayTitle()))}`, width)];
     }
 
-    let footer = this.kind === "question" ? this.questionHintText() : undefined;
+    let footer = this.kind === "question" ? theme.muted(this.questionHintText()) : undefined;
     let rightTitle: string | undefined;
-    if (body.length > bodyRows) {
+    const questionFooterGap =
+      this.kind === "question" && (this.questionSelectionRange !== undefined || this.questionReview);
+    const visibleBodyRows = questionFooterGap ? Math.max(1, bodyRows - 1) : bodyRows;
+    if (body.length > visibleBodyRows) {
       if (this.kind === "question" && this.questionReview) {
-        this.state.scroll = Math.max(0, Math.min(this.state.scroll, body.length - bodyRows));
+        this.state.scroll = Math.max(0, Math.min(this.state.scroll, body.length - visibleBodyRows));
+        const total = body.length;
+        body = body.slice(this.state.scroll, this.state.scroll + visibleBodyRows);
+        rightTitle = `${this.state.scroll + 1}-${this.state.scroll + body.length} / ${total}`;
+      } else if (this.kind === "question" && this.questionSelectionRange) {
+        const pinnedRows = Math.min(this.questionPinnedRows, Math.max(0, visibleBodyRows - 2));
+        const pinned = body.slice(0, pinnedRows);
+        const scrollable = body.slice(pinnedRows);
+        const scrollRows = Math.max(1, visibleBodyRows - pinned.length);
+        const selectionStart = Math.max(0, this.questionSelectionRange[0] - pinnedRows);
+        const selectionEnd = Math.max(selectionStart, this.questionSelectionRange[1] - pinnedRows);
+        this.state.scroll = Math.max(0, Math.min(this.state.scroll, Math.max(0, scrollable.length - scrollRows)));
+        if (selectionStart < this.state.scroll) this.state.scroll = selectionStart;
+        if (selectionEnd - selectionStart < scrollRows && selectionEnd >= this.state.scroll + scrollRows) {
+          this.state.scroll = selectionEnd - scrollRows + 1;
+        }
+        const visible = scrollable.slice(this.state.scroll, this.state.scroll + scrollRows);
+        body = [...pinned, ...visible];
+        rightTitle = `${this.state.scroll + 1}-${this.state.scroll + visible.length} / ${scrollable.length}`;
       } else {
+        let selectionStart: number;
+        let selectionEnd: number;
         // selectedLine may sit behind a panel gutter; only accept a leading marker after whitespace.
         const highlightedRows = body
           .map((line, index) => (/^\s*› /.test(stripAnsi(line)) ? index : -1))
           .filter((index) => index >= 0);
-        let selectionStart = Math.max(0, Math.min(highlightedRows[0] ?? this.state.selected, body.length - 1));
-        let selectionEnd = highlightedRows.at(-1) ?? selectionStart;
+        selectionStart = Math.max(0, Math.min(highlightedRows[0] ?? this.state.selected, body.length - 1));
+        selectionEnd = highlightedRows.at(-1) ?? selectionStart;
         if (this.kind === "tools") {
           selectionStart = Math.min(this.state.selected * 2, body.length - 1);
           selectionEnd = Math.min(selectionStart + 1, body.length - 1);
         }
-        this.state.scroll = Math.max(0, Math.min(this.state.scroll, body.length - bodyRows));
+        this.state.scroll = Math.max(0, Math.min(this.state.scroll, body.length - visibleBodyRows));
         if (selectionStart < this.state.scroll) this.state.scroll = selectionStart;
         // 块不高于视口时才对齐块底；超高块保持块顶可见，避免首尾互斥把内容推走。
-        if (selectionEnd - selectionStart < bodyRows && selectionEnd >= this.state.scroll + bodyRows) {
-          this.state.scroll = selectionEnd - bodyRows + 1;
+        if (selectionEnd - selectionStart < visibleBodyRows && selectionEnd >= this.state.scroll + visibleBodyRows) {
+          this.state.scroll = selectionEnd - visibleBodyRows + 1;
         }
+        const total = body.length;
+        body = body.slice(this.state.scroll, this.state.scroll + visibleBodyRows);
+        footer = `${this.state.scroll + 1}-${this.state.scroll + body.length} / ${total}`;
       }
-      const total = body.length;
-      body = body.slice(this.state.scroll, this.state.scroll + bodyRows);
-      const range = `${this.state.scroll + 1}-${this.state.scroll + body.length} / ${total}`;
-      if (this.kind === "question") rightTitle = range;
-      else footer = range;
     }
+    if (questionFooterGap) body.push("");
     return frame(body, width, theme, {
       title,
       ...(rightTitle ? { rightTitle } : {}),
@@ -730,8 +808,14 @@ export class PanelController {
   }
 
   sessionsSurfaceHeight(maxRows: number): number {
-    const contentRows = Math.max(1, Math.min(this.sessions.length, 14));
-    return Math.max(3, Math.min(maxRows, contentRows + 2));
+    return Math.max(3, maxRows);
+  }
+
+  /** Actual rendered height of the Sessions surface (content rows + frame borders). */
+  sessionsContentHeight(width: number, theme: VspiTheme): number {
+    const bodyWidth = Math.max(1, width - 2);
+    const body = this.renderSessions(bodyWidth, theme);
+    return Math.max(3, 2 + body.length);
   }
 
   renderSessionsSurface(width: number, maxRows: number, theme: VspiTheme): string[] {
@@ -740,8 +824,13 @@ export class PanelController {
     this.lastBodyWidth = bodyWidth;
     let body = this.renderSessions(bodyWidth, theme);
     this.state.scroll = Math.max(0, Math.min(this.state.scroll, Math.max(0, body.length - bodyRows)));
-    if (this.state.selected < this.state.scroll) this.state.scroll = this.state.selected;
-    if (this.state.selected >= this.state.scroll + bodyRows) this.state.scroll = this.state.selected - bodyRows + 1;
+    const selectedRow = this.state.selected * 2;
+    if (selectedRow < this.state.scroll) this.state.scroll = selectedRow;
+    if (selectedRow >= this.state.scroll + bodyRows) {
+      this.state.scroll = selectedRow - bodyRows + 1;
+      if (this.state.scroll % 2 !== 0) this.state.scroll += 1;
+    }
+    this.state.scroll = Math.max(0, Math.min(this.state.scroll, Math.max(0, body.length - bodyRows)));
     body = body.slice(this.state.scroll, this.state.scroll + bodyRows);
     while (body.length < bodyRows) body.push("");
     const hint = renderInteractionHint("panel", "sessions", this.interactionState());
@@ -797,6 +886,11 @@ export class PanelController {
   acceptsInput(data: string): boolean {
     // 唯一候选的 Tab 补全由 composer 层完成；多候选时面板不拦截 Tab（Registry 宣告了 Tab 补全）。
     if (this.kind === "commands" && panelKey(data, Key.tab)) return false;
+    if (
+      this.kind === "agents" &&
+      [Key.escape, Key.enter, Key.tab, Key.up, Key.down, Key.left, Key.right].some((key) => panelKey(data, key))
+    )
+      return true;
     return matchingInteraction("panel", this.kind, data, this.interactionState()) !== undefined;
   }
 
@@ -1734,20 +1828,15 @@ export class PanelController {
 
   private renderSessions(width: number, theme: VspiTheme): string[] {
     if (this.sessions.length === 0) return [theme.muted(padLine("暂无会话", width))];
-    return this.sessions.map((session, index) => {
+    return this.sessions.flatMap((session, index) => {
       const branch = session.branchDepth > 0 ? `${theme.muted("└─")} ` : "";
-      const current = session.current ? theme.success("● ") : "  ";
+      const current = session.current ? theme.success("● ") : "";
       const status = session.owner ? theme.warning("使用中") : session.relativeTime;
-      return selectedLine(
-        alignRight(
-          `${"  ".repeat(session.branchDepth)}${branch}${current}${session.label}`,
-          status,
-          Math.max(1, width - 2),
-        ),
-        index === this.state.selected,
-        width,
-        theme,
-      );
+      const selected = index === this.state.selected;
+      const marker = selected ? theme.focus("› ") : "  ";
+      const label = `${"  ".repeat(session.branchDepth)}${branch}${current}${session.label}`;
+      const line = alignRight(`${marker}${selected ? theme.focus(theme.bold(label)) : label}`, status, width);
+      return index < this.sessions.length - 1 ? [line, ""] : [line];
     });
   }
 
@@ -2105,6 +2194,186 @@ export class PanelController {
     });
   }
 
+  private agentRuns(): AgentRunSnapshot[] {
+    const byId = new Map<string, AgentRunSnapshot>();
+    for (const run of [...this.agentSnapshot.active, ...this.agentSnapshot.recent]) byId.set(run.id, run);
+    const children = new Map<string | undefined, AgentRunSnapshot[]>();
+    for (const run of byId.values()) children.set(run.parentId, [...(children.get(run.parentId) ?? []), run]);
+    const ordered: AgentRunSnapshot[] = [];
+    const visit = (parentId: string | undefined) => {
+      for (const run of children.get(parentId) ?? []) {
+        ordered.push(run);
+        visit(run.id);
+      }
+    };
+    visit(undefined);
+    for (const run of byId.values()) if (!ordered.some((item) => item.id === run.id)) ordered.push(run);
+    return ordered.slice(0, 64);
+  }
+
+  private selectedAgentRun(): AgentRunSnapshot | undefined {
+    return this.agentRuns()[this.state.selected];
+  }
+
+  private handleAgents(data: string): PanelEvent | undefined {
+    if (panelKey(data, Key.escape)) {
+      if (this.agentTab !== "map") {
+        this.agentTab = "map";
+        this.state.scroll = 0;
+        return;
+      }
+      this.close();
+      return { type: "close" };
+    }
+    if (panelKey(data, Key.tab)) {
+      const tabs = ["map", "transcript", "tools", "pools"] as const;
+      this.agentTab = tabs[(tabs.indexOf(this.agentTab) + 1) % tabs.length] ?? "map";
+      this.state.scroll = 0;
+      return;
+    }
+    const runs = this.agentRuns();
+    if (panelKey(data, Key.up) || panelKey(data, Key.down)) {
+      this.move(data, runs.length);
+      this.agentSelectedRunId = this.selectedAgentRun()?.id;
+      return;
+    }
+    if (panelKey(data, Key.enter) && this.selectedAgentRun()) {
+      this.agentTab = "transcript";
+      this.state.scroll = 0;
+      return;
+    }
+    if (panelKey(data, Key.left)) {
+      const parentId = this.selectedAgentRun()?.parentId;
+      const index = parentId ? runs.findIndex((run) => run.id === parentId) : -1;
+      if (index >= 0) this.state.selected = index;
+      this.agentSelectedRunId = this.selectedAgentRun()?.id;
+      return;
+    }
+    if (panelKey(data, Key.right)) {
+      const selectedId = this.selectedAgentRun()?.id;
+      const index = selectedId ? runs.findIndex((run) => run.parentId === selectedId) : -1;
+      if (index >= 0) this.state.selected = index;
+      this.agentSelectedRunId = this.selectedAgentRun()?.id;
+    }
+    return;
+  }
+
+  private renderGoal(width: number, theme: VspiTheme): string[] {
+    const goal = this.goalSnapshot;
+    if (!goal) return [theme.muted(padLine("当前 Session 没有绑定 Goal", width))];
+    const marker = goal.markers.at(-1);
+    const state = GOAL_STATE_LABELS[goal.state];
+    const progress = `${goal.autoRounds}/${goal.limits.maxAutoRounds} rounds · ${goal.noProgressRounds}/${goal.limits.maxNoProgressRounds} no-progress`;
+    const tokenBudget = `${goal.consumedTokens}/${goal.limits.maxTokens} tokens`;
+    const rows = [
+      alignRight(theme.bold(theme.focus(state)), theme.muted(`r${goal.revision}`), width),
+      ...wrapTextWithAnsi(theme.bold(goal.contract.objective), width),
+      theme.muted(truncateToWidth(`Plan ${goal.planId}`, width)),
+      alignRight(theme.muted(progress), theme.muted(tokenBudget), width),
+      ...(marker?.currentItem ? [truncateToWidth(`当前  ${marker.currentItem}`, width)] : []),
+      ...(marker?.nextItem ? [truncateToWidth(`下一步  ${marker.nextItem}`, width)] : []),
+      ...(marker?.completedWork.length
+        ? [theme.muted("最近完成"), ...marker.completedWork.flatMap((item) => wrapTextWithAnsi(`  ${item}`, width))]
+        : []),
+      ...(marker?.evidence.length
+        ? [theme.muted("证据"), ...marker.evidence.flatMap((item) => wrapTextWithAnsi(`  ${item}`, width))]
+        : []),
+      ...(goal.blocker
+        ? [
+            theme.warning("阻塞"),
+            ...wrapTextWithAnsi(`  ${goal.blocker.reason}`, width),
+            ...wrapTextWithAnsi(`  需要：${goal.blocker.neededInput}`, width),
+          ]
+        : []),
+      ...(goal.stateReason ? [theme.muted(truncateToWidth(`状态原因  ${goal.stateReason}`, width))] : []),
+      theme.muted(truncateToWidth(`Model  ${this.goalModelLabel}`, width)),
+    ];
+    return rows.map((row) => padLine(row, width));
+  }
+
+  private renderAgents(width: number, theme: VspiTheme): string[] {
+    const limits = this.agentSnapshot.limits;
+    const header = theme.muted(
+      padLine(
+        `Map  Transcript  Tools  Pools · depth ${limits.maxDepth} · tree ${limits.maxAgentsPerTree} · concurrency ${limits.maxConcurrency}`,
+        width,
+      ),
+    );
+    if (this.agentTab === "pools") {
+      const lines = [header];
+      for (const pool of this.agentSnapshot.pools) {
+        lines.push(theme.bold(`${pool.provider} · ${pool.source}`));
+        for (const role of ["orchestrator", "researcher", "analyst", "worker"] as const) {
+          lines.push(padLine(`  ${role.padEnd(12)} ${pool.roles[role]}`, width));
+        }
+      }
+      if (this.agentSnapshot.pools.length === 0) lines.push(theme.muted("No available model pools"));
+      return lines;
+    }
+    const selected = this.selectedAgentRun();
+    if (this.agentTab === "transcript" || this.agentTab === "tools") {
+      if (!selected) return [header, theme.muted("No Agent run selected")];
+      const breadcrumb = this.agentBreadcrumb(selected);
+      const lines = [header, theme.focus(`Root › ${breadcrumb.join(" › ")}`)];
+      lines.push(`${selected.role} · ${selected.model} · ${selected.effort} · ${selected.status}`);
+      lines.push(theme.muted(selected.modelReason));
+      if (this.agentTab === "tools") {
+        lines.push(
+          theme.bold("Tools"),
+          ...(selected.tools.length ? selected.tools.map((tool) => `  ${tool}`) : ["  none"]),
+        );
+        if (selected.sessionFile) lines.push(theme.muted(`Session  ${selected.sessionFile}`));
+      } else {
+        lines.push(theme.bold("Task"), ...wrapTextWithAnsi(selected.task, width));
+        lines.push(theme.bold("Transcript"));
+        lines.push(...wrapTextWithAnsi(selected.outputPreview ?? "Waiting for output...", width));
+      }
+      return lines.map((line) => padLine(line, width));
+    }
+    const runs = this.agentRuns();
+    const lines = [header];
+    if (this.agentSnapshot.diagnostic) lines.push(theme.warning(this.agentSnapshot.diagnostic));
+    for (const teammate of this.agentSnapshot.teammates) {
+      const model = teammate.currentModel ?? teammate.preferredModel ?? "inherit";
+      lines.push(padLine(`  ◇ ${teammate.id} · ${teammate.role}`, width));
+      lines.push(
+        theme.muted(
+          padLine(
+            `    ${teammate.routing} · current ${model}${teammate.preferredModel && teammate.preferredModel !== model ? ` · preferred ${teammate.preferredModel}` : ""} · ${teammate.effort ?? "inherit"} · lanes ${teammate.activeLanes.join(", ") || "none"}${teammate.stickyFallback ? " · sticky fallback" : ""}`,
+            width,
+          ),
+        ),
+      );
+    }
+    runs.forEach((run, index) => {
+      const symbol =
+        run.status === "success" ? theme.success("✓") : run.status === "error" ? theme.error("×") : theme.focus("●");
+      const branch = `${"  ".repeat(Math.max(0, run.depth - 1))}${run.depth > 1 ? "└─ " : ""}`;
+      const current = index === this.state.selected ? "› " : "  ";
+      lines.push(
+        padLine(
+          `${current}${branch}${symbol} ${run.role} · ${run.model.split("/").at(-1)} · ${run.status} · ${run.task}`,
+          width,
+        ),
+      );
+    });
+    if (runs.length === 0) lines.push(theme.muted("No recent Agent runs"));
+    return lines;
+  }
+
+  private agentBreadcrumb(run: AgentRunSnapshot): string[] {
+    const runs = this.agentRuns();
+    const result = [`${run.role} ${run.id.slice(0, 8)}`];
+    let parentId = run.parentId;
+    while (parentId) {
+      const parent = runs.find((candidate) => candidate.id === parentId);
+      if (!parent) break;
+      result.unshift(`${parent.role} ${parent.id.slice(0, 8)}`);
+      parentId = parent.parentId;
+    }
+    return result;
+  }
+
   private renderEffort(width: number, theme: VspiTheme): string[] {
     return this.effortLevels.map((level, index) =>
       selectedLine(
@@ -2324,14 +2593,19 @@ export class PanelController {
   }
 
   private renderQuestion(width: number, theme: VspiTheme): string[] {
+    this.questionSelectionRange = undefined;
+    this.questionPinnedRows = 0;
     const answered = this.questions.filter((question) => question.answer !== undefined).length;
     const skipped = this.questions.filter((question) => question.skipped).length;
     const status = theme.muted(`已答 ${answered} · 跳过 ${skipped}`);
     if (this.questionReview) {
       const lines = [
         alignRight(theme.muted("Question · Review"), status, width),
+        "",
         theme.bold(padLine("最终检查", width)),
+        "",
         theme.border(padLine((theme.capabilities.unicode ? "─" : "-").repeat(width), width)),
+        "",
       ];
       for (const question of this.questions) {
         const answer = question.skipped
@@ -2346,70 +2620,84 @@ export class PanelController {
     }
     const question = this.questions[this.questionIndex];
     if (!question) return [];
-    const gutter = width >= 6 ? 1 : 0;
+    const gutter = width >= 10 ? 2 : width >= 6 ? 1 : 0;
     const contentWidth = Math.max(1, width - gutter);
     const inset = (line: string) => padLine(`${" ".repeat(gutter)}${padLine(line, contentWidth)}`, width);
     const lines = [
       inset(
         alignRight(theme.muted(`Question ${this.questionIndex + 1} / ${this.questions.length}`), status, contentWidth),
       ),
+      "",
       inset(theme.bold(question.title)),
       ...wrapTextWithAnsi(question.prompt, contentWidth).map(inset),
+      "",
       inset(theme.border((theme.capabilities.unicode ? "─" : "-").repeat(contentWidth))),
+      "",
     ];
     if (this.questionDirectAnswer || question.kind === "freeText") {
-      const input = this.questionInput.render(Math.max(1, contentWidth - 2))[0] ?? "";
+      this.questionInput.focused = true;
+      const input = (this.questionInput.render(Math.max(1, contentWidth - 2))[0] ?? "").replace(/^> /, "");
       lines.push(theme.muted(inset("你的回答")));
-      lines.push(inset(theme.selected(padLine(` ${input} `, contentWidth))));
+      lines.push("");
+      lines.push(inset(`${theme.focus("›")} ${input}`));
+      lines.push(inset(theme.border((theme.capabilities.unicode ? "─" : "-").repeat(contentWidth))));
       return lines;
     }
+    this.questionInput.focused = false;
+    this.questionPinnedRows = 3;
     const options = [...(question.options ?? []), { id: "other", label: "其他" }];
     const answer = Array.isArray(question.answer) ? question.answer : [];
     const decorated = options.map((option, index) => {
-      const checked = question.kind === "multiChoice" && answer.includes(option.id) ? "✓ " : "";
-      const rank = question.kind === "ranking" && option.id !== "other" ? `${index + 1}. ` : "";
-      return { option, label: `${checked}${rank}${option.label}` };
+      const selected = index === this.state.selected;
+      const symbol =
+        question.kind === "multiChoice"
+          ? answer.includes(option.id)
+            ? theme.capabilities.unicode
+              ? "[✓]"
+              : "[x]"
+            : "[ ]"
+          : question.kind === "ranking"
+            ? option.id === "other"
+              ? theme.capabilities.unicode
+                ? "·"
+                : "+"
+              : `${index + 1}.`
+            : selected
+              ? theme.capabilities.unicode
+                ? "(●)"
+                : "(*)"
+              : "( )";
+      return { option, selected, label: `${symbol} ${option.label}` };
     });
-    const labelWidth = Math.min(24, Math.max(16, Math.floor(contentWidth * 0.32)));
-    // 对齐布局只在每个 label 与 description 都能完整单行容纳时启用；
-    // 任一项超长即切换流式块，绝不截断选项文本。
-    const compactFit =
-      contentWidth >= 56 &&
-      decorated.every(({ option, label }) => {
-        if (visibleWidth(label) > labelWidth) return false;
-        const description = "description" in option ? option.description : undefined;
-        if (description && visibleWidth(description) > contentWidth - labelWidth) return false;
-        return true;
-      });
-    if (compactFit) {
-      decorated.forEach(({ option, label }, index) => {
-        const selected = index === this.state.selected;
-        const description = "description" in option && option.description ? option.description : undefined;
-        if (description) {
-          lines.push(
-            inset(
-              selectedLine(`${padLine(label, labelWidth)}${theme.muted(description)}`, selected, contentWidth, theme),
-            ),
-          );
-        } else {
-          lines.push(inset(selectedLine(label, selected, contentWidth, theme)));
-        }
-      });
-    } else {
-      decorated.forEach(({ option, label }, index) => {
-        const selected = index === this.state.selected;
-        const description = "description" in option && option.description ? option.description : undefined;
-        for (const labelLine of wrapTextWithAnsi(label, Math.max(1, contentWidth - 2))) {
-          lines.push(inset(selectedLine(labelLine, selected, contentWidth, theme)));
+    const itemContentWidth = Math.max(1, contentWidth - 2);
+    const labelWidth = Math.min(24, Math.max(...decorated.map(({ label }) => visibleWidth(label))));
+    const inlineDescriptions = decorated.every(({ option }) => {
+      const description = "description" in option ? option.description : undefined;
+      return !description || labelWidth + 2 + visibleWidth(description) <= itemContentWidth;
+    });
+    const itemLine = (value: string, selected: boolean, continuation = false) => {
+      const marker = !continuation && selected ? theme.focus("› ") : "  ";
+      const content = padLine(`${marker}${value}`, contentWidth);
+      return selected ? theme.focus(theme.bold(content)) : content;
+    };
+    decorated.forEach(({ option, selected, label }) => {
+      const itemStart = lines.length;
+      const description = "description" in option && option.description ? option.description : undefined;
+      if (description && inlineDescriptions) {
+        lines.push(inset(itemLine(`${padLine(label, labelWidth + 2)}${theme.muted(description)}`, selected)));
+      } else {
+        const labelLines = wrapTextWithAnsi(label, itemContentWidth);
+        for (const [lineIndex, labelLine] of labelLines.entries()) {
+          lines.push(inset(itemLine(labelLine, selected, lineIndex > 0)));
         }
         if (description) {
-          for (const descriptionLine of wrapTextWithAnsi(description, Math.max(1, contentWidth - 4))) {
-            lines.push(inset(selectedLine(`  ${theme.muted(descriptionLine)}`, selected, contentWidth, theme)));
+          for (const descriptionLine of wrapTextWithAnsi(description, Math.max(1, itemContentWidth - 2))) {
+            lines.push(inset(itemLine(`  ${theme.muted(descriptionLine)}`, selected, true)));
           }
         }
-      });
-    }
-    lines.push(theme.muted(inset("  直接回答    跳过")));
+      }
+      if (selected) this.questionSelectionRange = [itemStart, lines.length - 1];
+    });
     return lines;
   }
 
