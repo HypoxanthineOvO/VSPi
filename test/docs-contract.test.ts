@@ -121,11 +121,14 @@ function expectSharedFacts(content: string, artifact: string): void {
   expect.soft(content, `${artifact}: no legacy pseudo-status`).not.toContain("Home · auto/safe · Web");
   expect.soft(content, `${artifact}: no legacy provider list`).not.toContain("Kimi / OpenAI / DeepSeek");
   expect
-    .soft(content, `${artifact}: splash committed before dynamic TUI`)
-    .toMatch(
-      /(?:最终帧.*(?:提交|写入).*scrollback.*动态 TUI|最终帧.*动态 TUI.*前.*(?:提交|写入).*scrollback|动态 TUI.*之?前.*(?:提交|写入).*scrollback)/i,
-    );
-  expect.soft(content, `${artifact}: later renders preserve splash`).toMatch(/不(?:会|被).*(?:擦除|清除|覆盖|刷掉)/);
+    .soft(content, `${artifact}: splash shares the physical waterfall`)
+    .toMatch(/Splash[^。\n]{0,160}(?:Transcript|Composer)[^。\n]{0,160}(?:同一|共享).*(?:坐标轴|瀑布|surface)/i);
+  expect
+    .soft(content, `${artifact}: natural terminal growth`)
+    .toMatch(/(?:触底|下边界)[^。\n]{0,100}(?:linefeed|推入|推).*scrollback/i);
+  expect
+    .soft(content, `${artifact}: no fixed Composer padding`)
+    .toMatch(/不(?:得|用)[^。\n]{0,100}(?:padding|固定).*Composer/i);
 
   for (const label of ["Model", "Effort", "Context", "Token", "Cost"]) {
     expect.soft(content, `${artifact}: status label ${label}`).toContain(label);

@@ -2,6 +2,7 @@ import { Key } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE, MODEL_GROUPS, MODELS, PROVIDERS } from "../src/domain/fixtures.js";
 import type { Question } from "../src/domain/types.js";
+import type { StoredGoal } from "../src/goals/types.js";
 import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
 import { PanelController } from "../src/ui/panels.js";
 import { cellsForText, plainTheme, sgrCells } from "./helpers.js";
@@ -48,6 +49,93 @@ function text(panel: PanelController, width = 80, rows = 14): string {
 }
 
 describe("panel controller", () => {
+  it.each([40, 80, 120])("renders Goal status without overflow at %i columns", (width) => {
+    const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
+    const goal: StoredGoal = {
+      id: "goal-panel",
+      revision: 7,
+      semanticHash: "a".repeat(64),
+      contract: {
+        objective: "整理完整小说，并让跨轮执行保持可恢复且不会在阶段总结后静默停止",
+        completionCriteria: ["完成全部章节"],
+      },
+      planId: "plan-novel",
+      limits: { maxAutoRounds: 24, maxNoProgressRounds: 3, maxTokens: 500_000 },
+      owner: { sessionId: "session-1", processId: "process-1", acquiredAt: "2026-07-31T00:00:00.000Z" },
+      initialTokens: 0,
+      state: "executing",
+      autoRounds: 6,
+      noProgressRounds: 0,
+      consumedTokens: 42_000,
+      markers: [
+        {
+          sequence: 2,
+          recordedAt: "2026-07-31T00:10:00.000Z",
+          currentItem: "第八章人物与事件索引",
+          completedWork: ["已整理第一章至第七章"],
+          evidence: ["index/chapter-01.md ... chapter-07.md"],
+          nextItem: "整理第八章",
+        },
+      ],
+      createdAt: "2026-07-31T00:00:00.000Z",
+      updatedAt: "2026-07-31T00:10:00.000Z",
+    };
+    panel.setGoalSnapshot(goal, "OpenAI / GPT-5");
+    panel.open("goal");
+    const lines = panel.render(width, 22, plainTheme(), DEFAULT_USAGE);
+    expect(lines.every((line) => visibleWidth(line) === width)).toBe(true);
+    const rendered = lines.map(stripAnsi).join("\n");
+    expect(rendered).toContain("执行中");
+    expect(rendered).toContain("6/24 rounds");
+    expect(rendered).toContain("OpenAI / GPT-5");
+  });
+
+  it.each([
+    [0, 20, 20],
+    [1, 20, 20],
+    [6, 20, 20],
+    [7, 20, 20],
+    [20, 20, 20],
+    [1, 5, 5],
+    [20, 7, 7],
+  ] as const)("sizes a %i-Session surface within %i rows to %i rows", (count, available, expected) => {
+    const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
+    panel.setSessions(
+      Array.from({ length: count }, (_, index) => ({
+        id: `session-${index}`,
+        label: `Session ${index}`,
+        relativeTime: "刚刚",
+        branchDepth: 0,
+      })),
+    );
+
+    expect(panel.sessionsSurfaceHeight(available)).toBe(expected);
+    expect(panel.renderSessionsSurface(80, expected, plainTheme())).toHaveLength(expected);
+  });
+
+  it("spaces Resume Session entities and scrolls by entity rows", () => {
+    const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
+    panel.setSessions(
+      Array.from({ length: 8 }, (_, index) => ({
+        id: `session-${index}`,
+        label: `Session ${index}`,
+        relativeTime: `${index} 分钟前`,
+        branchDepth: 0,
+      })),
+    );
+    panel.open("sessions");
+
+    const initial = panel.renderSessionsSurface(60, 7, plainTheme()).map(stripAnsi);
+    const first = initial.findIndex((line) => line.includes("Session 0"));
+    const second = initial.findIndex((line) => line.includes("Session 1"));
+    expect(second).toBe(first + 2);
+    expect(initial[first + 1]?.slice(1, -1).trim()).toBe("");
+
+    for (let index = 0; index < 7; index += 1) panel.handleInput(DOWN);
+    const scrolled = panel.renderSessionsSurface(60, 7, plainTheme()).map(stripAnsi).join("\n");
+    expect(scrolled).toContain("› Session 7");
+  });
+
   it("renders and filters the external history picker without overflowing", () => {
     const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
     panel.setExternalSessions([
@@ -409,6 +497,113 @@ describe("panel controller", () => {
 
     expect(rendered).toContain("这是一段会非常长的填空提示");
     expect(rendered).toContain("结尾标记");
+  });
+
+  it("groups Question metadata and prompt with space, then renders options as consecutive undecorated rows", () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    panel.openQuestions([
+      {
+        id: "spacing",
+        title: "Question spacing",
+        prompt: "Choose a readable option",
+        kind: "singleChoice",
+        options: [
+          { id: "first", label: "First option" },
+          { id: "second", label: "Second option" },
+        ],
+      },
+    ]);
+    const lines = panel.render(80, 22, plainTheme(), DEFAULT_USAGE).map(stripAnsi);
+    const blankBetween = (start: string, end: string) => {
+      const startRow = lines.findIndex((line) => line.includes(start));
+      const endRow = lines.findIndex((line) => line.includes(end));
+      expect(startRow).toBeGreaterThan(0);
+      expect(endRow).toBeGreaterThan(startRow);
+      expect(lines.slice(startRow + 1, endRow).some((line) => line.slice(1, -1).trim() === "")).toBe(true);
+    };
+
+    blankBetween("Question 1 / 1", "Question spacing");
+    blankBetween("Choose a readable option", "First option");
+    const first = lines.findIndex((line) => line.includes("First option"));
+    const second = lines.findIndex((line) => line.includes("Second option"));
+    const other = lines.findIndex((line) => line.includes("其他"));
+    expect(second).toBe(first + 1);
+    expect(other).toBe(second + 1);
+    expect(lines.find((line) => line.includes("Question spacing"))).toMatch(/^│\s{2,}/);
+    expect(lines.join("\n")).toContain("› (●) First option");
+    expect(lines.join("\n")).toContain("  ( ) Second option");
+    expect(lines.join("\n")).not.toContain("┃");
+    expect(lines.slice(first, other + 1).join("\n")).not.toMatch(/[┌┐└┘]|─{8,}/u);
+    expect(lines[other + 1]?.slice(1, -1).trim()).toBe("");
+    expect(lines[other + 2]).toContain("Enter 确认");
+  });
+
+  it("renders explicit multi-choice, ranking, and Question-local input affordances", () => {
+    const multi = new PanelController(DEFAULT_SETTINGS);
+    multi.openQuestions([
+      {
+        id: "multi",
+        title: "Signals",
+        prompt: "Choose signals",
+        kind: "multiChoice",
+        options: [
+          { id: "context", label: "Context" },
+          { id: "cost", label: "Cost" },
+        ],
+      },
+    ]);
+    expect(text(multi, 80, 22)).toContain("› [ ] Context");
+    multi.handleInput(SPACE);
+    expect(text(multi, 80, 22)).toContain("› [✓] Context");
+
+    const ranking = new PanelController(DEFAULT_SETTINGS);
+    ranking.openQuestions([
+      {
+        id: "ranking",
+        title: "Priority",
+        prompt: "Rank",
+        kind: "ranking",
+        options: [
+          { id: "model", label: "Model" },
+          { id: "provider", label: "Provider" },
+        ],
+      },
+    ]);
+    expect(text(ranking, 80, 22)).toContain("› 1. Model");
+    expect(text(ranking, 80, 22)).toContain("  2. Provider");
+
+    const freeText = new PanelController(DEFAULT_SETTINGS);
+    freeText.openQuestions([{ id: "note", title: "Note", prompt: "Add details", kind: "freeText" }]);
+    freeText.handleInput("A");
+    const input = freeText.render(80, 22, plainTheme({ colorLevel: 3, truecolor: true }), DEFAULT_USAGE);
+    expect(input.map(stripAnsi).join("\n")).toContain("› A");
+    expect(input.map(stripAnsi).join("\n")).not.toContain("┃");
+    expect(input.join("\n")).toContain("\u001b[7m");
+  });
+
+  it("keeps every wrapped row of the selected item visible when a long Question scrolls", () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    panel.openQuestions([
+      {
+        id: "boxed-scroll",
+        title: "Box scrolling",
+        prompt: "Choose the last entity",
+        kind: "singleChoice",
+        options: Array.from({ length: 8 }, (_, index) => ({
+          id: `option-${index}`,
+          label: `Option ${index}`,
+          ...(index === 7 ? { description: "Last selected description ".repeat(5) } : {}),
+        })),
+      },
+    ]);
+    for (let index = 0; index < 7; index += 1) panel.handleInput(DOWN);
+    const lines = panel.render(60, 18, plainTheme(), DEFAULT_USAGE).map(stripAnsi);
+    expect(lines.join("\n")).toContain("Box scrolling");
+    const selected = lines.findIndex((line) => line.includes("› (●) Option 7"));
+    expect(selected).toBeGreaterThan(0);
+    expect(lines.slice(selected + 1).join("\n")).toContain("Last selected description");
+    expect(lines.at(-2)?.slice(1, -1).trim()).toBe("");
+    expect(lines.at(-1)).toContain("Enter 确认");
   });
 
   it("does not treat content containing › as the selected row when scrolling", () => {

@@ -5,6 +5,7 @@ import type { AttachmentService } from "../src/attachments/service.js";
 import type { ChatBackend, ChatBackendEvents, SendOptions, SessionHandoffResponse } from "../src/backend/types.js";
 import { DEFAULT_SETTINGS } from "../src/domain/fixtures.js";
 import type { Attachment, ModelOption, Question, SessionOption, TranscriptMessage } from "../src/domain/types.js";
+import type { StoredGoal } from "../src/goals/types.js";
 import type { StoredPlan } from "../src/plans/types.js";
 import { createInteractiveApprovalBroker } from "../src/policy/startup-runtime.js";
 import { stripAnsi } from "../src/ui/ansi.js";
@@ -23,6 +24,7 @@ type TestableApp = {
   panelFocused: boolean;
   panels: PanelController;
   planSnapshot?: StoredPlan;
+  goalSnapshot?: StoredGoal;
   preview?: unknown;
   inspectIndex?: number;
   inspectNodeId?: string;
@@ -55,6 +57,24 @@ const PLAN: StoredPlan = {
   challenges: [],
   items: [{ id: "work", title: "Work item", status: "pending" }],
   blockers: [],
+};
+
+const GOAL: StoredGoal = {
+  id: "goal-1",
+  revision: 1,
+  semanticHash: "b".repeat(64),
+  contract: { objective: "Finish all work", completionCriteria: ["Everything requested is verified"] },
+  planId: PLAN.id,
+  limits: { maxAutoRounds: 24, maxNoProgressRounds: 3, maxTokens: 500_000 },
+  owner: { sessionId: "session-1", processId: "process-1", acquiredAt: "2026-07-31T00:00:00.000Z" },
+  initialTokens: 0,
+  state: "executing",
+  autoRounds: 0,
+  noProgressRounds: 0,
+  consumedTokens: 0,
+  markers: [],
+  createdAt: "2026-07-31T00:00:00.000Z",
+  updatedAt: "2026-07-31T00:00:00.000Z",
 };
 
 const ROUTE_QUESTIONS: Question[] = [
@@ -666,6 +686,58 @@ describe("command panel close", () => {
   });
 });
 
+describe("Goal command lifecycle", () => {
+  it("creates a Goal with explicit bounds and immediately starts the requested work", async () => {
+    const createGoal = vi.fn(async () => structuredClone(GOAL));
+    const send = vi.fn(async () => ({ status: "completed" as const }));
+    const app = await createApp(backendWith({}, { createGoal, send }));
+    const testable = app as unknown as TestableApp;
+    try {
+      await testable.submit("/goal --rounds 12 --no-progress=4 --tokens 90000 Finish all work");
+      expect(createGoal).toHaveBeenCalledWith("Finish all work", {
+        maxAutoRounds: 12,
+        maxNoProgressRounds: 4,
+        maxTokens: 90_000,
+      });
+      expect(send).toHaveBeenCalledWith(
+        "Finish all work",
+        expect.objectContaining({ behavior: "prompt", attachments: [] }),
+      );
+      expect(testable.goalSnapshot?.id).toBe(GOAL.id);
+      expect(testable.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: "session", text: expect.stringContaining("Goal 已开始") }),
+          expect.objectContaining({ role: "user", kind: "text", text: "Finish all work" }),
+        ]),
+      );
+    } finally {
+      await app.dispose();
+    }
+  });
+
+  it("opens status and resumes only after the explicit resume command", async () => {
+    const getGoal = vi.fn(async () => ({ ...structuredClone(GOAL), state: "paused" as const }));
+    const resumeGoal = vi.fn(async () => ({ ...structuredClone(GOAL), revision: 2 }));
+    const send = vi.fn(async () => ({ status: "completed" as const }));
+    const app = await createApp(backendWith({}, { getGoal, resumeGoal, send }));
+    const testable = app as unknown as TestableApp;
+    try {
+      await testable.submit("/goal status");
+      expect(testable.panels.kind).toBe("goal");
+      expect(send).not.toHaveBeenCalled();
+
+      await testable.submit("/goal resume");
+      expect(resumeGoal).toHaveBeenCalledOnce();
+      expect(send).toHaveBeenCalledWith(
+        expect.stringContaining("vspi_goal_resume"),
+        expect.objectContaining({ behavior: "prompt", attachments: [] }),
+      );
+    } finally {
+      await app.dispose();
+    }
+  });
+});
+
 describe("Plan router question", () => {
   it("hides the resident Plan surface until a plan exists or the user opens it explicitly", async () => {
     const app = await createApp(backendWith({}));
@@ -923,6 +995,39 @@ describe("session switch race guard", () => {
 });
 
 describe("interactive command completion", () => {
+  it("routes Policy changes through the backend so the active Session can persist them", async () => {
+    let policy: "Safe" | "Standard" | "Auto" | "YOLO" = "Standard";
+    const snapshot = () => ({
+      policy,
+      boundary: "Host" as const,
+      sandboxed: false as const,
+      recovery: false,
+      sessionAllowlist: [],
+    });
+    const switchPolicy = vi.fn(async (next: typeof policy) => {
+      policy = next;
+      return snapshot();
+    });
+    const setPolicy = vi.fn(async (next: typeof policy) => {
+      policy = next;
+      return snapshot();
+    });
+    const app = await createApp(backendWith({}, { setPolicy }), fakeAttachments(), {
+      executionPolicy: { snapshot, switchPolicy },
+    });
+    const testable = app as unknown as TestableApp;
+    try {
+      testable.panels.open("policy");
+      await testable.applyPanelEvent({ type: "policyChange", policy: "Auto", requiresAcknowledgement: false });
+
+      expect(setPolicy).toHaveBeenCalledWith("Auto");
+      expect(switchPolicy).not.toHaveBeenCalled();
+      expect(app.render(80).map(stripAnsi).join("\n")).toContain("Policy Auto");
+    } finally {
+      await app.dispose();
+    }
+  });
+
   it("closes Policy after a successful selection and keeps it open after a failure", async () => {
     const current = {
       policy: "Standard" as const,

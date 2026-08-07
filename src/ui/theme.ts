@@ -165,7 +165,8 @@ export function createTheme(capabilities: TerminalCapabilities, mode: AppSetting
   const warning = terminalMode ? chalk.yellow : color(palette.warning, 179);
   const error = terminalMode ? chalk.red : color(palette.error, 210);
   const border = terminalMode ? chalk.dim : color(palette.border, 240);
-  const selectionBg = terminalMode ? chalk.inverse : bg(palette.selectionBackground, 237);
+  // Terminal mode must remain readable on both dark and light terminal-owned backgrounds.
+  const selectionBg = terminalMode ? chalk.bold : bg(palette.selectionBackground, 237);
   const policyBadges = {
     Safe: (value: string) => bg(PALETTE.safeBadgeBackground, 22)(color(PALETTE.safeBadgeText, 120)(chalk.bold(value))),
     Standard: (value: string) =>

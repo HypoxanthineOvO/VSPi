@@ -1,0 +1,185 @@
+import { randomUUID } from "node:crypto";
+
+export const DEFAULT_AGENT_MAX_DEPTH = 3;
+export const DEFAULT_AGENT_MAX_PER_TREE = 12;
+export const DEFAULT_AGENT_MAX_CONCURRENCY = 16;
+export const DEFAULT_AGENT_MAX_CHILDREN = 3;
+
+interface TreeState {
+  created: number;
+  cancelled: boolean;
+  fingerprints: Set<string>;
+  children: Map<string, number>;
+}
+
+export interface AgentTreeContext {
+  treeId: string;
+  depth: number;
+  runId?: string;
+  parentRunId?: string;
+  lease?: AgentGenerationLease;
+}
+
+export class AgentGenerationLease {
+  private active = false;
+  private suspensionCount = 0;
+
+  constructor(private readonly semaphore: Semaphore) {}
+
+  async acquire(signal?: AbortSignal): Promise<void> {
+    if (this.active || this.suspensionCount > 0) return;
+    await this.semaphore.acquire(signal);
+    this.active = true;
+  }
+
+  suspend(): void {
+    this.suspensionCount += 1;
+    if (!this.active) return;
+    this.active = false;
+    this.semaphore.release();
+  }
+
+  async resume(signal?: AbortSignal): Promise<void> {
+    if (this.suspensionCount === 0) return;
+    this.suspensionCount -= 1;
+    if (this.suspensionCount === 0) await this.acquire(signal);
+  }
+
+  release(): void {
+    this.suspensionCount = 0;
+    if (!this.active) return;
+    this.active = false;
+    this.semaphore.release();
+  }
+}
+
+export class AgentTreeScheduler {
+  private readonly semaphore: Semaphore;
+  private readonly trees = new Map<string, TreeState>();
+  private writerTail: Promise<void> = Promise.resolve();
+
+  constructor(
+    readonly maxConcurrency = DEFAULT_AGENT_MAX_CONCURRENCY,
+    readonly maxDepth = DEFAULT_AGENT_MAX_DEPTH,
+    readonly maxAgentsPerTree = DEFAULT_AGENT_MAX_PER_TREE,
+  ) {
+    if (!Number.isSafeInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 128) {
+      throw new Error("Agent maxConcurrency must be an integer between 1 and 128");
+    }
+    this.semaphore = new Semaphore(maxConcurrency);
+  }
+
+  root(): AgentTreeContext {
+    const treeId = randomUUID();
+    this.trees.set(treeId, { created: 0, cancelled: false, fingerprints: new Set(), children: new Map() });
+    return { treeId, depth: 0 };
+  }
+
+  child(parent: AgentTreeContext, runId: string, fingerprint?: string): AgentTreeContext {
+    const tree = this.requireTree(parent.treeId);
+    if (tree.cancelled) throw abortError("Agent tree was cancelled");
+    const depth = parent.depth + 1;
+    if (depth > this.maxDepth) throw new Error(`Agent depth limit exceeded (${this.maxDepth})`);
+    const parentKey = parent.runId ?? "root";
+    const childCount = (tree.children.get(parentKey) ?? 0) + 1;
+    if (childCount > DEFAULT_AGENT_MAX_CHILDREN) {
+      throw new Error(`Agent child limit exceeded (${DEFAULT_AGENT_MAX_CHILDREN})`);
+    }
+    if (fingerprint && tree.fingerprints.has(fingerprint)) throw new Error("Duplicate agent task in the same tree");
+    tree.created += 1;
+    if (tree.created > this.maxAgentsPerTree) {
+      tree.created -= 1;
+      throw new Error(`Agent tree size limit exceeded (${this.maxAgentsPerTree})`);
+    }
+    tree.children.set(parentKey, childCount);
+    if (fingerprint) tree.fingerprints.add(fingerprint);
+    return {
+      treeId: parent.treeId,
+      depth,
+      runId,
+      ...(parent.runId ? { parentRunId: parent.runId } : {}),
+    };
+  }
+
+  createLease(): AgentGenerationLease {
+    return new AgentGenerationLease(this.semaphore);
+  }
+
+  async withWriter<T>(writeAccess: boolean, operation: () => Promise<T>): Promise<T> {
+    if (!writeAccess) return operation();
+    const previous = this.writerTail;
+    let release!: () => void;
+    this.writerTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  cancelTree(treeId: string): void {
+    const tree = this.trees.get(treeId);
+    if (tree) tree.cancelled = true;
+  }
+
+  finishTree(treeId: string): void {
+    this.trees.delete(treeId);
+  }
+
+  private requireTree(treeId: string): TreeState {
+    const tree = this.trees.get(treeId);
+    if (!tree) throw new Error("Agent tree is no longer active");
+    return tree;
+  }
+}
+
+class Semaphore {
+  private active = 0;
+  private readonly waiters: Array<{
+    resolve: () => void;
+    reject: (error: Error) => void;
+    signal?: AbortSignal;
+    abort?: () => void;
+  }> = [];
+
+  constructor(private readonly limit: number) {}
+
+  acquire(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return Promise.reject(abortError("Agent start was cancelled"));
+    if (this.active < this.limit) {
+      this.active += 1;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve, reject) => {
+      const waiter: (typeof this.waiters)[number] = { resolve, reject, ...(signal ? { signal } : {}) };
+      if (signal) {
+        waiter.abort = () => {
+          const index = this.waiters.indexOf(waiter);
+          if (index >= 0) this.waiters.splice(index, 1);
+          reject(abortError("Agent start was cancelled"));
+        };
+        signal.addEventListener("abort", waiter.abort, { once: true });
+      }
+      this.waiters.push(waiter);
+    });
+  }
+
+  release(): void {
+    const next = this.waiters.shift();
+    if (!next) {
+      this.active = Math.max(0, this.active - 1);
+      return;
+    }
+    if (next.signal && next.abort) next.signal.removeEventListener("abort", next.abort);
+    next.resolve();
+  }
+}
+
+function abortError(message: string): Error {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}

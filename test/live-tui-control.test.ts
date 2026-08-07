@@ -136,8 +136,8 @@ describe("real TUI live run control", () => {
       expect(newSession).not.toHaveBeenCalled();
       expect(onExit).not.toHaveBeenCalled();
       expect(terminal.stopCount).toBe(0);
-      expect(stripAnsi(terminal.staticCommits.flat().join("\n"))).toContain("PRIMARY");
-      expect(stripAnsi(app.render(80).join("\n"))).not.toContain("PRIMARY");
+      expect(stripAnsi(terminal.staticCommits.flat().join("\n"))).not.toContain("PRIMARY");
+      expect(stripAnsi(app.render(80).join("\n"))).toContain("PRIMARY");
 
       terminal.emit("\x1b[Z");
       expect(testable.workspaceFocus).toBe("transcript");

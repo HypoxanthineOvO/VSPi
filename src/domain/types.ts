@@ -66,9 +66,21 @@ export interface SubAgentMessage {
   role: "assistant";
   kind: "subagent";
   model: string;
+  agentRole?: "orchestrator" | "researcher" | "analyst" | "worker";
+  modelReason?: string;
+  preferredModel?: string;
   effort: EffortLevel;
+  contextMode?: "isolated" | "inherited" | "lane";
   task: string;
-  status: "queued" | "running" | "success" | "error";
+  tools?: string[];
+  outputPreview?: string;
+  sessionFile?: string;
+  status: "queued" | "running" | "success" | "error" | "cancelled";
+  agentKind?: "task" | "teammate";
+  teammateId?: string;
+  lane?: string;
+  depth?: number;
+  fallbackReason?: string;
 }
 
 export interface SessionMarkerMessage {

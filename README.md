@@ -86,9 +86,9 @@ VSPi 沿用 Pi 的模型、Provider、凭据和 session 目录，不另建 Secre
 
 ## 启动与默认界面
 
-启动序列会先立即写出一行 VSPi 初始品牌占位，它不含 Logo、运行状态或模型声明；应用初始化完成后清除该行并一次性提交保留现有六行块字符 Logo 的完整最终状态帧，不播放多段进度动画。静态提交临界区暂时禁用 autowrap，因此边框按真实终端列宽渲染，不需要错误地预留最右一列。最终帧使用初始化后解析得到的真实 Model、`package.json` 解析出的包版本、真实 Backend 与执行 Policy。真实 pi 显示 `Backend Pi`，显式离线后端显示 `Backend Fixture`；执行边界统一显示 `Policy … · Host`，Policy 只控制审批强度，Backend 与 Policy 是两项独立元数据。
+启动序列会先立即写出一行 VSPi 初始品牌占位，它不含 Logo、运行状态或模型声明；最终帧等待应用初始化完成。应用只清理一次当前 viewport，并把保留现有六行块字符 Logo 的最终状态帧作为统一 TUI 瀑布的第一个内容块，不播放多段进度动画，也不制造一整屏换行。最终帧使用初始化后解析得到的真实 Model、`package.json` 解析出的包版本、真实 Backend 与执行 Policy。真实 pi 显示 `Backend Pi`，显式离线后端显示 `Backend Fixture`；执行边界统一显示 `Policy … · Host`，Policy 只控制审批强度，Backend 与 Policy 是两项独立元数据。
 
-完整 Logo 的最终帧会通过 static commit 提交并推进终端原生 `scrollback`，之后才启动动态 TUI；终端包装器过滤 pi-tui 强制 redraw 中的 `CSI 3J`，但保留 viewport clear，因此 resize、输入和 full redraw 都不会删除已提交静态内容。Splash 每个进程只提交一次；`/new` 和 alias `/clear` 不停止或重启 TUI，也不重播 Splash，只重置动态 Session 区域。启用 reduced motion 时不播放形状动画，但遵守相同的初始化屏障与静态提交顺序。
+Splash、Transcript、面板、Composer 与 Status 由同一个物理 surface 按顺序渲染：高终端从顶部自然向下增长，不用顶部 padding 把 Composer 固定到底部；只有内容真正触及终端下边界后，新增行才把旧内容逐行推入原生 `scrollback`。终端包装器过滤普通 pi-tui redraw 中的 `CSI 3J`；已经越过 viewport 的稳定前缀只做坐标 rebase，不清屏、不回 Home、不重复写入。Splash 每个进程只出现一次；`/new` 和 alias `/clear` 不停止或重启 TUI，也不重播 Splash，只重置 Session 内容。启用 reduced motion 时不播放形状动画，但遵守相同的初始化屏障和瀑布顺序。
 
 默认的新工作区动态界面为空，不加载或预置对话、工具消息、演示计划、usage 或 session；文档中的对话和工具消息一律标为“交互示例”，不是启动内容。空 Plan 只保留安静的标题与留白，不展示 Workflow 缺失、未初始化或“当前计划为空”之类的提示；离线后端明确标识为 `Offline Fixture`。`80` 列状态固定为两行，并且每行可见宽度严格为 80 列：
 
@@ -117,8 +117,8 @@ Status 的短模型样例左右锚是：80 列第一行 `Model 0 / Effort 24 / C
 
 ```text
 /new       /sessions   /import     /skills     /compact    /model       /providers   /login
-/logout    /update     /plan       /prompt     /thinking    /effort      /tools
-/policy    /usage      /settings   /theme      /quit
+/logout    /update     /plan       /goal       /prompt      /thinking    /effort      /agents
+/tools     /policy     /usage      /settings   /theme       /quit
 ```
 
 `/compact` 在未绑定 Local Plan 时默认使用 Pi Native，绑定 Plan 时默认使用 Execution Continuity。
@@ -132,13 +132,17 @@ Status 的短模型样例左右锚是：80 列第一行 `Model 0 / Effort 24 / C
 
 Command 工作区在 40 列把每个命令排成身份行与详情/source 行，滚动时两行保持成组；80 列和 120 列使用稳定的“身份 / 描述 / source”三列。三档 Command 与 Status 都按终端可见列宽计算，不使用特殊全角填充。
 
-`/plan`、`/prompt`、`/tools` 与 `/policy` 都已接入真实生产工作区。普通模式使用按 workspace 隔离的 VSPi Local Plan；没有活动计划时不渲染常驻 Plan frame，也不会让 Shift+Tab 落入空区域，显式 `/plan` 仍可临时打开入口。只有显式启用 Workflow 后才投影其 Delivery。Prompt Profile 使用分层规则、Factory/Fork 与每轮 overlay；Tools 公开当前能力、路由和失败边界。
+`/plan`、`/goal`、`/prompt`、`/agents`、`/tools` 与 `/policy` 都已接入真实生产工作区。普通模式使用按 workspace 隔离的 VSPi Local Plan；没有活动计划时不渲染常驻 Plan frame，也不会让 Shift+Tab 落入空区域，显式 `/plan` 仍可临时打开入口。只有显式启用 Workflow 后才投影其 Delivery。Prompt Profile 使用分层规则、Factory/Fork 与每轮 overlay；Agents 显示 Task Agent、Teammate、lane、当前模型与 fallback 状态；Tools 公开当前能力、路由和失败边界。
+
+`/goal <request>` 创建一个绑定当前 Session 的持久 Goal，并立即开始执行。可在 request 前设置 `--rounds N`、`--no-progress N` 和 `--tokens N`；默认分别为 24、3 和 500000。`/goal` 或 `/goal status` 打开状态面板，`/goal pause|resume|cancel|accept` 执行明确的用户状态转换。Goal Contract 保存完整原始 request 和完成约束，模型只能通过 `goal_checkpoint` 记录进度、通过 `goal_block` 声明真实阻塞、通过 `goal_complete` 携证据进入待验收；模型没有修改 Contract 或自行 accept 的工具。
+
+执行中的 Goal 在普通 assistant final 后使用 Pi 原生 Follow-up 继续，不递归调用 VSPi send。阶段总结、Local Plan 更新和 marker 都不是完成条件。达到轮次、token 或连续无进展边界时分别进入暂停或 stalled，不伪造完成；结构化阻塞、用户暂停/取消、Session 中断、进程退出、owner 丢失和待验收都会停止自动生成。重启、fork 或 handoff 后只恢复落盘状态，不自动重新发起模型请求，必须显式 `/goal resume` 获取当前 Session 的唯一 execution owner。Goal 与 Local Plan 均按 workspace 隔离，Recovery 和只读 Workflow 模式不启用 Goal runtime。
 
 `/update` 与 CLI 的 `vspi update` 使用同一条自更新链路：从 VSPi 公共 GitLab Release 查询最新稳定 SemVer，要求固定项目、tag、tarball 名称与下载地址完全一致，下载后按 Release 中的 SHA-256 校验。自更新会识别当前命令由 Volta 还是 npm 管理，更新同一安装位置并复验当前包版本；不会再把另一份全局安装成功误报为当前命令已更新。已经是最新版时不会重复安装；更新成功后重启 VSPi 生效。
 
-用户消息使用焦点色竖标和至少三行的全宽表面，短消息也保留上下留白，不绘制额外 frame。`VSPi Dark` 使用 `#202428`/`#F4F7FA`，Light 使用对应浅色表面，默认 Terminal 不强加前景或背景。40/80/120 列下硬换行、长单词和附件摘要都保持宽度安全；Transcript Inspect 只改变选择态，不改变消息尺寸。
+用户消息使用焦点色竖标和至少三行的全宽表面，短消息也保留上下留白，不绘制额外 frame。`VSPi Dark` 使用 `#202428`/`#F4F7FA`，Light 使用对应浅色表面，默认 Terminal 不强加前景或背景。40 列、80 列和 120 列下硬换行、长单词和附件摘要都保持宽度安全；Transcript Inspect 只改变选择态，不改变消息尺寸。
 
-Transcript 使用 static/live split：Splash、启动时恢复的历史和每次完成的稳定 turn 提交到原生 scrollback；Working、流式尾部、queued 消息和 Composer 保持动态。Composer 普通态只渲染尚未提交的 live tail，避免与静态历史重复；进入 Inspect 时仍读取完整内存 Session。终端 `PageUp` 可从 Composer 直接进入历史，`PageUp/PageDown` 每次至少跨五个节点或一个当前可视批次，到边界时自动加载相邻历史；不显示无法交互的“已折叠 N 条”占位。普通终端滚轮可连续查看原生 scrollback；完整 Session JSONL 不因 UI 窗口或模型 compaction 删除。逐消息/工具组缓存继续用于 live 渲染，运行中的 Tool 组实时展示，完成后是否收束由 Settings 控制。
+普通 Transcript 使用最多三个当前终端高度的活动瀑布窗口；Splash、稳定内容、Working、流式尾部、queued 消息、Composer 和 Status 共享一条连续坐标轴。稳定前缀完全越过 viewport 后，TUI 只缩减自己的相对坐标，不清除或重写终端中的旧行。进入 Inspect 时改用单屏窗口，保证选中节点始终在当前 viewport；完整 Session 仍是权威历史。终端 `PageUp` 可从 Composer 直接进入历史，`PageUp/PageDown` 每次至少跨五个节点或一个当前可视批次，到边界时自动加载相邻历史；不显示无法交互的“已折叠 N 条”占位。普通终端滚轮可连续查看原生 scrollback；完整 Session JSONL 不因 UI 窗口或模型 compaction 删除。逐消息/工具组缓存继续用于 live 渲染，运行中的 Tool 组实时展示，完成后是否收束由 Settings 控制。
 
 - `Enter` 空闲时提交；工作中作为 Steer 插入，在当前工具批次结束后、下一次模型调用前送达。
 - `Shift+Enter` 或 `Ctrl+J` 换行。
@@ -151,7 +155,7 @@ Agent 从首次提交到真正 idle 期间显示所选 Working 样式：`1` 为�
 
 Question、Approval、Inspect、Preview 与普通面板打开时，Esc 先关闭当前交互层；回到主 composer 后再次按 Esc 才中断运行。保存结果和短时状态临时替换固定 contextual hint 行，约 3.5 秒后恢复；不创建 overlay、不改变布局高度，也不抢占 composer 焦点。
 
-Model、Provider、Sessions、Settings、Usage、Theme 和 Question 共用底部工作区，不叠加多层弹窗。VSPi 自有 `question` 通过 Pi ToolDefinition 接口注册，支持单选、多选、排序和填空；模型发起调用后会等待用户在动态 Question 工作区完成最终检查。`Left/Right` 切题，`Up/Down` 选择，`Ctrl/Alt+Up/Down` 调整排序，`Tab` 直接回答，`Shift+S` 跳过，`Enter` 确认或提交。取消、Session replacement 与应用退出都会以 `AbortError` 终止 pending Question，不把 prompt、选项说明、路径或 secret 样式文本写回 tool result。
+Model、Provider、Sessions、Settings、Usage、Theme 和 Question 共用底部工作区，不叠加多层弹窗。VSPi 自有 `question` 通过 Pi ToolDefinition 接口注册，支持单选、多选、排序和填空；模型发起调用后会等待用户在动态 Question 工作区完成最终检查。Question footer/contextual hint 与主 Composer 之间固定保留一行 interaction gutter；等待回答时不伪造 Working 动画，也不靠固定底部布局制造间距。`Left/Right` 切题，`Up/Down` 选择，`Ctrl/Alt+Up/Down` 调整排序，`Tab` 直接回答，`Shift+S` 跳过，`Enter` 确认或提交。取消、Session replacement 与应用退出都会以 `AbortError` 终止 pending Question，不把 prompt、选项说明、路径或 secret 样式文本写回 tool result。
 
 同一台服务器上的每个 Pi Session 只允许一个执行 owner 和一个可交互前台。Sessions 面板把其他进程持有的会话标为“使用中”，选择后可迁移前台、从最后一个完整回复创建分支或取消。普通接管不会 abort 旧任务：新 TUI 立即成为唯一交互前台，以正常主界面接收旧 runtime 的完整快照和实时输出；旧 TUI 显示“已在另一终端继续”后停止读取输入，但旧进程暂时保留不可序列化的 Pi runtime，直到当前 generation、工具或压缩结束。新前台在此期间发送的普通消息通过 `0600` Unix control socket 存入旧 owner 的等待队列，不会进入当前 generation；安全点到达后按顺序执行。新前台按 Esc 才会通过同一控制通道明确中断旧 runtime，随后继续处理已接受的等待消息。
 
@@ -164,6 +168,53 @@ pending 或随后出现的 Question/Approval 会迁移到新前台，回答仍�
 导入是一次 Enter 完成的结构化快照复制，不会修改或接管源文件，也不进入 Question 的“提交答案”复核。VSPi 按读取开始时的文件字节边界解析已完整写入的 JSONL 记录，把用户消息、助手 Thinking 与最终回答转换为原生可见 Session 历史；工具调用和工具输出完全丢弃，不展示、不进入模型上下文。新 Session 保留导入时正在使用的 VSPi 模型与 Effort；模型上下文优先使用 Codex 最近的 compaction checkpoint 及其后正文，否则按当前模型窗口截取最近可见正文，完整可见历史仍可在 Transcript 中查看。system/developer prompt、权限状态与内部控制记录不会进入导入结果；API Key、Bearer Token、password 等常见凭据在落盘前脱敏。读取后若源会话的可见内容已经变化，导入会拒绝本次快照并要求重试；旧版 30 MB reference blob 会在 Provider context 边界被兼容过滤。
 
 确认框显示对话数、工具记录数和 token 估算。估算量超过当前模型窗口 80% 时会警告，但不会静默截断；首次继续对话时可能由 Pi 触发压缩。导入成功后会创建并切换到新的原生 VSPi Session，源会话始终保持不变。
+
+## Subagent 与 Teammate
+
+普通 Pi runtime 注册原生 `subagent` 工具。每次调用必须提供一个 `task`；并行委派通过同一轮发出多个 `subagent` 调用完成。Task Agent 使用保存在 Pi agent directory 下的独立 Session，默认只收到 `task` 和显式 `context`，不会复制父对话；只有调用参数明确设置 `inherit_parent_context: true` 才传递经过凭据、授权字段、图片数据和大块编码内容过滤的父上下文。`instructions` 追加角色约束，`system_prompt` 替换子会话基础提示词；主代理可从当前真实模型目录显式选择 `model`，递归子代理只能选择 `orchestrator/researcher/analyst/worker` 角色，由当前 Provider 的 Agent Pool 映射实际模型。未配置项目 Teammate 时，工具 schema 不暴露 `teammate` 或 `lane`。
+
+递归默认开启，但子代理不接收任意模型字符串：GPT Pool 自动把协调、研究、分析和快速任务映射到 Sol/Luna/Terra；DeepSeek Pro/Flash 与 Kimi K3/K2.6 这类双层目录会让多个强角色复用 Pro/K3，并把 `worker` 映射到 Flash/K2.6。默认最大深度 3、每棵树 12 个 Agent、每个节点 3 个直接子节点；同一父轮的并行调用共享树预算，重复任务指纹和 `No-op` 探测会被拒绝。全局同时生成数默认 16，可在受信项目配置中改为 1-128。共享 workspace 采用单写者工具边界：读取可以并行，`edit/write/bash` 的实际执行串行。
+
+`/agents` 打开 Agent Map；`Up/Down` 选择节点，`Left/Right` 在父子节点间移动，`Enter` 进入节点 Transcript，`Tab` 切换 `Map / Transcript / Tools / Pools`，`Esc` 先返回 Map、再关闭。主 Transcript 中每个 Subagent 使用独立状态框，展示角色、实际模型、任务、状态和流式预览。Pool 自动从真实模型目录生成；可信项目可执行 `/agents pool <provider> <role> <provider/model>` 覆盖一个角色，同 Provider 是默认边界，跨 Provider 必须在项目配置中显式开启。
+
+Teammate 是受信项目内的持久角色，定义位于 `<workspace>/.vspi/agents.json`。角色身份、提示词、工具、routing 与 preferred model 持久；每个 `lane` 使用 `<workspace>/.vspi/agent-sessions/<teammate>/<lane>` 下的独立 Pi Session 历史。VSPi 只暴露能力、当前状态、用户策略和系统边界，不注入 Research/Plan/Implement/Audit 一类工作流教程。`required` routing 会在匹配项尚未成功运行时阻止主代理写入和结束本轮；`preferred`、`consult` 和 `manual` 作为真实路由状态提供给模型。用户明确要求使用 Subagent 时，在子代理成功前主代理同样不能执行 mutation 或完成本轮。
+
+```json
+{
+  "version": 1,
+  "maxConcurrency": 16,
+  "allowedModels": ["*"],
+  "crossProviderDelegation": false,
+  "modelPools": {
+    "vsplab": {
+      "roles": {
+        "orchestrator": "vsplab/gpt-5.6-sol",
+        "researcher": "vsplab/gpt-5.6-luna",
+        "analyst": "vsplab/gpt-5.6-terra",
+        "worker": "vsplab/gpt-5.6-terra"
+      }
+    }
+  },
+  "teammates": [
+    {
+      "id": "frontend",
+      "role": "Frontend",
+      "description": "Own frontend planning and implementation",
+      "routing": "required",
+      "match": ["frontend", "前端"],
+      "systemPrompt": "You own the frontend role for this project.",
+      "tools": ["read", "ls", "find", "grep", "bash", "edit", "write"],
+      "preferredModel": "kimi/k2",
+      "effort": "high",
+      "fallbackModels": ["openai/gpt-5"]
+    }
+  ]
+}
+```
+
+项目配置只有在 `--trust-project` 下读取；损坏 JSON、额外字段、symlink scope、非法模型或工具都会 fail closed。子代理文件工具拒绝 workspace 外路径和 symlink escape；Bash 在 Linux `bubblewrap` 中运行，使用空 HOME、清理后的环境和 workspace 单独可写挂载，缺少 `bwrap` 时 fail closed。Recovery 完全不注册 `subagent`。子代理不能创建、删除、重置 Teammate，也不能修改其模型或 lane。
+
+只有确认是额度耗尽的错误才会尝试 `fallbackModels`；普通 429、网络、认证或一般模型错误不会触发 fallback。Teammate fallback 会把 `currentModel` 与原因原子写回配置并保持 sticky，不探测首选模型、不自动恢复。主模型会收到结构化 tool result 和 warning notice，Transcript 与 `/agents` 同时显示角色、实际模型、选择原因、Effort、lane、任务和 fallback。用户可显式执行 `/agents model <teammate> <provider/model>`、`/agents reset <teammate> [lane]` 或 `/agents pool <provider> <role> <provider/model>`；这些项目配置写入都要求 `--trust-project`。
 
 ## Skill 管理
 
@@ -209,7 +260,7 @@ npm run dev -- --recovery
 
 审批器提供“允许本次”“本会话允许同类”“提升到最低充分档位并执行”“拒绝”“拒绝并说明”五项决定；例如 Safe 的工作区写入提升到 Standard、Standard 的 SSH 提升到 YOLO、Standard 的删除直接提升到 Auto。本会话规则和提升等级只驻留内存。审批 Panel 在内容四周保留稳定 gutter，选项使用额外缩进；当前 Policy 在类别上方以固定 8 列的背景标签显示，Safe、Standard、YOLO 与 Auto 在其中居中，并分别使用绿、黄、橙、红的低亮度语义色。文字始终保留，因此无色终端和色觉差异不会丢失语义。首轮只做粗粒度分类，不承诺识别 Bash 中所有隐藏写操作；后续可以把同一结构化接口交给独立小模型。审计日志不记录环境值，并脱敏 token、secret、password、credential 与 API key 类值。Workflow authority gate 仍保持独立。
 
-生产 Pi Session 启用原生 `read/ls/find/grep/bash/edit/write` ToolDefinition。VSPi 包装器只在原生 `execute()` 前请求审批，批准后完整委托回 Pi，因此保留图片读取、流式输出、秒制 timeout、AbortSignal、输出截断和编辑 diff。结构化 `question` 继续使用 VSPi 自有 schema 与 Panel，只借用 Pi ToolDefinition 接口。普通模式额外注册 `plan_list/read/create/update/archive/bind`：所有写入使用 workspace-scoped revision store，`plan_update` 与 `plan_archive` 必须携带 expected revision；更新和归档使用独立 ToolDefinition，避免可选归档标志被 Provider schema 误判为必填后触发破坏性操作。Session binding 使用 Pi custom entry；显式 Workflow 模式完全不注册这些 Local Plan mutation，避免双权威。
+生产 Pi Session 启用原生 `read/ls/find/grep/bash/edit/write` ToolDefinition。VSPi 包装器只在原生 `execute()` 前请求审批，批准后完整委托回 Pi，因此保留图片读取、流式输出、秒制 timeout、AbortSignal、输出截断和编辑 diff。结构化 `question` 继续使用 VSPi 自有 schema 与 Panel，只借用 Pi ToolDefinition 接口。普通模式额外注册 `plan_list/read/create/update/archive/bind`；绑定 Goal 时还提供 `goal_status/checkpoint/block/complete`。所有写入使用 workspace-scoped revision store 和 expected revision；Session binding 使用 Pi custom entry。显式 Workflow 模式完全不注册这些 Local Plan 与 Goal mutation，避免双权威。
 
 每轮 `before_agent_start` 都会先要求 Agent 对照最新用户指令检查计划范围、优先级、依赖、阻塞和下一步。无活动 Local Plan 时，只有明显的多步骤、跨多轮或长期任务才应创建并绑定计划；简单问答不建计划。有活动计划时，Agent 在实质进展、阻塞、焦点变化和结束回复前使用结构化工具更新状态。最新指令揭示遗漏或未修 bug 时，即使 Plan 已全为 done，也必须重开或增加修复项；`plan_update` 和 done 只记录进度，不能终止尚未完成的实现与验证。连续性 hooks 还会在四次有效对话、六次工作事件、resume、compaction、重复失败和完成声明时提高复核强度；成功的 Plan mutation 会刷新面板并开启新的复核窗口。当前 generation 内每次成功的 threshold 自动压缩都会注入隐藏 continuation，立即继续同一原任务；overflow 已由 Pi retry、手动压缩、失败或取消时不重复续跑。完成声明与开放 Plan 不一致时仍只记录一次性 checkpoint，供下一次真实用户请求核对，不向普通队列发送独立的 Plan 对账任务。显式 Workflow 模式执行相同检查，但更新只能通过 Hypo-Workflow skill/command 完成。
 
@@ -298,10 +349,11 @@ pi 返回的模型价格和 usage 以 USD 为基础。VSPi 内部换算人民币
 
 ## 开发验证
 
+日常修改先运行最小的定向测试；只有验证 `dist`、本地 `vspi`、打包内容或到达最终检查点时才构建。`npm test` 已通过 `pretest` 自动构建，不需要提前重复执行 `npm run build`。完整的分层验证、PTY 用法和现场定位方法见 [Docs/testing-and-debugging.md](Docs/testing-and-debugging.md)。
+
 ```bash
 npm run check
 npm test
-npm run build
 npm run smoke
 npm audit
 ```

@@ -32,9 +32,9 @@ Plan 背景       #182529
 
 ## 启动封面
 
-封面使用多行圆角框、`◈` 品牌符号和现有六行块字符 Logo。初始化期间只显示一行品牌占位，不含 Logo、运行状态或模型声明；应用初始化完成后清除该行并一次性提交最终状态帧，不播放中间动画，也不使用无法跨越 scrollback 的多行光标回退。占位行与最终帧都预留终端最右一列，避免 right-margin autowrap 造成额外物理行；reduced-motion、CI 与 dumb terminal 使用同一初始化屏障。
+封面使用多行圆角框、`◈` 品牌符号和现有六行块字符 Logo。初始化期间只显示一行品牌占位，不含 Logo、运行状态或模型声明；应用初始化完成后只清理一次当前 viewport，并把最终状态帧交给统一 TUI 瀑布作为第一个内容块，不播放中间动画、不制造整屏换行，也不使用多行光标回退。reduced-motion、CI 与 dumb terminal 使用同一初始化屏障。
 
-最终帧等待应用初始化完成，使用初始化后解析得到的真实 Model，并显示从 `package.json` 读取的包版本、Backend 与独立的执行 Policy。真实后端显示 `Backend Pi`，显式离线后端显示 `Backend Fixture`；Policy 统一表达为 `Policy … · Host`，仅表示审批等级和宿主执行。启动、`/new` 和 alias `/clear` 都必须先把完整最终帧提交并写入终端 `scrollback`，之后才启动新的动态 TUI；后续刷新和差分渲染只拥有其下方的动态区域，不会擦除、清空或覆盖这个最终帧。
+最终帧等待应用初始化完成，使用初始化后解析得到的真实 Model，并显示从 `package.json` 读取的包版本、Backend 与独立的执行 Policy。真实后端显示 `Backend Pi`，显式离线后端显示 `Backend Fixture`；Policy 统一表达为 `Policy … · Host`，仅表示审批等级和宿主执行。Splash、Transcript、面板、Composer 与 Status 共享同一物理坐标轴：内容不足一屏时从顶部自然向下增长，触底后才通过 linefeed 推入终端 `scrollback`。普通差分渲染不得通过 `CSI 3J`、整屏空行或顶部 padding 提前隐藏 Splash、固定 Composer 或清除旧内容。
 
 ```text
 ╭──────────────────────────────────────────────────────────────────────────────╮
@@ -71,7 +71,7 @@ Model OpenAI / GPT-5.4  Effort High                     Context 50K / 128K 39% 
 
 自更新由 `/update` 与 `vspi update` 共同提供；只接受 VSPi 公共 GitLab 项目的稳定 SemVer Release，并在 npm 全局安装前校验固定资产地址和 SHA-256。
 
-主界面末端的顺序固定为 Plan bottom → contextual hint → 运行时 Working 活动带（仅 active 时）→ composer → 两行 status。hint 位于面板框外；Working 是独立的全宽状态层，不挤入 Effort 或其他 telemetry 字段，也不会抢 composer 焦点。
+主界面末端的顺序固定为 Plan bottom → contextual hint → 运行时 Working 活动带（仅 active 时）→ composer → 两行 status。hint 位于面板框外；Working 是独立的全宽状态层，不挤入 Effort 或其他 telemetry 字段，也不会抢 composer 焦点。普通 Composer 模式最多保留三个终端高度的活动瀑布，完全越过 viewport 的稳定前缀通过坐标 rebase 退出活动布局；Inspect 使用单屏窗口，保证当前选择可见。
 
 ## M1 Context 与 Usage
 
@@ -156,7 +156,7 @@ v0.3.11 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自�
 
 ```
 
-回答只用弱化的 `•` 标记开始。Transcript 按后端事件只追加：工具前文本、Tool、Tool result 与工具后回答各有唯一节点，相同 `contentIndex` 不得复用节点 ID。完整 Session 历史不删除，主聊天只投影最多 80 个内容块、60K 字符和约 6 屏的最近后缀；旧块用顶部弱提示计数，逐消息/工具组缓存避免 Working 帧重复解析整段 Markdown，Inspect 使用同一窗口。`thinkingDisplay` 提供隐藏、折叠、展开三态：隐藏只收起正文，活跃时显示“思考中”，完成后仍保留最简思考记录；折叠保留 Effort/耗时标题并显示最后一段关键内容；展开显示完整正文。可选 `thinkingTranslationEndpoint` 只在 Thinking 完成后串行调用 HTTP(S) 翻译服务，原文继续保留在 Session，译文替换可见投影；pending/success/error 都在标题中有弱状态。Inspect 始终使用稳定 message id，并可查看当前单条 thinking/tool 详情。同一批 Tool 使用一个 `工具调用` 组头；每项把状态符号、固定宽度名称列和弱化动作摘要放在一行，摘要从同一列开始，运行/失败文字位于摘要末尾；中间项使用 `├─`，末项使用 `└─`。只要组内存在 queued/running 项，就实时展示完整树；全部进入 success/error/cancelled 后，`collapseTools=true` 将其收束为包含总数和失败/取消计数的一行摘要。Settings 的“完成后收起工具”默认开启，关闭后完整树持续显示；Inspect/Enter 临时恢复完整顺序，edit 输出继续使用行号、增删色与窄屏换行。Markdown 标题使用内容蓝色前景和字重，不增加背景块。Sub Agent 只展示模型、effort、任务和状态。
+回答只用弱化的 `•` 标记开始。Transcript 按后端事件只追加：工具前文本、Tool、Tool result 与工具后回答各有唯一节点，相同 `contentIndex` 不得复用节点 ID。完整 Session 历史不删除，主聊天只投影最多 80 个内容块、60K 字符和约 6 屏的最近后缀；旧块用顶部弱提示计数，逐消息/工具组缓存避免 Working 帧重复解析整段 Markdown，Inspect 使用同一窗口。`thinkingDisplay` 提供隐藏、折叠、展开三态：隐藏只收起正文，活跃时显示“思考中”，完成后仍保留最简思考记录；折叠保留 Effort/耗时标题并显示最后一段关键内容；展开显示完整正文。可选 `thinkingTranslationEndpoint` 只在 Thinking 完成后串行调用 HTTP(S) 翻译服务，原文继续保留在 Session，译文替换可见投影；pending/success/error 都在标题中有弱状态。Inspect 始终使用稳定 message id，并可查看当前单条 thinking/tool 详情。同一批 Tool 使用一个 `工具调用` 组头；每项把状态符号、固定宽度名称列和弱化动作摘要放在一行，摘要从同一列开始，运行/失败文字位于摘要末尾；中间项使用 `├─`，末项使用 `└─`。只要组内存在 queued/running 项，就实时展示完整树；全部进入 success/error/cancelled 后，`collapseTools=true` 将其收束为包含总数和失败/取消计数的一行摘要。Settings 的“完成后收起工具”默认开启，关闭后完整树持续显示；Inspect/Enter 临时恢复完整顺序，edit 输出继续使用行号、增删色与窄屏换行。Markdown 标题使用内容蓝色前景和字重，不增加背景块。Subagent 使用独立状态框；`/agents` 提供 Map、节点 Transcript、Tools 与角色 Model Pools，并显示当前查看路径。
 
 ## Composer
 
@@ -244,7 +244,7 @@ Workflow bootstrap 使用 TypeScript adapter 包裹同进程 ESM JavaScript Core
 
 边界必须按字面理解：当前 Policy 不是 OS sandbox，SSH、容器和远程系统也不在隔离边界内。深层命令解析、小模型审批、远程目标约束和系统级 containment 是后续安全加固。
 
-Question 已注册为 Pi 的真实 TypeBox `question` ToolDefinition，并在初始及 replacement runtime 中与 Policy tools 一起安装；调用本身以 Tool 节点进入 Transcript。弹出后使用 `Question n / m` 进度元数据、粗体标题、正文、分隔线、选项标题与次级说明形成层次；四种题型支持“其他”、直接回答、跳过和最终检查，填空输入位于 Question 工作区内部。`Left/Right` 切题，`Up/Down` 选择，`Ctrl/Alt+Up/Down` 排序，`Tab` 直接回答，`Shift+S` 跳过，`Enter` 确认/提交；hint 只显示当前状态可用动作。Tool result 只返回 question id、answer/skipped，取消、Session replacement 与 dispose 都 fail closed。
+Question 已注册为 Pi 的真实 TypeBox `question` ToolDefinition，并在初始及 replacement runtime 中与 Policy tools 一起安装；调用本身以 Tool 节点进入 Transcript。弹出后使用 `Question n / m` 进度元数据、粗体标题、正文、分隔线、选项标题与次级说明形成层次；四种题型支持“其他”、直接回答、跳过和最终检查，填空输入位于 Question 工作区内部。Question footer/contextual hint 与主 Composer 之间固定保留一行 interaction gutter；等待答案时不显示虚假 Working 动画。`Left/Right` 切题，`Up/Down` 选择，`Ctrl/Alt+Up/Down` 排序，`Tab` 直接回答，`Shift+S` 跳过，`Enter` 确认/提交；hint 只显示当前状态可用动作。Tool result 只返回 question id、answer/skipped，取消、Session replacement 与 dispose 都 fail closed。
 
 Settings 分别加载 Global 与 Project 层，Tab 切换只更换草稿，Enter 修改，`Ctrl+S` Apply，Esc Cancel；切 Tab 和修改开关不会立即写文件。“思考翻译服务”进入独立文本编辑态，支持粘贴 IP:端口、域名或完整 URL，Enter 确认字段、Esc 取消字段编辑；保存时只接受无 userinfo 的 HTTP(S)，缺省 path 补 `/translate`。`/effort` 从当前 Pi Session 的 `getAvailableThinkingLevels()` 读取模型实际支持的 `off/minimal/low/medium/high/xhigh/max` 子集，展示时首字母大写，保存时保留原生小写值；旧中文配置在读取时迁移。未 trust 或 Recovery 时只允许 Global settings。
 

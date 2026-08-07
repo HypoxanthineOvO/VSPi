@@ -134,7 +134,10 @@ describe("M2 session identity isolation", () => {
     await (app as unknown as TestableApp).submit("/resume");
     const sessions = app.render(80).map(stripAnsi);
     const surface = sessions.join("\n");
-    expect(sessions).toHaveLength(23);
+    expect(sessions).toHaveLength(24);
+    // Sessions surface is vertically centered: title stays below the top padding.
+    const titleRow = sessions.findIndex((line) => line.startsWith("╭ Sessions"));
+    expect(titleRow).toBeGreaterThan(0);
     expect(surface).toContain("Sessions");
     expect(surface).toContain("2 个会话");
     expect(surface).toContain("当前会话");
@@ -152,10 +155,27 @@ describe("M2 session identity isolation", () => {
     await app.dispose();
   });
 
+  it("does not keep the startup splash above a full-screen Sessions picker", async () => {
+    const controlled = sessionBackend();
+    vi.mocked(controlled.backend.listSessions).mockResolvedValue([
+      { id: "session-a", label: "Resume target", relativeTime: "刚刚", branchDepth: 0 },
+    ]);
+    const app = await createApp(controlled.backend);
+
+    await (app as unknown as TestableApp).submit("/resume");
+    app.setStartupSurface(["SPLASH-LINE-A", "SPLASH-LINE-B"]);
+
+    const surface = app.render(80).map(stripAnsi);
+    const titleRow = surface.findIndex((line) => line.startsWith("╭ Sessions"));
+    expect(titleRow).toBeGreaterThan(0);
+    expect(surface.join("\n")).not.toContain("SPLASH-LINE");
+    await app.dispose();
+  });
+
   it.each([
-    [12, 11],
-    [24, 23],
-    [40, 39],
+    [12, 12],
+    [24, 24],
+    [40, 40],
   ] as const)(
     "keeps the Resume title visible and caps its adaptive surface at %i terminal rows",
     async (rows, expectedRows) => {
@@ -182,10 +202,17 @@ describe("M2 session identity isolation", () => {
     },
   );
 
-  it("commits resumed history to native scrollback before returning to Composer", async () => {
+  it("keeps the restored tail visible without clearing the physical waterfall", async () => {
     const controlled = sessionBackend();
-    const tui = fakeTui() as TUI & { commitStatic: ReturnType<typeof vi.fn> };
+    const tui = fakeTui() as TUI & {
+      beginSurfaceEpoch: ReturnType<typeof vi.fn>;
+      commitStatic: ReturnType<typeof vi.fn>;
+      replaceStatic: ReturnType<typeof vi.fn>;
+      requestRender: ReturnType<typeof vi.fn>;
+    };
+    tui.beginSurfaceEpoch = vi.fn();
     tui.commitStatic = vi.fn();
+    tui.replaceStatic = vi.fn();
     const app = await createApp(controlled.backend, tui);
     const testable = app as unknown as TestableApp;
     const session: SessionOption = {
@@ -194,16 +221,97 @@ describe("M2 session identity isolation", () => {
       relativeTime: "刚刚",
       branchDepth: 0,
     };
+    tui.requestRender.mockClear();
 
     await testable.applyPanelEvent({ type: "session", session });
 
-    expect(tui.commitStatic).toHaveBeenCalledOnce();
-    expect(tui.commitStatic.mock.calls[0]?.[0].map(stripAnsi).join("\n")).toContain(
-      "TRANSCRIPT_restored-static-session",
-    );
-    expect(testable.committedMessageCount).toBe(testable.messages.length);
+    expect(tui.replaceStatic).not.toHaveBeenCalled();
+    expect(tui.commitStatic).not.toHaveBeenCalled();
+    expect(tui.beginSurfaceEpoch).toHaveBeenCalledOnce();
+    expect(tui.requestRender).not.toHaveBeenCalledWith(true);
+    expect(testable.committedMessageCount).toBe(0);
     expect(testable.currentTranscriptWindow(80).hiddenBlocks).toBe(0);
-    expect(testable.currentTranscriptWindow(80).messages).toEqual([]);
+    expect(testable.currentTranscriptWindow(80).messages).toEqual([
+      expect.objectContaining({ text: "TRANSCRIPT_restored-static-session" }),
+    ]);
+    const rendered = app.render(80).map(stripAnsi).join("\n");
+    expect(rendered).toContain("TRANSCRIPT_restored-static-session");
+    expect(rendered).not.toContain("Plan");
+    await app.dispose();
+  });
+
+  it("publishes one restored surface only after backend and attachment hydration finish", async () => {
+    let events: ChatBackendEvents | undefined;
+    let releaseBackend!: () => void;
+    let releaseAttachments!: () => void;
+    const backendGate = new Promise<void>((resolve) => {
+      releaseBackend = resolve;
+    });
+    const attachmentGate = new Promise<void>((resolve) => {
+      releaseAttachments = resolve;
+    });
+    const backend = {
+      kind: "pi",
+      modelLabel: "Hydration Model",
+      modelId: "hydration-model",
+      supportsVision: false,
+      start: vi.fn(async (captured: ChatBackendEvents) => {
+        events = captured;
+      }),
+      send: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
+      compact: vi.fn(async () => {}),
+      newSession: vi.fn(async () => {}),
+      listSessions: vi.fn(async () => []),
+      switchSession: vi.fn(async (id: string) => {
+        events?.onSessionReset?.({ id, reason: "resume" });
+        events?.onMessage({ id: "hydrated-first", role: "assistant", kind: "text", text: "HYDRATED_FIRST" });
+        await backendGate;
+        events?.onMessage({ id: "hydrated-last", role: "assistant", kind: "text", text: "HYDRATED_LAST" });
+      }),
+      dispose: vi.fn(async () => {}),
+    } as unknown as ChatBackend;
+    const attachments = {
+      sessionGeneration: 0,
+      store: { list: () => [] },
+      start: vi.fn(async () => {}),
+      switchSession: vi.fn(async () => attachmentGate),
+      dispose: vi.fn(async () => {}),
+    } as unknown as AttachmentService;
+    const tui = fakeTui() as TUI & {
+      beginSurfaceEpoch: ReturnType<typeof vi.fn>;
+      requestRender: ReturnType<typeof vi.fn>;
+    };
+    tui.beginSurfaceEpoch = vi.fn();
+    const app = new VspiApp(tui, plainTheme(), backend, {
+      cwd: "/workspace/hydration",
+      settings: { ...DEFAULT_SETTINGS, bridgeEnabled: false },
+      attachments,
+      renderOnce: true,
+      onExit: vi.fn(),
+    });
+    await app.start();
+    tui.requestRender.mockClear();
+
+    const switching = (app as unknown as TestableApp).applyPanelEvent({
+      type: "session",
+      session: { id: "hydrated", label: "Hydrated", relativeTime: "刚刚", branchDepth: 0 },
+    });
+    await flush();
+    expect(tui.beginSurfaceEpoch).not.toHaveBeenCalled();
+    expect(tui.requestRender).not.toHaveBeenCalled();
+
+    releaseBackend();
+    await flush();
+    expect(tui.beginSurfaceEpoch).not.toHaveBeenCalled();
+
+    releaseAttachments();
+    await switching;
+    expect(tui.beginSurfaceEpoch).toHaveBeenCalledOnce();
+    expect((app as unknown as TestableApp).messages.map((message) => message.id)).toEqual([
+      "hydrated-first",
+      "hydrated-last",
+    ]);
     await app.dispose();
   });
 

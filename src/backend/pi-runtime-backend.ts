@@ -14,8 +14,11 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { PiAgentManager } from "../agents/manager.js";
+import type { AgentRole, AgentSnapshot, AgentStatusEvent } from "../agents/types.js";
 import { readVerifiedAttachmentBytes } from "../attachments/store.js";
 import { type CompactOptions, resolveCompactionProfile } from "../continuity/compaction-profiles.js";
+import { createGoalCapsuleExtension } from "../continuity/goal-capsule.js";
 import { createPlanCapsuleExtension } from "../continuity/plan-capsule.js";
 import { createReviewReminderExtension, createReviewTracker } from "../continuity/review-tracker.js";
 import { createWorkflowPlanExtension } from "../continuity/workflow-plan.js";
@@ -32,6 +35,17 @@ import type {
   TranscriptMessage,
   UsageSnapshot,
 } from "../domain/types.js";
+import { createGoalToolDefinitions } from "../goals/tools.js";
+import {
+  DEFAULT_GOAL_LIMITS,
+  type GoalBackend,
+  type GoalBinding,
+  type GoalLimits,
+  type GoalMarker,
+  type GoalOwner,
+  goalIsTerminal,
+  type StoredGoal,
+} from "../goals/types.js";
 import { createPlanToolDefinitions } from "../plans/tools.js";
 import type { LocalPlanBackend, PlanBinding, PlanWorkItem, StoredPlan } from "../plans/types.js";
 import {
@@ -39,6 +53,9 @@ import {
   type ApprovalResponse,
   createExecutionPolicyService,
   type ExecutionPolicyService,
+  POLICY_LEVELS,
+  type PolicyLevel,
+  type PolicySnapshot,
 } from "../policy/execution-policy.js";
 import { createPolicyToolOverrides } from "../policy/pi-policy-tools.js";
 import type { EffectivePromptSegment } from "../prompts/effective-prompt.js";
@@ -133,6 +150,7 @@ export interface PiRuntimeBackendOptions {
   skillManager?: SkillManager;
   modelRuntime?: ModelRuntimeView;
   planBackend?: LocalPlanBackend;
+  goalBackend?: GoalBackend;
   workflowPlan?: Pick<WorkflowAdapter, "snapshot">;
   promptProfiles?: {
     resolve(identity: ModelIdentity): Promise<Pick<ResolvedPromptProfile, "profileId" | "overlay">>;
@@ -266,6 +284,9 @@ export class PiRuntimeBackend implements ChatBackend {
   private planMutatedThisTask = false;
   private planReconciliationCheckpoint: PlanReconciliationCheckpoint | undefined;
   private planCheckpointRecordingEpoch: number | undefined;
+  private goalMutatedThisTask = false;
+  private goalContinuationTurn = 0;
+  private readonly goalProcessId = `${process.pid}-${randomUUID()}`;
   private compacting = false;
   private compactionEvidence: CompactionEvidence | undefined;
   private compactionEvidenceSequence = 0;
@@ -296,6 +317,9 @@ export class PiRuntimeBackend implements ChatBackend {
   private readonly leaseAbortController = new AbortController();
   private readonly externalSessions: Pick<ExternalSessionCatalog, "list" | "preview">;
   private skillManager: SkillManager | undefined;
+  private agentManager: PiAgentManager | undefined;
+  private readonly agentMessageIds = new Set<string>();
+  private readonly startupPolicy: PolicyLevel;
 
   private readonly options: PiRuntimeBackendOptions & { executionPolicy: ExecutionPolicyService };
 
@@ -306,6 +330,7 @@ export class PiRuntimeBackend implements ChatBackend {
         options.executionPolicy ??
         createExecutionPolicyService({ workspace: options.cwd, recovery: options.recovery ?? false }),
     };
+    this.startupPolicy = this.options.executionPolicy.snapshot().policy;
     this.externalSessions = options.externalSessions ?? new ExternalSessionCatalog();
     this.skillManager = options.skillManager;
   }
@@ -421,7 +446,7 @@ export class PiRuntimeBackend implements ChatBackend {
       this.handoffClient = undefined;
       this.projectedModel = undefined;
       this.trackRuntimeInvalidation(this.runtime);
-      this.bindCurrentSession(this.options.continueRecent ? "resume" : "startup");
+      await this.bindCurrentSession(this.options.continueRecent ? "resume" : "startup");
       this.leaseLifecycleReady = true;
       this.events?.onSessionWait?.(false);
       this.events?.onSessionReady?.();
@@ -461,6 +486,17 @@ export class PiRuntimeBackend implements ChatBackend {
   private async sendActiveRuntime(text: string, options: SendOptions): Promise<SendResult> {
     const session = this.requireSession();
     if (options.attachments.length > 0 && !this.supportsVision) throw new Error(`${this.modelLabel} 不支持图片输入`);
+    this.agentManager?.beginRootTask(
+      text,
+      session.isStreaming || this.activeGeneration !== undefined || this.compacting,
+    );
+    const agentContext = this.agentManager?.capabilityContext();
+    if (agentContext) {
+      await session.sendCustomMessage(
+        { customType: "vspi.agent-capabilities", content: agentContext, display: false },
+        session.isStreaming ? { deliverAs: "nextTurn" } : undefined,
+      );
+    }
     session.setThinkingLevel(options.effort);
     const images = await Promise.all(
       options.attachments.map(async (attachment) => ({
@@ -484,6 +520,7 @@ export class PiRuntimeBackend implements ChatBackend {
     }
     this.activeTaskEpoch = ++this.taskEpoch;
     this.planMutatedThisTask = false;
+    this.goalMutatedThisTask = false;
     this.suppressGenerationEvents = false;
     const generation = ++this.generation;
     this.activeGeneration = generation;
@@ -493,6 +530,7 @@ export class PiRuntimeBackend implements ChatBackend {
         images,
         source: "interactive",
       });
+      if (!this.cancelledGenerations.has(generation)) this.agentManager?.assertRootTaskComplete();
       return { status: this.cancelledGenerations.has(generation) ? "cancelled" : "completed" };
     } finally {
       if (this.activeGeneration === generation) this.activeGeneration = undefined;
@@ -517,6 +555,7 @@ export class PiRuntimeBackend implements ChatBackend {
     const queuedMessages = [...queued.steering, ...queued.followUp].map(stripAttachmentManifest);
     this.queueState = { steering: 0, followUp: 0 };
     this.agentRunning = false;
+    await this.pauseExecutingGoal("generation_cancelled");
     if (this.compacting) {
       if (this.activeGeneration !== undefined) {
         this.cancelledGenerations.add(this.activeGeneration);
@@ -537,6 +576,7 @@ export class PiRuntimeBackend implements ChatBackend {
     this.runningToolIds.clear();
     this.publishActivity();
     try {
+      await this.agentManager?.cancelAll();
       await session?.abort();
     } catch (error) {
       this.unusableError = new Error("上次取消失败，当前 Pi session 已锁定；请新建或切换会话后重试。", {
@@ -602,6 +642,7 @@ export class PiRuntimeBackend implements ChatBackend {
     if (result.cancelled) return this.rebindAfterCancelledReplacement();
     await this.replaceLease(this.session?.sessionManager?.getSessionFile());
     if (continuedPlanId) await this.appendPlanBinding(continuedPlanId);
+    await this.appendExecutionPolicy(this.options.executionPolicy.snapshot().policy);
     await this.acceptReplacement("new", options.continuePlan);
     this.events?.onNotice("已新建 Pi 会话", "success");
   }
@@ -829,6 +870,87 @@ export class PiRuntimeBackend implements ChatBackend {
     this.events?.onPlanBindingChange?.(this.getPlanBinding());
   }
 
+  getGoalBinding(): GoalBinding | undefined {
+    if (!this.options.goalBackend) return undefined;
+    const manager = this.session?.sessionManager;
+    return manager ? readManagerGoalBinding(manager) : undefined;
+  }
+
+  async getGoal(): Promise<StoredGoal | undefined> {
+    const binding = this.getGoalBinding();
+    return binding ? this.options.goalBackend?.read(binding.goalId) : undefined;
+  }
+
+  async createGoal(request: string, limits: Partial<GoalLimits> = {}): Promise<StoredGoal> {
+    this.assertHandoffWritable();
+    if (!this.options.goalBackend || !this.options.planBackend) throw new Error("Goal runtime is not enabled");
+    if (this.compacting) throw new Error("Cannot create a Goal while context compaction is in progress");
+    const objective = request.trim();
+    if (!objective) throw new Error("Goal request cannot be empty");
+    const existing = await this.getGoal();
+    if (existing && !goalIsTerminal(existing.state))
+      throw new Error(`Session already has an active Goal (${existing.state})`);
+    const plan = await this.options.planBackend.create({
+      title: objective.split(/\r?\n/, 1)[0]?.slice(0, 500) || "Goal",
+      goal: objective.slice(0, 4_000),
+      background: "Created by /goal. The Goal contract remains authoritative over this mutable working plan.",
+      challenges: [],
+      items: [{ id: "deliver-goal", title: "Deliver and verify the Goal contract", status: "in_progress" }],
+      focusItemId: "deliver-goal",
+      blockers: [],
+      nextAction: "Start the requested work",
+    });
+    const goal = await this.options.goalBackend.create({
+      contract: {
+        objective,
+        completionCriteria: [
+          "Every requirement in the user request is delivered; no requested portion is silently dropped.",
+          "Relevant verification evidence is recorded before completion is claimed.",
+        ],
+      },
+      planId: plan.id,
+      limits: resolveGoalLimits(limits),
+      owner: this.goalOwner(),
+      initialTokens: this.currentTotalTokens(),
+    });
+    await this.appendPlanBinding(plan.id);
+    await this.appendGoalBinding(goal.id);
+    this.planMutationSequence += 1;
+    this.goalMutatedThisTask = false;
+    this.events?.onPlanBindingChange?.(this.getPlanBinding());
+    this.events?.onGoalChange?.(structuredClone(goal));
+    return goal;
+  }
+
+  async pauseGoal(): Promise<StoredGoal> {
+    return this.transitionBoundGoal("paused", "user_paused");
+  }
+
+  async resumeGoal(): Promise<StoredGoal> {
+    return this.transitionBoundGoal("executing", "user_resumed", this.goalOwner());
+  }
+
+  async cancelGoal(): Promise<StoredGoal> {
+    return this.transitionBoundGoal("cancelled", "user_cancelled");
+  }
+
+  async acceptGoal(): Promise<StoredGoal> {
+    return this.transitionBoundGoal("completed", "user_accepted");
+  }
+
+  async setPolicy(policy: PolicyLevel): Promise<PolicySnapshot> {
+    this.assertHandoffWritable();
+    const previous = this.options.executionPolicy.snapshot().policy;
+    const snapshot = await this.options.executionPolicy.switchPolicy(policy);
+    try {
+      await this.appendExecutionPolicy(snapshot.policy);
+      return snapshot;
+    } catch (error) {
+      await this.options.executionPolicy.switchPolicy(previous);
+      throw error;
+    }
+  }
+
   getEffectivePromptSegments(): EffectivePromptSegment[] {
     return structuredClone(this.effectivePromptSegments);
   }
@@ -840,6 +962,7 @@ export class PiRuntimeBackend implements ChatBackend {
     const selected = await this.findSession(id);
     const sourceManager = SessionManager.open(selected.path);
     const sourcePlanId = this.options.planBackend ? readManagerPlanBinding(sourceManager)?.planId : undefined;
+    const sourcePolicy = readManagerExecutionPolicy(sourceManager) ?? this.startupPolicy;
     const leafId = sourceManager.getLeafId();
     if (!leafId) throw new Error("空会话没有可分支的消息");
     const sourceIsCurrent = this.sessionLease?.sessionPath === resolve(selected.path);
@@ -865,6 +988,7 @@ export class PiRuntimeBackend implements ChatBackend {
       }
       await this.adoptLease(branchLease?.lease);
       if (sourcePlanId && this.getPlanBinding()?.planId !== sourcePlanId) await this.appendPlanBinding(sourcePlanId);
+      await this.appendExecutionPolicy(sourcePolicy);
       await this.acceptReplacement("fork");
       this.events?.onNotice(`已从「${selected.name || selected.firstMessage || id}」的落盘快照创建分支`, "success");
       return;
@@ -891,6 +1015,7 @@ export class PiRuntimeBackend implements ChatBackend {
     }
     await this.replaceLease(this.session?.sessionManager?.getSessionFile());
     if (sourcePlanId && this.getPlanBinding()?.planId !== sourcePlanId) await this.appendPlanBinding(sourcePlanId);
+    await this.appendExecutionPolicy(sourcePolicy);
     await this.acceptReplacement("fork");
     this.events?.onNotice(`已从「${selected.name || selected.firstMessage || id}」创建分支`, "success");
   }
@@ -941,6 +1066,10 @@ export class PiRuntimeBackend implements ChatBackend {
     manager.appendSessionInfo(preview.title);
     manager.appendModelChange(activeModel.provider, activeModel.id);
     manager.appendThinkingLevelChange(activeSession.thinkingLevel);
+    manager.appendCustomEntry("vspi.execution-policy", {
+      version: 1,
+      policy: this.options.executionPolicy.snapshot().policy,
+    });
     const entryIds = preview.items.map((item) => appendImportedMessage(manager, item, activeModel));
     if (contextPlan.summary !== undefined) {
       const firstKeptEntryId =
@@ -1017,6 +1146,8 @@ export class PiRuntimeBackend implements ChatBackend {
     this.events?.onSessionInvalidating?.();
     this.unsubscribeCurrent();
     try {
+      await this.agentManager?.dispose();
+      this.agentManager = undefined;
       await this.runtime?.dispose();
       this.runtime = undefined;
       this.events?.onBusy(false);
@@ -1061,6 +1192,14 @@ export class PiRuntimeBackend implements ChatBackend {
             },
           })
         : undefined;
+      const goalCapsuleExtension =
+        this.options.goalBackend && this.options.planBackend
+          ? createGoalCapsuleExtension({
+              readBinding: async () => this.getGoalBinding(),
+              readGoal: (goalId) => this.options.goalBackend?.read(goalId) ?? Promise.resolve(undefined),
+              readPlan: (planId) => this.options.planBackend?.read(planId) ?? Promise.resolve(undefined),
+            })
+          : undefined;
       const workflowPlanExtension = this.options.workflowPlan
         ? createWorkflowPlanExtension({
             snapshot: () => this.options.workflowPlan?.snapshot() ?? Promise.reject(new Error("Workflow unavailable")),
@@ -1093,6 +1232,7 @@ export class PiRuntimeBackend implements ChatBackend {
         promptProfileExtension ||
         planCapsuleExtension ||
         workflowPlanExtension ||
+        goalCapsuleExtension ||
         reviewReminderExtension
           ? {
               resourceLoaderOptions: {
@@ -1112,6 +1252,7 @@ export class PiRuntimeBackend implements ChatBackend {
                         promptProfileExtension,
                         planCapsuleExtension,
                         workflowPlanExtension,
+                        goalCapsuleExtension,
                         reviewReminderExtension,
                       ].filter((factory) => factory !== undefined),
                     }
@@ -1145,8 +1286,22 @@ export class PiRuntimeBackend implements ChatBackend {
         throw new Error(`新 Pi runtime 中找不到继承模型 ${modelIdentity.provider}/${modelIdentity.id}`);
       }
       const thinkingLevel = this.replacementThinking;
+      const nextAgentManager = await PiAgentManager.create({
+        cwd,
+        agentDir,
+        trustedProject: projectTrusted,
+        recovery: this.options.recovery ?? false,
+        modelRuntime: services.modelRuntime,
+        executionPolicy: this.options.executionPolicy,
+        onStatus: (event) => this.publishAgentStatus(event),
+      });
       const policyTools = Object.values(
-        createPolicyToolOverrides({ workspace: cwd, executionPolicy: this.options.executionPolicy }),
+        createPolicyToolOverrides({
+          workspace: cwd,
+          executionPolicy: this.options.executionPolicy,
+          preflight: (action) => nextAgentManager.assertMainAction(action),
+          executionBoundary: (action, operation) => nextAgentManager.withToolBoundary(action, operation),
+        }),
       );
       const question = createQuestionToolDefinition({
         request: (questions, signal) => {
@@ -1182,10 +1337,24 @@ export class PiRuntimeBackend implements ChatBackend {
             },
           })
         : [];
+      const goalTools = this.options.goalBackend
+        ? createGoalToolDefinitions({
+            backend: this.options.goalBackend,
+            binding: { read: async () => this.getGoalBinding()?.goalId ?? null },
+            onMutation: async (operation, goal, previous) => {
+              this.goalMutatedThisTask =
+                operation === "checkpoint" && markerRecordsProgress(previous.markers.at(-1), goal.markers.at(-1));
+              this.events?.onGoalChange?.(structuredClone(goal));
+            },
+          })
+        : [];
       this.replacementModelIdentity = undefined;
       this.replacementThinking = undefined;
-      return {
-        ...(await createAgentSessionFromServices({
+      const rootAgentTools = ["read", "ls", "find", "grep", "bash", "edit", "write"];
+      const subagentTool = nextAgentManager.createTool(rootAgentTools, true);
+      let created: Awaited<ReturnType<typeof createAgentSessionFromServices>>;
+      try {
+        created = await createAgentSessionFromServices({
           services,
           sessionManager,
           ...(sessionStartEvent ? { sessionStartEvent } : {}),
@@ -1195,6 +1364,8 @@ export class PiRuntimeBackend implements ChatBackend {
             ...policyTools,
             ...(this.events?.onQuestion ? [question, ...skillTools] : []),
             ...planTools,
+            ...goalTools,
+            ...(!this.options.recovery ? [subagentTool] : []),
           ] as unknown as ToolDefinition[],
           tools: [
             "read",
@@ -1208,8 +1379,19 @@ export class PiRuntimeBackend implements ChatBackend {
             "skill_list",
             "skill_manage",
             ...planTools.map((tool) => tool.name),
+            ...goalTools.map((tool) => tool.name),
+            ...(!this.options.recovery ? ["subagent"] : []),
           ],
-        })),
+        });
+      } catch (error) {
+        await nextAgentManager.dispose();
+        throw error;
+      }
+      const previousAgentManager = this.agentManager;
+      this.agentManager = nextAgentManager;
+      await previousAgentManager?.dispose();
+      return {
+        ...created,
         services,
         diagnostics: services.diagnostics,
       };
@@ -1221,10 +1403,261 @@ export class PiRuntimeBackend implements ChatBackend {
     });
   }
 
+  getAgentSnapshot(): AgentSnapshot {
+    return (
+      this.agentManager?.snapshot() ?? {
+        enabled: false,
+        projectTrusted: this.options.trustedProject === true,
+        recovery: this.options.recovery === true,
+        limits: { maxDepth: 5, maxAgentsPerTree: 128, maxConcurrency: 16 },
+        pools: [],
+        active: [],
+        recent: [],
+        teammates: [],
+        diagnostic: "Subagent runtime is not ready",
+      }
+    );
+  }
+
+  async switchTeammateModel(id: string, model: string): Promise<void> {
+    this.assertHandoffWritable();
+    if (!this.agentManager) throw new Error("Subagent runtime is not ready");
+    await this.agentManager.switchTeammateModel(id, model);
+  }
+
+  async resetTeammateLane(id: string, lane?: string): Promise<void> {
+    this.assertHandoffWritable();
+    if (!this.agentManager) throw new Error("Subagent runtime is not ready");
+    await this.agentManager.resetTeammateLane(id, lane);
+  }
+
+  async setAgentPoolRole(provider: string, role: AgentRole, model: string): Promise<void> {
+    this.assertHandoffWritable();
+    if (!this.agentManager) throw new Error("Subagent runtime is not ready");
+    await this.agentManager.setModelPoolRole(provider, role, model);
+    this.events?.onAgentSnapshot?.(this.getAgentSnapshot());
+  }
+
+  private publishAgentStatus(event: AgentStatusEvent): void {
+    if (!this.events) return;
+    const id = `subagent:${event.run.id}`;
+    const message = {
+      id,
+      role: "assistant" as const,
+      kind: "subagent" as const,
+      model: event.run.model,
+      agentRole: event.run.role,
+      modelReason: event.run.modelReason,
+      ...(event.run.preferredModel ? { preferredModel: event.run.preferredModel } : {}),
+      effort: event.run.effort,
+      contextMode: event.run.contextMode,
+      task: event.run.task,
+      tools: event.run.tools,
+      ...(event.run.outputPreview ? { outputPreview: event.run.outputPreview } : {}),
+      ...(event.run.sessionFile ? { sessionFile: event.run.sessionFile } : {}),
+      status: event.run.status,
+      agentKind: event.run.kind,
+      ...(event.run.teammateId ? { teammateId: event.run.teammateId } : {}),
+      ...(event.run.lane ? { lane: event.run.lane } : {}),
+      depth: event.run.depth,
+      ...(event.run.fallbackReason ? { fallbackReason: event.run.fallbackReason } : {}),
+    };
+    if (this.agentMessageIds.has(id)) this.events.onMessageUpdate(id, message);
+    else {
+      this.agentMessageIds.add(id);
+      this.events.onMessage(message);
+    }
+    if (event.fallbackNotice) this.events.onNotice(event.fallbackNotice, "warning");
+    this.events.onAgentSnapshot?.(this.getAgentSnapshot());
+  }
+
   private async appendPlanBinding(planId: string | undefined): Promise<void> {
     const manager = this.requireSession().sessionManager;
     if (!manager) throw new Error("Active Pi SessionManager is unavailable");
     await appendDurablePlanBinding(manager, planId);
+  }
+
+  private async appendGoalBinding(goalId: string | undefined): Promise<void> {
+    const manager = this.requireSession().sessionManager;
+    if (!manager) throw new Error("Active Pi SessionManager is unavailable");
+    await appendDurableGoalBinding(manager, goalId);
+  }
+
+  private goalOwner(): GoalOwner {
+    return {
+      sessionId: safeId(this.requireSession().sessionId),
+      processId: this.goalProcessId,
+      acquiredAt: new Date().toISOString(),
+    };
+  }
+
+  private currentTotalTokens(): number {
+    const total = this.session?.getSessionStats().tokens.total;
+    return typeof total === "number" && Number.isFinite(total) ? Math.max(0, Math.round(total)) : 0;
+  }
+
+  private async transitionBoundGoal(
+    state: "executing" | "paused" | "completed" | "cancelled",
+    reason: string,
+    owner?: GoalOwner,
+  ): Promise<StoredGoal> {
+    const backend = this.options.goalBackend;
+    const binding = this.getGoalBinding();
+    if (!backend || !binding) throw new Error("No Goal is bound to this Session");
+    const current = await backend.read(binding.goalId);
+    if (!current) throw new Error("The bound Goal was not found");
+    const goal = await backend.transition(current.id, {
+      expectedRevision: current.revision,
+      state,
+      reason,
+      ...(owner ? { owner } : {}),
+      ...(state === "executing" ? { initialTokens: this.currentTotalTokens() } : {}),
+    });
+    this.events?.onGoalChange?.(structuredClone(goal));
+    return goal;
+  }
+
+  private async reconcileRestoredGoalOwner(reason: SessionResetReason): Promise<void> {
+    const backend = this.options.goalBackend;
+    const binding = this.getGoalBinding();
+    if (!backend || !binding) {
+      this.events?.onGoalChange?.(undefined);
+      return;
+    }
+    let goal = await backend.read(binding.goalId);
+    if (!goal) {
+      this.events?.onNotice(`绑定的 Goal ${binding.goalId} 不存在`, "warning");
+      this.events?.onGoalChange?.(undefined);
+      return;
+    }
+    const ownerMatches =
+      goal.owner.processId === this.goalProcessId && goal.owner.sessionId === safeId(this.requireSession().sessionId);
+    if (goal.state === "executing" && !ownerMatches) {
+      goal = await backend.transition(goal.id, {
+        expectedRevision: goal.revision,
+        state: "paused",
+        reason: reason === "fork" ? "fork_requires_explicit_resume" : "lost_owner_requires_explicit_resume",
+      });
+      this.events?.onNotice("活动 Goal 已恢复为暂停状态；使用 /goal resume 显式续跑", "warning");
+    }
+    this.events?.onGoalChange?.(structuredClone(goal));
+  }
+
+  private async continueGoalAfterTurn(turn: number): Promise<void> {
+    if (turn <= this.goalContinuationTurn || this.compacting || this.suppressGenerationEvents) return;
+    this.goalContinuationTurn = turn;
+    const backend = this.options.goalBackend;
+    const binding = this.getGoalBinding();
+    if (!backend || !binding) return;
+    try {
+      const current = await backend.read(binding.goalId);
+      if (!current || current.state !== "executing") return;
+      if (this.handoffRequested || this.handoffFinalizing) {
+        const paused = await backend.transition(current.id, {
+          expectedRevision: current.revision,
+          state: "paused",
+          reason: "handoff_requires_explicit_resume",
+        });
+        this.events?.onGoalChange?.(structuredClone(paused));
+        this.events?.onNotice("Goal 已在 Session 移交边界暂停；接管后使用 /goal resume", "info");
+        return;
+      }
+      const owner = this.goalOwner();
+      if (current.owner.sessionId !== owner.sessionId || current.owner.processId !== owner.processId) {
+        const paused = await backend.transition(current.id, {
+          expectedRevision: current.revision,
+          state: "paused",
+          reason: "lost_execution_owner",
+        });
+        this.events?.onGoalChange?.(structuredClone(paused));
+        this.events?.onNotice("Goal execution owner 已变化；自动续跑已暂停", "warning");
+        return;
+      }
+      const updated = await backend.recordRound(current.id, {
+        expectedRevision: current.revision,
+        consumedTokens: Math.max(0, this.currentTotalTokens() - current.initialTokens),
+        progressed: this.goalMutatedThisTask || this.planMutatedThisTask,
+      });
+      this.events?.onGoalChange?.(structuredClone(updated));
+      if (updated.state !== "executing") {
+        const reason = updated.stateReason ?? updated.state;
+        this.events?.onMessage({
+          id: `goal-boundary:${updated.id}:${updated.revision}`,
+          role: "assistant",
+          kind: "session",
+          text: `Goal 自动续跑已停止 · ${updated.state} · ${reason}`,
+        });
+        this.events?.onNotice(`Goal 已停止自动续跑：${reason}`, updated.state === "stalled" ? "warning" : "info");
+        return;
+      }
+      this.pendingFollowUpTaskEpochs.push(++this.taskEpoch);
+      await this.requireSession().followUp(
+        `<vspi_goal_continuation hidden="true" goal_id="${updated.id}" revision="${updated.revision}">The bound Goal remains executing. Continue the same Goal from its durable contract, Working Plan, latest marker, and repository evidence. An ordinary phase summary is not a stop condition. Use the available Goal controls to record progress, a concrete blocker, or evidence-backed completion.</vspi_goal_continuation>`,
+      );
+    } catch (error) {
+      this.events?.onNotice(`Goal 自动续跑失败：${error instanceof Error ? error.message : "未知错误"}`, "warning");
+      await this.pauseGoalAfterContinuationFailure().catch(() => undefined);
+    }
+  }
+
+  private async pauseGoalAfterContinuationFailure(): Promise<void> {
+    const backend = this.options.goalBackend;
+    const binding = this.getGoalBinding();
+    if (!backend || !binding) return;
+    const current = await backend.read(binding.goalId);
+    if (!current || current.state !== "executing") return;
+    const paused = await backend.transition(current.id, {
+      expectedRevision: current.revision,
+      state: "paused",
+      reason: "followup_error",
+    });
+    this.events?.onGoalChange?.(structuredClone(paused));
+  }
+
+  private async pauseExecutingGoal(reason: string): Promise<void> {
+    const backend = this.options.goalBackend;
+    const binding = this.getGoalBinding();
+    if (!backend || !binding) return;
+    try {
+      const current = await backend.read(binding.goalId);
+      if (!current || current.state !== "executing") return;
+      const paused = await backend.transition(current.id, {
+        expectedRevision: current.revision,
+        state: "paused",
+        reason,
+      });
+      this.events?.onGoalChange?.(structuredClone(paused));
+    } catch (error) {
+      this.events?.onNotice(`Goal 暂停状态写入失败：${error instanceof Error ? error.message : "未知错误"}`, "warning");
+    }
+  }
+
+  private async continueAfterCompaction(): Promise<void> {
+    try {
+      const binding = this.getGoalBinding();
+      if (!binding) {
+        this.pendingFollowUpTaskEpochs.push(++this.taskEpoch);
+        await this.requireSession().followUp(
+          '<vspi_compaction_continuation hidden="true">上下文压缩已完成。立即继续同一个最新用户任务：先根据压缩摘要、工作区事实和绑定计划核对尚未完成的实现与验证，然后直接执行。计划复核、plan_update 或把计划项标为 done 都不是停止条件；只有用户要求的结果已实际完成并有相应验证证据时才能结束。</vspi_compaction_continuation>',
+        );
+        return;
+      }
+      const goal = await this.getGoal();
+      if (goal && goal.state !== "executing") return;
+      this.pendingFollowUpTaskEpochs.push(++this.taskEpoch);
+      await this.requireSession().followUp(
+        `<vspi_goal_compaction_continuation hidden="true" goal_id="${goal?.id ?? binding.goalId}">Context compaction completed. Continue the same executing Goal from its durable contract, Working Plan, latest marker, and repository evidence.</vspi_goal_compaction_continuation>`,
+      );
+    } catch (error) {
+      this.events?.onNotice(`压缩后自动续跑失败：${error instanceof Error ? error.message : "未知错误"}`, "warning");
+      await this.pauseGoalAfterContinuationFailure().catch(() => undefined);
+    }
+  }
+
+  private async appendExecutionPolicy(policy: PolicyLevel): Promise<void> {
+    const manager = this.session?.sessionManager;
+    if (!manager) return;
+    await appendDurableExecutionPolicy(manager, policy);
   }
 
   private requireSkillManager(): SkillManager {
@@ -1243,7 +1676,7 @@ export class PiRuntimeBackend implements ChatBackend {
     }
   }
 
-  private bindCurrentSession(reason: SessionResetReason, continuePlan?: boolean): void {
+  private async bindCurrentSession(reason: SessionResetReason, continuePlan?: boolean): Promise<void> {
     const runtime = this.requireRuntime();
     const session = runtime.session;
     this.assertConfiguredSession(session, runtime.modelFallbackMessage);
@@ -1265,8 +1698,14 @@ export class PiRuntimeBackend implements ChatBackend {
     this.planMutatedThisTask = false;
     this.planReconciliationCheckpoint = undefined;
     this.planCheckpointRecordingEpoch = undefined;
+    this.goalMutatedThisTask = false;
+    this.goalContinuationTurn = 0;
     this.compactionEvidence = undefined;
     this.compactionMutationBlocked = false;
+    const restoredPolicy = this.options.recovery
+      ? "Standard"
+      : (readManagerExecutionPolicy(session.sessionManager) ?? this.startupPolicy);
+    await this.options.executionPolicy.switchPolicy(restoredPolicy);
     if (reason === "resume") this.reviewTracker.noteResume();
     const binding = ++this.binding;
     this.unsubscribe = session.subscribe((event) => {
@@ -1293,6 +1732,7 @@ export class PiRuntimeBackend implements ChatBackend {
     }
     this.publishUsage();
     this.publishActivity();
+    await this.reconcileRestoredGoalOwner(reason);
   }
 
   private rebindAfterCancelledReplacement(): void {
@@ -1320,7 +1760,7 @@ export class PiRuntimeBackend implements ChatBackend {
 
   private async acceptReplacement(reason: SessionResetReason, continuePlan?: boolean): Promise<void> {
     try {
-      this.bindCurrentSession(reason, continuePlan);
+      await this.bindCurrentSession(reason, continuePlan);
     } catch (error) {
       await this.failRuntime(false);
       throw error;
@@ -1743,6 +2183,7 @@ export class PiRuntimeBackend implements ChatBackend {
       if (!this.compactionMutationBlocked && this.pendingFollowUpTaskEpochs.length > 0) {
         this.activeTaskEpoch = this.pendingFollowUpTaskEpochs.shift() ?? this.activeTaskEpoch;
         this.planMutatedThisTask = false;
+        this.goalMutatedThisTask = false;
       }
       this.publishActivity();
       return;
@@ -1752,6 +2193,7 @@ export class PiRuntimeBackend implements ChatBackend {
       this.agentRunning = false;
       this.publishActivity();
       this.publishUsage();
+      void this.continueGoalAfterTurn(this.turn);
       return;
     }
     if (event.type === "compaction_start") {
@@ -1802,16 +2244,7 @@ export class PiRuntimeBackend implements ChatBackend {
       this.compactionMutationBlocked = this.activeGeneration !== undefined || event.willRetry;
       this.agentRunning = event.willRetry;
       if (succeeded && !event.willRetry && event.reason !== "manual" && compactionTaskEpoch !== undefined) {
-        void this.session
-          ?.followUp(
-            '<vspi_compaction_continuation hidden="true">上下文压缩已完成。立即继续同一个最新用户任务：先根据压缩摘要、工作区事实和绑定计划核对尚未完成的实现与验证，然后直接执行。计划复核、plan_update 或把计划项标为 done 都不是停止条件；只有用户要求的结果已实际完成并有相应验证证据时才能结束。</vspi_compaction_continuation>',
-          )
-          .catch((error: unknown) => {
-            this.events?.onNotice(
-              `压缩后自动续跑失败：${error instanceof Error ? error.message : "未知错误"}`,
-              "warning",
-            );
-          });
+        void this.continueAfterCompaction();
       }
       this.publishActivity();
       return;
@@ -1997,7 +2430,9 @@ export class PiRuntimeBackend implements ChatBackend {
   }
 
   private async findSession(id: string) {
-    const selected = (await SessionManager.list(this.options.cwd)).find((session) => session.id === id);
+    const selected = (await SessionManager.list(this.options.cwd, this.options.sessionDir)).find(
+      (session) => session.id === id,
+    );
     if (!selected) throw new Error("会话不存在");
     return selected;
   }
@@ -2258,7 +2693,7 @@ function isTranscriptMessage(value: unknown): value is TranscriptMessage {
       typeof value.model === "string" &&
       typeof value.task === "string" &&
       isEffort(value.effort) &&
-      ["queued", "running", "success", "error"].includes(String(value.status))
+      ["queued", "running", "success", "error", "cancelled"].includes(String(value.status))
     );
   }
   return value.kind === "session" && typeof value.text === "string";
@@ -2425,23 +2860,95 @@ function readManagerPlanBinding(manager: SessionManager): PlanBinding | undefine
   return undefined;
 }
 
+function readManagerGoalBinding(manager: SessionManager): GoalBinding | undefined {
+  const entries = manager.getEntries();
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry?.type !== "custom" || entry.customType !== "vspi.goal-binding") continue;
+    const goalId = (entry.data as { goalId?: unknown } | undefined)?.goalId;
+    return typeof goalId === "string" && goalId.length > 0 ? { goalId } : undefined;
+  }
+  return undefined;
+}
+
 async function appendDurablePlanBinding(manager: SessionManager, planId: string | undefined): Promise<void> {
+  await appendDurableCustomEntry(manager, "vspi.plan-binding", { planId: planId ?? null }, "plan binding");
+}
+
+async function appendDurableGoalBinding(manager: SessionManager, goalId: string | undefined): Promise<void> {
+  await appendDurableCustomEntry(manager, "vspi.goal-binding", { goalId: goalId ?? null }, "goal binding");
+}
+
+function resolveGoalLimits(input: Partial<GoalLimits>): GoalLimits {
+  const numeric = (value: number | undefined, fallback: number, minimum: number, maximum: number): number =>
+    Number.isSafeInteger(value) && (value as number) >= minimum && (value as number) <= maximum
+      ? (value as number)
+      : fallback;
+  return {
+    maxAutoRounds: numeric(input.maxAutoRounds, DEFAULT_GOAL_LIMITS.maxAutoRounds, 1, 1_000),
+    maxNoProgressRounds: numeric(input.maxNoProgressRounds, DEFAULT_GOAL_LIMITS.maxNoProgressRounds, 1, 100),
+    maxTokens: numeric(input.maxTokens, DEFAULT_GOAL_LIMITS.maxTokens, 1_000, 100_000_000),
+  };
+}
+
+function markerRecordsProgress(previous: GoalMarker | undefined, current: GoalMarker | undefined): boolean {
+  if (!current) return false;
+  const payload = (marker: GoalMarker) => ({
+    currentItem: marker.currentItem ?? null,
+    completedWork: marker.completedWork,
+    evidence: marker.evidence,
+    nextItem: marker.nextItem ?? null,
+    note: marker.note ?? null,
+  });
+  const meaningful =
+    current.currentItem !== undefined ||
+    current.completedWork.length > 0 ||
+    current.evidence.length > 0 ||
+    current.nextItem !== undefined ||
+    current.note !== undefined;
+  return meaningful && (!previous || JSON.stringify(payload(previous)) !== JSON.stringify(payload(current)));
+}
+
+function readManagerExecutionPolicy(manager: SessionManager | undefined): PolicyLevel | undefined {
+  if (!manager) return undefined;
+  const entries = manager.getEntries();
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry?.type !== "custom" || entry.customType !== "vspi.execution-policy") continue;
+    const policy = (entry.data as { policy?: unknown } | undefined)?.policy;
+    return typeof policy === "string" && POLICY_LEVELS.includes(policy as PolicyLevel)
+      ? (policy as PolicyLevel)
+      : undefined;
+  }
+  return undefined;
+}
+
+async function appendDurableExecutionPolicy(manager: SessionManager, policy: PolicyLevel): Promise<void> {
+  await appendDurableCustomEntry(manager, "vspi.execution-policy", { version: 1, policy }, "execution policy");
+}
+
+async function appendDurableCustomEntry(
+  manager: SessionManager,
+  customType: string,
+  data: Record<string, unknown>,
+  compatibilityLabel: string,
+): Promise<void> {
   if (!manager.isPersisted() || !manager.getSessionFile()) {
-    manager.appendCustomEntry("vspi.plan-binding", { planId: planId ?? null });
+    manager.appendCustomEntry(customType, data);
     return;
   }
   const runtime = manager as unknown as { fileEntries?: unknown[]; flushed?: boolean };
   const before = structuredClone(runtime.fileEntries);
   const header = Array.isArray(before) ? before[0] : undefined;
   if (!Array.isArray(before) || !isRecord(header) || header.type !== "session") {
-    throw new Error("Pi SessionManager persistence layout is incompatible with VSPi plan binding");
+    throw new Error(`Pi SessionManager persistence layout is incompatible with VSPi ${compatibilityLabel}`);
   }
   const sessionFile = manager.getSessionFile();
   if (!sessionFile) throw new Error("Pi Session file is unavailable");
   await writeSessionEntriesAtomically(sessionFile, before);
   runtime.flushed = true;
   try {
-    manager.appendCustomEntry("vspi.plan-binding", { planId: planId ?? null });
+    manager.appendCustomEntry(customType, data);
     const handle = await open(sessionFile, "r");
     try {
       await handle.sync();
