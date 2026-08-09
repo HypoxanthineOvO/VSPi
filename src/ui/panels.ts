@@ -206,6 +206,12 @@ function capitalize(value: string): string {
   return value.slice(0, 1).toLocaleUpperCase() + value.slice(1);
 }
 
+function formatAgentTokens(value: number): string {
+  if (value < 1_000) return String(Math.max(0, Math.round(value)));
+  if (value < 10_000) return `${(value / 1_000).toFixed(1)}K`;
+  return `${Math.round(value / 1_000)}K`;
+}
+
 function panelKey(data: string, key: Parameters<typeof matchesKey>[1]): boolean {
   return data === key || matchesKey(data, key);
 }
@@ -228,6 +234,18 @@ function thinkingDisplayLabel(mode: AppSettings["thinkingDisplay"]): string {
   if (mode === "hidden") return "隐藏";
   if (mode === "expanded") return "展开";
   return "折叠";
+}
+
+function fullscreenScrollbarLabel(mode: AppSettings["fullscreenScrollbar"]): string {
+  if (mode === "always") return "常驻";
+  if (mode === "hidden") return "隐藏";
+  return "滚动时显示";
+}
+
+function mermaidRenderingLabel(mode: AppSettings["mermaidRendering"]): string {
+  if (mode === "off") return "关闭";
+  if (mode === "streaming") return "流式";
+  return "完成后";
 }
 
 function selectedLine(text: string, selected: boolean, width: number, theme: VspiTheme): string {
@@ -382,14 +400,23 @@ export class PanelController {
     enabled: false,
     projectTrusted: false,
     recovery: false,
-    limits: { maxDepth: 5, maxAgentsPerTree: 128, maxConcurrency: 16 },
+    limits: {
+      maxDepth: 3,
+      maxAgentsPerTree: 12,
+      maxConcurrency: 16,
+      maxRunTokens: 120_000,
+      maxTreeTokens: 500_000,
+      maxTreeCostUsd: 20,
+      maxRunSeconds: 900,
+    },
     pools: [],
     active: [],
     recent: [],
     teammates: [],
+    authority: { pendingRequired: [], turnOverrides: [], sessionOverrides: [], taskEpoch: 0 },
     diagnostic: "Subagent runtime is not ready",
   };
-  private agentTab: "map" | "transcript" | "tools" | "pools" = "map";
+  private agentTab: "map" | "timeline" | "tools" | "pools" = "map";
   private agentSelectedRunId: string | undefined;
 
   constructor(settings: AppSettings) {
@@ -1236,6 +1263,25 @@ export class PanelController {
         this.settingsDirty = true;
         return;
       }
+      if (row.key === "tuiMode") {
+        this.settings.tuiMode = this.settings.tuiMode === "fullscreen" ? "regular" : "fullscreen";
+        this.settingsDirty = true;
+        return;
+      }
+      if (row.key === "fullscreenScrollbar") {
+        const scrollbars: AppSettings["fullscreenScrollbar"][] = ["auto", "always", "hidden"];
+        this.settings.fullscreenScrollbar =
+          scrollbars[(scrollbars.indexOf(this.settings.fullscreenScrollbar) + 1) % scrollbars.length] ?? "auto";
+        this.settingsDirty = true;
+        return;
+      }
+      if (row.key === "mermaidRendering") {
+        const modes: AppSettings["mermaidRendering"][] = ["off", "final", "streaming"];
+        this.settings.mermaidRendering =
+          modes[(modes.indexOf(this.settings.mermaidRendering) + 1) % modes.length] ?? "final";
+        this.settingsDirty = true;
+        return;
+      }
       if (row.key === "workingStyle") {
         const styles: AppSettings["workingStyle"][] = [1, 2, 3];
         this.settings.workingStyle = styles[(styles.indexOf(this.settings.workingStyle) + 1) % styles.length] ?? 3;
@@ -2062,6 +2108,9 @@ export class PanelController {
     label: string;
     key:
       | "theme"
+      | "tuiMode"
+      | "fullscreenScrollbar"
+      | "mermaidRendering"
       | "reducedMotion"
       | "workingStyle"
       | "thinkingDisplay"
@@ -2096,6 +2145,21 @@ export class PanelController {
         key: "collapseTools",
       },
       { group: "附件", label: `SSH 图片桥接  ${this.settings.bridgeEnabled ? "开" : "关"}`, key: "bridgeEnabled" },
+      {
+        group: "终端",
+        label: `TUI 模式  ${this.settings.tuiMode === "fullscreen" ? "Fullscreen" : "Regular"}`,
+        key: "tuiMode",
+      },
+      {
+        group: "终端",
+        label: `Fullscreen 滚动条  ${fullscreenScrollbarLabel(this.settings.fullscreenScrollbar)}`,
+        key: "fullscreenScrollbar",
+      },
+      {
+        group: "Markdown",
+        label: `Mermaid 图表  ${mermaidRenderingLabel(this.settings.mermaidRendering)}`,
+        key: "mermaidRendering",
+      },
     ];
   }
 
@@ -2226,7 +2290,7 @@ export class PanelController {
       return { type: "close" };
     }
     if (panelKey(data, Key.tab)) {
-      const tabs = ["map", "transcript", "tools", "pools"] as const;
+      const tabs = ["map", "timeline", "tools", "pools"] as const;
       this.agentTab = tabs[(tabs.indexOf(this.agentTab) + 1) % tabs.length] ?? "map";
       this.state.scroll = 0;
       return;
@@ -2238,7 +2302,7 @@ export class PanelController {
       return;
     }
     if (panelKey(data, Key.enter) && this.selectedAgentRun()) {
-      this.agentTab = "transcript";
+      this.agentTab = "timeline";
       this.state.scroll = 0;
       return;
     }
@@ -2293,57 +2357,103 @@ export class PanelController {
 
   private renderAgents(width: number, theme: VspiTheme): string[] {
     const limits = this.agentSnapshot.limits;
-    const header = theme.muted(
-      padLine(
-        `Map  Transcript  Tools  Pools · depth ${limits.maxDepth} · tree ${limits.maxAgentsPerTree} · concurrency ${limits.maxConcurrency}`,
+    const headers = [
+      theme.muted(padLine("Map  Timeline  Tools  Pools", width)),
+      ...wrapTextWithAnsi(
+        `limits d${limits.maxDepth} · tree ${limits.maxAgentsPerTree} · gen ${limits.maxConcurrency} · run ${formatAgentTokens(limits.maxRunTokens)}/${limits.maxRunSeconds}s · tree ${formatAgentTokens(limits.maxTreeTokens)}/$${limits.maxTreeCostUsd}`,
         width,
-      ),
-    );
+      ).map((line) => theme.muted(line)),
+    ];
     if (this.agentTab === "pools") {
-      const lines = [header];
+      const lines = [...headers];
       for (const pool of this.agentSnapshot.pools) {
         lines.push(theme.bold(`${pool.provider} · ${pool.source}`));
         for (const role of ["orchestrator", "researcher", "analyst", "worker"] as const) {
-          lines.push(padLine(`  ${role.padEnd(12)} ${pool.roles[role]}`, width));
+          lines.push(...wrapTextWithAnsi(`  ${role.padEnd(12)} ${pool.roles[role]}`, width));
         }
       }
       if (this.agentSnapshot.pools.length === 0) lines.push(theme.muted("No available model pools"));
       return lines;
     }
     const selected = this.selectedAgentRun();
-    if (this.agentTab === "transcript" || this.agentTab === "tools") {
-      if (!selected) return [header, theme.muted("No Agent run selected")];
+    if (this.agentTab === "timeline" || this.agentTab === "tools") {
+      if (!selected) return [...headers, theme.muted("No Agent run selected")];
       const breadcrumb = this.agentBreadcrumb(selected);
-      const lines = [header, theme.focus(`Root › ${breadcrumb.join(" › ")}`)];
-      lines.push(`${selected.role} · ${selected.model} · ${selected.effort} · ${selected.status}`);
-      lines.push(theme.muted(selected.modelReason));
+      const lines = [...headers, theme.focus(`Root › ${breadcrumb.join(" › ")}`)];
+      lines.push(
+        ...wrapTextWithAnsi(
+          `${selected.role} · ${selected.provider}/${selected.model.split("/").at(-1)} · ${selected.effort} · ${selected.status}`,
+          width,
+        ),
+        ...wrapTextWithAnsi(
+          `run ${selected.id} · tree ${selected.treeId}${selected.parentId ? ` · parent ${selected.parentId}` : ""}`,
+          width,
+        ).map((line) => theme.muted(line)),
+        ...wrapTextWithAnsi(
+          `${selected.modelReason} · context ${selected.contextMode}/${selected.contextChars} chars`,
+          width,
+        ).map((line) => theme.muted(line)),
+      );
       if (this.agentTab === "tools") {
         lines.push(
           theme.bold("Tools"),
           ...(selected.tools.length ? selected.tools.map((tool) => `  ${tool}`) : ["  none"]),
         );
-        if (selected.sessionFile) lines.push(theme.muted(`Session  ${selected.sessionFile}`));
       } else {
         lines.push(theme.bold("Task"), ...wrapTextWithAnsi(selected.task, width));
-        lines.push(theme.bold("Transcript"));
+        const usage = selected.usage;
+        const budget = selected.budget;
+        lines.push(
+          theme.bold("Budget"),
+          ...wrapTextWithAnsi(
+            `  run ${formatAgentTokens(Math.max(0, budget.maxRunTokens - budget.runTokensUsed))} tokens left · tree ${formatAgentTokens(Math.max(0, budget.maxTreeTokens - budget.treeTokensUsed))} / $${Math.max(0, budget.maxTreeCostUsd - budget.treeCostUsd).toFixed(3)} left`,
+            width,
+          ),
+          ...wrapTextWithAnsi(
+            `  usage in ${formatAgentTokens(usage.input)} · out ${formatAgentTokens(usage.output)} · cache ${formatAgentTokens(usage.cacheRead + usage.cacheWrite)} · ${usage.turns} turns`,
+            width,
+          ).map((line) => theme.muted(line)),
+          theme.bold("Timeline"),
+          ...selected.timeline.flatMap((event) =>
+            wrapTextWithAnsi(`  ${event.at.slice(11, 19)} ${event.kind} · ${event.summary}`, width),
+          ),
+        );
+        lines.push(theme.bold("Run output preview"));
         lines.push(...wrapTextWithAnsi(selected.outputPreview ?? "Waiting for output...", width));
       }
       return lines.map((line) => padLine(line, width));
     }
     const runs = this.agentRuns();
-    const lines = [header];
+    const lines = [...headers];
     if (this.agentSnapshot.diagnostic) lines.push(theme.warning(this.agentSnapshot.diagnostic));
+    const authority = this.agentSnapshot.authority;
+    lines.push(
+      ...wrapTextWithAnsi(
+        `Authority · required ${authority.pendingRequired.join(",") || "none"} · override turn ${authority.turnOverrides.join(",") || "none"} · session ${authority.sessionOverrides.join(",") || "none"}`,
+        width,
+      ).map((line) => theme.muted(line)),
+    );
     for (const teammate of this.agentSnapshot.teammates) {
       const model = teammate.currentModel ?? teammate.preferredModel ?? "inherit";
-      lines.push(padLine(`  ◇ ${teammate.id} · ${teammate.role}`, width));
+      lines.push(padLine(`  ◇ ${teammate.id} · ${teammate.role} · ${teammate.routing}`, width));
       lines.push(
-        theme.muted(
-          padLine(
-            `    ${teammate.routing} · current ${model}${teammate.preferredModel && teammate.preferredModel !== model ? ` · preferred ${teammate.preferredModel}` : ""} · ${teammate.effort ?? "inherit"} · lanes ${teammate.activeLanes.join(", ") || "none"}${teammate.stickyFallback ? " · sticky fallback" : ""}`,
-            width,
-          ),
-        ),
+        ...wrapTextWithAnsi(
+          `    current ${model} · preferred ${teammate.preferredModel ?? "inherit"} · effort ${teammate.effort ?? "inherit"}`,
+          width,
+        ).map((line) => theme.muted(line)),
       );
+      if (teammate.fallback) {
+        lines.push(
+          ...wrapTextWithAnsi(
+            `    fallback ${teammate.fallback.from} -> ${teammate.currentModel ?? model} · ${teammate.fallback.reason}`,
+            width,
+          ).map((line) => theme.warning(line)),
+        );
+      }
+      const lanes = teammate.lanes.length
+        ? teammate.lanes.map((lane) => `${lane.lane}:${lane.state}${lane.owner ? `@${lane.owner}` : ""}`).join(", ")
+        : teammate.activeLanes.map((lane) => `${lane}:idle`).join(", ") || "none";
+      lines.push(...wrapTextWithAnsi(`    lanes ${lanes}`, width).map((line) => theme.muted(line)));
     }
     runs.forEach((run, index) => {
       const symbol =
@@ -2351,7 +2461,7 @@ export class PanelController {
       const branch = `${"  ".repeat(Math.max(0, run.depth - 1))}${run.depth > 1 ? "└─ " : ""}`;
       const current = index === this.state.selected ? "› " : "  ";
       lines.push(
-        padLine(
+        ...wrapTextWithAnsi(
           `${current}${branch}${symbol} ${run.role} · ${run.model.split("/").at(-1)} · ${run.status} · ${run.task}`,
           width,
         ),

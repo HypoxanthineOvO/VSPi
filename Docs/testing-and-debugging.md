@@ -34,6 +34,7 @@
 npm run test:pty
 npx vitest run test/pty-continuity.test.ts
 npx vitest run test/pty-scrollback.test.ts
+npx vitest run test/pty-fullscreen.test.ts
 ```
 
 新增场景优先复用 `PtyHarness`：
@@ -53,6 +54,8 @@ npx vitest run test/pty-scrollback.test.ts
 - `viewportY`：当前可见窗口起点；跟随最新输出时应等于 `baseY`。
 - `cursorX` / `cursorY`：物理光标位置；主界面中应位于 Composer 内且不能落到 status 下方。
 - `length`：buffer 总行数，可辅助判断历史是否真的进入原生 scrollback。
+
+Fullscreen 使用 alternate buffer，`baseY` 应保持 0；历史可达性通过 PageUp/Home/End/滚轮和当前 `screenText()` 验证。Regular 才用 `baseY > 0` 与 `scrollbackText()` 验证原生历史。PTY 可用 `VSPi_TUI_MODE=fullscreen|regular` 明确固定 renderer，避免用户配置影响测试。
 
 TUI 连续性回归至少覆盖以下场景：
 

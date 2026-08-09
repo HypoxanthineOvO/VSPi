@@ -1,6 +1,8 @@
+import { execFile as execFileCallback } from "node:child_process";
 import { mkdtemp, readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import {
   type AgentSession,
   type AgentSessionEvent,
@@ -13,7 +15,9 @@ import { PiAgentManager } from "../src/agents/manager.js";
 import type { AgentStatusEvent } from "../src/agents/types.js";
 import { createExecutionPolicyService } from "../src/policy/execution-policy.js";
 
-function fakeSession(prompt: (text: string) => Promise<string>): AgentSession {
+const execFile = promisify(execFileCallback);
+
+function fakeSession(prompt: (text: string) => Promise<string>, inputTokens = 2): AgentSession {
   const messages: unknown[] = [];
   return {
     messages,
@@ -27,7 +31,7 @@ function fakeSession(prompt: (text: string) => Promise<string>): AgentSession {
         content: [{ type: "text", text: output }],
         stopReason: "stop",
         usage: {
-          input: 2,
+          input: inputTokens,
           output: 3,
           cacheRead: 1,
           cacheWrite: 0,
@@ -41,13 +45,39 @@ function fakeSession(prompt: (text: string) => Promise<string>): AgentSession {
   } as unknown as AgentSession;
 }
 
-function stoppedSession(stopReason: "error" | "aborted", errorMessage: string): AgentSession {
+function abortControlledSession(onPrompt?: () => void): AgentSession {
+  const messages: unknown[] = [];
+  let resolvePrompt: (() => void) | undefined;
+  let stopped = false;
+  return {
+    messages,
+    subscribe() {
+      return () => undefined;
+    },
+    prompt: vi.fn(async () => {
+      onPrompt?.();
+      await new Promise<void>((resolvePromise) => {
+        resolvePrompt = resolvePromise;
+      });
+    }),
+    abort: vi.fn(async () => {
+      if (stopped) return;
+      stopped = true;
+      messages.push({ role: "assistant", content: [], stopReason: "aborted", errorMessage: "cancelled" });
+      resolvePrompt?.();
+    }),
+    dispose: vi.fn(),
+  } as unknown as AgentSession;
+}
+
+function stoppedSession(stopReason: "error" | "aborted", errorMessage: string, inputTokens = 0): AgentSession {
   const messages = [
     {
       role: "assistant",
       content: [],
       stopReason,
       errorMessage,
+      usage: { input: inputTokens, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
     },
   ];
   return {
@@ -261,6 +291,7 @@ describe("PiAgentManager", () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-manager-"));
     const sessions: Array<{ model: string; effort: string; tools: string[] }> = [];
     const prompts: string[] = [];
+    const sessionFiles: Array<string | undefined> = [];
     const manager = await PiAgentManager.create({
       cwd,
       agentDir: cwd,
@@ -270,6 +301,7 @@ describe("PiAgentManager", () => {
       executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
       sessionFactory: async (input) => {
         sessions.push({ model: input.model, effort: input.effort, tools: input.tools });
+        sessionFiles.push(input.manager.getSessionFile());
         return fakeSession(async (prompt) => {
           prompts.push(prompt);
           return "isolated result";
@@ -289,6 +321,66 @@ describe("PiAgentManager", () => {
     expect(sessions).toEqual([{ model: "openai/gpt-5", effort: "high", tools: ["read", "ls", "find", "grep"] }]);
     expect(prompts[0]).toContain("Only this context");
     expect(prompts[0]).not.toContain("PARENT_CONTEXT_MUST_NOT_LEAK");
+    expect(sessionFiles).toEqual([undefined]);
+    await manager.dispose();
+  });
+
+  it("publishes a bounded redacted audit projection with usage and budget instead of a Session path", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-audit-"));
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: false,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory: async () => fakeSession(async () => "Bearer audit-secret-token api_key=output-secret"),
+    });
+    await manager
+      .createTool(["read"], true)
+      .execute(
+        "audit-projection",
+        { task: "Audit api_key=task-secret" },
+        undefined,
+        undefined,
+        fakeToolContext(cwd) as never,
+      );
+    const run = manager.snapshot().recent[0];
+    expect(run).toMatchObject({
+      provider: "openai",
+      contextMode: "isolated",
+      contextChars: 0,
+      usage: { input: 2, output: 3, cacheRead: 1, turns: 1 },
+      budget: { runTokensUsed: 6, treeTokensUsed: 6, maxRunTokens: 120_000, maxTreeTokens: 500_000 },
+      status: "success",
+    });
+    expect(run?.timeline.map((event) => event.kind)).toEqual(["queued", "started", "completed"]);
+    const audit = JSON.stringify(run);
+    expect(audit).toContain("[redacted]");
+    expect(audit).not.toContain("task-secret");
+    expect(audit).not.toContain("audit-secret-token");
+    expect(audit).not.toContain("output-secret");
+    expect(audit).not.toContain(cwd);
+    expect(run).not.toHaveProperty("sessionFile");
+    await manager.dispose();
+  });
+
+  it("refreshes completed sibling projections with the final shared tree budget", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-tree-projection-"));
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: false,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory: async () => fakeSession(async () => "done"),
+    });
+    manager.beginRootTask("Run two checks");
+    const tool = manager.createTool(["read"], true);
+    await tool.execute("first", { task: "Check first area" }, undefined, undefined, fakeToolContext(cwd) as never);
+    await tool.execute("second", { task: "Check second area" }, undefined, undefined, fakeToolContext(cwd) as never);
+    expect(manager.snapshot().recent.map((run) => run.budget.treeTokensUsed)).toEqual([12, 12]);
     await manager.dispose();
   });
 
@@ -324,7 +416,7 @@ describe("PiAgentManager", () => {
         task: "Use the inherited facts",
         instructions: "Answer as an auditor",
         system_prompt: "Custom child system prompt",
-        model: "deepseek/reasoner",
+        model: "openai/gpt-4",
         effort: "xhigh",
         tools: ["read"],
         inherit_parent_context: true,
@@ -337,7 +429,7 @@ describe("PiAgentManager", () => {
     expect(result.content).toEqual([{ type: "text", text: "custom result" }]);
     expect(sessions).toMatchObject([
       {
-        model: "deepseek/reasoner",
+        model: "openai/gpt-4",
         effort: "xhigh",
         tools: ["read"],
         systemPrompt: "Custom child system prompt",
@@ -349,6 +441,99 @@ describe("PiAgentManager", () => {
     expect(childPrompt).not.toContain("supersecret");
     expect(childPrompt).not.toContain("sk-1234567890abcdef");
     expect(manager.snapshot().recent[0]?.contextMode).toBe("inherited");
+    await manager.dispose();
+  });
+
+  it("rejects cross-provider Task delegation before creating a Session when project policy disables it", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-cross-provider-"));
+    const sessionFactory = vi.fn(async () => fakeSession(async () => "unused"));
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: false,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory,
+    });
+
+    await expect(
+      manager
+        .createTool(["read"], true)
+        .execute(
+          "cross-provider",
+          { task: "Research", model: "deepseek/reasoner" },
+          undefined,
+          undefined,
+          fakeToolContext(cwd) as never,
+        ),
+    ).rejects.toThrow("Cross-provider delegation is disabled");
+    expect(sessionFactory).not.toHaveBeenCalled();
+    await manager.dispose();
+  });
+
+  it("rejects full parent-history inheritance across Providers even when explicit delegation is enabled", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-cross-provider-inherit-"));
+    const config = defaultAgentProjectConfig();
+    config.crossProviderDelegation = true;
+    await saveAgentProjectConfig(cwd, true, config);
+    const sessionFactory = vi.fn(async () => fakeSession(async () => "unused"));
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: true,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory,
+    });
+
+    await expect(
+      manager
+        .createTool(["read"], true)
+        .execute(
+          "cross-provider-history",
+          { task: "Research", model: "deepseek/reasoner", inherit_parent_context: true },
+          undefined,
+          undefined,
+          fakeToolContext(cwd, "private parent history") as never,
+        ),
+    ).rejects.toThrow("Full parent context cannot cross Provider boundaries");
+    expect(sessionFactory).not.toHaveBeenCalled();
+    await manager.dispose();
+  });
+
+  it("allows only task and explicit context across Providers when project policy enables delegation", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-cross-provider-explicit-"));
+    const config = defaultAgentProjectConfig();
+    config.crossProviderDelegation = true;
+    await saveAgentProjectConfig(cwd, true, config);
+    let prompt = "";
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: true,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory: async (input) =>
+        fakeSession(async (received) => {
+          expect(input.model).toBe("deepseek/reasoner");
+          prompt = received;
+          return "cross-provider result";
+        }),
+    });
+    await manager
+      .createTool(["read"], true)
+      .execute(
+        "cross-provider-explicit",
+        { task: "Research remote facts", context: "share this fact", model: "deepseek/reasoner" },
+        undefined,
+        undefined,
+        fakeToolContext(cwd, "private parent history") as never,
+      );
+    expect(prompt).toContain("share this fact");
+    expect(prompt).not.toContain("private parent history");
     await manager.dispose();
   });
 
@@ -431,6 +616,43 @@ describe("PiAgentManager", () => {
     await recovery.dispose();
   });
 
+  it("serializes all Bash boundaries across managers, including commands labelled read-only", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-writer-"));
+    const output = join(cwd, "writer-order.txt");
+    const options = {
+      cwd,
+      agentDir: cwd,
+      trustedProject: false,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory: async () => fakeSession(async () => "unused"),
+    };
+    const [firstManager, secondManager] = await Promise.all([
+      PiAgentManager.create(options),
+      PiAgentManager.create(options),
+    ]);
+    const first = firstManager.withToolBoundary({ kind: "process", operation: "read" }, async () => {
+      await execFile(process.execPath, [
+        "-e",
+        "const {appendFileSync}=require('node:fs');appendFileSync(process.argv[1],'A');setTimeout(()=>appendFileSync(process.argv[1],'B'),100)",
+        output,
+      ]);
+    });
+    while (true) {
+      try {
+        if ((await readFile(output, "utf8")) === "A") break;
+      } catch {}
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 5));
+    }
+    const second = secondManager.withToolBoundary({ kind: "process", operation: "read" }, async () => {
+      await execFile(process.execPath, ["-e", "require('node:fs').appendFileSync(process.argv[1],'C')", output]);
+    });
+    await Promise.all([first, second]);
+    expect(await readFile(output, "utf8")).toBe("ABC");
+    await Promise.all([firstManager.dispose(), secondManager.dispose()]);
+  });
+
   it("falls back only after a quota error and reports the model change to the parent surface", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-fallback-"));
     const events: AgentStatusEvent[] = [];
@@ -453,21 +675,52 @@ describe("PiAgentManager", () => {
     const tool = manager.createTool(["read", "ls", "find", "grep"], true);
     const result = await tool.execute(
       "call-2",
-      { task: "Research", fallback_models: ["deepseek/reasoner"] },
+      { task: "Research", fallback_models: ["openai/gpt-4"] },
       undefined,
       undefined,
       fakeToolContext(cwd) as never,
     );
 
     expect(result.content[0]).toMatchObject({ type: "text" });
-    expect((result.content[0] as { text: string }).text).toContain(
-      "Task Agent fallback: openai/gpt-5 -> deepseek/reasoner",
-    );
+    expect((result.content[0] as { text: string }).text).toContain("Task Agent fallback: openai/gpt-5 -> openai/gpt-4");
     expect((result.content[0] as { text: string }).text).toContain("fallback result");
-    expect(events.some((event) => event.fallbackNotice?.includes("openai/gpt-5 -> deepseek/reasoner"))).toBe(true);
+    expect(events.some((event) => event.fallbackNotice?.includes("openai/gpt-5 -> openai/gpt-4"))).toBe(true);
     expect(manager.snapshot().recent[0]).toMatchObject({
-      model: "deepseek/reasoner",
+      model: "openai/gpt-4",
       fallbackReason: "quota_exhausted",
+    });
+    await manager.dispose();
+  });
+
+  it("aggregates fallback attempt usage in the run and tree audit budget", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-fallback-usage-"));
+    let attempt = 0;
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: false,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory: async () => {
+        attempt += 1;
+        return attempt === 1
+          ? stoppedSession("error", "insufficient_quota", 10)
+          : fakeSession(async () => "fallback complete");
+      },
+    });
+    await manager
+      .createTool(["read"], true)
+      .execute(
+        "fallback-usage",
+        { task: "Research usage", fallback_models: ["openai/gpt-4"] },
+        undefined,
+        undefined,
+        fakeToolContext(cwd) as never,
+      );
+    expect(manager.snapshot().recent[0]).toMatchObject({
+      usage: { input: 12, output: 3, cacheRead: 1, cacheWrite: 0, turns: 2 },
+      budget: { runTokensUsed: 16, treeTokensUsed: 16 },
     });
     await manager.dispose();
   });
@@ -502,9 +755,139 @@ describe("PiAgentManager", () => {
     await manager.dispose();
   });
 
+  it("charges failed quota attempts to the tree budget before considering fallback", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-failed-budget-"));
+    const config = defaultAgentProjectConfig();
+    config.maxRunTokens = 1_000;
+    config.maxTreeTokens = 1_000;
+    await saveAgentProjectConfig(cwd, true, config);
+    let attempts = 0;
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: true,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory: async () => {
+        attempts += 1;
+        return stoppedSession("error", "insufficient_quota", 1_000);
+      },
+    });
+    await expect(
+      manager
+        .createTool(["read"], true)
+        .execute(
+          "failed-budget",
+          { task: "Research", fallback_models: ["openai/gpt-4"] },
+          undefined,
+          undefined,
+          fakeToolContext(cwd) as never,
+        ),
+    ).rejects.toThrow("tree token budget exhausted");
+    expect(attempts).toBe(1);
+    await manager.dispose();
+  });
+
+  it("rejects a completed attempt that exceeds the per-run token boundary", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-run-budget-"));
+    const config = defaultAgentProjectConfig();
+    config.maxRunTokens = 1_000;
+    await saveAgentProjectConfig(cwd, true, config);
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: true,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory: async () => fakeSession(async () => "over budget", 1_001),
+    });
+    await expect(
+      manager
+        .createTool(["read"], true)
+        .execute("run-budget", { task: "Research budget" }, undefined, undefined, fakeToolContext(cwd) as never),
+    ).rejects.toThrow("run token budget exceeded (1005/1000)");
+    await manager.dispose();
+  });
+
+  it("aborts an active attempt at its configured deadline", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-deadline-"));
+    const config = defaultAgentProjectConfig();
+    config.maxRunSeconds = 1;
+    await saveAgentProjectConfig(cwd, true, config);
+    const child = abortControlledSession();
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: true,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory: async () => child,
+    });
+    await expect(
+      manager
+        .createTool(["read"], true)
+        .execute("deadline", { task: "Wait for deadline" }, undefined, undefined, fakeToolContext(cwd) as never),
+    ).rejects.toThrow("run deadline exceeded (1s)");
+    expect(child.abort).toHaveBeenCalled();
+    await manager.dispose();
+  });
+
+  it("cascades root cancellation to active and queued descendants", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-tree-cancel-"));
+    const config = defaultAgentProjectConfig();
+    config.maxConcurrency = 1;
+    await saveAgentProjectConfig(cwd, true, config);
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolvePromise) => {
+      markStarted = resolvePromise;
+    });
+    const child = abortControlledSession(markStarted);
+    const sessionFactory = vi.fn(async () => child);
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: true,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory,
+    });
+    manager.beginRootTask("Run parallel research");
+    const tool = manager.createTool(["read"], true);
+    const active = tool.execute(
+      "active-child",
+      { task: "Research active branch" },
+      undefined,
+      undefined,
+      fakeToolContext(cwd) as never,
+    );
+    await started;
+    const queued = tool.execute(
+      "queued-child",
+      { task: "Research queued branch" },
+      undefined,
+      undefined,
+      fakeToolContext(cwd) as never,
+    );
+    const settled = Promise.allSettled([active, queued]);
+    await manager.cancelAll();
+    const results = await settled;
+    expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+    expect(results.map((result) => (result.status === "rejected" ? result.reason.name : ""))).toEqual([
+      "AbortError",
+      "AbortError",
+    ]);
+    expect(sessionFactory).toHaveBeenCalledOnce();
+    await manager.dispose();
+  });
+
   it("persists Teammate fallback as a sticky binding until an explicit model switch", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-teammate-fallback-"));
     const config = defaultAgentProjectConfig();
+    config.crossProviderDelegation = true;
     config.teammates.push({
       id: "frontend",
       role: "Frontend",
@@ -564,6 +947,7 @@ describe("PiAgentManager", () => {
   it("rolls back an in-memory sticky fallback when config persistence fails", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-teammate-fallback-rollback-"));
     const config = defaultAgentProjectConfig();
+    config.crossProviderDelegation = true;
     config.teammates.push({
       id: "frontend",
       role: "Frontend",

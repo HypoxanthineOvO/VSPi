@@ -30,7 +30,7 @@ export function createPolicyToolOverrides(options: {
   workspaceBoundary?: boolean;
   bashOperations?: BashOperations;
   preflight?: (action: PolicyAction) => void | Promise<void>;
-  executionBoundary?: <T>(action: PolicyAction, operation: () => Promise<T>) => Promise<T>;
+  executionBoundary?: <T>(action: PolicyAction, operation: () => Promise<T>, signal?: AbortSignal) => Promise<T>;
 }): PolicyToolOverrides {
   const workspace = resolve(options.workspace);
   const native = {
@@ -100,7 +100,7 @@ export function createPolicyToolOverrides(options: {
           if (!decision.allowed) throw new Error(decision.reason);
           return tool.execute(toolCallId, input, signal, onUpdate, context);
         };
-        return options.executionBoundary ? options.executionBoundary(action, operation) : operation();
+        return options.executionBoundary ? options.executionBoundary(action, operation, signal) : operation();
       },
     };
   }

@@ -1,4 +1,4 @@
-import type { AgentRole, AgentSnapshot } from "../agents/types.js";
+import type { AgentOverrideScope, AgentRole, AgentSnapshot } from "../agents/types.js";
 import type { CompactOptions } from "../continuity/compaction-profiles.js";
 import type {
   Attachment,
@@ -213,6 +213,7 @@ export interface ChatBackend {
   getAgentSnapshot?(): AgentSnapshot;
   switchTeammateModel?(id: string, model: string): Promise<void>;
   resetTeammateLane?(id: string, lane?: string): Promise<void>;
+  overrideRequiredTeammate?(id: string, scope: AgentOverrideScope): Promise<void>;
   setAgentPoolRole?(provider: string, role: AgentRole, model: string): Promise<void>;
   isProjectTrusted?(): boolean;
   runProviderProbe?(

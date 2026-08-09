@@ -15,9 +15,16 @@ import { type Static, Type } from "typebox";
 import type { EffortLevel } from "../domain/types.js";
 import type { ExecutionPolicyService, PolicyAction } from "../policy/execution-policy.js";
 import { createPolicyToolOverrides } from "../policy/pi-policy-tools.js";
-import { AGENT_TOOL_NAMES, loadAgentProjectConfig, saveAgentProjectConfig } from "./config.js";
+import {
+  AGENT_TOOL_NAMES,
+  defaultAgentProjectConfig,
+  loadAgentProjectConfig,
+  saveAgentProjectConfig,
+} from "./config.js";
+import { AgentLeaseConflictError, acquireAgentExclusiveLease } from "./exclusive-lease.js";
 import { type AgentGenerationLease, type AgentTreeContext, AgentTreeScheduler } from "./scheduler.js";
 import type {
+  AgentLaneSnapshot,
   AgentProjectConfig,
   AgentRole,
   AgentRunSnapshot,
@@ -80,6 +87,15 @@ interface RunOutcome {
   usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number };
 }
 
+interface ResolvedRunSettings {
+  teammate?: TeammateDefinition;
+  tools: string[];
+  effort: EffortLevel;
+  role: AgentRole;
+  preferred: string;
+  modelReason: string;
+}
+
 export interface PiAgentManagerOptions {
   cwd: string;
   agentDir: string;
@@ -107,12 +123,16 @@ export class PiAgentManager {
   private readonly activeSessions = new Map<string, AgentSession>();
   private readonly lanes = new Map<string, CachedLane>();
   private readonly laneTails = new Map<string, Promise<void>>();
+  private readonly laneStates = new Map<string, AgentLaneSnapshot>();
   private readonly pools: ResolvedAgentModelPool[];
   private rootContext: AgentTreeContext | undefined;
+  private rootTaskEpoch = 0;
   private pendingRequired = new Set<string>();
+  private routingHints = new Map<string, "preferred" | "consult">();
+  private activeTurnOverrides = new Set<string>();
+  private nextTurnOverrides = new Set<string>();
+  private sessionOverrides = new Set<string>();
   private explicitAgentRequired = false;
-  private agentConfigMutationAuthorized = false;
-  private requiredOverride = false;
   private diagnostic: string | undefined;
   private disposed = false;
 
@@ -122,7 +142,13 @@ export class PiAgentManager {
     diagnostic?: string,
   ) {
     this.config = config;
-    this.scheduler = new AgentTreeScheduler(config.maxConcurrency);
+    this.scheduler = new AgentTreeScheduler(
+      config.maxConcurrency,
+      config.maxDepth,
+      config.maxAgentsPerTree,
+      config.maxTreeTokens,
+      config.maxTreeCostUsd,
+    );
     this.pools = resolveModelPools(options.modelRuntime, config);
     this.diagnostic = diagnostic;
   }
@@ -131,14 +157,7 @@ export class PiAgentManager {
     if (options.recovery) {
       return new PiAgentManager(
         options,
-        {
-          version: 1,
-          maxConcurrency: 16,
-          allowedModels: [],
-          modelPools: {},
-          crossProviderDelegation: false,
-          teammates: [],
-        },
+        { ...defaultAgentProjectConfig(), allowedModels: [] },
         "Recovery mode disables delegated agents",
       );
     }
@@ -147,14 +166,7 @@ export class PiAgentManager {
     } catch (error) {
       return new PiAgentManager(
         options,
-        {
-          version: 1,
-          maxConcurrency: 16,
-          allowedModels: [],
-          modelPools: {},
-          crossProviderDelegation: false,
-          teammates: [],
-        },
+        { ...defaultAgentProjectConfig(), allowedModels: [] },
         `Agent configuration rejected: ${safeError(error)}`,
       );
     }
@@ -254,44 +266,36 @@ export class PiAgentManager {
 
   beginRootTask(text: string, merge = false): void {
     const normalized = text.toLocaleLowerCase();
+    const matches = (item: TeammateDefinition) =>
+      item.match.length > 0 && item.match.some((match) => normalized.includes(match.toLocaleLowerCase()));
     const matchedRequired = new Set(
-      this.config.teammates
-        .filter(
-          (item) =>
-            item.routing === "required" &&
-            item.match.length > 0 &&
-            item.match.some((match) => normalized.includes(match.toLocaleLowerCase())),
-        )
-        .map((item) => item.id),
+      this.config.teammates.filter((item) => item.routing === "required" && matches(item)).map((item) => item.id),
+    );
+    const matchedHints = this.config.teammates.filter(
+      (item): item is TeammateDefinition & { routing: "preferred" | "consult" } =>
+        (item.routing === "preferred" || item.routing === "consult") && matches(item),
     );
     const mentionsAgent = /\bsub[ -]?agent\b|子代理|子智能体|派(?:生|一个)?.{0,8}agent/iu.test(text);
     const rejectsAgent =
       /(?:不用|不要|禁止|别用|do not|don't|without).{0,20}(?:sub[ -]?agent|子代理|子智能体|agent)/iu.test(text);
     const explicitlyRequired = mentionsAgent && !rejectsAgent;
-    const requiredOverride =
-      /(?:override|ignore|bypass|接管|覆盖|绕过).{0,30}(?:teammate|队友|路由|routing|required)/iu.test(text) ||
-      /(?:主模型|main agent).{0,30}(?:接管|take over|override)/iu.test(text);
-    const mutationAuthorized =
-      /(?:create|add|delete|remove|switch|change|reset|创建|添加|删除|切换|更换|重置).{0,40}(?:teammate|sub[ -]?agent|agent|队友|子代理)/iu.test(
-        text,
-      ) ||
-      /(?:teammate|sub[ -]?agent|agent|队友|子代理).{0,40}(?:create|add|delete|remove|switch|change|reset|创建|添加|删除|切换|更换|重置)/iu.test(
-        text,
-      );
     if (!merge) {
       if (this.rootContext) this.scheduler.finishTree(this.rootContext.treeId);
       this.rootContext = this.scheduler.root();
+      this.rootTaskEpoch += 1;
+      this.activeTurnOverrides = this.nextTurnOverrides;
+      this.nextTurnOverrides = new Set();
       this.pendingRequired = matchedRequired;
+      this.routingHints = new Map(matchedHints.map((item) => [item.id, item.routing]));
       this.explicitAgentRequired = explicitlyRequired;
-      this.requiredOverride = requiredOverride;
-      this.agentConfigMutationAuthorized = mutationAuthorized;
     } else {
       for (const id of matchedRequired) this.pendingRequired.add(id);
+      for (const item of matchedHints) this.routingHints.set(item.id, item.routing);
       this.explicitAgentRequired ||= explicitlyRequired;
-      this.requiredOverride ||= requiredOverride;
-      this.agentConfigMutationAuthorized ||= mutationAuthorized;
     }
-    if (requiredOverride) this.pendingRequired.clear();
+    for (const id of [...this.pendingRequired]) {
+      if (this.overrideApplies(id)) this.pendingRequired.delete(id);
+    }
   }
 
   capabilityContext(): string | undefined {
@@ -309,14 +313,26 @@ export class PiAgentManager {
         ? [`User policy for this turn requires teammate routing: ${[...this.pendingRequired].join(", ")}.`]
         : []),
       ...(this.explicitAgentRequired ? ["The user explicitly required subagent use for this turn."] : []),
-      ...(this.requiredOverride ? ["The user explicitly overrode required Teammate routing for this turn."] : []),
+      ...(this.routingHints.size > 0
+        ? [
+            `Routing guidance for this turn: ${[...this.routingHints]
+              .map(([id, routing]) => `${routing}=${id}`)
+              .join(", ")}. Preferred routes by default; consult is advisory; neither blocks main-agent completion.`,
+          ]
+        : []),
+      ...(this.activeTurnOverrides.size > 0 || this.sessionOverrides.size > 0
+        ? [
+            `Typed required-routing overrides: turn=${[...this.activeTurnOverrides].join(", ") || "none"}; session=${[...this.sessionOverrides].join(", ") || "none"}.`,
+          ]
+        : []),
+      "Manual teammates are used only when a call explicitly names them.",
       "</vspi_agent_capabilities>",
     ].join("\n");
   }
 
   assertMainAction(action: PolicyAction): void {
-    if (isPersistentAgentMutation(action, this.options.cwd) && !this.agentConfigMutationAuthorized) {
-      throw new Error("Persistent Teammate changes require an explicit user request");
+    if (isPersistentAgentMutation(action, this.options.cwd)) {
+      throw new Error("Persistent Teammate changes require a typed /agents action");
     }
     const mutating = action.kind === "file-write" || (action.kind === "process" && action.operation !== "read");
     if (!mutating) return;
@@ -336,6 +352,9 @@ export class PiAgentManager {
     }
     if (this.rootContext) this.scheduler.finishTree(this.rootContext.treeId);
     this.rootContext = undefined;
+    this.activeTurnOverrides.clear();
+    this.routingHints.clear();
+    this.explicitAgentRequired = false;
   }
 
   snapshot(): AgentSnapshot {
@@ -347,6 +366,10 @@ export class PiAgentManager {
         maxDepth: this.scheduler.maxDepth,
         maxAgentsPerTree: this.scheduler.maxAgentsPerTree,
         maxConcurrency: this.scheduler.maxConcurrency,
+        maxRunTokens: this.config.maxRunTokens,
+        maxTreeTokens: this.config.maxTreeTokens,
+        maxTreeCostUsd: this.config.maxTreeCostUsd,
+        maxRunSeconds: this.config.maxRunSeconds,
       },
       pools: structuredClone(this.pools),
       active: [...this.active.values()].map(cloneRun),
@@ -356,53 +379,74 @@ export class PiAgentManager {
         activeLanes: [...this.lanes.keys()]
           .filter((key) => key.startsWith(`${item.id}:`))
           .map((key) => key.slice(item.id.length + 1)),
+        lanes: [...this.laneStates]
+          .filter(([key]) => key.startsWith(`${item.id}:`))
+          .map(([, lane]) => structuredClone(lane)),
         stickyFallback: item.fallback !== undefined,
       })),
+      authority: {
+        pendingRequired: [...this.pendingRequired],
+        turnOverrides: [...this.activeTurnOverrides],
+        sessionOverrides: [...this.sessionOverrides],
+        taskEpoch: this.rootTaskEpoch,
+      },
       ...(this.diagnostic ? { diagnostic: this.diagnostic } : {}),
     };
   }
 
   async switchTeammateModel(id: string, model: string): Promise<void> {
-    const teammate = this.requireTeammate(id);
-    this.assertAllowedModel(model);
     await this.resolveModel(model);
-    const previousModel = teammate.currentModel;
-    const previousFallback = teammate.fallback ? structuredClone(teammate.fallback) : undefined;
-    teammate.currentModel = model;
-    delete teammate.fallback;
+    const gate = await this.acquireTeammateGate(id);
+    let configGate: Awaited<ReturnType<typeof acquireAgentExclusiveLease>> | undefined;
     try {
-      await saveAgentProjectConfig(this.options.cwd, this.options.trustedProject, this.config);
-    } catch (error) {
-      if (previousModel) teammate.currentModel = previousModel;
-      else delete teammate.currentModel;
-      if (previousFallback) teammate.fallback = previousFallback;
-      else delete teammate.fallback;
-      throw error;
+      configGate = await this.acquireConfigGate();
+      await this.refreshMutableProjectConfig();
+      const teammate = this.requireTeammate(id);
+      this.assertAllowedModel(model);
+      const previousModel = teammate.currentModel;
+      const previousFallback = teammate.fallback ? structuredClone(teammate.fallback) : undefined;
+      teammate.currentModel = model;
+      delete teammate.fallback;
+      try {
+        await saveAgentProjectConfig(this.options.cwd, this.options.trustedProject, this.config);
+      } catch (error) {
+        if (previousModel) teammate.currentModel = previousModel;
+        else delete teammate.currentModel;
+        if (previousFallback) teammate.fallback = previousFallback;
+        else delete teammate.fallback;
+        throw error;
+      }
+      await this.closeTeammateLanes(id);
+    } finally {
+      await configGate?.release();
+      await gate.release();
     }
-    await this.closeTeammateLanes(id);
   }
 
   async resetTeammateLane(id: string, lane = "default"): Promise<void> {
-    const teammate = this.requireTeammate(id);
+    this.requireTeammate(id);
     const safeLane = identifier(lane, "lane");
     const key = `${id}:${safeLane}`;
-    const cached = this.lanes.get(key);
-    cached?.session.dispose();
-    this.lanes.delete(key);
-    const manager = await this.newLaneManager(id, safeLane);
-    manager.appendCustomEntry("vspi.teammate-lane-reset", { at: new Date().toISOString() });
-    const model = teammate.currentModel ?? teammate.preferredModel;
-    if (!model) return;
-    const session = await this.createSession(
-      manager,
-      model,
-      teammate.effort ?? "medium",
-      teammate.tools,
-      teammate.systemPrompt,
-      "",
-      undefined,
-    );
-    this.lanes.set(key, { session, manager, model, effort: teammate.effort ?? "medium" });
+    await this.withLane(key, async () => {
+      const teammate = this.requireTeammate(id);
+      const cached = this.lanes.get(key);
+      cached?.session.dispose();
+      this.lanes.delete(key);
+      const manager = await this.newLaneManager(id, safeLane);
+      manager.appendCustomEntry("vspi.teammate-lane-reset", { at: new Date().toISOString() });
+      const model = teammate.currentModel ?? teammate.preferredModel;
+      if (!model) return;
+      const session = await this.createSession(
+        manager,
+        model,
+        teammate.effort ?? "medium",
+        teammate.tools,
+        teammate.systemPrompt,
+        "",
+        undefined,
+      );
+      this.lanes.set(key, { session, manager, model, effort: teammate.effort ?? "medium" });
+    });
   }
 
   async setModelPoolRole(provider: string, role: AgentRole, model: string): Promise<void> {
@@ -411,24 +455,45 @@ export class PiAgentManager {
       throw new Error("Agent Pool provider or role is invalid");
     }
     await this.resolveModel(model);
-    if (!this.config.crossProviderDelegation && !model.startsWith(`${provider}/`)) {
-      throw new Error("Cross-provider delegation is disabled for this project");
-    }
-    const previous = structuredClone(this.config.modelPools);
-    this.config.modelPools[provider] = {
-      roles: { ...(this.config.modelPools[provider]?.roles ?? {}), [role]: model },
-    };
+    const gate = await this.acquireConfigGate();
     try {
-      await saveAgentProjectConfig(this.options.cwd, true, this.config);
-    } catch (error) {
-      this.config.modelPools = previous;
-      throw error;
+      await this.refreshMutableProjectConfig();
+      if (!this.config.crossProviderDelegation && !model.startsWith(`${provider}/`)) {
+        throw new Error("Cross-provider delegation is disabled for this project");
+      }
+      const previous = structuredClone(this.config.modelPools);
+      this.config.modelPools[provider] = {
+        roles: { ...(this.config.modelPools[provider]?.roles ?? {}), [role]: model },
+      };
+      try {
+        await saveAgentProjectConfig(this.options.cwd, true, this.config);
+      } catch (error) {
+        this.config.modelPools = previous;
+        throw error;
+      }
+      this.pools.splice(0, this.pools.length, ...resolveModelPools(this.options.modelRuntime, this.config));
+    } finally {
+      await gate.release();
     }
-    this.pools.splice(0, this.pools.length, ...resolveModelPools(this.options.modelRuntime, this.config));
   }
 
   async cancelAll(): Promise<void> {
+    const trees = new Set([...this.active.values()].map((run) => run.treeId));
+    if (this.rootContext) trees.add(this.rootContext.treeId);
+    for (const treeId of trees) this.scheduler.cancelTree(treeId);
     await Promise.all([...this.activeSessions.values()].map((session) => session.abort().catch(() => undefined)));
+  }
+
+  overrideRequiredTeammate(id: string, scope: "turn" | "session" = "turn"): void {
+    const target = id === "all" ? "*" : this.requireTeammate(id).id;
+    if (scope === "session") this.sessionOverrides.add(target);
+    else if (this.rootContext) this.activeTurnOverrides.add(target);
+    else this.nextTurnOverrides.add(target);
+    if (this.rootContext) {
+      for (const pending of [...this.pendingRequired]) {
+        if (target === "*" || pending === target) this.pendingRequired.delete(pending);
+      }
+    }
   }
 
   async dispose(): Promise<void> {
@@ -446,22 +511,19 @@ export class PiAgentManager {
     signal: AbortSignal | undefined,
     update: (message: string) => void,
   ): Promise<RunOutcome> {
+    const taskEpoch = this.rootTaskEpoch;
     const runId = randomUUID();
     const fingerprint = compactText(task.task, 2_000).toLocaleLowerCase();
     if (/^(?:no[ -]?op|noop|unused|test|测试)[.!。\s]*$/iu.test(fingerprint)) {
       throw new Error("Subagent task must request substantive work");
     }
+    const settings = this.resolveRunSettings(task, parent);
     const context = this.scheduler.child(parentContext, runId, fingerprint);
-    const teammate = task.teammate ? this.requireTeammate(task.teammate) : undefined;
+    const treeSignal = this.scheduler.treeSignal(context.treeId);
+    const runSignal = signal ? AbortSignal.any([signal, treeSignal]) : treeSignal;
+    const teammate = settings.teammate;
     const lane = teammate ? identifier(task.lane ?? "default", "lane") : undefined;
-    const defaultTaskTools = ["read", "ls", "find", "grep"].filter((tool) => parent.tools.includes(tool));
-    const tools = this.resolveTools(task.tools ?? teammate?.tools ?? defaultTaskTools, parent.tools);
-    const effort = task.effort ?? teammate?.effort ?? parent.effort;
-    const role = task.role ?? inferAgentRole(task.task);
-    const routed = this.routeModel(role, parent.model);
-    const preferred = task.model ?? teammate?.currentModel ?? teammate?.preferredModel ?? routed.model;
-    if (!preferred) throw new Error("No parent or explicit model is available for the agent");
-    this.assertAllowedModel(preferred);
+    const queuedAt = new Date().toISOString();
     const run: AgentRunSnapshot = {
       id: runId,
       treeId: context.treeId,
@@ -470,18 +532,19 @@ export class PiAgentManager {
       ...(teammate ? { teammateId: teammate.id } : {}),
       ...(lane ? { lane } : {}),
       depth: context.depth,
-      model: preferred,
-      role,
-      modelReason: task.model
-        ? "explicit model"
-        : teammate?.currentModel || teammate?.preferredModel
-          ? "Teammate model"
-          : routed.reason,
+      model: settings.preferred,
+      provider: providerFromSelector(settings.preferred),
+      role: settings.role,
+      modelReason: settings.modelReason,
       ...(teammate?.preferredModel ? { preferredModel: teammate.preferredModel } : {}),
-      effort,
+      effort: settings.effort,
       contextMode: teammate ? "lane" : task.inherit_parent_context ? "inherited" : "isolated",
-      task: compactText(task.task, 500),
-      tools,
+      contextChars: task.context?.length ?? 0,
+      task: redactAuditText(task.task, 500),
+      tools: settings.tools,
+      usage: emptyUsage(),
+      budget: this.runBudget(context.treeId, emptyUsage()),
+      timeline: [{ at: queuedAt, kind: "queued", summary: "Run queued" }],
       status: "queued",
     };
     this.publish(run);
@@ -489,35 +552,60 @@ export class PiAgentManager {
     context.lease = lease;
     parentContext.lease?.suspend();
     try {
-      await lease.acquire(signal);
+      await lease.acquire(runSignal);
       run.status = "running";
       run.startedAt = new Date().toISOString();
+      run.deadlineAt = new Date(Date.now() + this.config.maxRunSeconds * 1_000).toISOString();
+      appendTimeline(run, "started", "Generation started");
       this.publish(run);
-      const operation = () =>
-        this.runWithFallback(
+      const operation = () => {
+        const current = teammate ? this.resolveRunSettings(task, parent) : settings;
+        run.model = current.preferred;
+        run.provider = providerFromSelector(current.preferred);
+        run.role = current.role;
+        run.modelReason = current.modelReason;
+        run.effort = current.effort;
+        run.tools = [...current.tools];
+        delete run.preferredModel;
+        if (current.teammate?.preferredModel) run.preferredModel = current.teammate.preferredModel;
+        this.publish(run);
+        return this.runWithFallback(
           task,
-          teammate,
+          current.teammate,
           lane,
           context,
           parent,
-          tools,
-          preferred,
-          effort,
+          current.tools,
+          current.preferred,
+          current.effort,
           parentHistory,
-          signal,
+          runSignal,
           update,
           run,
           lease,
         );
-      return teammate && lane ? await this.withLane(`${teammate.id}:${lane}`, operation) : await operation();
+      };
+      const outcome =
+        teammate && lane ? await this.withLane(`${teammate.id}:${lane}`, operation, runSignal) : await operation();
+      if (taskEpoch === this.rootTaskEpoch) {
+        if (teammate) this.pendingRequired.delete(teammate.id);
+        this.explicitAgentRequired = false;
+      }
+      this.publish(run);
+      return outcome;
     } catch (error) {
       run.status = error instanceof Error && error.name === "AbortError" ? "cancelled" : "error";
       run.finishedAt = new Date().toISOString();
+      appendTimeline(
+        run,
+        run.status === "cancelled" ? "cancelled" : isBudgetError(error) ? "budget" : "failed",
+        run.status === "cancelled" ? "Run cancelled" : safeError(error),
+      );
       this.publish(run);
       throw error;
     } finally {
       lease.release();
-      await parentContext.lease?.resume();
+      await parentContext.lease?.resume(runSignal).catch(() => undefined);
     }
   }
 
@@ -544,6 +632,7 @@ export class PiAgentManager {
       const model = candidates[index];
       if (!model) continue;
       this.assertAllowedModel(model);
+      this.assertProviderBoundary(model, parent, task.inherit_parent_context === true);
       try {
         const outcome =
           teammate && lane
@@ -577,8 +666,7 @@ export class PiAgentManager {
               );
         run.status = "success";
         run.finishedAt = new Date().toISOString();
-        this.pendingRequired.delete(teammate?.id ?? "");
-        this.explicitAgentRequired = false;
+        appendTimeline(run, "completed", "Run completed");
         this.publish(run);
         return {
           ...outcome,
@@ -588,27 +676,37 @@ export class PiAgentManager {
       } catch (error) {
         lastError = error;
         if (!isQuotaExhaustion(error) || index >= candidates.length - 1) throw error;
+        this.scheduler.assertBudget(run.treeId);
         const fallback = candidates[index + 1];
         if (!fallback) throw error;
         run.model = fallback;
+        run.provider = providerFromSelector(fallback);
         run.fallbackReason = "quota_exhausted";
         const notice = teammate
           ? `Teammate ${teammate.id} fallback: ${model} -> ${fallback} (quota exhausted); binding is sticky until the user changes it.`
           : `Task Agent fallback: ${model} -> ${fallback} (quota exhausted).`;
         fallbackNotice = notice;
+        appendTimeline(run, "fallback", `${model} -> ${fallback} (quota exhausted)`);
         if (teammate) {
-          const previousModel = teammate.currentModel;
-          const previousFallback = teammate.fallback ? structuredClone(teammate.fallback) : undefined;
-          teammate.currentModel = fallback;
-          teammate.fallback = { from: model, reason: "quota_exhausted", at: new Date().toISOString() };
+          const configGate = await this.acquireConfigGate(signal);
           try {
-            await saveAgentProjectConfig(this.options.cwd, this.options.trustedProject, this.config);
-          } catch (saveError) {
-            if (previousModel) teammate.currentModel = previousModel;
-            else delete teammate.currentModel;
-            if (previousFallback) teammate.fallback = previousFallback;
-            else delete teammate.fallback;
-            throw saveError;
+            await this.refreshMutableProjectConfig();
+            const persistent = this.requireTeammate(teammate.id);
+            const previousModel = persistent.currentModel;
+            const previousFallback = persistent.fallback ? structuredClone(persistent.fallback) : undefined;
+            persistent.currentModel = fallback;
+            persistent.fallback = { from: model, reason: "quota_exhausted", at: new Date().toISOString() };
+            try {
+              await saveAgentProjectConfig(this.options.cwd, this.options.trustedProject, this.config);
+            } catch (saveError) {
+              if (previousModel) persistent.currentModel = previousModel;
+              else delete persistent.currentModel;
+              if (previousFallback) persistent.fallback = previousFallback;
+              else delete persistent.fallback;
+              throw saveError;
+            }
+          } finally {
+            await configGate.release();
           }
         }
         this.publish(run, notice);
@@ -630,12 +728,9 @@ export class PiAgentManager {
     run: AgentRunSnapshot,
     lease: AgentGenerationLease,
   ): Promise<RunOutcome> {
-    const directory = join(this.options.agentDir, "vspi-agent-runs", context.treeId, run.id);
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    const manager = SessionManager.create(this.options.cwd, directory);
-    const sessionFile = manager.getSessionFile();
-    if (sessionFile) run.sessionFile = sessionFile;
-    this.publish(run);
+    const manager = SessionManager.inMemory(this.options.cwd);
+    const inherited = task.inherit_parent_context ? parentHistory() : undefined;
+    run.contextChars = (task.context?.length ?? 0) + (inherited?.length ?? 0);
     const session = await this.createSession(
       manager,
       model,
@@ -645,15 +740,7 @@ export class PiAgentManager {
       task.instructions ?? "",
       { ...context, lease },
     );
-    return this.executeSession(
-      session,
-      taskPrompt(task, task.inherit_parent_context ? parentHistory() : undefined),
-      signal,
-      update,
-      run,
-      parent,
-      model,
-    );
+    return this.executeSession(session, taskPrompt(task, inherited), signal, update, run, parent, model);
   }
 
   private async runTeammateAttempt(
@@ -674,27 +761,22 @@ export class PiAgentManager {
     const key = `${teammate.id}:${lane}`;
     const previous = this.lanes.get(key);
     previous?.session.dispose();
-    const manager = previous?.manager ?? (await this.openLaneManager(teammate.id, lane));
+    this.lanes.delete(key);
+    const manager = await this.openLaneManager(teammate.id, lane);
+    const inherited = task.inherit_parent_context ? parentHistory() : undefined;
+    run.contextChars = (task.context?.length ?? 0) + (inherited?.length ?? 0);
     const session = await this.createSession(
       manager,
       model,
       effort,
       tools,
-      task.system_prompt ?? teammate.systemPrompt,
+      teammate.systemPrompt,
       task.instructions ?? "",
       { ...context, lease },
     );
     const cached = { session, manager, model, effort };
     this.lanes.set(key, cached);
-    return this.executeSession(
-      cached.session,
-      taskPrompt(task, task.inherit_parent_context ? parentHistory() : undefined),
-      signal,
-      update,
-      run,
-      parent,
-      model,
-    );
+    return this.executeSession(cached.session, taskPrompt(task, inherited), signal, update, run, parent, model);
   }
 
   private async executeSession(
@@ -712,7 +794,7 @@ export class PiAgentManager {
       if (event.type === "message_update") {
         latest = assistantText(event.message);
         if (latest) {
-          run.outputPreview = compactText(latest, 4_000);
+          run.outputPreview = redactAuditText(latest, 4_000);
           this.publish(run);
           update(`${run.kind} ${run.id.slice(0, 8)} · ${model}\n${run.outputPreview}`);
         }
@@ -720,8 +802,17 @@ export class PiAgentManager {
     });
     const abort = () => void session.abort();
     signal?.addEventListener("abort", abort, { once: true });
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      void session.abort();
+    }, this.config.maxRunSeconds * 1_000);
+    timeout.unref();
     try {
       await session.prompt(prompt, { expandPromptTemplates: false, source: "interactive" });
+      if (timedOut) throw new Error(`Agent run deadline exceeded (${this.config.maxRunSeconds}s)`);
+      const usage = addUsage(run.usage, sessionUsage(session.messages));
+      assertRunTokenBudget(usage, this.config.maxRunTokens);
       const failure = assistantFailure(session.messages);
       if (failure) {
         const error = new Error(failure.message);
@@ -729,10 +820,23 @@ export class PiAgentManager {
         throw error;
       }
       const output = finalAssistantText(session.messages);
-      run.outputPreview = compactText(output || "(no output)", 4_000);
-      const usage = sessionUsage(session.messages);
+      run.outputPreview = redactAuditText(output || "(no output)", 4_000);
       return { output: truncateOutput(output || "(no output)"), run: cloneRun(run), usage };
+    } catch (error) {
+      assertRunTokenBudget(addUsage(run.usage, sessionUsage(session.messages)), this.config.maxRunTokens);
+      throw error;
     } finally {
+      const attemptUsage = sessionUsage(session.messages);
+      run.usage = addUsage(run.usage, attemptUsage);
+      this.scheduler.recordUsage(
+        run.treeId,
+        attemptUsage.input + attemptUsage.output + attemptUsage.cacheRead + attemptUsage.cacheWrite,
+        attemptUsage.cost,
+      );
+      run.budget = this.runBudget(run.treeId, run.usage);
+      this.refreshTreeBudgets(run.treeId);
+      this.publish(run);
+      clearTimeout(timeout);
       signal?.removeEventListener("abort", abort);
       unsubscribe();
       this.activeSessions.delete(run.id);
@@ -792,7 +896,7 @@ export class PiAgentManager {
         workspaceBoundary: true,
         bashOperations: createWorkspaceBashOperations(this.options.cwd),
         preflight: (action) => this.assertChildAction(action),
-        executionBoundary: (action, operation) => this.withToolBoundary(action, operation),
+        executionBoundary: (action, operation, signal) => this.withToolBoundary(action, operation, signal),
       }),
     );
     const recursive = this.createTool(tools, false, context);
@@ -814,6 +918,37 @@ export class PiAgentManager {
     const model = this.options.modelRuntime.getModel(provider, id);
     if (!model) throw new Error(`Agent model is unavailable: ${selector}`);
     return model;
+  }
+
+  private resolveRunSettings(task: AgentTaskValue, parent: ParentIdentity): ResolvedRunSettings {
+    const teammate = task.teammate ? this.requireTeammate(task.teammate) : undefined;
+    if (teammate && task.system_prompt !== undefined) {
+      throw new Error("Teammate system_prompt is fixed by trusted project configuration");
+    }
+    const defaultTaskTools = ["read", "ls", "find", "grep"].filter((tool) => parent.tools.includes(tool));
+    const tools = this.resolveTools(task.tools ?? teammate?.tools ?? defaultTaskTools, parent.tools);
+    if (teammate && tools.some((tool) => !teammate.tools.includes(tool))) {
+      throw new Error(`Teammate tools exceed configured ceiling: ${teammate.id}`);
+    }
+    const effort = task.effort ?? teammate?.effort ?? parent.effort;
+    const role = task.role ?? inferAgentRole(task.task);
+    const routed = this.routeModel(role, parent.model);
+    const preferred = task.model ?? teammate?.currentModel ?? teammate?.preferredModel ?? routed.model;
+    if (!preferred) throw new Error("No parent or explicit model is available for the agent");
+    this.assertAllowedModel(preferred);
+    this.assertProviderBoundary(preferred, parent, task.inherit_parent_context === true);
+    return {
+      ...(teammate ? { teammate } : {}),
+      tools,
+      effort,
+      role,
+      preferred,
+      modelReason: task.model
+        ? "explicit model"
+        : teammate?.currentModel || teammate?.preferredModel
+          ? "Teammate model"
+          : routed.reason,
+    };
   }
 
   private routeModel(role: AgentRole, parent: ParentIdentity["model"]): { model?: string; reason: string } {
@@ -852,12 +987,35 @@ export class PiAgentManager {
       });
   }
 
-  withToolBoundary<T>(action: PolicyAction, operation: () => Promise<T>): Promise<T> {
-    const writes =
-      action.kind === "file-write" ||
-      (action.kind === "process" && action.operation !== "read") ||
-      action.kind === "network";
-    return this.scheduler.withWriter(writes, operation);
+  withToolBoundary<T>(action: PolicyAction, operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const writes = action.kind === "file-write" || action.kind === "process" || action.kind === "network";
+    return this.scheduler.withWriter(
+      writes,
+      async () => {
+        if (!writes) return operation();
+        const lease = await acquireAgentExclusiveLease({
+          agentDir: this.options.agentDir,
+          namespace: "writer",
+          identity: resolve(this.options.cwd),
+          ...(signal ? { signal } : {}),
+          wait: true,
+        });
+        try {
+          return await operation();
+        } finally {
+          await lease.release();
+        }
+      },
+      signal,
+    );
+  }
+
+  private assertProviderBoundary(selector: string, parent: ParentIdentity, inheritsParentContext: boolean): void {
+    const parentProvider = parent.model?.provider;
+    const provider = selector.slice(0, selector.indexOf("/"));
+    if (!parentProvider || provider === parentProvider) return;
+    if (inheritsParentContext) throw new Error("Full parent context cannot cross Provider boundaries");
+    if (!this.config.crossProviderDelegation) throw new Error("Cross-provider delegation is disabled for this project");
   }
 
   private assertChildAction(action: PolicyAction): void {
@@ -895,6 +1053,15 @@ export class PiAgentManager {
     return teammate;
   }
 
+  private overrideApplies(id: string): boolean {
+    return (
+      this.activeTurnOverrides.has("*") ||
+      this.activeTurnOverrides.has(id) ||
+      this.sessionOverrides.has("*") ||
+      this.sessionOverrides.has(id)
+    );
+  }
+
   private async openLaneManager(teammate: string, lane: string): Promise<SessionManager> {
     const directory = await this.ensureLaneDirectory(teammate, lane);
     const sessions = await SessionManager.list(this.options.cwd, directory);
@@ -922,20 +1089,92 @@ export class PiAgentManager {
     return laneDir;
   }
 
-  private async withLane<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  private async withLane<T>(key: string, operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     const previous = this.laneTails.get(key) ?? Promise.resolve();
     let release!: () => void;
     const tail = new Promise<void>((resolvePromise) => {
       release = resolvePromise;
     });
     this.laneTails.set(key, tail);
-    await previous;
+    const separator = key.indexOf(":");
+    const teammate = key.slice(0, separator);
+    const lane = key.slice(separator + 1);
+    this.laneStates.set(key, {
+      lane,
+      state: "waiting",
+      owner: `pid ${process.pid}`,
+      updatedAt: new Date().toISOString(),
+    });
+    let teammateGate: Awaited<ReturnType<typeof acquireAgentExclusiveLease>> | undefined;
+    let laneLease: Awaited<ReturnType<typeof acquireAgentExclusiveLease>> | undefined;
+    let blocked = false;
     try {
+      await waitForPromise(previous, signal);
+      teammateGate = await this.acquireTeammateGate(teammate, signal);
+      laneLease = await acquireAgentExclusiveLease({
+        agentDir: this.options.agentDir,
+        namespace: "lane",
+        identity: `${resolve(this.options.cwd)}:${key}`,
+        ...(signal ? { signal } : {}),
+        wait: false,
+      });
+      this.laneStates.set(key, {
+        lane,
+        state: "owned",
+        owner: `pid ${process.pid}`,
+        updatedAt: new Date().toISOString(),
+      });
+      await this.refreshMutableProjectConfig();
       return await operation();
+    } catch (error) {
+      if (error instanceof AgentLeaseConflictError) {
+        blocked = true;
+        this.laneStates.set(key, {
+          lane,
+          state: "blocked",
+          owner: `${error.owner.hostname}:${error.owner.pid}`,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      throw error;
     } finally {
+      await laneLease?.release();
+      await teammateGate?.release();
       release();
       if (this.laneTails.get(key) === tail) this.laneTails.delete(key);
+      if (!blocked) {
+        this.laneStates.set(key, { lane, state: "idle", updatedAt: new Date().toISOString() });
+      }
     }
+  }
+
+  private acquireTeammateGate(id: string, signal?: AbortSignal) {
+    return acquireAgentExclusiveLease({
+      agentDir: this.options.agentDir,
+      namespace: "teammate",
+      identity: `${resolve(this.options.cwd)}:${identifier(id, "teammate")}`,
+      ...(signal ? { signal } : {}),
+      wait: false,
+    });
+  }
+
+  private acquireConfigGate(signal?: AbortSignal) {
+    return acquireAgentExclusiveLease({
+      agentDir: this.options.agentDir,
+      namespace: "config",
+      identity: resolve(this.options.cwd),
+      ...(signal ? { signal } : {}),
+      wait: false,
+    });
+  }
+
+  private async refreshMutableProjectConfig(): Promise<void> {
+    const current = await loadAgentProjectConfig(this.options.cwd, this.options.trustedProject);
+    this.config.allowedModels = current.allowedModels;
+    this.config.modelPools = current.modelPools;
+    this.config.crossProviderDelegation = current.crossProviderDelegation;
+    this.config.teammates = current.teammates;
+    this.pools.splice(0, this.pools.length, ...resolveModelPools(this.options.modelRuntime, this.config));
   }
 
   private async closeTeammateLanes(id: string): Promise<void> {
@@ -946,10 +1185,34 @@ export class PiAgentManager {
     }
   }
 
+  private runBudget(treeId: string, usage: RunOutcome["usage"]): AgentRunSnapshot["budget"] {
+    const tree = this.scheduler.budget(treeId);
+    return {
+      runTokensUsed: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
+      maxRunTokens: this.config.maxRunTokens,
+      treeTokensUsed: tree.tokens,
+      maxTreeTokens: this.config.maxTreeTokens,
+      treeCostUsd: tree.costUsd,
+      maxTreeCostUsd: this.config.maxTreeCostUsd,
+      maxRunSeconds: this.config.maxRunSeconds,
+    };
+  }
+
+  private refreshTreeBudgets(treeId: string): void {
+    const tree = this.scheduler.budget(treeId);
+    for (const run of [...this.active.values(), ...this.recent]) {
+      if (run.treeId !== treeId) continue;
+      run.budget.treeTokensUsed = tree.tokens;
+      run.budget.treeCostUsd = tree.costUsd;
+    }
+  }
+
   private publish(run: AgentRunSnapshot, fallbackNotice?: string): void {
     if (run.status === "queued" || run.status === "running") this.active.set(run.id, cloneRun(run));
     else {
       this.active.delete(run.id);
+      const existing = this.recent.findIndex((item) => item.id === run.id);
+      if (existing >= 0) this.recent.splice(existing, 1);
       this.recent.unshift(cloneRun(run));
       this.recent.splice(64);
     }
@@ -976,6 +1239,10 @@ function inheritedContextReplacer(key: string, value: unknown): unknown {
   if (/^(?:api[_-]?key|token|secret|password|authorization|cookie|credential)$/i.test(key)) return "[redacted]";
   if (key === "data" && typeof value === "string") return "[binary content redacted]";
   if (typeof value !== "string") return value;
+  return redactSensitiveString(value);
+}
+
+function redactSensitiveString(value: string): string {
   return value
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
     .replace(
@@ -984,6 +1251,42 @@ function inheritedContextReplacer(key: string, value: unknown): unknown {
     )
     .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, "[redacted]")
     .replace(/[A-Za-z0-9+/]{512,}={0,2}/g, "[large encoded content redacted]");
+}
+
+function redactAuditText(value: string, max: number): string {
+  return compactText(redactSensitiveString(value), max);
+}
+
+function providerFromSelector(selector: string): string {
+  return selector.slice(0, selector.indexOf("/"));
+}
+
+function emptyUsage(): RunOutcome["usage"] {
+  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+}
+
+function addUsage(left: RunOutcome["usage"], right: RunOutcome["usage"]): RunOutcome["usage"] {
+  return {
+    input: left.input + right.input,
+    output: left.output + right.output,
+    cacheRead: left.cacheRead + right.cacheRead,
+    cacheWrite: left.cacheWrite + right.cacheWrite,
+    cost: left.cost + right.cost,
+    turns: left.turns + right.turns,
+  };
+}
+
+function appendTimeline(
+  run: AgentRunSnapshot,
+  kind: AgentRunSnapshot["timeline"][number]["kind"],
+  summary: string,
+): void {
+  run.timeline.push({ at: new Date().toISOString(), kind, summary: redactAuditText(summary, 240) });
+  if (run.timeline.length > 32) run.timeline.splice(0, run.timeline.length - 32);
+}
+
+function isBudgetError(error: unknown): boolean {
+  return /\b(?:budget|deadline)\b/i.test(error instanceof Error ? error.message : String(error));
 }
 
 function modelSelector(model: ParentIdentity["model"]): string | undefined {
@@ -1087,6 +1390,11 @@ function sessionUsage(messages: readonly unknown[]): RunOutcome["usage"] {
   return usage;
 }
 
+function assertRunTokenBudget(usage: RunOutcome["usage"], maxRunTokens: number): void {
+  const used = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  if (used > maxRunTokens) throw new Error(`Agent run token budget exceeded (${used}/${maxRunTokens})`);
+}
+
 function isQuotaExhaustion(error: unknown): boolean {
   const text = safeError(error).toLocaleLowerCase();
   return [
@@ -1124,9 +1432,35 @@ function identifier(value: string, label: string): string {
 }
 
 function safeError(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error))
-    .replace(/(?:token|secret|api[_-]?key)\s*[=:]\s*[^\s;,]+/gi, "$1=[redacted]")
-    .slice(0, 1_000);
+  return redactSensitiveString(error instanceof Error ? error.message : String(error)).slice(0, 1_000);
+}
+
+async function waitForPromise(promise: Promise<void>, signal?: AbortSignal): Promise<void> {
+  if (!signal) return promise;
+  if (signal.aborted) throw agentAbortError("Teammate lane wait was cancelled");
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    const abort = () => {
+      signal.removeEventListener("abort", abort);
+      rejectPromise(agentAbortError("Teammate lane wait was cancelled"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    void promise.then(
+      () => {
+        signal.removeEventListener("abort", abort);
+        resolvePromise();
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", abort);
+        rejectPromise(error);
+      },
+    );
+  });
+}
+
+function agentAbortError(message: string): Error {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

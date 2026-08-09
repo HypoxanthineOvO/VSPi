@@ -146,7 +146,7 @@ describe("contextual panel hints", () => {
     const result = await renderPanel("/sessions");
     try {
       const rendered = result.plain.join("\n");
-      expect(result.plain[0]).toMatch(/^╭ Sessions/);
+      expect(result.plain.findIndex((line) => /^╭ Sessions/.test(line))).toBeGreaterThanOrEqual(2);
       expect(rendered).toContain("0 个会话");
       expect(rendered).toContain("暂无会话");
       expect(result.plain.find((line) => line.startsWith("╰"))).toContain("Esc 返回");

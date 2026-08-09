@@ -1,5 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { type Component, type Focusable, Input, Key, matchesKey, type TUI } from "@earendil-works/pi-tui";
+import {
+  type Component,
+  type Focusable,
+  Input,
+  Key,
+  matchesKey,
+  ScrollView,
+  type TUI,
+  TuiAltScreen,
+  type TuiMainScreenRenderState,
+  type TuiMode,
+  VStack,
+} from "@earendil-works/pi-tui";
 import type { AgentRole } from "../agents/types.js";
 import type { AttachmentService } from "../attachments/service.js";
 import type {
@@ -76,8 +88,10 @@ import {
   renderInteractionHint,
 } from "../ui/interactions.js";
 import { PanelController, type PanelEvent } from "../ui/panels.js";
+import { ScrollbackTUI } from "../ui/scrollback-terminal.js";
 import type { StartupStatus } from "../ui/splash.js";
 import { renderStatusLines } from "../ui/status.js";
+import { openTerminalUrl } from "../ui/terminal-link.js";
 import type { VspiTheme } from "../ui/theme.js";
 import {
   buildTranscriptNodes,
@@ -210,6 +224,11 @@ interface PendingApproval {
   cleanup(): void;
 }
 
+interface AppRenderSections {
+  body: string[];
+  dock: string[];
+}
+
 export class VspiApp implements Component, Focusable {
   readonly composer: Composer;
   private tui: TUI;
@@ -289,6 +308,15 @@ export class VspiApp implements Component, Focusable {
   private thinkingTranslationAbort: AbortController | undefined;
   private thinkingTranslationRevision = 0;
   private readonly translatedThinkingSources = new Map<string, string>();
+  private readonly fullscreenTranscriptSurface: Component;
+  private readonly fullscreenDockSurface: Component;
+  private readonly fullscreenScrollView: ScrollView;
+  private readonly fullscreenLayout: VStack;
+  private mainScreenRenderState: TuiMainScreenRenderState | undefined;
+  private renderRevision = 0;
+  private renderSectionsCache:
+    | { width: number; revision: number; mode: TuiMode; sections: AppRenderSections }
+    | undefined;
 
   get focused(): boolean {
     return this._focused;
@@ -312,6 +340,20 @@ export class VspiApp implements Component, Focusable {
     } as TUI;
     this.composer = new Composer(renderingTui, theme);
     this.panels = new PanelController(options.settings);
+    this.fullscreenTranscriptSurface = this.createRenderSurface((width) => this.renderSections(width).body);
+    this.fullscreenDockSurface = this.createRenderSurface((width) => this.renderSections(width).dock);
+    this.fullscreenScrollView = new ScrollView(this.fullscreenTranscriptSurface, {
+      follow: "end",
+      primary: true,
+      overscroll: "chain",
+      scrollbar: options.settings.fullscreenScrollbar,
+      scrollbarStyle: (text) => this.theme.selected(text),
+    });
+    this.fullscreenLayout = new VStack([
+      { component: this.fullscreenScrollView, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+      { component: this.fullscreenDockSurface, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
+    ]);
+    this.bindTui(tui);
     this.thinkingTranslator = options.thinkingTranslator ?? new HttpThinkingTranslator();
     this.yoloAcknowledgementBroker = options.yoloAcknowledgementBroker ?? createYoloAcknowledgementBroker();
     this.executionPolicy =
@@ -566,6 +608,55 @@ export class VspiApp implements Component, Focusable {
     return this.tui;
   }
 
+  private createRenderSurface(render: (width: number) => string[]): Component {
+    return {
+      render,
+      invalidate: () => {
+        this.renderSectionsCache = undefined;
+      },
+    };
+  }
+
+  private bindTui(tui: TUI): void {
+    if (tui instanceof TuiAltScreen) tui.setLayoutRoot(this.fullscreenLayout);
+  }
+
+  private switchTuiMode(mode: TuiMode): boolean {
+    const previous = this.tui;
+    if (previous.mode === mode) {
+      this.fullscreenScrollView.setScrollbar(this.options.settings.fullscreenScrollbar);
+      return true;
+    }
+    if (previous.hasOverlay()) return false;
+    const terminal = previous.terminal;
+    const showHardwareCursor = previous.getShowHardwareCursor();
+    const clearOnShrink = previous.getClearOnShrink();
+    const onDebug = previous.onDebug;
+    if (previous instanceof ScrollbackTUI) this.mainScreenRenderState = previous.captureRenderState();
+    previous.stop({ preserveScreen: true });
+    previous.setFocus(null);
+    previous.clear();
+    if (previous instanceof TuiAltScreen) previous.setLayoutRoot(undefined);
+
+    const next: TUI =
+      mode === "fullscreen"
+        ? new TuiAltScreen(terminal, showHardwareCursor, undefined, { openUrl: openTerminalUrl })
+        : new ScrollbackTUI(terminal, showHardwareCursor);
+    next.setClearOnShrink(clearOnShrink);
+    if (onDebug) next.onDebug = onDebug;
+    if (next instanceof ScrollbackTUI && this.mainScreenRenderState) {
+      next.restoreRenderState(this.mainScreenRenderState);
+    }
+    this.tui = next;
+    this.bindTui(next);
+    next.addChild(this);
+    next.setFocus(this);
+    this.renderRevision += 1;
+    this.renderSectionsCache = undefined;
+    next.start();
+    return true;
+  }
+
   async runStartupCommand(raw: string): Promise<void> {
     const command = resolveCommand(raw);
     if (!command) throw new Error(`未知启动命令：${raw}`);
@@ -745,9 +836,24 @@ export class VspiApp implements Component, Focusable {
   }
 
   render(width: number): string[] {
+    const sections = this.buildRenderSections(width);
+    return [...sections.body, ...sections.dock];
+  }
+
+  private renderSections(width: number): AppRenderSections {
+    const cached = this.renderSectionsCache;
+    if (cached && cached.width === width && cached.revision === this.renderRevision && cached.mode === this.tui.mode) {
+      return cached.sections;
+    }
+    const sections = this.buildRenderSections(width);
+    this.renderSectionsCache = { width, revision: this.renderRevision, mode: this.tui.mode, sections };
+    return sections;
+  }
+
+  private buildRenderSections(width: number): AppRenderSections {
     const questionActive = this.panels.kind === "question";
     this.composer.focused = this._focused && !questionActive;
-    if (this.authDialog) return this.withStartupSurface(this.authDialog.render(width, this.theme));
+    if (this.authDialog) return { body: this.withStartupSurface(this.authDialog.render(width, this.theme)), dock: [] };
     if (this.panels.kind === "sessions") {
       const status = this.renderStatus(width);
       const terminalRows = Number.isFinite(this.tui.terminal.rows) ? this.tui.terminal.rows : 24;
@@ -763,7 +869,7 @@ export class VspiApp implements Component, Focusable {
       const bottomPad = Math.max(0, remaining - topPad);
       const blank = Array.from({ length: topPad }, () => padLine("", width));
       const blankBottom = Array.from({ length: bottomPad }, () => padLine("", width));
-      return [...blank, ...surface, ...blankBottom, ...status];
+      return { body: [...blank, ...surface, ...blankBottom], dock: status };
     }
     const transcriptFocused = this.workspaceFocus === "transcript";
     const activityActive = this.activityActive();
@@ -811,7 +917,8 @@ export class VspiApp implements Component, Focusable {
       : (planSurfaceVisible ? panelRows : 0) + auxiliaryRows;
     const terminalRows = Number.isFinite(this.tui.terminal.rows) ? this.tui.terminal.rows : 24;
     const questionGutterRows = !previewLines && this.panels.kind === "question" ? 1 : 0;
-    const activeSurfaceRows = transcriptFocused ? terminalRows : terminalRows * 3;
+    const activeSurfaceRows =
+      this.tui.mode === "fullscreen" ? Number.MAX_SAFE_INTEGER : transcriptFocused ? terminalRows : terminalRows * 3;
     const transcriptRows = transcriptFocused
       ? Math.max(
           3,
@@ -828,7 +935,7 @@ export class VspiApp implements Component, Focusable {
     const transcriptWindow = this.currentTranscriptWindow(
       width,
       transcriptRows,
-      activityActive || this.waterfallSettling,
+      this.tui.mode === "regular" && (activityActive || this.waterfallSettling),
     );
     const output = renderTranscript(transcriptWindow.messages, width, this.theme, {
       ...(transcriptFocused && this.inspectNodeId ? { selectedNodeId: this.inspectNodeId } : {}),
@@ -838,6 +945,7 @@ export class VspiApp implements Component, Focusable {
       thinkingDisplay: this.options.settings.thinkingDisplay,
       wrapCode: this.options.settings.wrapCode,
       collapseCompletedTools: this.options.settings.collapseTools,
+      mermaidRendering: this.options.settings.mermaidRendering,
       cache: this.transcriptRenderCache,
     });
     if (output.length > 0) output.push("");
@@ -852,11 +960,10 @@ export class VspiApp implements Component, Focusable {
       if (hint !== undefined) output.push(hint);
     }
     if (questionGutterRows > 0) output.push("");
-    output.push(...activity);
-    output.push(...queuedMessages);
-    output.push(...composer);
-    output.push(...status);
-    return this.withStartupSurface(output);
+    return {
+      body: this.withStartupSurface(output),
+      dock: [...activity, ...queuedMessages, ...composer, ...status],
+    };
   }
 
   commitStableTranscript(): number {
@@ -888,6 +995,7 @@ export class VspiApp implements Component, Focusable {
       thinkingDisplay: this.options.settings.thinkingDisplay,
       wrapCode: this.options.settings.wrapCode,
       collapseCompletedTools: this.options.settings.collapseTools,
+      mermaidRendering: this.options.settings.mermaidRendering,
       cache: this.transcriptRenderCache,
     });
     if (messages.length > 0 && commitEnd < this.messages.length && stripAnsi(lines.at(-1) ?? "") !== "") {
@@ -958,6 +1066,8 @@ export class VspiApp implements Component, Focusable {
   }
 
   invalidate(): void {
+    this.renderRevision += 1;
+    this.renderSectionsCache = undefined;
     this.composer.invalidate();
   }
 
@@ -1442,17 +1552,30 @@ export class VspiApp implements Component, Focusable {
           if (!this.backend.setAgentPoolRole) throw new Error("当前后端不支持 Agent Pool 配置");
           await this.backend.setAgentPoolRole(command.provider, command.role, command.model);
           this.showNotice(`${command.provider} · ${command.role} 已映射到 ${command.model}`, "success");
+        } else if (command.kind === "override") {
+          if (!this.backend.overrideRequiredTeammate) throw new Error("当前后端不支持 Teammate required override");
+          await this.backend.overrideRequiredTeammate(command.id, command.scope);
+          this.showNotice(`Required routing override: ${command.id} · ${command.scope}`, "success");
         }
         this.panels.setAgentSnapshot(
           this.backend.getAgentSnapshot?.() ?? {
             enabled: false,
             projectTrusted: false,
             recovery: false,
-            limits: { maxDepth: 5, maxAgentsPerTree: 128, maxConcurrency: 16 },
+            limits: {
+              maxDepth: 3,
+              maxAgentsPerTree: 12,
+              maxConcurrency: 16,
+              maxRunTokens: 120_000,
+              maxTreeTokens: 500_000,
+              maxTreeCostUsd: 20,
+              maxRunSeconds: 900,
+            },
             pools: [],
             active: [],
             recent: [],
             teammates: [],
+            authority: { pendingRequired: [], turnOverrides: [], sessionOverrides: [], taskEpoch: 0 },
             diagnostic: "当前后端不支持 Subagent",
           },
         );
@@ -1769,15 +1892,22 @@ export class VspiApp implements Component, Focusable {
           trustedProject: this.backend.isProjectTrusted?.() ?? false,
         });
         this.panels.confirmSettings(settings);
+        let requestedTuiMode: TuiMode | undefined;
         if (this.options.settings.scope === settings.scope) {
           const endpointChanged =
             this.options.settings.thinkingTranslationEndpoint !== settings.thinkingTranslationEndpoint;
+          const tuiModeChanged = this.options.settings.tuiMode !== settings.tuiMode;
           this.options.settings = { ...settings };
           this.applyThinkingDisplay(settings.thinkingDisplay);
           if (endpointChanged) this.applyThinkingTranslationEndpoint();
+          this.fullscreenScrollView.setScrollbar(settings.fullscreenScrollbar);
+          if (tuiModeChanged) requestedTuiMode = settings.tuiMode;
           this.syncActivityPresentation();
         }
         this.completeOneShotPanel();
+        if (requestedTuiMode && !this.switchTuiMode(requestedTuiMode)) {
+          throw new Error("当前 overlay 打开中，暂时无法切换 TUI 模式");
+        }
         this.showNotice(`${settings.scope === "global" ? "全局" : "项目"}设置已保存到 ${path}`, "success");
       } catch (error) {
         this.showNotice(`设置保存失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
@@ -2733,6 +2863,7 @@ export class VspiApp implements Component, Focusable {
       maxCharacters: unboundedActiveTail ? Number.MAX_SAFE_INTEGER : 60_000,
       thinkingDisplay: this.options.settings.thinkingDisplay,
       collapseCompletedTools: this.options.settings.collapseTools,
+      exactHiddenBlocks: this.tui.mode !== "fullscreen",
       ...(this.workspaceFocus === "transcript" && this.inspectNodeId ? { pinnedNodeId: this.inspectNodeId } : {}),
       ...(this.workspaceFocus === "transcript" && this.transcriptStartNodeId
         ? { startNodeId: this.transcriptStartNodeId }
@@ -3354,16 +3485,19 @@ export class VspiApp implements Component, Focusable {
   }
 
   private requestRender(force = false): void {
+    this.renderRevision += 1;
+    this.renderSectionsCache = undefined;
     if (this.renderReady && !this.sessionTransition) this.tui.requestRender(force);
   }
 }
 
-function parseAgentsCommand(
+export function parseAgentsCommand(
   raw: string,
 ):
   | { kind: "show" }
   | { kind: "model"; id: string; model: string }
   | { kind: "reset"; id: string; lane?: string }
+  | { kind: "override"; id: string; scope: "turn" | "session" }
   | { kind: "pool"; provider: string; role: AgentRole; model: string } {
   const parts = raw.trim().split(/\s+/);
   if (parts.length <= 1) return { kind: "show" };
@@ -3374,6 +3508,13 @@ function parseAgentsCommand(
     return { kind: "reset", id: parts[2] as string, ...(parts[3] ? { lane: parts[3] } : {}) };
   }
   if (
+    parts[1] === "override" &&
+    (parts.length === 3 || parts.length === 4) &&
+    (parts[3] === undefined || parts[3] === "turn" || parts[3] === "session")
+  ) {
+    return { kind: "override", id: parts[2] as string, scope: (parts[3] as "turn" | "session") ?? "turn" };
+  }
+  if (
     parts[1] === "pool" &&
     parts.length === 5 &&
     ["orchestrator", "researcher", "analyst", "worker"].includes(parts[3] ?? "")
@@ -3381,7 +3522,7 @@ function parseAgentsCommand(
     return { kind: "pool", provider: parts[2] as string, role: parts[3] as AgentRole, model: parts[4] as string };
   }
   throw new Error(
-    "用法：/agents、/agents pool <provider> <orchestrator|researcher|analyst|worker> <provider/model>、/agents model <teammate> <provider/model>、/agents reset <teammate> [lane]",
+    "用法：/agents、/agents pool <provider> <orchestrator|researcher|analyst|worker> <provider/model>、/agents model <teammate> <provider/model>、/agents reset <teammate> [lane]、/agents override <teammate|all> [turn|session]",
   );
 }
 

@@ -1,4 +1,4 @@
-import { type Terminal, TUI } from "@earendil-works/pi-tui";
+import { type Terminal, type TUI, TuiMainScreen } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as startupModule from "../src/app/startup.js";
 import { VspiApp } from "../src/app/vspi-app.js";
@@ -424,7 +424,7 @@ async function exerciseStartup(reducedMotion: boolean, result: StartupResult): P
 
 async function exerciseShutdown(shutdownInteractiveSession: InteractiveShutdown, result: StartupResult): Promise<void> {
   const terminal = new RecordingTerminal();
-  const tui = new TUI(terminal, true);
+  const tui = new TuiMainScreen(terminal, true);
   const backend = new ControlledBackend(result);
   const attachments = new ControlledAttachments(result);
   const app = new VspiApp(tui, plainTheme(), backend, {

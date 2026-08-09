@@ -23,14 +23,21 @@ export async function loginProviderWithoutModelNetwork(
   interaction: ProviderAuthInteraction,
 ): Promise<void> {
   if (!runtime.login) throw new Error("当前 Pi runtime 不支持交互式登录");
+  // ModelRuntime 0.84 spreads the interaction before adding its AbortSignal.
+  // Bind prototype-based dialog methods as own properties so they survive that boundary.
+  const compatibleInteraction: ProviderAuthInteraction = {
+    ...(interaction.signal ? { signal: interaction.signal } : {}),
+    prompt: (prompt) => interaction.prompt(prompt),
+    notify: (event) => interaction.notify(event),
+  };
   const originalRefresh = runtime.refresh;
   if (!originalRefresh) {
-    await runtime.login(providerId, type, interaction);
+    await runtime.login(providerId, type, compatibleInteraction);
     return;
   }
   runtime.refresh = (options = {}) => originalRefresh.call(runtime, { ...options, allowNetwork: false });
   try {
-    await runtime.login(providerId, type, interaction);
+    await runtime.login(providerId, type, compatibleInteraction);
   } finally {
     runtime.refresh = originalRefresh;
   }

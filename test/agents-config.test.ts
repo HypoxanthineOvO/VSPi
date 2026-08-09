@@ -5,6 +5,29 @@ import { describe, expect, it } from "vitest";
 import { defaultAgentProjectConfig, loadAgentProjectConfig, saveAgentProjectConfig } from "../src/agents/config.js";
 
 describe("project agent configuration", () => {
+  it("uses conservative defaults and rejects values above the trusted-project hard ceilings", async () => {
+    expect(defaultAgentProjectConfig()).toMatchObject({
+      maxDepth: 3,
+      maxAgentsPerTree: 12,
+      maxConcurrency: 16,
+      maxRunTokens: 120_000,
+      maxTreeTokens: 500_000,
+      maxTreeCostUsd: 20,
+      maxRunSeconds: 900,
+    });
+
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agents-limits-"));
+    const depth = defaultAgentProjectConfig();
+    depth.maxDepth = 6;
+    await expect(saveAgentProjectConfig(cwd, true, depth)).rejects.toThrow("maxDepth");
+    const tree = defaultAgentProjectConfig();
+    tree.maxAgentsPerTree = 129;
+    await expect(saveAgentProjectConfig(cwd, true, tree)).rejects.toThrow("maxAgentsPerTree");
+    const concurrency = defaultAgentProjectConfig();
+    concurrency.maxConcurrency = 17;
+    await expect(saveAgentProjectConfig(cwd, true, concurrency)).rejects.toThrow("maxConcurrency");
+  });
+
   it("loads project teammates only for trusted projects and persists normalized state", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-agents-config-"));
     const config = defaultAgentProjectConfig();

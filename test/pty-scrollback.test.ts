@@ -16,6 +16,7 @@ function isolatedEnv(home: string): NodeJS.ProcessEnv {
     COLORTERM: "truecolor",
     VSPi_FIXTURE: "1",
     VSPi_REDUCED_MOTION: "1",
+    VSPi_TUI_MODE: "regular",
   };
 }
 
@@ -118,9 +119,9 @@ describe("real PTY scrollback", () => {
       expect(harness.terminal.buffer.active.viewportY).toBe(harness.terminal.buffer.active.baseY);
 
       harness.terminal.scrollToBottom();
-      for (let page = 0; page < 8 && !harness.screenText().includes("PTY_HISTORY_0"); page += 1) {
+      for (let page = 0; page < 20 && !harness.screenText().includes("PTY_HISTORY_0"); page += 1) {
         harness.write("\u001b[5~");
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 120));
       }
       expect(harness.screenText()).toContain("PTY_HISTORY_0");
 

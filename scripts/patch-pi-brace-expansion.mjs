@@ -2,8 +2,15 @@ import { cp, readFile, rm } from "node:fs/promises";
 import { dirname, join, parse } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PATCHED_VERSION = "5.0.8";
-const VULNERABLE_VERSION = "5.0.7";
+const PATCHED_VERSION = "5.0.9";
+const VULNERABLE_VERSIONS = new Set(["5.0.7", "5.0.8"]);
+
+function isKnownSafeVersion(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+  if (!match) return false;
+  const [, major, minor, patch] = match.map(Number);
+  return major === 5 && minor === 0 && patch >= 9;
+}
 
 async function packageRoot(specifier, expectedName) {
   let cursor = dirname(fileURLToPath(import.meta.resolve(specifier)));
@@ -36,11 +43,11 @@ try {
 
 // npm may deduplicate the patched direct dependency. Only replace Pi's known bad
 // shrinkwrapped copy; an unexpected version should be reviewed instead of overwritten.
-if (nestedVersion === undefined || nestedVersion === PATCHED_VERSION) process.exit(0);
-if (nestedVersion !== VULNERABLE_VERSION) {
+if (nestedVersion === undefined || isKnownSafeVersion(nestedVersion)) process.exit(0);
+if (!VULNERABLE_VERSIONS.has(nestedVersion)) {
   throw new Error(`Refusing to replace unexpected Pi brace-expansion ${nestedVersion}`);
 }
 
 await rm(nested, { recursive: true, force: true });
 await cp(source.path, nested, { recursive: true });
-console.log(`Patched Pi brace-expansion ${VULNERABLE_VERSION} -> ${PATCHED_VERSION}`);
+console.log(`Patched Pi brace-expansion ${nestedVersion} -> ${PATCHED_VERSION}`);

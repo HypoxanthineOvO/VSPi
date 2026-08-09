@@ -91,6 +91,27 @@ describe("scrollback-preserving terminal", () => {
     expect(renderSurfaceEpochBreak(-2)).toContain("\u001b[2A\r\n");
   });
 
+  it("renders the first frame after an epoch break without clearing the existing main screen", async () => {
+    vi.useFakeTimers();
+    const terminal = new RecordingStaticTerminal();
+    const tui = new ScrollbackTUI(terminal, true);
+    tui.addChild({ render: () => ["restored-session", "composer"], invalidate() {} });
+    tui.start();
+    await vi.runAllTimersAsync();
+
+    const writesBefore = terminal.writes.length;
+    tui.beginSurfaceEpoch();
+    await vi.runAllTimersAsync();
+
+    const output = terminal.writes.slice(writesBefore).join("");
+    expect(output).toContain(renderSurfaceEpochBreak());
+    expect(output).toContain("restored-session");
+    expect(output).not.toContain("\u001b[2J");
+    expect(output).not.toContain("\u001b[3J");
+    expect(output).not.toContain("\u001b[H");
+    tui.stop();
+  });
+
   it("rebases an offscreen rendered prefix without clearing or rewriting the viewport", async () => {
     vi.useFakeTimers();
     const terminal = new RecordingStaticTerminal();

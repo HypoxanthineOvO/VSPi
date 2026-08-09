@@ -155,6 +155,9 @@ export const DEFAULT_USAGE: UsageSnapshot = {
 export const DEFAULT_SETTINGS: AppSettings = {
   scope: "project",
   theme: "VSPi Dark",
+  tuiMode: "fullscreen",
+  fullscreenScrollbar: "auto",
+  mermaidRendering: "final",
   reducedMotion: false,
   workingStyle: 3,
   thinkingDisplay: "collapsed",

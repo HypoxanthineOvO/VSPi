@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { type Terminal, TUI } from "@earendil-works/pi-tui";
+import { type Terminal, TuiAltScreen, TuiMainScreen } from "@earendil-works/pi-tui";
 import { runAuthSetup } from "./app/auth-setup.js";
 import { shutdownInteractiveSession, startUiAfterSplash } from "./app/startup.js";
 import { VspiApp } from "./app/vspi-app.js";
@@ -30,6 +30,7 @@ import { BUILTIN_PROVIDERS } from "./providers/builtins.js";
 import { createProviderConfigService } from "./providers/config-service.js";
 import { applySettingsToCapabilities, detectTerminalCapabilities } from "./ui/capabilities.js";
 import { ScrollbackProcessTerminal, ScrollbackTUI } from "./ui/scrollback-terminal.js";
+import { openTerminalUrl } from "./ui/terminal-link.js";
 import { createTheme } from "./ui/theme.js";
 import { updateVspi } from "./update/self-update.js";
 import { VSPI_VERSION } from "./version.js";
@@ -59,7 +60,7 @@ async function renderOnce(): Promise<void> {
   const { security, executionPolicy, approvalBroker, yoloAcknowledgementBroker, workflowAdapter } =
     await startupPolicy(workspace);
   const terminal = new HeadlessTerminal();
-  const tui = new TUI(terminal);
+  const tui = new TuiMainScreen(terminal);
   const settings = await loadSettings(workspace, undefined, { trustedProject: security.trustedProject });
   const detected = { ...detectTerminalCapabilities(), reducedMotion: true, ssh: false };
   const capabilities = applySettingsToCapabilities(detected, settings);
@@ -144,8 +145,15 @@ async function interactive(): Promise<void> {
   const { security, executionPolicy, approvalBroker, yoloAcknowledgementBroker, workflowAdapter } =
     await startupPolicy(workspace);
   const terminal = new ScrollbackProcessTerminal();
-  const tui = new ScrollbackTUI(terminal, true);
   const settings = await loadSettings(workspace, undefined, { trustedProject: security.trustedProject });
+  const configuredTuiMode =
+    process.env.VSPi_TUI_MODE === "regular" || process.env.VSPi_TUI_MODE === "fullscreen"
+      ? process.env.VSPi_TUI_MODE
+      : settings.tuiMode;
+  const tui =
+    configuredTuiMode === "fullscreen"
+      ? new TuiAltScreen(terminal, true, undefined, { openUrl: openTerminalUrl })
+      : new ScrollbackTUI(terminal, true);
   const capabilities = applySettingsToCapabilities(detectTerminalCapabilities(), settings);
   const theme = createTheme(capabilities, settings.theme);
   let closing = false;

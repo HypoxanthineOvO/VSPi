@@ -1,4 +1,4 @@
-import { ProcessTerminal, type Terminal, TUI } from "@earendil-works/pi-tui";
+import { ProcessTerminal, type Terminal, TuiMainScreen } from "@earendil-works/pi-tui";
 import { stripAnsi } from "./ansi.js";
 
 const CLEAR_SCROLLBACK = "\u001b[3J";
@@ -7,17 +7,6 @@ const END_SYNC = "\u001b[?2026l";
 const DISABLE_AUTOWRAP = "\u001b[?7l";
 const ENABLE_AUTOWRAP = "\u001b[?7h";
 const CLEAR_VIEWPORT_HOME = "\u001b[2J\u001b[H";
-
-interface TuiRenderState {
-  previousLines: string[];
-  previousKittyImageIds: Set<number>;
-  previousWidth: number;
-  previousHeight: number;
-  cursorRow: number;
-  hardwareCursorRow: number;
-  maxLinesRendered: number;
-  previousViewportTop: number;
-}
 
 export interface StaticCommitTerminal extends Terminal {
   commitStatic(lines: readonly string[]): void;
@@ -79,7 +68,7 @@ export class ScrollbackProcessTerminal extends ProcessTerminal implements Static
   }
 }
 
-export class ScrollbackTUI extends TUI {
+export class ScrollbackTUI extends TuiMainScreen {
   constructor(terminal: Terminal, showHardwareCursor = true, logDirectory?: string) {
     super(terminal, showHardwareCursor, logDirectory);
     this.setClearOnShrink(false);
@@ -87,45 +76,51 @@ export class ScrollbackTUI extends TUI {
 
   commitStatic(lines: readonly string[]): boolean {
     if (lines.length === 0) return false;
-    const state = this as unknown as TuiRenderState;
+    const state = this.captureRenderState();
     if (lines.length > state.previousViewportTop || lines.length > state.previousLines.length) return false;
     for (const [index, line] of lines.entries()) {
       if (stripAnsi(state.previousLines[index] ?? "") !== stripAnsi(line)) return false;
     }
 
-    state.previousLines = state.previousLines.slice(lines.length);
-    state.cursorRow = Math.max(0, state.cursorRow - lines.length);
-    state.hardwareCursorRow = Math.max(0, state.hardwareCursorRow - lines.length);
-    state.maxLinesRendered = Math.max(0, state.maxLinesRendered - lines.length);
-    state.previousViewportTop = Math.max(0, state.previousViewportTop - lines.length);
+    this.restoreRenderState({
+      ...state,
+      previousLines: state.previousLines.slice(lines.length),
+      cursorRow: Math.max(0, state.cursorRow - lines.length),
+      hardwareCursorRow: Math.max(0, state.hardwareCursorRow - lines.length),
+      maxLinesRendered: Math.max(0, state.maxLinesRendered - lines.length),
+      previousViewportTop: Math.max(0, state.previousViewportTop - lines.length),
+    });
     this.requestRender();
     return true;
   }
 
   replaceStatic(lines: readonly string[]): void {
     (this.terminal as StaticCommitTerminal).replaceStatic(lines);
-    this.resetRenderState();
+    this.resetScrollbackRenderState();
   }
 
   beginSurfaceEpoch(): void {
-    const state = this as unknown as TuiRenderState;
+    const state = this.captureRenderState();
     const finalRow = Math.max(0, state.previousLines.length - 1);
     const lineOffset = finalRow - state.hardwareCursorRow;
     const terminal = this.terminal as Partial<StaticCommitTerminal>;
     terminal.beginSurfaceEpoch?.(lineOffset);
-    this.resetRenderState();
+    this.resetScrollbackRenderState();
   }
 
-  private resetRenderState(): void {
-    const state = this as unknown as TuiRenderState;
-    state.previousLines = [];
-    state.previousKittyImageIds = new Set();
-    state.previousWidth = 0;
-    state.previousHeight = 0;
-    state.cursorRow = 0;
-    state.hardwareCursorRow = 0;
-    state.maxLinesRendered = 0;
-    state.previousViewportTop = 0;
+  private resetScrollbackRenderState(): void {
+    // A new append-only epoch is a first render on the existing main screen.
+    // Pi 0.84's resetRenderState() uses -1 dimensions to request a clearing
+    // redraw, which would erase native scrollback during Resume.
+    this.restoreRenderState({
+      previousLines: [],
+      previousWidth: 0,
+      previousHeight: 0,
+      cursorRow: 0,
+      hardwareCursorRow: 0,
+      maxLinesRendered: 0,
+      previousViewportTop: 0,
+    });
     this.requestRender();
   }
 }

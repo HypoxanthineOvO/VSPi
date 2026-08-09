@@ -71,16 +71,20 @@ export interface SubAgentMessage {
   preferredModel?: string;
   effort: EffortLevel;
   contextMode?: "isolated" | "inherited" | "lane";
+  contextChars?: number;
   task: string;
   tools?: string[];
   outputPreview?: string;
-  sessionFile?: string;
   status: "queued" | "running" | "success" | "error" | "cancelled";
   agentKind?: "task" | "teammate";
   teammateId?: string;
   lane?: string;
   depth?: number;
   fallbackReason?: string;
+  usageTokens?: number;
+  runTokensLeft?: number;
+  treeTokensLeft?: number;
+  treeCostUsdLeft?: number;
 }
 
 export interface SessionMarkerMessage {
@@ -183,6 +187,9 @@ export interface Question {
 export interface AppSettings {
   scope: "global" | "project";
   theme: "VSPi Dark" | "VSPi Light" | "Terminal";
+  tuiMode: "fullscreen" | "regular";
+  fullscreenScrollbar: "auto" | "always" | "hidden";
+  mermaidRendering: "off" | "final" | "streaming";
   reducedMotion: boolean;
   workingStyle: 1 | 2 | 3;
   thinkingDisplay: "hidden" | "collapsed" | "expanded";

@@ -25,6 +25,27 @@ describe("AgentTreeScheduler", () => {
     expect(() => scheduler.child(root, "four", "task-four")).toThrow("child limit");
   });
 
+  it("blocks new descendants after tree token or cost budgets are exhausted", () => {
+    const tokenScheduler = new AgentTreeScheduler(16, 3, 12, 1_000, 20);
+    const tokenRoot = tokenScheduler.root();
+    tokenScheduler.recordUsage(tokenRoot.treeId, 1_000, 0);
+    expect(() => tokenScheduler.child(tokenRoot, "over-token-budget")).toThrow("token budget exhausted");
+
+    const costScheduler = new AgentTreeScheduler(16, 3, 12, 500_000, 1);
+    const costRoot = costScheduler.root();
+    costScheduler.recordUsage(costRoot.treeId, 1, 1);
+    expect(() => costScheduler.child(costRoot, "over-cost-budget")).toThrow("cost budget exhausted");
+  });
+
+  it("aborts the tree signal and rejects future descendants on cancellation", () => {
+    const scheduler = new AgentTreeScheduler();
+    const root = scheduler.root();
+    const signal = scheduler.treeSignal(root.treeId);
+    scheduler.cancelTree(root.treeId);
+    expect(signal.aborted).toBe(true);
+    expect(() => scheduler.child(root, "after-cancel")).toThrow("cancelled");
+  });
+
   it("releases a waiting ancestor generation slot for recursive delegation", async () => {
     const scheduler = new AgentTreeScheduler(1);
     const parent = scheduler.createLease();

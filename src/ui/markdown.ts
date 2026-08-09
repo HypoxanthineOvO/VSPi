@@ -1,4 +1,5 @@
-import { type Component, Markdown, truncateToWidth } from "@earendil-works/pi-tui";
+import { type Component, Markdown, Marked, truncateToWidth } from "@earendil-works/pi-tui";
+import { render as renderMermaid } from "grok-mermaid";
 import { fillBackground, padLine, stripAnsi, visibleWidth, wrapTextWithAnsi } from "./ansi.js";
 import type { VspiTheme } from "./theme.js";
 
@@ -50,6 +51,43 @@ function pushBlank(output: string[], width: number): void {
   output.push(padLine("", width));
 }
 
+const markdownParser = new Marked();
+
+function mermaidCodeSpan(line: string): string {
+  const content = line || "\u00a0";
+  const longestBacktickRun = Math.max(0, ...Array.from(content.matchAll(/`+/g), (match) => match[0].length));
+  const fence = "`".repeat(longestBacktickRun + 1);
+  const padding = content.startsWith("`") || content.endsWith("`") ? " " : "";
+  return `${fence}${padding}${content}${padding}${fence}`;
+}
+
+function transformMermaidBlocks(
+  source: string,
+  options: {
+    mode: "off" | "final" | "streaming";
+    streaming: boolean;
+    thinking: boolean;
+    availableWidth: number;
+  },
+): string {
+  if (options.mode === "off" || options.thinking || (options.streaming && options.mode !== "streaming")) {
+    return source;
+  }
+  return markdownParser
+    .lexer(source)
+    .map((token) => {
+      if (token.type !== "code" || token.lang?.trim().split(/\s+/, 1)[0]?.toLowerCase() !== "mermaid") {
+        return token.raw;
+      }
+      const art = renderMermaid(token.text);
+      if (!art || art.width > options.availableWidth || (!options.streaming && art.warnings.length > 0)) {
+        return token.raw;
+      }
+      return `${art.plain.map(mermaidCodeSpan).join("  \n")}\n`;
+    })
+    .join("");
+}
+
 export class VspiMarkdown implements Component {
   private readonly renderer: Markdown;
   private text: string;
@@ -60,7 +98,12 @@ export class VspiMarkdown implements Component {
     text: string,
     private readonly theme: VspiTheme,
     paddingX = 0,
-    private readonly options: { wrapCode?: boolean; tone?: "default" | "thinking" } = {},
+    private readonly options: {
+      wrapCode?: boolean;
+      tone?: "default" | "thinking";
+      streaming?: boolean;
+      mermaidRendering?: "off" | "final" | "streaming";
+    } = {},
   ) {
     this.text = text;
     this.tokenizedSource = normalizeHeadings(text);
@@ -81,8 +124,14 @@ export class VspiMarkdown implements Component {
 
   render(width: number): string[] {
     const codeWidth = Math.max(1, width - 4);
+    const transformed = transformMermaidBlocks(this.text, {
+      mode: this.theme.capabilities.unicode ? (this.options.mermaidRendering ?? "final") : "off",
+      thinking: this.options.tone === "thinking",
+      streaming: this.options.streaming ?? false,
+      availableWidth: width,
+    });
     const source = normalizeHeadings(
-      this.options.wrapCode ? wrapFencedCode(this.text, codeWidth) : truncateFencedCode(this.text, codeWidth),
+      this.options.wrapCode ? wrapFencedCode(transformed, codeWidth) : truncateFencedCode(transformed, codeWidth),
     );
     if (source !== this.tokenizedSource) {
       this.tokenizedSource = source;
@@ -132,7 +181,12 @@ export function renderMarkdown(
   text: string,
   width: number,
   theme: VspiTheme,
-  options: { wrapCode?: boolean; tone?: "default" | "thinking" } = {},
+  options: {
+    wrapCode?: boolean;
+    tone?: "default" | "thinking";
+    streaming?: boolean;
+    mermaidRendering?: "off" | "final" | "streaming";
+  } = {},
 ): string[] {
   return new VspiMarkdown(text, theme, 0, options).render(width);
 }

@@ -2,7 +2,7 @@
 
 ## 设计边界
 
-VSPi v1 是工作型终端界面，不使用营销页、装饰卡片或多层模态框。主会话保留终端原生 scrollback；Plan、临时工作区、composer 与状态行始终位于输出末端。应用不改变终端字体，只使用 ANSI 前景色、背景色和文本属性。
+VSPi v1 是工作型终端界面，不使用营销页、装饰卡片或多层模态框。默认 fullscreen 使用应用内 Transcript viewport 与固定 dock；regular 回退保留终端原生 scrollback。应用不改变终端字体，只使用 ANSI 前景色、背景色和文本属性。
 
 最低布局为 `80×24`。低于 80 列仍保持所有行宽安全，但只作为紧急降级，不作为完整验收面。终端能力分为：
 
@@ -34,7 +34,7 @@ Plan 背景       #182529
 
 封面使用多行圆角框、`◈` 品牌符号和现有六行块字符 Logo。初始化期间只显示一行品牌占位，不含 Logo、运行状态或模型声明；应用初始化完成后只清理一次当前 viewport，并把最终状态帧交给统一 TUI 瀑布作为第一个内容块，不播放中间动画、不制造整屏换行，也不使用多行光标回退。reduced-motion、CI 与 dumb terminal 使用同一初始化屏障。
 
-最终帧等待应用初始化完成，使用初始化后解析得到的真实 Model，并显示从 `package.json` 读取的包版本、Backend 与独立的执行 Policy。真实后端显示 `Backend Pi`，显式离线后端显示 `Backend Fixture`；Policy 统一表达为 `Policy … · Host`，仅表示审批等级和宿主执行。Splash、Transcript、面板、Composer 与 Status 共享同一物理坐标轴：内容不足一屏时从顶部自然向下增长，触底后才通过 linefeed 推入终端 `scrollback`。普通差分渲染不得通过 `CSI 3J`、整屏空行或顶部 padding 提前隐藏 Splash、固定 Composer 或清除旧内容。
+最终帧等待应用初始化完成，使用真实 Model、包版本、Backend 与独立 Policy；真实后端显示 `Backend Pi`，离线后端显示 `Backend Fixture`。Fullscreen 将 Splash/Transcript 放入 upstream `ScrollView`，Panel/Composer/Status 保持在 dock。Regular 中 Splash、Transcript、面板、Composer 与 Status 共享物理瀑布，内容触底后才通过 linefeed 推入原生 scrollback；不得用顶部 padding 固定 Composer。两种 renderer 可在 Settings 中切换且不替换 Session/draft；退出必须恢复原屏。
 
 ```text
 ╭──────────────────────────────────────────────────────────────────────────────╮
@@ -49,7 +49,7 @@ Plan 背景       #182529
 │                                                                              │
 │ Model  OpenAI / GPT-5.4                                                      │
 │ Backend Pi                                                                   │
-│ Policy Standard · Host                                                v0.3.11│
+│ Policy Standard · Host                                                 v0.6.0│
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -133,17 +133,17 @@ contextual hint 只宣告当前真实可用的操作。普通面板 hint 位于 
 
 Model 以外层 60 列为 breakpoint：小于 60 列是窄屏列表/详情布局，hint 显示 `←→ 详情`，Right 进入详情、Left 返回；外层 60 列及以上是宽屏双栏，左侧列表、右侧详情，hint 不宣告无效的左右切换。
 
-v0.3 的生产命令清单是：
+v0.6 的生产命令清单是：
 
 ```text
-/new       /sessions   /import     /skills     /compact    /model      /providers
-/update    /plan       /prompt     /thinking   /effort     /tools
-/policy    /usage      /settings   /theme      /quit
+/new       /sessions   /import     /skills     /compact    /model       /providers   /login
+/logout    /update     /plan       /goal       /prompt      /thinking    /effort      /agents
+/tools     /policy     /usage      /settings   /theme       /quit
 ```
 
 手动 `/compact` 提供 Pi Native、Execution Continuity、Research Decisions 与 Custom 四种 profile。
 未绑定 Local Plan 默认 Pi Native，绑定 Plan 默认 Execution Continuity；`/compact --list` 可检查当前选择范围。
-v0.3.11 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
+v0.6.0 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
 成功的 threshold 自动压缩若发生在当前 generation 内，每次完成后都必须注入隐藏 continuation 并继续同一用户任务；Pi 已声明 `willRetry` 的 overflow 不重复注入，手动压缩、失败和取消也不续跑。Plan 更新或把最后一项标为 done 只同步状态，不得替代实际修复与验证；最新用户指令揭示遗漏时必须重开或新增工作项。
 
 `/plan`、`/prompt`、`/tools` 与 `/policy` 均由 Action Registry 接入真实生产工作区。无 Workflow 时 Plan 使用 workspace-scoped Local Plan；没有活动计划时常驻 frame 与 hint 都不渲染，Shift+Tab 跳过空 Plan，显式 `/plan` 可临时打开入口。显式启用 Workflow 后才只读投影 Workflow Delivery。Prompt 提供 Factory/Fork、分层规则、导入导出与 Effective Prompt；Tools 只读展示当前能力、路由与失败边界。
@@ -156,7 +156,7 @@ v0.3.11 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自�
 
 ```
 
-回答只用弱化的 `•` 标记开始。Transcript 按后端事件只追加：工具前文本、Tool、Tool result 与工具后回答各有唯一节点，相同 `contentIndex` 不得复用节点 ID。完整 Session 历史不删除，主聊天只投影最多 80 个内容块、60K 字符和约 6 屏的最近后缀；旧块用顶部弱提示计数，逐消息/工具组缓存避免 Working 帧重复解析整段 Markdown，Inspect 使用同一窗口。`thinkingDisplay` 提供隐藏、折叠、展开三态：隐藏只收起正文，活跃时显示“思考中”，完成后仍保留最简思考记录；折叠保留 Effort/耗时标题并显示最后一段关键内容；展开显示完整正文。可选 `thinkingTranslationEndpoint` 只在 Thinking 完成后串行调用 HTTP(S) 翻译服务，原文继续保留在 Session，译文替换可见投影；pending/success/error 都在标题中有弱状态。Inspect 始终使用稳定 message id，并可查看当前单条 thinking/tool 详情。同一批 Tool 使用一个 `工具调用` 组头；每项把状态符号、固定宽度名称列和弱化动作摘要放在一行，摘要从同一列开始，运行/失败文字位于摘要末尾；中间项使用 `├─`，末项使用 `└─`。只要组内存在 queued/running 项，就实时展示完整树；全部进入 success/error/cancelled 后，`collapseTools=true` 将其收束为包含总数和失败/取消计数的一行摘要。Settings 的“完成后收起工具”默认开启，关闭后完整树持续显示；Inspect/Enter 临时恢复完整顺序，edit 输出继续使用行号、增删色与窄屏换行。Markdown 标题使用内容蓝色前景和字重，不增加背景块。Subagent 使用独立状态框；`/agents` 提供 Map、节点 Transcript、Tools 与角色 Model Pools，并显示当前查看路径。
+回答只用弱化的 `•` 标记开始。Transcript 按后端事件只追加，每个节点有稳定 ID。完整 Session 历史不删除；fullscreen tail-follow 反向读取最近最多 80 个内容块/60K 字符，regular 活动瀑布最多三个终端高度，逐消息/工具组 cache 避免 Working frame 重复解析。Inspect/锚点浏览使用精确历史索引。`thinkingDisplay` 提供隐藏、折叠、展开三态；可选翻译只改变展示。Tool 组在运行中展示完整树，完成后由 `collapseTools` 决定是否收束。Markdown 标题使用内容蓝色前景和字重，不增加背景块。
 
 ## Composer
 
@@ -172,7 +172,7 @@ composer 正文空态为一行，随内容增长，最多显示 10 行；之后�
 
 ## Markdown
 
-以下 Markdown 视觉规则已经接入完整流式渲染；`wrapCode` 决定 fenced code 长行是否换行，partial fence 到完成态的重绘在 40/80/120 列保持有界且不残留 streaming cursor。
+Markdown 以 Pi 0.84 upstream renderer/LaTeX 为基础，再应用 VSPi 主题和结构后处理；`wrapCode` 决定 fenced code 长行是否换行。`mermaidRendering` 可关闭、完成后转换或流式转换；图表过宽、无 Unicode、thinking 或解析警告时保留源码代码块。
 
 - H1/H2：焦点青、粗体、下划线。
 - H3 及以下：彩色粗体，保留层级前缀。
@@ -183,6 +183,8 @@ composer 正文空态为一行，随内容增长，最多显示 10 行；之后�
 - fenced code 使用整行背景、语言标签和语法色；流式未闭合 fence 不闪烁。
 - 引用使用焦点色竖线和数据蓝文本。
 - 表格、任务列表、分隔线、长单词和东亚宽字符均参与列宽计算。
+- LaTeX inline/display/matrix 使用 upstream Unicode renderer。
+- Mermaid 支持 flowchart/state/class/ER/sequence 的终端图；图表边框与表格边框共用弱化主题色。
 
 ## 底部工作区
 
