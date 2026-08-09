@@ -7,7 +7,40 @@ import {
   readSessionLease,
   type SessionHandoffChannel,
   type SessionLease,
+  sessionSocketNamespaceMatches,
+  sessionSocketPath,
 } from "../src/sessions/lease.js";
+
+describe("session socket path", () => {
+  it("uses a named pipe on Windows instead of a filesystem socket path", () => {
+    const directory = "C:\\Users\\hyx02\\.pi\\agent\\session-leases";
+    expect(sessionSocketPath(directory, "abc123", 12345, "token1234", "win32")).toBe(
+      "\\\\.\\pipe\\vspi-session-abc123-12345-token123",
+    );
+    expect(sessionSocketPath("/home/user/.pi/agent/session-leases", "abc123", 12345, "token1234", "linux")).toBe(
+      "/home/user/.pi/agent/session-leases/abc123-12345-token123.sock",
+    );
+  });
+
+  it("accepts only the Windows pipe namespace on Windows", () => {
+    expect(
+      sessionSocketNamespaceMatches("\\\\.\\pipe\\vspi-session-abc123-12345-token1234", "C:\\leases", "win32"),
+    ).toBe(true);
+    expect(sessionSocketNamespaceMatches("C:\\leases\\abc123-12345-token1234.sock", "C:\\leases", "win32")).toBe(false);
+    expect(sessionSocketNamespaceMatches("\\\\.\\pipe\\other-abc123-12345-token1234", "C:\\leases", "win32")).toBe(
+      false,
+    );
+  });
+
+  it("accepts only sockets inside the lease directory on POSIX", () => {
+    const directory = "/home/user/.pi/agent/session-leases";
+    expect(sessionSocketNamespaceMatches(`${directory}/abc123-12345-token1234.sock`, directory, "linux")).toBe(true);
+    expect(sessionSocketNamespaceMatches("/tmp/outside/abc123-12345-token1234.sock", directory, "linux")).toBe(false);
+    expect(sessionSocketNamespaceMatches("\\\\.\\pipe\\vspi-session-abc123-12345-token1234", directory, "linux")).toBe(
+      false,
+    );
+  });
+});
 
 describe("session owner lease", () => {
   it("hands the same Session to a waiting owner only after the current owner releases it", async () => {

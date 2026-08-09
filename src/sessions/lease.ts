@@ -8,6 +8,7 @@ const HEARTBEAT_MS = 2_000;
 const CONNECT_TIMEOUT_MS = 2_000;
 const WAIT_POLL_MS = 200;
 const MAX_CONTROL_BYTES = 16 * 1024 * 1024;
+const WINDOWS_PIPE_PREFIX = "\\\\.\\pipe\\vspi-session-";
 
 export interface SessionLeaseOwner {
   pid: number;
@@ -98,7 +99,7 @@ export class SessionLease {
     for (const socket of this.sockets) socket.destroy();
     await closeServer(this.server);
     await removeIfOwned(this.leasePath, this.owner.token);
-    await unlink(this.owner.socketPath).catch(ignoreMissing);
+    await removeSocketFile(this.owner.socketPath);
   }
 
   async transfer(successor: SessionLeaseSuccessor): Promise<void> {
@@ -137,7 +138,7 @@ export async function acquireSessionLease(
   const identity = createHash("sha256").update(sessionPath).digest("hex").slice(0, 20);
   const leasePath = join(directory, `${identity}.json`);
   const token = randomBytes(16).toString("hex");
-  const socketPath = join(directory, `${identity}-${process.pid}-${token.slice(0, 8)}.sock`);
+  const socketPath = sessionSocketPath(directory, identity, process.pid, token);
   let takeoverStarted = false;
   let lease: SessionLease | undefined;
   const socketsBeforeLease = new Set<Socket>();
@@ -196,7 +197,7 @@ export async function acquireSessionLease(
     });
   });
   await listenUnix(server, socketPath);
-  await chmod(socketPath, 0o600);
+  if (process.platform !== "win32") await chmod(socketPath, 0o600);
 
   let waited = false;
   let requestedOwnerToken: string | undefined;
@@ -229,7 +230,7 @@ export async function acquireSessionLease(
       }
       if (!(await ownerIsAlive(existing))) {
         await removeIfOwned(leasePath, existing.token);
-        await unlink(existing.socketPath).catch(ignoreMissing);
+        await removeSocketFile(existing.socketPath);
         continue;
       }
       if (existing.token === token) {
@@ -258,7 +259,7 @@ export async function acquireSessionLease(
     }
   } catch (error) {
     await closeServer(server);
-    await unlink(socketPath).catch(ignoreMissing);
+    await removeSocketFile(socketPath);
     throw error;
   }
 }
@@ -270,7 +271,7 @@ export async function readSessionLease(sessionFile: string, agentDir: string): P
   const owner = await readLeaseOwner(leasePath);
   if (!owner || (await ownerIsAlive(owner))) return owner;
   await removeIfOwned(leasePath, owner.token);
-  await unlink(owner.socketPath).catch(ignoreMissing);
+  await removeSocketFile(owner.socketPath);
   return undefined;
 }
 
@@ -444,7 +445,7 @@ function parseTakeoverRequest(
       return undefined;
     }
     const successor = parsed.successor;
-    if (successor.sessionPath !== sessionPath || dirname(resolve(successor.socketPath)) !== resolve(directory)) {
+    if (successor.sessionPath !== sessionPath || !sessionSocketNamespaceMatches(successor.socketPath, directory)) {
       return undefined;
     }
     return { token: parsed.token, successor };
@@ -683,6 +684,32 @@ function listenUnix(server: Server, path: string): Promise<void> {
       resolvePromise();
     });
   });
+}
+
+export function sessionSocketPath(
+  directory: string,
+  identity: string,
+  pid: number,
+  token: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const suffix = `${identity}-${pid}-${token.slice(0, 8)}`;
+  return platform === "win32" ? `${WINDOWS_PIPE_PREFIX}${suffix}` : join(directory, `${suffix}.sock`);
+}
+
+export function sessionSocketNamespaceMatches(
+  socketPath: string,
+  directory: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return platform === "win32"
+    ? socketPath.startsWith(WINDOWS_PIPE_PREFIX)
+    : dirname(resolve(socketPath)) === resolve(directory);
+}
+
+async function removeSocketFile(path: string): Promise<void> {
+  if (process.platform === "win32") return;
+  await unlink(path).catch(ignoreMissing);
 }
 
 function closeServer(server: Server): Promise<void> {
