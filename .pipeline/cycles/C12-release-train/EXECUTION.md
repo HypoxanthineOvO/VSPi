@@ -85,3 +85,13 @@ updated: 2026-08-09T16:56:25+08:00
 - **计划影响：** R6 completed；C12 进入 final waiting-review。
 - **遇到的问题：** 无。
 - **下一步：** 用户在 Windows 执行 Release 安装命令并接受或反馈。
+
+## 2026-08-09 - R7 Windows 0.6.1 corrective release
+
+- **计划项：** `R7`
+- **目的：** 修复 Windows 上 `listen EACCES: permission denied ...\.sock` 启动崩溃。
+- **结果：** `src/sessions/lease.ts` 在 win32 使用 `\\.\pipe\vspi-session-...` named pipe，跳过 pipe 的 chmod/unlink，并加入平台化 namespace 校验；新增 3 个平台路径单测。全量 113 files / 830 tests、check、smoke 通过。
+- **证据：** session-lease 11 tests passed；全量 830 tests passed；`npm version 0.6.1` 已更新 package/lock。
+- **计划影响：** 发布版本提升到 0.6.1；Release notes 与安装指令随 CI 自动生成。
+- **遇到的问题：** 无。
+- **下一步：** 提交、推送 main，等待 CI 后打 v0.6.1 tag 并复验 Release 资产。

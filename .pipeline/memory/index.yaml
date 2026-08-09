@@ -56,6 +56,7 @@ active_by_dedupe_key:
   feedback.vspi.release-ledger.v0.3.8-v0.3.11: feedback-0a04be071178907334e0e47b60963e0b
   feedback.vspi.release-ledger.v0.6.0: feedback-b6abe47c831810e3daca7bfbecde498d
   feedback.vspi.status-layout-fixed-tracks: feedback-7cc38e004361e3431e700a74e251d0e0
+  feedback.vspi.windows-session-lease-named-pipe: feedback-c4f72332aa932996be667c3bb7d2d876
   goal.vspi-live-run-control.feedback.3f4c4ce3670b5fb2: feedback-2dc39de0dbbb77493cac3135e83d2a25
   goal.vspi-live-run-control.feedback.557a36ec9b6ed4be: feedback-89ed9f5b6872a5259a96a681d88ae282
   goal.vspi-live-run-control.feedback.5ae10d550e18b724: feedback-dc147863d143b0fbd2fb60550d0d6596
@@ -1878,6 +1879,24 @@ records:
         type: user_feedback
     supersedes: []
     updated_at: 2026-07-23T04:20:44.366Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-08-09T09:53:24.962Z
+    dedupe_key: feedback.vspi.windows-session-lease-named-pipe
+    id: feedback-c4f72332aa932996be667c3bb7d2d876
+    kind: feedback
+    path: .pipeline/memory/records/project-33aa1007aa14/feedback/feedback-c4f72332aa932996be667c3bb7d2d876.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: c4f72332aa932996be667c3bb7d2d876267cb453f9700a2ccaca36d533412b0e
+    source_refs:
+      - locator: 2026-08-09-windows-v0.6.0-eacces
+        ref: current-chat
+        type: session
+    supersedes: []
+    updated_at: 2026-08-09T09:53:24.962Z
   - active: true
     confidence: confirmed
     created_at: 2026-08-01T13:29:33.872Z

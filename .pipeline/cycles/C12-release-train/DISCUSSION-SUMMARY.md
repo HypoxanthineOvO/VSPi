@@ -25,3 +25,9 @@ updated: 2026-08-09T16:56:25+08:00
 ## 未决问题
 
 - 无；用户已明确开始授权。
+
+## R7 Windows 启动失败
+
+- 用户原文（Windows PowerShell）：`vspi.cmd` 启动失败，`Error: listen EACCES: permission denied C:\Users\hyx02\.pi\agent\session-leases\...sock`。
+- 根因：Windows 上 `net.listen(路径)` 不接受文件系统路径，必须使用 `\\.\pipe\...` named pipe。
+- 处理：0.6.1 corrective release 修复 named-pipe lease 并重新走完整发布流程；用户使用 0.6.1 完成 Windows 最终验收。

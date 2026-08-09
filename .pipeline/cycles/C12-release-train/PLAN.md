@@ -39,5 +39,6 @@ execution: EXECUTION.md
 | `R4` | 主线提交与 CI | 发布内容形成有意提交并推送 `main`，分支 pipeline 通过 | Git status、remote branch、GitLab pipeline/jobs |
 | `R5` | Tag 与 GitLab Release | `v0.6.0` tag pipeline 创建可下载 Release | tag、pipeline、Release API、资产与 SHA-256 |
 | `R6` | Release 安装复验 | latest Release URL 安装成功，形成 Windows 安装指令 | 临时 prefix 安装、`vspi --version`、release smoke |
+| `R7` | Windows 0.6.1 corrective release | 修复 Windows named-pipe lease，发布 0.6.1 并完成 Windows 安装复验 | 平台路径单测、全量门禁、tag pipeline、Release 资产安装 |
 
 ID 在本 Cycle 内保持稳定；本 Goal 没有中间人工审阅点。
