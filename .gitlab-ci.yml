@@ -17,7 +17,7 @@ stages:
 
 default:
   image:
-    name: gitlab.vsplab.cn:5050/heyx/vspi/ci-node:22.22.0-2@sha256:ed82f600a93b35f8b68d8e403c36ce5f832538df8a676cce83454679b2aee1a9
+    name: gitlab.vsplab.cn:5050/heyx/vspi/ci-node:22.22.0-3@sha256:851dd7ad97ef3937761bdff450e349c08ac5d173e9b7ecc1bb01ca875c40f491
   tags:
     - vspi-docker
   interruptible: true

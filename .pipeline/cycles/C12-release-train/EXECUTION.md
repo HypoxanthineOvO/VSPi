@@ -45,3 +45,13 @@ updated: 2026-08-09T16:56:25+08:00
 - **计划影响：** R4 保持 in progress；新增不可变 CI 镜像 `22.22.0-3`，精确安装 Debian bubblewrap 0.8.0-2+deb12u1。
 - **遇到的问题：** 本地环境已安装 bwrap，原本未暴露 CI 镜像依赖缺口。
 - **下一步：** 构建并验证新镜像，更新 digest 后重跑主线 pipeline。
+
+## 2026-08-09 - R4 CI 镜像发布
+
+- **计划项：** `R4`
+- **目的：** 为真实 Subagent sandbox 回归提供不可变 CI 依赖。
+- **结果：** `ci-node:22.22.0-3` 已发布并锁定 digest；普通非 privileged Docker 中 bwrap 在 namespace 边界 fail closed，宿主与容器两种路径的安全测试均 3/3 通过。
+- **证据：** image digest `sha256:851dd7ad97ef3937761bdff450e349c08ac5d173e9b7ecc1bb01ca875c40f491`；bubblewrap 0.8.0、fd 10.4.2、rg 15.1.0。
+- **计划影响：** `.gitlab-ci.yml` 切换到新 digest。
+- **遇到的问题：** Docker runner 不允许嵌套 user namespace；测试契约接受命令执行前的 namespace fail-closed，同时继续要求控制文件字节不变。
+- **下一步：** 提交并推送 CI digest，等待新 main pipeline。
