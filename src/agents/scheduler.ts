@@ -8,6 +8,9 @@ export const DEFAULT_AGENT_MAX_CHILDREN = 3;
 interface TreeState {
   created: number;
   cancelled: boolean;
+  controller: AbortController;
+  consumedTokens: number;
+  consumedCostUsd: number;
   fingerprints: Set<string>;
   children: Map<string, number>;
 }
@@ -55,29 +58,48 @@ export class AgentGenerationLease {
 
 export class AgentTreeScheduler {
   private readonly semaphore: Semaphore;
+  private readonly writerSemaphore = new Semaphore(1);
   private readonly trees = new Map<string, TreeState>();
-  private writerTail: Promise<void> = Promise.resolve();
 
   constructor(
     readonly maxConcurrency = DEFAULT_AGENT_MAX_CONCURRENCY,
     readonly maxDepth = DEFAULT_AGENT_MAX_DEPTH,
     readonly maxAgentsPerTree = DEFAULT_AGENT_MAX_PER_TREE,
+    readonly maxTreeTokens = 500_000,
+    readonly maxTreeCostUsd = 20,
   ) {
-    if (!Number.isSafeInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 128) {
-      throw new Error("Agent maxConcurrency must be an integer between 1 and 128");
+    if (!Number.isSafeInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 16) {
+      throw new Error("Agent maxConcurrency must be an integer between 1 and 16");
     }
+    if (!Number.isSafeInteger(maxDepth) || maxDepth < 1 || maxDepth > 5)
+      throw new Error("Agent maxDepth must be an integer between 1 and 5");
+    if (!Number.isSafeInteger(maxAgentsPerTree) || maxAgentsPerTree < 1 || maxAgentsPerTree > 128)
+      throw new Error("Agent maxAgentsPerTree must be an integer between 1 and 128");
+    if (!Number.isSafeInteger(maxTreeTokens) || maxTreeTokens < 1_000)
+      throw new Error("Agent maxTreeTokens must be an integer of at least 1000");
+    if (!Number.isFinite(maxTreeCostUsd) || maxTreeCostUsd <= 0)
+      throw new Error("Agent maxTreeCostUsd must be positive");
     this.semaphore = new Semaphore(maxConcurrency);
   }
 
   root(): AgentTreeContext {
     const treeId = randomUUID();
-    this.trees.set(treeId, { created: 0, cancelled: false, fingerprints: new Set(), children: new Map() });
+    this.trees.set(treeId, {
+      created: 0,
+      cancelled: false,
+      controller: new AbortController(),
+      consumedTokens: 0,
+      consumedCostUsd: 0,
+      fingerprints: new Set(),
+      children: new Map(),
+    });
     return { treeId, depth: 0 };
   }
 
   child(parent: AgentTreeContext, runId: string, fingerprint?: string): AgentTreeContext {
     const tree = this.requireTree(parent.treeId);
     if (tree.cancelled) throw abortError("Agent tree was cancelled");
+    this.assertBudget(parent.treeId);
     const depth = parent.depth + 1;
     if (depth > this.maxDepth) throw new Error(`Agent depth limit exceeded (${this.maxDepth})`);
     const parentKey = parent.runId ?? "root";
@@ -105,24 +127,43 @@ export class AgentTreeScheduler {
     return new AgentGenerationLease(this.semaphore);
   }
 
-  async withWriter<T>(writeAccess: boolean, operation: () => Promise<T>): Promise<T> {
+  async withWriter<T>(writeAccess: boolean, operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (!writeAccess) return operation();
-    const previous = this.writerTail;
-    let release!: () => void;
-    this.writerTail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
+    await this.writerSemaphore.acquire(signal);
     try {
       return await operation();
     } finally {
-      release();
+      this.writerSemaphore.release();
     }
+  }
+
+  treeSignal(treeId: string): AbortSignal {
+    return this.requireTree(treeId).controller.signal;
+  }
+
+  recordUsage(treeId: string, tokens: number, costUsd: number): void {
+    const tree = this.requireTree(treeId);
+    tree.consumedTokens += Math.max(0, Math.round(tokens));
+    tree.consumedCostUsd += Math.max(0, costUsd);
+  }
+
+  assertBudget(treeId: string): void {
+    const tree = this.requireTree(treeId);
+    if (tree.consumedTokens >= this.maxTreeTokens) throw new Error("Agent tree token budget exhausted");
+    if (tree.consumedCostUsd >= this.maxTreeCostUsd) throw new Error("Agent tree cost budget exhausted");
+  }
+
+  budget(treeId: string): { tokens: number; costUsd: number } {
+    const tree = this.requireTree(treeId);
+    return { tokens: tree.consumedTokens, costUsd: tree.consumedCostUsd };
   }
 
   cancelTree(treeId: string): void {
     const tree = this.trees.get(treeId);
-    if (tree) tree.cancelled = true;
+    if (tree) {
+      tree.cancelled = true;
+      tree.controller.abort();
+    }
   }
 
   finishTree(treeId: string): void {

@@ -24,7 +24,7 @@ successors:
 ## 验证结果
 
 - `subagent-delivery-verification.md` 验证证据通过。
-- 验证角色 implement，证据路径 `.pipeline/memory/records/goal-64e8827d5a84/evidence/`。
+- 验证角色 implement，证据路径 `.pipeline/memory/evidence/subagent-delivery-verification.md`。
 
 ## 重要决定与经验
 

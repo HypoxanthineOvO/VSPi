@@ -1,8 +1,8 @@
 ---
 kind: plan
 cycle: C09-ui-rendering-fixes
-status: active
-updated: 2026-08-06
+status: closed
+updated: 2026-08-09
 progress: PROGRESS.md
 execution: EXECUTION.md
 ---

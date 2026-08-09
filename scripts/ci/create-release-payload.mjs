@@ -22,11 +22,23 @@ export function createReleasePayload(checksumPath, env = process.env) {
   const directAssetUrl = `${env.CI_PROJECT_URL}/-/releases/${tag}/downloads/${filename}`;
   const latestFilename = "vspi-latest.tgz";
   const latestAssetUrl = `${env.CI_PROJECT_URL}/-/releases/permalink/latest/downloads/${latestFilename}`;
+  const releaseNotes = env.RELEASE_NOTES_PATH ? readFileSync(env.RELEASE_NOTES_PATH, "utf8").trim() : "";
   const description = [
-    `Install the prebuilt VSPi ${version} package:`,
+    ...(releaseNotes ? [releaseNotes, ""] : []),
+    "## Install",
+    "",
+    "Windows PowerShell:",
+    "",
+    "```powershell",
+    `npm install --global "${latestAssetUrl}"`,
+    "vspi --version",
+    "```",
+    "",
+    "Linux/macOS:",
     "",
     "```bash",
     `npm install -g '${latestAssetUrl}'`,
+    "vspi --version",
     "```",
     "",
     `Pinned package: \`${directAssetUrl}\``,
@@ -35,7 +47,7 @@ export function createReleasePayload(checksumPath, env = process.env) {
   ].join("\n");
 
   return {
-    name: `VSPi ${version}`,
+    name: env.RELEASE_TITLE || `VSPi ${version}`,
     tag_name: tag,
     description,
     assets: {

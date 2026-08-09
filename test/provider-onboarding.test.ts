@@ -190,7 +190,7 @@ describe("provider onboarding", () => {
         allowModelNetwork: false,
       });
       const dialog = new AuthDialog("Kimi For Coding", vi.fn(), vi.fn());
-      await runtime.login("kimi-coding", "oauth", dialog);
+      await loginProviderWithoutModelNetwork(runtime, "kimi-coding", "oauth", dialog);
 
       expect(tokenPolls).toBe(1);
       expect(await runtime.listCredentials()).toContainEqual({ providerId: "kimi-coding", type: "oauth" });

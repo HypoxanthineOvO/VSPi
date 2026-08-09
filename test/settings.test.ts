@@ -77,6 +77,36 @@ describe("settings persistence", () => {
       collapseTools: true,
       workingStyle: 3,
       thinkingTranslationEndpoint: "",
+      tuiMode: "fullscreen",
+      fullscreenScrollbar: "auto",
+      mermaidRendering: "final",
+    });
+  });
+
+  it("persists valid TUI modes and normalizes invalid fullscreen settings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vspi-settings-tui-mode-"));
+    const home = join(root, "home");
+    const path = settingsPaths(root, home).global;
+    await mkdir(dirname(path), { recursive: true });
+
+    await writeFile(
+      path,
+      `${JSON.stringify({ tuiMode: "regular", fullscreenScrollbar: "hidden", mermaidRendering: "streaming" })}\n`,
+    );
+    await expect(loadSettings(root, home)).resolves.toMatchObject({
+      tuiMode: "regular",
+      fullscreenScrollbar: "hidden",
+      mermaidRendering: "streaming",
+    });
+
+    await writeFile(
+      path,
+      `${JSON.stringify({ tuiMode: "invalid", fullscreenScrollbar: "wide", mermaidRendering: "sometimes" })}\n`,
+    );
+    await expect(loadSettings(root, home)).resolves.toMatchObject({
+      tuiMode: "fullscreen",
+      fullscreenScrollbar: "auto",
+      mermaidRendering: "final",
     });
   });
 

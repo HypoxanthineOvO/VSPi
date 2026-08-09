@@ -5,7 +5,7 @@ import {
   Key,
   matchesKey,
   ProcessTerminal,
-  TUI as TerminalUi,
+  TuiMainScreen as TerminalUi,
   type TUI,
 } from "@earendil-works/pi-tui";
 import type { AppSettings } from "../domain/types.js";

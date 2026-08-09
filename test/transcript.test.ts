@@ -71,6 +71,36 @@ describe("transcript rendering", () => {
     ]);
   });
 
+  it("selects a 10k-message fullscreen tail without scanning the full history", () => {
+    const source: TranscriptMessage[] = Array.from({ length: 10_000 }, (_, index) => ({
+      id: `event-${index}`,
+      role: "assistant",
+      kind: "text",
+      text: `event body ${index}`,
+    }));
+    let indexedReads = 0;
+    const messages = new Proxy(source, {
+      get(target, property, receiver) {
+        if (typeof property === "string" && /^\d+$/.test(property)) indexedReads += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const window = selectTranscriptWindow(messages, {
+      width: 80,
+      maxRows: Number.MAX_SAFE_INTEGER,
+      maxBlocks: 80,
+      maxCharacters: 1_000_000,
+      exactHiddenBlocks: false,
+    });
+
+    expect(window.messages).toHaveLength(80);
+    expect(window.messages[0]?.id).toBe("event-9920");
+    expect(window.messages.at(-1)?.id).toBe("event-9999");
+    expect(window.hiddenBlocks).toBeGreaterThan(0);
+    expect(indexedReads).toBeLessThan(500);
+  });
+
   it("reuses cached blocks across stable frames and invalidates only a replaced message", () => {
     const cache = new TranscriptRenderCache();
     const messages: TranscriptMessage[] = Array.from({ length: 3 }, (_, index) => ({
@@ -400,12 +430,17 @@ describe("transcript rendering", () => {
       lane: "main",
       depth: 1,
       fallbackReason: "quota_exhausted",
+      usageTokens: 2_600,
+      runTokensLeft: 117_400,
+      treeTokensLeft: 495_000,
+      treeCostUsdLeft: 19.6,
     };
     const full = stripAnsi(renderTranscriptMessage(message, 160, plainTheme()).join("\n"));
     expect(full).toContain("frontend");
     expect(full).toContain("preferred kimi/k2");
     expect(full).toContain("lane main");
     expect(full).toContain("fallback quota_exhausted");
+    expect(full).toContain("Budget · run 117K left · tree 495K / $19.600 left");
     for (const width of [40, 80, 120]) {
       expect(renderTranscriptMessage(message, width, plainTheme()).every((line) => visibleWidth(line) <= width)).toBe(
         true,

@@ -1,7 +1,7 @@
 ---
 kind: execution-log
 cycle: C09-ui-rendering-fixes
-updated: 2026-08-06T03:10:00+08:00
+updated: 2026-08-09T12:16:00+08:00
 ---
 
 # VSPi 终端渲染与历史浏览修复执行记录
@@ -35,3 +35,11 @@ updated: 2026-08-06T03:10:00+08:00
 - **证据：** Mock/PTY 帧（PageUp 2 显示 hello 1 响应）；app 内部窗口诊断（窗口 3 节点、渲染 21 行连续）。
 - **遇到的问题：** Inspect 帧渲染不完整在 scrollOnEraseInDisplay 开关下均存在，排除测试环境因素；根因指向未提交的 scrollback 机制修改。
 - **下一步：** 深挖渲染层或按用户决定转后续候选。
+
+## 2026-08-09 - M3 渲染层闭环并关闭 C09
+
+- **计划项：** `M3` → Cycle close
+- **目的：** 用 C11 dual-renderer 迁移后的真实终端证据复核 Inspect 历史完整性。
+- **结果：** regular main-screen 可连续 PageUp 到最早 turn；fullscreen viewport 可滚到最早 history 且 dock/status 固定。原“只显示部分内容”问题不再复现。
+- **证据：** `pty-scrollback`、`pty-fullscreen`、`input-dispatch-regression`、`contextual-hints` 共 4 files / 62 tests passed；C11 全量 110 files / 800 tests passed。
+- **下一步：** 无；C09 closed。

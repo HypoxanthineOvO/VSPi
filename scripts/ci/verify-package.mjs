@@ -44,7 +44,7 @@ for (const required of [
 if ((files.get("dist/index.js")?.mode & 0o111) === 0) fail("dist/index.js is not executable");
 
 const allowed =
-  /^(?:package\.json|README\.md|dist\/|Docs\/tui-v1\.md$|Docs\/harness\/|scripts\/patch-pi-brace-expansion\.mjs$)/;
+  /^(?:package\.json|README\.md|dist\/|Docs\/(?:tui-v1|testing-and-debugging)\.md$|Docs\/harness\/|scripts\/patch-pi-brace-expansion\.mjs$)/;
 for (const path of files.keys()) {
   if (!allowed.test(path)) fail(`unexpected file in package: ${path}`);
   if (/^(?:src|test|node_modules|\.git)(?:\/|$)/.test(path)) fail(`private source leaked: ${path}`);

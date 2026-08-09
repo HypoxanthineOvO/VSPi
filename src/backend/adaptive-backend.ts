@@ -1,4 +1,4 @@
-import type { AgentRole, AgentSnapshot } from "../agents/types.js";
+import type { AgentOverrideScope, AgentRole, AgentSnapshot } from "../agents/types.js";
 import type { CompactOptions } from "../continuity/compaction-profiles.js";
 import type { EffortLevel, ModelGroup, ProviderOption, SessionOption } from "../domain/types.js";
 import type { GoalBackend, GoalLimits } from "../goals/types.js";
@@ -239,11 +239,20 @@ export class AdaptiveBackend implements ChatBackend {
         enabled: false,
         projectTrusted: false,
         recovery: false,
-        limits: { maxDepth: 5, maxAgentsPerTree: 128, maxConcurrency: 16 },
+        limits: {
+          maxDepth: 3,
+          maxAgentsPerTree: 12,
+          maxConcurrency: 16,
+          maxRunTokens: 120_000,
+          maxTreeTokens: 500_000,
+          maxTreeCostUsd: 20,
+          maxRunSeconds: 900,
+        },
         pools: [],
         active: [],
         recent: [],
         teammates: [],
+        authority: { pendingRequired: [], turnOverrides: [], sessionOverrides: [], taskEpoch: 0 },
         diagnostic: "当前后端不支持 Subagent",
       }
     );
@@ -257,6 +266,11 @@ export class AdaptiveBackend implements ChatBackend {
   async resetTeammateLane(id: string, lane?: string): Promise<void> {
     if (!this.active.resetTeammateLane) throw new Error("当前后端不支持 Teammate lane 重置");
     await this.active.resetTeammateLane(id, lane);
+  }
+
+  async overrideRequiredTeammate(id: string, scope: AgentOverrideScope): Promise<void> {
+    if (!this.active.overrideRequiredTeammate) throw new Error("当前后端不支持 Teammate required override");
+    await this.active.overrideRequiredTeammate(id, scope);
   }
 
   async setAgentPoolRole(provider: string, role: AgentRole, model: string): Promise<void> {

@@ -1,7 +1,7 @@
 ---
 kind: discussion-summary
 cycle: C09-ui-rendering-fixes
-updated: 2026-08-06
+updated: 2026-08-09
 raw_discussion: .pipeline/local/discussions/C09-ui-rendering-fixes/
 ---
 
@@ -23,7 +23,7 @@ raw_discussion: .pipeline/local/discussions/C09-ui-rendering-fixes/
 ## 接受与拒绝
 
 - M1、M2 通过 Mock 帧验证并接受。
-- M3 app 层修复通过验证；渲染层遗留问题待处理。
+- M3 app 层与真实终端渲染层均通过；用户明确要求先完成 C09，验证后关闭。
 
 ## 纠正与分歧
 
@@ -31,4 +31,4 @@ raw_discussion: .pipeline/local/discussions/C09-ui-rendering-fixes/
 
 ## 未决问题
 
-- Inspect 帧在真实终端的渲染不完整（只显示部分内容），根因与工作区未提交的 scrollback 机制修改（ScrollbackTUI.commitStatic rebase）交互有关，待深挖或转后续候选。
+- 无。原 Inspect 渲染遗留已由 C11 dual renderer 与 fresh PTY 证据闭环。

@@ -22,6 +22,9 @@ export interface SettingsLayers {
 }
 
 const THEME_VALUES = new Set<AppSettings["theme"]>(["VSPi Dark", "VSPi Light", "Terminal"]);
+const TUI_MODE_VALUES = new Set<AppSettings["tuiMode"]>(["fullscreen", "regular"]);
+const FULLSCREEN_SCROLLBAR_VALUES = new Set<AppSettings["fullscreenScrollbar"]>(["auto", "always", "hidden"]);
+const MERMAID_RENDERING_VALUES = new Set<AppSettings["mermaidRendering"]>(["off", "final", "streaming"]);
 const THINKING_DISPLAY_VALUES = new Set<AppSettings["thinkingDisplay"]>(["hidden", "collapsed", "expanded"]);
 
 function normalizeSettings(input: unknown, fallback: AppSettings): AppSettings {
@@ -38,6 +41,15 @@ function normalizeSettings(input: unknown, fallback: AppSettings): AppSettings {
   return {
     scope: value.scope === "global" || value.scope === "project" ? value.scope : fallback.scope,
     theme: value.theme && THEME_VALUES.has(value.theme) ? value.theme : fallback.theme,
+    tuiMode: value.tuiMode && TUI_MODE_VALUES.has(value.tuiMode) ? value.tuiMode : fallback.tuiMode,
+    fullscreenScrollbar:
+      value.fullscreenScrollbar && FULLSCREEN_SCROLLBAR_VALUES.has(value.fullscreenScrollbar)
+        ? value.fullscreenScrollbar
+        : fallback.fullscreenScrollbar,
+    mermaidRendering:
+      value.mermaidRendering && MERMAID_RENDERING_VALUES.has(value.mermaidRendering)
+        ? value.mermaidRendering
+        : fallback.mermaidRendering,
     reducedMotion: typeof value.reducedMotion === "boolean" ? value.reducedMotion : fallback.reducedMotion,
     workingStyle:
       value.workingStyle === 1 || value.workingStyle === 2 || value.workingStyle === 3

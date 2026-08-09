@@ -125,9 +125,22 @@ describe("pi backend adapter", () => {
         ],
       }),
     ]);
-    const interaction = { prompt: vi.fn(), notify: vi.fn() };
+    const interaction = { prompt: vi.fn(async (_prompt: unknown) => "answer"), notify: vi.fn((_event: unknown) => {}) };
     await backend.loginProvider("kimi-coding", "oauth", interaction as never);
-    expect(login).toHaveBeenCalledWith("kimi-coding", "oauth", interaction);
+    expect(login).toHaveBeenCalledWith(
+      "kimi-coding",
+      "oauth",
+      expect.objectContaining({ prompt: expect.any(Function), notify: expect.any(Function) }),
+    );
+    const forwarded = (login.mock.calls as unknown as Array<[string, string, typeof interaction]>)[0]?.[2];
+    expect(forwarded).toBeDefined();
+    if (!forwarded) throw new Error("login interaction was not forwarded");
+    const prompt = { type: "text", message: "Code" } as never;
+    await expect(forwarded.prompt(prompt)).resolves.toBe("answer");
+    expect(interaction.prompt).toHaveBeenCalledWith(prompt);
+    const event = { type: "progress", message: "Waiting" } as const;
+    forwarded.notify(event);
+    expect(interaction.notify).toHaveBeenCalledWith(event);
     await backend.logoutProvider("kimi-coding");
     expect(logout).toHaveBeenCalledWith("kimi-coding");
     await backend.dispose();

@@ -1,9 +1,9 @@
 ---
 kind: cycle-summary
 cycle: C08-persistent-goal-runner
-status: active
+status: closed
 started: 2026-07-27
-finished: null
+finished: 2026-08-09
 builds_on:
   - C04-live-run-control
 successors: []
@@ -13,16 +13,20 @@ successors: []
 
 ## 目的与边界
 
-实现 VSPi 持久 Goal Runner 与终端瀑布、Mock-first 恢复修订，是当前进行中的 Cycle。
+实现 VSPi 持久 Goal Runner 与终端瀑布、Mock-first 恢复修订；旧 Delivery 对象只读保留。
 
 ## 最终结果
 
-- 尚未完成：delivery `vspi-persistent-goal-runner` 状态 needs_revision，revision 4（proposal_ready）。
-- 持久 runner 能力已迭代多轮，proposal 待按修订反馈收敛。
+- Goal 可跨进程持久恢复；失去 owner 后转 paused，只有显式 `/goal resume` 重新取得当前 Session owner，不自动重发模型请求。
+- 普通 final 通过 Pi native `followUp` 续跑；pending acceptance、阻塞、取消及轮次/token/no-progress 边界停止自动续跑。
+- Goal store 使用 workspace 隔离、CAS revision、semantic hash、immutable revision、atomic HEAD 与 writer lock，并拒绝 symlink/control text。
+- Terminal Inspector 修订完成；Pi 0.84 regular renderer 的 Resume epoch 额外 clear/Home 回归已修复。
 
 ## 验证结果
 
-- 尚无最终验收；恢复/owner 语义验证标准已写入 PLAN.md。
+- `npm run check` 与 `npm run build` 通过。
+- 全量 Vitest：110 files / 801 tests passed。
+- 80×40 Terminal Mock：child 尺寸精确、restored surface 1、partial hydration 0、pre-resize clear 0、Resume Home 0、violations 0。
 
 ## 重要决定与经验
 
@@ -31,4 +35,4 @@ successors: []
 
 ## 后续候选
 
-- 处理修订反馈，达成 proposal_ready 后重新提交；包含待修复的小 Bug。
+- 无。legacy runtime/delivery 保持 2026-08-01 的 revision 4 / `needs_revision` 历史状态，不再作为当前源码完成度判断。

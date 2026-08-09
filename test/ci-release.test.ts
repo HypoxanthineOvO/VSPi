@@ -15,10 +15,12 @@ describe("CI release publisher", () => {
     const directory = await mkdtemp(join(tmpdir(), "vspi-release-"));
     const tarball = join(directory, "vspi-1.2.3.tgz");
     const checksums = join(directory, "SHA256SUMS");
+    const releaseNotes = join(directory, "release-notes.md");
     const tarballBody = Buffer.from("package bytes");
     const sha256 = "a".repeat(64);
     await writeFile(tarball, tarballBody);
     await writeFile(checksums, `${sha256}  .artifacts/vspi-1.2.3.tgz\n`);
+    await writeFile(releaseNotes, "## Fullscreen Runtime\n\nAgent Teams and Persistent Goals.");
 
     const requests: Array<{
       method: string | undefined;
@@ -62,6 +64,8 @@ describe("CI release publisher", () => {
             CI_API_V4_URL: `${origin}/api/v4`,
             CI_PROJECT_ID: "107",
             CI_JOB_TOKEN: "job-token",
+            RELEASE_TITLE: "VSPi 1.2.3 - Fullscreen Runtime",
+            RELEASE_NOTES_PATH: releaseNotes,
           },
         },
       );
@@ -84,7 +88,7 @@ describe("CI release publisher", () => {
       expect(releaseRequest.headers["job-token"]).toBe("job-token");
       const release = JSON.parse(releaseRequest.body.toString("utf8"));
       expect(release).toMatchObject({
-        name: "VSPi 1.2.3",
+        name: "VSPi 1.2.3 - Fullscreen Runtime",
         tag_name: "v1.2.3",
         assets: {
           links: [
@@ -103,6 +107,8 @@ describe("CI release publisher", () => {
         },
       });
       expect(release.description).toContain(sha256);
+      expect(release.description).toContain("Agent Teams and Persistent Goals");
+      expect(release.description).toContain("```powershell");
       expect(release.description).toContain(
         "https://gitlab.example/heyx/vspi/-/releases/permalink/latest/downloads/vspi-latest.tgz",
       );

@@ -1,9 +1,9 @@
 ---
 kind: cycle-summary
 cycle: C09-ui-rendering-fixes
-status: active
+status: closed
 started: 2026-08-06
-finished: null
+finished: 2026-08-09
 builds_on: []
 successors: []
 ---
@@ -18,11 +18,11 @@ successors: []
 
 - M1 completed：Question review 界面获得 footer 空行，与选项模式一致。
 - M2 completed：Sessions picker 垂直居中，标题离开第 0 行。
-- M3 部分完成：历史翻页 app 层已修复（连续翻页不跳过头）；真实终端渲染层 Inspect 帧仍不完整，遗留为下一步。
+- M3 completed：历史翻页 app 层连续翻页不跳过头；C11 dual renderer 后 regular/fullscreen 真实 PTY 均能到达最早历史，渲染层遗留已消除。
 
 ## 验证结果
 
-- 110 个相关测试通过（含更新后的 Sessions 居中断言）。
+- 收口验证 4 files / 62 tests 通过；C11 全量 110 files / 800 tests 通过。
 - mock:terminal trace 回归 0 violations。
 - Mock/PTY 帧确认 M1、M2 布局与 M3 app 层行为。
 
@@ -33,4 +33,4 @@ successors: []
 
 ## 后续候选
 
-- Inspect 渲染层遗留：深挖 `ScrollbackTUI.commitStatic` rebase 与 pi-tui 差分渲染的交互，或在后续 Cycle 单独处理。
+- 无。

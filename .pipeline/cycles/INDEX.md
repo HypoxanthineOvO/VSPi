@@ -9,9 +9,7 @@ status: active
 
 | Cycle | 目的 | 状态 | 当前项 | 下一步 |
 | --- | --- | --- | --- | --- |
-| [C07-subagent-teams](C07-subagent-teams/PLAN.md) | Subagent/Teammate 完整计划（m1-m5） | active | m1-contract-and-scheduler | 等待交付审批后按 m1→m5 执行 |
-| [C08-persistent-goal-runner](C08-persistent-goal-runner/PLAN.md) | 持久 Goal Runner 与终端瀑布修订 | active | G3 修订反馈闭环 | 按 needs_revision 反馈修订 proposal 后重新提交 |
-| [C09-ui-rendering-fixes](C09-ui-rendering-fixes/PLAN.md) | 终端渲染与历史浏览修复（Question 空行 / Sessions 居中 / 历史滚动） | active | M3 历史滚动渲染层 | 深挖 Inspect 渲染层遗留或转后续候选 |
+| [C12-release-train](C12-release-train/PROGRESS.md) | VSPi v0.6.0 GitLab Release 与 Windows 安装交付 | active | R4 | R5 |
 
 ## Closed Cycles
 
@@ -23,8 +21,13 @@ status: active
 | [C04-live-run-control](C04-live-run-control/SUMMARY.md) | VSPi Goal 运行控制 | closed | vspi-live-run-control | v0.2.0 |
 | [C05-subagent-teams-goal](C05-subagent-teams-goal/SUMMARY.md) | Subagent 与 Teammate 能力（Goal 交付） | closed | vspi-subagent-teams-goal | 0.3.11 |
 | [C06-terminal-mock-recovery](C06-terminal-mock-recovery/SUMMARY.md) | 终端 Mock 与 Recovery 工具链 | closed | vspi-terminal-mock-recovery | 0.3.x |
+| [C07-subagent-teams](C07-subagent-teams/SUMMARY.md) | Subagent/Teammate corrective Plan | closed | vspi-subagent-teams（legacy 只读） | - |
+| [C10-history-refresh-repair](C10-history-refresh-repair/SUMMARY.md) | History Refresh 语义结构修复 | closed | - | - |
+| [C11-pi-084-compatibility](C11-pi-084-compatibility/SUMMARY.md) | Pi 0.84 fullscreen TUI 与 Markdown 增强 | closed | - | - |
+| [C09-ui-rendering-fixes](C09-ui-rendering-fixes/SUMMARY.md) | 终端渲染与历史浏览修复 | closed | - | - |
+| [C08-persistent-goal-runner](C08-persistent-goal-runner/SUMMARY.md) | 持久 Goal Runner 与终端瀑布修订 | closed | vspi-persistent-goal-runner（legacy 只读） | - |
 
 ## 说明
 
 - 历史 Cycle 依据已接受 Delivery 对象重建，遵循决策 `decision-742e1882`（不捏造接受记录）。
-- 未完成的 Delivery（vspi-subagent-teams、vspi-persistent-goal-runner）保持 active，未标记完成。
+- Legacy Delivery 对象保持原始状态不回写；当前完成度以语义 Cycle 与 fresh 验证证据为准。

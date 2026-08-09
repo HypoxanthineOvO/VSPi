@@ -23,6 +23,9 @@ export const DEFAULT_USAGE: UsageSnapshot = {
 export const DEFAULT_SETTINGS: AppSettings = {
   scope: "project",
   theme: "Terminal",
+  tuiMode: "fullscreen",
+  fullscreenScrollbar: "auto",
+  mermaidRendering: "final",
   reducedMotion: false,
   workingStyle: 3,
   thinkingDisplay: "collapsed",

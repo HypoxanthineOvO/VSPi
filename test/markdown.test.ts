@@ -107,6 +107,46 @@ describe("VSPi Markdown rendering", () => {
     expect(cellsForText(rendered, "│").every((cell) => cell.foreground === "rgb(70,80,88)")).toBe(true);
   });
 
+  it("renders upstream inline and matrix LaTeX without overflowing", () => {
+    const source = ["Inline $E = mc^2$", "", "$$\\begin{bmatrix}1 & 2 \\\\ 3 & 4\\end{bmatrix}$$"].join("\n");
+    const lines = renderMarkdown(source, 40, plainTheme()).map(stripAnsi);
+    expect(lines.join("\n")).toContain("E = mc²");
+    expect(lines.join("\n")).toContain("⎡ 1 │ 2 ⎤");
+    expect(lines.join("\n")).toContain("⎣ 3 │ 4 ⎦");
+    expect(lines.every((line) => visibleWidth(line) <= 40)).toBe(true);
+  });
+
+  it("renders completed Mermaid blocks and keeps final-mode streaming as source", () => {
+    const source = "```mermaid\nflowchart LR\n  A[Start] --> B[Done]\n```";
+    const complete = renderMarkdown(source, 60, plainTheme(), { mermaidRendering: "final" }).map(stripAnsi).join("\n");
+    expect(complete).toContain("Start");
+    expect(complete).toContain("Done");
+    expect(complete).toContain("───▶");
+    expect(complete).not.toContain("flowchart");
+
+    const pending = renderMarkdown(source, 60, plainTheme(), { mermaidRendering: "final", streaming: true })
+      .map(stripAnsi)
+      .join("\n");
+    expect(pending).toContain("MERMAID");
+    expect(pending).toContain("flowchart LR");
+
+    const live = renderMarkdown(source, 60, plainTheme(), { mermaidRendering: "streaming", streaming: true })
+      .map(stripAnsi)
+      .join("\n");
+    expect(live).toContain("───▶");
+  });
+
+  it("falls back to a bounded code block for narrow or non-Unicode Mermaid", () => {
+    const source = "```mermaid\nflowchart LR\n  A[Long starting node] --> B[Long finishing node]\n```";
+    for (const theme of [plainTheme(), plainTheme({ unicode: false })]) {
+      const lines = renderMarkdown(source, 24, theme, { mermaidRendering: "final" });
+      const text = lines.map(stripAnsi).join("\n");
+      expect(text).toContain("MERMAID");
+      expect(text).toContain("flowchart LR");
+      expect(lines.every((line) => visibleWidth(line) <= 24)).toBe(true);
+    }
+  });
+
   it("reuses tokenization while text and effective code width stay unchanged", () => {
     const long = 'const value = "x".repeat(80); // 超长代码行需要按宽度处理';
     const source = ["```ts", long, "```"].join("\n");

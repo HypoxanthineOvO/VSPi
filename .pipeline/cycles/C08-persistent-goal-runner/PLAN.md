@@ -1,8 +1,8 @@
 ---
 kind: plan
 cycle: C08-persistent-goal-runner
-status: active
-updated: 2026-08-01
+status: closed
+updated: 2026-08-09
 progress: PROGRESS.md
 execution: EXECUTION.md
 ---
@@ -11,7 +11,7 @@ execution: EXECUTION.md
 
 ## 执行目的
 
-实现 VSPi 持久 Goal Runner 与相关终端瀑布修订：Goal 的跨进程/跨 Session 持久恢复能力，以及与之配套的终端瀑布与 Mock-first 恢复工具。这是当前进行中的 Cycle，仍处于 needs_revision 状态。
+实现 VSPi 持久 Goal Runner 与相关终端瀑布修订：Goal 的跨进程/跨 Session 持久恢复能力，以及与之配套的终端瀑布与 Mock-first 恢复工具。
 
 ## 执行边界
 
@@ -29,4 +29,4 @@ Goal 在重启、fork、handoff 后只恢复落盘状态而不自动重新发起
 | `G2` | 终端瀑布与 Mock-first 恢复 | 终端瀑布恢复与 Mock-first 恢复修订一致 | Mock 几何断言与恢复轨迹回归 |
 | `G3` | 修订反馈闭环 | 根据用户修订反馈（needs_revision）收敛 proposal | revision 迭代与 proposal_ready 达成 |
 
-ID 在本 Cycle 内保持稳定；当前 revision 4 处于 proposal_ready / needs_revision。
+ID 在本 Cycle 内保持稳定。legacy revision 4 的反馈已映射到当前实现并通过 fresh 验证；旧 Delivery 对象只读保留。

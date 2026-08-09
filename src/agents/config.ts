@@ -23,7 +23,13 @@ export const AGENT_TOOL_NAMES = ["read", "ls", "find", "grep", "bash", "edit", "
 export function defaultAgentProjectConfig(): AgentProjectConfig {
   return {
     version: 1,
+    maxDepth: 3,
+    maxAgentsPerTree: 12,
     maxConcurrency: 16,
+    maxRunTokens: 120_000,
+    maxTreeTokens: 500_000,
+    maxTreeCostUsd: 20,
+    maxRunSeconds: 900,
     allowedModels: ["*"],
     modelPools: {},
     crossProviderDelegation: false,
@@ -77,11 +83,30 @@ function normalizeConfig(raw: unknown): AgentProjectConfig {
   if (!isRecord(raw)) throw new Error("Agent configuration must be an object");
   assertKeys(
     raw,
-    ["version", "maxConcurrency", "allowedModels", "modelPools", "crossProviderDelegation", "teammates"],
+    [
+      "version",
+      "maxDepth",
+      "maxAgentsPerTree",
+      "maxConcurrency",
+      "maxRunTokens",
+      "maxTreeTokens",
+      "maxTreeCostUsd",
+      "maxRunSeconds",
+      "allowedModels",
+      "modelPools",
+      "crossProviderDelegation",
+      "teammates",
+    ],
     "agent configuration",
   );
   if (raw.version !== 1) throw new Error("Agent configuration version must be 1");
-  const maxConcurrency = normalizeInteger(raw.maxConcurrency ?? 16, 1, 128, "maxConcurrency");
+  const maxDepth = normalizeInteger(raw.maxDepth ?? 3, 1, 5, "maxDepth");
+  const maxAgentsPerTree = normalizeInteger(raw.maxAgentsPerTree ?? 12, 1, 128, "maxAgentsPerTree");
+  const maxConcurrency = normalizeInteger(raw.maxConcurrency ?? 16, 1, 16, "maxConcurrency");
+  const maxRunTokens = normalizeInteger(raw.maxRunTokens ?? 120_000, 1_000, 1_000_000, "maxRunTokens");
+  const maxTreeTokens = normalizeInteger(raw.maxTreeTokens ?? 500_000, maxRunTokens, 10_000_000, "maxTreeTokens");
+  const maxTreeCostUsd = normalizeNumber(raw.maxTreeCostUsd ?? 20, 0.01, 10_000, "maxTreeCostUsd");
+  const maxRunSeconds = normalizeInteger(raw.maxRunSeconds ?? 900, 1, 86_400, "maxRunSeconds");
   const allowedModels = normalizeStringList(raw.allowedModels ?? ["*"], 128, 200, "allowedModels");
   if (allowedModels.some((value) => !isModelSelector(value, true))) {
     throw new Error("allowedModels contains an invalid model selector");
@@ -96,7 +121,20 @@ function normalizeConfig(raw: unknown): AgentProjectConfig {
   if (new Set(teammates.map((item) => item.id)).size !== teammates.length) {
     throw new Error("Teammate IDs must be unique");
   }
-  return { version: 1, maxConcurrency, allowedModels, modelPools, crossProviderDelegation, teammates };
+  return {
+    version: 1,
+    maxDepth,
+    maxAgentsPerTree,
+    maxConcurrency,
+    maxRunTokens,
+    maxTreeTokens,
+    maxTreeCostUsd,
+    maxRunSeconds,
+    allowedModels,
+    modelPools,
+    crossProviderDelegation,
+    teammates,
+  };
 }
 
 function normalizeModelPools(value: unknown): Record<string, AgentModelPoolConfig> {
@@ -237,6 +275,13 @@ function normalizeInteger(value: unknown, min: number, max: number, label: strin
     throw new Error(`${label} must be an integer between ${min} and ${max}`);
   }
   return value as number;
+}
+
+function normalizeNumber(value: unknown, min: number, max: number, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max) {
+    throw new Error(`${label} must be a number between ${min} and ${max}`);
+  }
+  return value;
 }
 
 function assertKeys(value: Record<string, unknown>, allowed: string[], label: string): void {

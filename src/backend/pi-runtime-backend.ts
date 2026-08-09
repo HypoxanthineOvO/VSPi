@@ -530,7 +530,10 @@ export class PiRuntimeBackend implements ChatBackend {
         images,
         source: "interactive",
       });
-      if (!this.cancelledGenerations.has(generation)) this.agentManager?.assertRootTaskComplete();
+      if (!this.cancelledGenerations.has(generation)) {
+        this.agentManager?.assertRootTaskComplete();
+        this.events?.onAgentSnapshot?.(this.getAgentSnapshot());
+      }
       return { status: this.cancelledGenerations.has(generation) ? "cancelled" : "completed" };
     } finally {
       if (this.activeGeneration === generation) this.activeGeneration = undefined;
@@ -1300,7 +1303,8 @@ export class PiRuntimeBackend implements ChatBackend {
           workspace: cwd,
           executionPolicy: this.options.executionPolicy,
           preflight: (action) => nextAgentManager.assertMainAction(action),
-          executionBoundary: (action, operation) => nextAgentManager.withToolBoundary(action, operation),
+          executionBoundary: (action, operation, signal) =>
+            nextAgentManager.withToolBoundary(action, operation, signal),
         }),
       );
       const question = createQuestionToolDefinition({
@@ -1409,11 +1413,20 @@ export class PiRuntimeBackend implements ChatBackend {
         enabled: false,
         projectTrusted: this.options.trustedProject === true,
         recovery: this.options.recovery === true,
-        limits: { maxDepth: 5, maxAgentsPerTree: 128, maxConcurrency: 16 },
+        limits: {
+          maxDepth: 3,
+          maxAgentsPerTree: 12,
+          maxConcurrency: 16,
+          maxRunTokens: 120_000,
+          maxTreeTokens: 500_000,
+          maxTreeCostUsd: 20,
+          maxRunSeconds: 900,
+        },
         pools: [],
         active: [],
         recent: [],
         teammates: [],
+        authority: { pendingRequired: [], turnOverrides: [], sessionOverrides: [], taskEpoch: 0 },
         diagnostic: "Subagent runtime is not ready",
       }
     );
@@ -1429,6 +1442,13 @@ export class PiRuntimeBackend implements ChatBackend {
     this.assertHandoffWritable();
     if (!this.agentManager) throw new Error("Subagent runtime is not ready");
     await this.agentManager.resetTeammateLane(id, lane);
+  }
+
+  async overrideRequiredTeammate(id: string, scope: "turn" | "session"): Promise<void> {
+    this.assertHandoffWritable();
+    if (!this.agentManager) throw new Error("Subagent runtime is not ready");
+    this.agentManager.overrideRequiredTeammate(id, scope);
+    this.events?.onAgentSnapshot?.(this.getAgentSnapshot());
   }
 
   async setAgentPoolRole(provider: string, role: AgentRole, model: string): Promise<void> {
@@ -1451,16 +1471,20 @@ export class PiRuntimeBackend implements ChatBackend {
       ...(event.run.preferredModel ? { preferredModel: event.run.preferredModel } : {}),
       effort: event.run.effort,
       contextMode: event.run.contextMode,
+      contextChars: event.run.contextChars,
       task: event.run.task,
       tools: event.run.tools,
       ...(event.run.outputPreview ? { outputPreview: event.run.outputPreview } : {}),
-      ...(event.run.sessionFile ? { sessionFile: event.run.sessionFile } : {}),
       status: event.run.status,
       agentKind: event.run.kind,
       ...(event.run.teammateId ? { teammateId: event.run.teammateId } : {}),
       ...(event.run.lane ? { lane: event.run.lane } : {}),
       depth: event.run.depth,
       ...(event.run.fallbackReason ? { fallbackReason: event.run.fallbackReason } : {}),
+      usageTokens: event.run.budget.runTokensUsed,
+      runTokensLeft: Math.max(0, event.run.budget.maxRunTokens - event.run.budget.runTokensUsed),
+      treeTokensLeft: Math.max(0, event.run.budget.maxTreeTokens - event.run.budget.treeTokensUsed),
+      treeCostUsdLeft: Math.max(0, event.run.budget.maxTreeCostUsd - event.run.budget.treeCostUsd),
     };
     if (this.agentMessageIds.has(id)) this.events.onMessageUpdate(id, message);
     else {

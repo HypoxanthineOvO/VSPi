@@ -12,6 +12,7 @@ export interface TranscriptRenderOptions {
   thinkingDisplay?: "hidden" | "collapsed" | "expanded";
   wrapCode?: boolean;
   collapseCompletedTools?: boolean;
+  mermaidRendering?: "off" | "final" | "streaming";
   cache?: TranscriptRenderCache;
 }
 
@@ -31,6 +32,8 @@ export interface TranscriptWindowOptions {
   pinnedNodeId?: string;
   /** Anchor mode: start the window at this node and fill forward instead of trailing the tail. */
   startNodeId?: string;
+  /** Skip the exact hidden-block count so tail-follow redraws only inspect the bounded visible tail. */
+  exactHiddenBlocks?: boolean;
 }
 
 export interface TranscriptWindow {
@@ -128,6 +131,9 @@ export function selectTranscriptWindow(
   messages: TranscriptMessage[],
   options: TranscriptWindowOptions,
 ): TranscriptWindow {
+  if (options.exactHiddenBlocks === false && !options.startNodeId && !options.pinnedNodeId) {
+    return selectTranscriptTail(messages, options);
+  }
   const nodes = buildTranscriptNodes(messages);
   if (nodes.length === 0) return { messages: [], nodes: [], hiddenBlocks: 0, truncatedTailBlocks: 0 };
 
@@ -207,6 +213,61 @@ export function selectTranscriptWindow(
     messages: messages.slice(firstMessageIndex),
     nodes: selectedNodes,
     hiddenBlocks: start,
+    truncatedTailBlocks: 0,
+  };
+}
+
+function selectTranscriptTail(messages: TranscriptMessage[], options: TranscriptWindowOptions): TranscriptWindow {
+  const maxBlocks = Math.max(1, options.maxBlocks ?? 80);
+  const maxCharacters = Math.max(1, options.maxCharacters ?? 60_000);
+  const maxRows = Math.max(1, options.maxRows);
+  const reversedNodes: TranscriptNode[] = [];
+  let characters = 0;
+  let rows = 0;
+  let cursor = messages.length - 1;
+
+  while (cursor >= 0) {
+    const message = messages[cursor];
+    if (!message || isQueuedTranscriptMessage(message)) {
+      cursor -= 1;
+      continue;
+    }
+    let start = cursor;
+    if (message.kind === "tool") {
+      while (start > 0) {
+        const candidate = messages[start - 1];
+        if (candidate?.kind !== "tool" || !sameToolGroup(candidate, message)) break;
+        start -= 1;
+      }
+    }
+    const messageIndexes = Array.from({ length: cursor - start + 1 }, (_, offset) => start + offset);
+    const block = messageIndexes
+      .map((messageIndex) => messages[messageIndex])
+      .filter((candidate): candidate is TranscriptMessage => candidate !== undefined);
+    const nextCharacters = block.reduce((total, candidate) => total + transcriptMessageCharacters(candidate), 0);
+    const nextRows = estimateTranscriptBlockRows(block, options);
+    if (
+      reversedNodes.length > 0 &&
+      (reversedNodes.length >= maxBlocks || characters + nextCharacters > maxCharacters || rows + nextRows > maxRows)
+    ) {
+      break;
+    }
+    reversedNodes.push({
+      id: message.kind === "tool" ? toolGroupNodeId(message) : message.id,
+      kind: message.kind === "tool" ? "toolGroup" : "message",
+      messageIndexes,
+    });
+    characters += nextCharacters;
+    rows += nextRows;
+    cursor = start - 1;
+  }
+
+  const nodes = reversedNodes.reverse();
+  const firstMessageIndex = nodes[0]?.messageIndexes[0] ?? messages.length;
+  return {
+    messages: messages.slice(firstMessageIndex),
+    nodes,
+    hiddenBlocks: cursor >= 0 ? 1 : 0,
     truncatedTailBlocks: 0,
   };
 }
@@ -296,6 +357,8 @@ export function renderTranscriptMessage(
   } else if (message.kind === "text") {
     const markdown = renderMarkdown(message.text, Math.max(1, width - 2), theme, {
       ...(options.wrapCode !== undefined ? { wrapCode: options.wrapCode } : {}),
+      ...(options.mermaidRendering ? { mermaidRendering: options.mermaidRendering } : {}),
+      streaming: message.streaming ?? false,
     });
     lines = markdown.map((line, index) => `${index === 0 ? `${theme.muted("•")} ` : "  "}${line}`);
     if (message.streaming && lines.length > 0) {
@@ -337,6 +400,8 @@ export function renderTranscriptMessage(
       lines.push(
         ...renderMarkdown(displayText, Math.max(1, width - 2), theme, {
           ...(options.wrapCode !== undefined ? { wrapCode: options.wrapCode } : {}),
+          ...(options.mermaidRendering ? { mermaidRendering: options.mermaidRendering } : {}),
+          streaming: message.streaming ?? false,
           tone: "thinking",
         }).map((line) => `  ${line}`),
       );
@@ -367,6 +432,17 @@ export function renderTranscriptMessage(
     const body = [
       padLine(metadata, bodyWidth),
       ...wrapTextWithAnsi(message.task, bodyWidth).slice(0, 2),
+      ...(message.runTokensLeft !== undefined && message.treeTokensLeft !== undefined
+        ? [
+            theme.muted(
+              truncateToWidth(
+                `Budget · run ${formatSubagentTokens(message.runTokensLeft)} left · tree ${formatSubagentTokens(message.treeTokensLeft)} / $${(message.treeCostUsdLeft ?? 0).toFixed(3)} left`,
+                bodyWidth,
+                "…",
+              ),
+            ),
+          ]
+        : []),
       ...(message.outputPreview
         ? [theme.muted(truncateToWidth(message.outputPreview, bodyWidth, "…"))]
         : message.status === "running"
@@ -383,6 +459,12 @@ export function renderTranscriptMessage(
 
   if (selected) return renderSelectedLines(lines, width, theme);
   return lines.map((line) => (visibleWidth(line) > width ? padLine(line, width) : line));
+}
+
+function formatSubagentTokens(value: number): string {
+  if (value < 1_000) return String(Math.max(0, Math.round(value)));
+  if (value < 10_000) return `${(value / 1_000).toFixed(1)}K`;
+  return `${Math.round(value / 1_000)}K`;
 }
 
 function collapsedThinkingPreview(text: string, width: number): string | undefined {
@@ -439,6 +521,7 @@ export function renderTranscript(
     options.thinkingDisplay ?? "collapsed",
     options.wrapCode === false ? "nowrap" : "wrap",
     options.collapseCompletedTools ? "collapse-tools" : "expand-tools",
+    options.mermaidRendering ?? "final",
     options.selectedNodeId ?? "",
     options.selectedToolId ?? "",
     options.inspectedId ?? "",

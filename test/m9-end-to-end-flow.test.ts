@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Terminal, TUI } from "@earendil-works/pi-tui";
+import { type Terminal, TuiMainScreen } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { VspiApp } from "../src/app/vspi-app.js";
 import type {
@@ -219,7 +219,7 @@ describe("M9 injected Pi end-to-end state flow", () => {
   it("preserves restore, question, attachment, plan, profile, compact, replacement, fork and restart state", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-m9-e2e-"));
     const terminal = new TestTerminal();
-    const tui = new TUI(terminal);
+    const tui = new TuiMainScreen(terminal);
     const backend = new StatefulPiBackend();
     const attachments = new StatefulAttachments();
     const plans = new Map([
@@ -353,7 +353,7 @@ describe("M9 injected Pi end-to-end state flow", () => {
 
     await app.dispose();
 
-    const restarted = new VspiApp(new TUI(new TestTerminal()), plainTheme(), backend, {
+    const restarted = new VspiApp(new TuiMainScreen(new TestTerminal()), plainTheme(), backend, {
       cwd,
       settings: { ...DEFAULT_SETTINGS, scope: "global", bridgeEnabled: false },
       attachments: attachments as never,
@@ -432,7 +432,7 @@ async function modelGroupHarness(models: RuntimeModelOption[]) {
     isProjectTrusted: () => false,
     dispose: vi.fn(async () => {}),
   };
-  const app = new VspiApp(new TUI(new TestTerminal()), plainTheme(), backend, {
+  const app = new VspiApp(new TuiMainScreen(new TestTerminal()), plainTheme(), backend, {
     cwd: await mkdtemp(join(tmpdir(), "vspi-m9-model-group-")),
     settings: { ...DEFAULT_SETTINGS, scope: "global", bridgeEnabled: false },
     attachments: new StatefulAttachments() as never,
