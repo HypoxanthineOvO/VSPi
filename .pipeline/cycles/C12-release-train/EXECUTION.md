@@ -55,3 +55,33 @@ updated: 2026-08-09T16:56:25+08:00
 - **计划影响：** `.gitlab-ci.yml` 切换到新 digest。
 - **遇到的问题：** Docker runner 不允许嵌套 user namespace；测试契约接受命令执行前的 namespace fail-closed，同时继续要求控制文件字节不变。
 - **下一步：** 提交并推送 CI digest，等待新 main pipeline。
+
+## 2026-08-09 - R4 主线 CI 完成
+
+- **计划项：** `R4`
+- **目的：** 取得与发布候选 commit 绑定的完整 main pipeline 证据。
+- **结果：** commit `f325353` 的 pipeline `#348` 成功；quality、test、package、install-smoke 四关全部通过。
+- **证据：** quality 41.43s；test 113 files / 827 tests、81.80s；package 36.03s；install-smoke 29.87s。
+- **计划影响：** R4 completed，进入 R5。
+- **遇到的问题：** 无新增问题。
+- **下一步：** 在 `f325353` 创建并推送 `v0.6.0` annotated tag。
+
+## 2026-08-09 - R5 Tag 与 GitLab Release
+
+- **计划项：** `R5`
+- **目的：** 从已验证 commit 创建不可变 tag、package 与 GitLab Release。
+- **结果：** 受保护 annotated tag `v0.6.0` 指向 `f325353`；pipeline `#349` 的 quality、test、package、install-smoke、release 五关全部成功；Release `VSPi 0.6.0 - Fullscreen Runtime` 已创建。
+- **证据：** tag pipeline 113 files / 827 tests；release assets `vspi-0.6.0.tgz` 与 `vspi-latest.tgz`；CI SHA-256 `6925f44c5f377c922eafbeef655f594f47a8bc7d89c8f1e579a2de479d978602`。
+- **计划影响：** R5 completed，进入 R6。
+- **遇到的问题：** 无。
+- **下一步：** 匿名下载 Release 资产，验证 checksum、安装和运行。
+
+## 2026-08-09 - R6 Release 安装复验
+
+- **计划项：** `R6`
+- **目的：** 从用户实际使用的公开 latest URL 验证发布资产，而不是复用本地产物或认证 API。
+- **结果：** 清除 GitLab token 环境后，latest 与 pinned 资产均可下载且字节一致；SHA-256 匹配 Release；从 latest URL 干净安装成功，CLI version 与 Fixture smoke 均为 0.6.0。
+- **证据：** SHA-256 `6925f44c5f377c922eafbeef655f594f47a8bc7d89c8f1e579a2de479d978602`；production install 146 packages；`vspi --version` = `0.6.0`。
+- **计划影响：** R6 completed；C12 进入 final waiting-review。
+- **遇到的问题：** 无。
+- **下一步：** 用户在 Windows 执行 Release 安装命令并接受或反馈。

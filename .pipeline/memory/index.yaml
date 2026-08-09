@@ -54,6 +54,7 @@ active_by_dedupe_key:
   feedback.vspi.release-ledger.v0.2.1-v0.2.7: feedback-286ce0c0ce667f86cdf15febe3fc54eb
   feedback.vspi.release-ledger.v0.3.0-v0.3.7: feedback-60093381731f723a648627fef2347991
   feedback.vspi.release-ledger.v0.3.8-v0.3.11: feedback-0a04be071178907334e0e47b60963e0b
+  feedback.vspi.release-ledger.v0.6.0: feedback-b6abe47c831810e3daca7bfbecde498d
   feedback.vspi.status-layout-fixed-tracks: feedback-7cc38e004361e3431e700a74e251d0e0
   goal.vspi-live-run-control.feedback.3f4c4ce3670b5fb2: feedback-2dc39de0dbbb77493cac3135e83d2a25
   goal.vspi-live-run-control.feedback.557a36ec9b6ed4be: feedback-89ed9f5b6872a5259a96a681d88ae282
@@ -1819,6 +1820,30 @@ records:
     supersedes:
       - feedback-c9b3e339c6c3f13935ced61f6fe90114
     updated_at: 2026-07-26T10:22:55.228Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-08-09T09:38:48.532Z
+    dedupe_key: feedback.vspi.release-ledger.v0.6.0
+    id: feedback-b6abe47c831810e3daca7bfbecde498d
+    kind: feedback
+    path: .pipeline/memory/records/project-33aa1007aa14/feedback/feedback-b6abe47c831810e3daca7bfbecde498d.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: b6abe47c831810e3daca7bfbecde498d054aa083f77f65d2d05135ce25b1fcfa
+    source_refs:
+      - locator: commit:f325353ac5672bdf9bec65b203f9733877d9eefb
+        ref: tag:v0.6.0
+        type: git
+      - locator: pipeline:349
+        ref: project:107
+        type: gitlab_pipeline
+      - locator: https://gitlab.vsplab.cn/heyx/vspi/-/releases/v0.6.0
+        ref: v0.6.0
+        type: gitlab_release
+    supersedes: []
+    updated_at: 2026-08-09T09:38:48.532Z
   - active: true
     confidence: confirmed
     created_at: 2026-07-24T16:32:21.716Z

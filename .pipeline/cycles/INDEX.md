@@ -9,7 +9,7 @@ status: active
 
 | Cycle | 目的 | 状态 | 当前项 | 下一步 |
 | --- | --- | --- | --- | --- |
-| [C12-release-train](C12-release-train/PROGRESS.md) | VSPi v0.6.0 GitLab Release 与 Windows 安装交付 | active | R4 | R5 |
+| [C12-release-train](C12-release-train/PROGRESS.md) | VSPi v0.6.0 GitLab Release 与 Windows 安装交付 | waiting-review | final-review | Windows 安装验收 |
 
 ## Closed Cycles
 

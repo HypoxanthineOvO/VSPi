@@ -98,6 +98,7 @@ Derived view. Individual Markdown Records remain authoritative.
 | feedback-a48b3363d40d3c1d583cb0b182121e66 | active | feedback | cycle:vspi-tui-v1 | cycle.vspi-tui-v1.feedback.68c2739abc2b5cb2 | - |
 | feedback-a707294349349d72544d7bd53c5cb6d3 | active | feedback | goal:vspi-persistent-goal-runner | goal.vspi-persistent-goal-runner.feedback.200f1ed19a14d67e | - |
 | feedback-ab1742539cee36f0f27b27c36c48aad2 | inactive (superseded) | feedback | project:VSPi | feedback.vspi.status-layout-fixed-tracks | feedback-c9b3e339c6c3f13935ced61f6fe90114 |
+| feedback-b6abe47c831810e3daca7bfbecde498d | active | feedback | project:VSPi | feedback.vspi.release-ledger.v0.6.0 | - |
 | feedback-b9047e6d784e40bea91fe9161db5225e | active | feedback | cycle:vspi-v0-2-0-workflow-integration | cycle.vspi-v0-2-0-workflow-integration.feedback.dccc1d0a2004dda9 | - |
 | feedback-bf0c8330b8356e5ff14f20b4235030f5 | active | feedback | cycle:vspi-tui-v1 | cycle.vspi-tui-v1.feedback.a46dbbee077088c5 | - |
 | feedback-c90953025ce589276d97a5a28643be41 | active | feedback | cycle:vspi-terminal-mock-recovery | cycle.vspi-terminal-mock-recovery.feedback.9e1f81ee06fa39b6 | - |
@@ -133,4 +134,4 @@ Derived view. Individual Markdown Records remain authoritative.
 | requirement-d964d07c3a6671ab7b3702649d3734f6 | inactive (superseded) | requirement | project:VSPi | requirement.vspi.interactive-panel-density | requirement-aba0169a5c698bb5539131b2d634d5a4 |
 | requirement-e9d688a0505fffb6626c54cc08f0d3ef | active | requirement | project:VSPi | requirement.vspi.external-session-import | - |
 
-Records: 128
+Records: 129

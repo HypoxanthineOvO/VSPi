@@ -2,7 +2,7 @@
 kind: plan
 cycle: C12-release-train
 mode: goal
-status: active
+status: waiting-review
 updated: 2026-08-09T16:56:25+08:00
 progress: PROGRESS.md
 execution: EXECUTION.md
