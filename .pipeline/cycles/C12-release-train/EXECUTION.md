@@ -35,3 +35,13 @@ updated: 2026-08-09T16:56:25+08:00
 - **计划影响：** 无。
 - **遇到的问题：** 首次 check 发现 release payload 格式问题并修复；打包后摘要脚本误读 pack JSON 数组，但 package/install 已成功，修正摘要读取后 checksum 再次通过。
 - **下一步：** `R4`。
+
+## 2026-08-09 - R4 主线 CI 第一次运行
+
+- **计划项：** `R4`
+- **目的：** 验证 commit `1b665635` 的主线发布候选。
+- **结果：** pipeline `#347` 的 quality 通过，test 为 112 files / 826 tests passed、1 failed；package/install 因 test failure 正确跳过。
+- **证据：** 唯一失败为 `agents-security.test.ts` 的真实 bubblewrap sandbox 回归；锁定 CI 镜像缺少 `/usr/bin/bwrap`。
+- **计划影响：** R4 保持 in progress；新增不可变 CI 镜像 `22.22.0-3`，精确安装 Debian bubblewrap 0.8.0-2+deb12u1。
+- **遇到的问题：** 本地环境已安装 bwrap，原本未暴露 CI 镜像依赖缺口。
+- **下一步：** 构建并验证新镜像，更新 digest 后重跑主线 pipeline。

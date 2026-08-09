@@ -7,12 +7,15 @@ ADD --checksum=sha256:1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921
     https://gitlab.vsplab.cn/api/v4/projects/107/packages/generic/vspi-ci-tools/1/ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz \
     /tmp/rg.tar.gz
 
-RUN mkdir -p /tmp/fd /tmp/rg \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bubblewrap=0.8.0-2+deb12u1 \
+    && mkdir -p /tmp/fd /tmp/rg \
     && tar -xzf /tmp/fd.tar.gz -C /tmp/fd --strip-components=1 \
     && tar -xzf /tmp/rg.tar.gz -C /tmp/rg --strip-components=1 \
     && install -m 0755 /tmp/fd/fd /usr/local/bin/fd \
     && install -m 0755 /tmp/rg/rg /usr/local/bin/rg \
     && rm -rf /tmp/fd /tmp/rg /tmp/fd.tar.gz /tmp/rg.tar.gz \
+    && bwrap --version \
     && fd --version \
     && rg --version
 
