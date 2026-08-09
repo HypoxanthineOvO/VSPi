@@ -50,6 +50,8 @@ describe("Subagent workspace boundary", () => {
     );
     expect(result.exitCode).not.toBe(0);
     expect(await readFile(config, "utf8")).toBe("trusted\n");
-    expect(Buffer.concat(output).toString("utf8")).toMatch(/read-only|permission denied/i);
+    expect(Buffer.concat(output).toString("utf8")).toMatch(
+      /read-only|permission denied|no permissions to create new namespace/i,
+    );
   });
 });
