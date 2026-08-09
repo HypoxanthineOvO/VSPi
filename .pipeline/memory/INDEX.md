@@ -55,6 +55,7 @@ Derived view. Individual Markdown Records remain authoritative.
 | feedback-04b0b14ffc2b6a81d5cd30ab95fb6f18 | active | feedback | cycle:vspi-v0-2-0-workflow-integration | cycle.vspi-v0-2-0-workflow-integration.feedback.5d5692392e6ba9a7 | - |
 | feedback-05b2c0d4fb86a081d2871fc9f08a58e2 | active | feedback | project:VSPi | feedback.vspi.release-ledger.v0.2.0 | - |
 | feedback-0a04be071178907334e0e47b60963e0b | active | feedback | project:VSPi | feedback.vspi.release-ledger.v0.3.8-v0.3.11 | - |
+| feedback-0c1ac0036058ec0494dc5d7c1b2e62c0 | active | feedback | project:VSPi | feedback.vspi.release-ledger.v0.6.1 | - |
 | feedback-0d2cda78eb4c67b25aef1238c0bbda86 | active | feedback | cycle:vspi-terminal-mock-recovery | cycle.vspi-terminal-mock-recovery.feedback.6a8df73c713438f1 | - |
 | feedback-0dade055f803cb4ce3ce638f585147d2 | active | feedback | cycle:vspi-v0-2-0-workflow-integration | cycle.vspi-v0-2-0-workflow-integration.feedback.c138c34d690d31c6 | - |
 | feedback-0f27a2032f6ccd79b08d65781aa01d9f | active | feedback | goal:vspi-persistent-goal-runner | goal.vspi-persistent-goal-runner.feedback.a9ceb930e26d7f23 | - |
@@ -135,4 +136,4 @@ Derived view. Individual Markdown Records remain authoritative.
 | requirement-d964d07c3a6671ab7b3702649d3734f6 | inactive (superseded) | requirement | project:VSPi | requirement.vspi.interactive-panel-density | requirement-aba0169a5c698bb5539131b2d634d5a4 |
 | requirement-e9d688a0505fffb6626c54cc08f0d3ef | active | requirement | project:VSPi | requirement.vspi.external-session-import | - |
 
-Records: 130
+Records: 131

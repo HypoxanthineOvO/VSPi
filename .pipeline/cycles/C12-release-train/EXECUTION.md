@@ -95,3 +95,13 @@ updated: 2026-08-09T16:56:25+08:00
 - **计划影响：** 发布版本提升到 0.6.1；Release notes 与安装指令随 CI 自动生成。
 - **遇到的问题：** 无。
 - **下一步：** 提交、推送 main，等待 CI 后打 v0.6.1 tag 并复验 Release 资产。
+
+## 2026-08-09 - R7 发布完成
+
+- **计划项：** `R7`
+- **目的：** 将 Windows named-pipe lease 修复作为 0.6.1 发布并完成公开资产复验。
+- **结果：** main pipeline `#351` 与 tag pipeline `#352` 全部成功；Release `VSPi 0.6.1 - Fullscreen Runtime` 已创建；匿名 latest/pinned 下载、SHA-256、干净安装、`vspi --version` 与 Fixture smoke 全部通过。
+- **证据：** SHA-256 `e6d3f5294598f02acb0ce8a53178d25ccf68fc34d5d096e727a67c57d85cff7a`；installed version `0.6.1`。
+- **计划影响：** C12 回到 waiting-review，等待 Windows 最终验收。
+- **遇到的问题：** 无。
+- **下一步：** 用户执行 Windows 安装命令并接受或反馈。

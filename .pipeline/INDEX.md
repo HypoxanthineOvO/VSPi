@@ -10,7 +10,7 @@ status: active
 
 - [Cycle 索引](cycles/INDEX.md)：1 个 active Cycle（C12 Release Train R7），11 个历史 Cycle closed。
 - [Experiment 索引](experiments/INDEX.md)：无高置信 Experiment 记录。
-- [Memory 记录](memory/records/)：130 条合法 decision/feedback/requirement/preference Record，按 scope 分组；C07 corrective decision supersede 旧 revision 0 记录；v0.6.0 release outcome 与 Windows named-pipe lease 修复已记录。
+- [Memory 记录](memory/records/)：131 条合法 decision/feedback/requirement/preference Record，按 scope 分组；C07 corrective decision supersede 旧 revision 0 记录；v0.6.0/v0.6.1 release outcome 与 Windows named-pipe lease 修复已记录。
 - Legacy 保留：`.pipeline/manifest.yaml` 与 `.pipeline/runtime/objects/delivery/`（8 个 Delivery 对象）继续作为旧兼容入口；C05 Delivery 仅修正 evidence path，状态、revision 与 digest 未改变。
 
 ## 历史来源与权威
