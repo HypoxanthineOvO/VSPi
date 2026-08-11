@@ -26,8 +26,9 @@ type TestableApp = {
   focusTranscript(): boolean;
 };
 
-function fakeTui(setProgress = vi.fn(), rows = 24): TUI {
+function fakeTui(setProgress = vi.fn(), rows = 24, mode: "regular" | "fullscreen" = "regular"): TUI {
   return {
+    mode,
     terminal: { rows, columns: 80, setProgress, write: vi.fn() },
     requestRender: vi.fn(),
   } as unknown as TUI;
@@ -40,7 +41,7 @@ function fakeAttachments(): AttachmentService {
   } as unknown as AttachmentService;
 }
 
-function sessionBackend() {
+function sessionBackend(switchMessageCount = 1) {
   let events: SessionResetEvents | undefined;
   const newSession = vi.fn(async (_options?: NewSessionOptions) => {
     events?.onSessionReset?.({ id: `new-${newSession.mock.calls.length}`, reason: "new" });
@@ -48,7 +49,14 @@ function sessionBackend() {
   });
   const switchSession = vi.fn(async (id: string) => {
     events?.onSessionReset?.({ id, reason: "resume" });
-    events?.onMessage({ id: `${id}-message`, role: "assistant", kind: "text", text: `TRANSCRIPT_${id}` });
+    for (let index = 0; index < switchMessageCount; index += 1) {
+      events?.onMessage({
+        id: switchMessageCount === 1 ? `${id}-message` : `${id}-message-${index}`,
+        role: "assistant",
+        kind: "text",
+        text: switchMessageCount === 1 ? `TRANSCRIPT_${id}` : `TRANSCRIPT_${id}_${index}`,
+      });
+    }
     events?.onUsage({ ...DEFAULT_USAGE, inputTokens: 7, outputTokens: 11 });
   });
   const forkSession = vi.fn(async (id: string) => {
@@ -237,6 +245,37 @@ describe("M2 session identity isolation", () => {
     const rendered = app.render(80).map(stripAnsi).join("\n");
     expect(rendered).toContain("TRANSCRIPT_restored-static-session");
     expect(rendered).not.toContain("Plan");
+    await app.dispose();
+  });
+
+  it("lets fullscreen own restored history without the regular scrollback epoch or commit rebase", async () => {
+    const controlled = sessionBackend(120);
+    const tui = fakeTui(vi.fn(), 24, "fullscreen") as TUI & {
+      beginSurfaceEpoch: ReturnType<typeof vi.fn>;
+      requestRender: ReturnType<typeof vi.fn>;
+    };
+    tui.beginSurfaceEpoch = vi.fn();
+    const app = await createApp(controlled.backend, tui);
+    const testable = app as unknown as TestableApp;
+    tui.requestRender.mockClear();
+
+    await testable.applyPanelEvent({
+      type: "session",
+      session: { id: "fullscreen-restored", label: "Fullscreen restored", relativeTime: "刚刚", branchDepth: 0 },
+    });
+
+    expect(tui.beginSurfaceEpoch).not.toHaveBeenCalled();
+    expect(tui.requestRender).toHaveBeenCalledWith(true);
+    expect(testable.committedMessageCount).toBe(0);
+    expect(testable.messages).toHaveLength(120);
+    expect(testable.messages[0]).toMatchObject({
+      id: "fullscreen-restored-message-0",
+      text: "TRANSCRIPT_fullscreen-restored_0",
+    });
+    expect(testable.messages.at(-1)).toMatchObject({
+      id: "fullscreen-restored-message-119",
+      text: "TRANSCRIPT_fullscreen-restored_119",
+    });
     await app.dispose();
   });
 

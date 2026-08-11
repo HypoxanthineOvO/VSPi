@@ -944,13 +944,16 @@ export class PiRuntimeBackend implements ChatBackend {
   async setPolicy(policy: PolicyLevel): Promise<PolicySnapshot> {
     this.assertHandoffWritable();
     const previous = this.options.executionPolicy.snapshot().policy;
+    if (previous === policy) return this.options.executionPolicy.snapshot();
     const snapshot = await this.options.executionPolicy.switchPolicy(policy);
     try {
       await this.appendExecutionPolicy(snapshot.policy);
       return snapshot;
     } catch (error) {
-      await this.options.executionPolicy.switchPolicy(previous);
-      throw error;
+      return {
+        ...snapshot,
+        persistenceWarning: `Policy 已切换，但 Session 恢复记录未保存：${error instanceof Error ? error.message : "未知错误"}`,
+      };
     }
   }
 
