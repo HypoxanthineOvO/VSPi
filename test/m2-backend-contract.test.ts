@@ -192,6 +192,38 @@ describe("M2 Pi history hydration", () => {
     await recoveryBackend.dispose();
   });
 
+  it("keeps an Auto switch effective when optional Session recovery metadata cannot be persisted", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vspi-m2-policy-runtime-"));
+    const cwd = join(root, "project");
+    const sessionDir = join(root, "sessions");
+    await mkdir(cwd);
+    await mkdir(sessionDir);
+    const policy = createExecutionPolicyService({ workspace: cwd, policy: "Standard" });
+    let activeManager: SessionManager | undefined;
+    const recorded = eventRecorder();
+    const backend = new PiBackend({
+      cwd,
+      sessionDir,
+      executionPolicy: policy,
+      sessionFactory: async (manager) => {
+        activeManager = manager;
+        const fake = fakePiSession(manager.buildSessionContext().messages, {
+          sessionId: manager.getSessionId(),
+        }).session;
+        return { session: Object.assign(fake, { sessionManager: manager }) };
+      },
+    });
+    await backend.start(recorded.events);
+    if (!activeManager) throw new Error("test SessionManager was not captured");
+    (activeManager as unknown as { fileEntries: unknown[] }).fileEntries = [];
+
+    const snapshot = await backend.setPolicy("Auto");
+
+    expect(snapshot).toMatchObject({ policy: "Auto", persistenceWarning: expect.stringContaining("未保存") });
+    expect(policy.snapshot().policy).toBe("Auto");
+    await backend.dispose();
+  });
+
   it("restores the selected Session Policy when Resume switches away from a fresh Standard session", async () => {
     const root = await mkdtemp(join(tmpdir(), "vspi-m2-policy-picker-"));
     const cwd = join(root, "project");

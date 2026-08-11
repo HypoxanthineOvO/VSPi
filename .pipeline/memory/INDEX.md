@@ -60,6 +60,7 @@ Derived view. Individual Markdown Records remain authoritative.
 | feedback-0dade055f803cb4ce3ce638f585147d2 | active | feedback | cycle:vspi-v0-2-0-workflow-integration | cycle.vspi-v0-2-0-workflow-integration.feedback.c138c34d690d31c6 | - |
 | feedback-0f27a2032f6ccd79b08d65781aa01d9f | active | feedback | goal:vspi-persistent-goal-runner | goal.vspi-persistent-goal-runner.feedback.a9ceb930e26d7f23 | - |
 | feedback-13bbda7f257b5e1ea9c9dd89dcb17e84 | active | feedback | cycle:vspi-tui-v1 | cycle.vspi-tui-v1.feedback.b8889f634cbf1297 | - |
+| feedback-14e57c568f1c796ca2702e6439cd6c96 | active | feedback | project:VSPi | feedback.vspi.fullscreen-session-history-authority | - |
 | feedback-1694ce4177ffbff5fc094ce6a0f3bb2e | active | feedback | cycle:vspi-v0-2-0-workflow-integration | cycle.vspi-v0-2-0-workflow-integration.feedback.32820b10def09cf8 | - |
 | feedback-1c1db9560547552fdd3dda4f2bca1295 | active | feedback | cycle:vspi-v0-2-0-workflow-integration | cycle.vspi-v0-2-0-workflow-integration.feedback.984b4eaf663b3721 | - |
 | feedback-2297e288f16050f7244e0a1a3947f940 | active | feedback | cycle:vspi-terminal-mock-recovery | cycle.vspi-terminal-mock-recovery.feedback.e8174f3295129be2 | - |
@@ -131,9 +132,11 @@ Derived view. Individual Markdown Records remain authoritative.
 | requirement-98835412db3b1cb35d3aacd8c4909f11 | inactive (superseded) | requirement | project:VSPi | requirement.vspi.interactive-panel-density | requirement-9714a3a81831cd03dec8943e06b51b8a |
 | requirement-aba0169a5c698bb5539131b2d634d5a4 | inactive (superseded) | requirement | project:VSPi | requirement.vspi.interactive-panel-density | requirement-b5632341374b9eda4562c59c56e1e5e9 |
 | requirement-af8bfc3a57f131729a2179756a1200d3 | inactive (superseded) | requirement | project:VSPi | requirement.vspi.question-interaction-depth | requirement-425d1183157473cee73d160be5970a70 |
+| requirement-b07059defab206566f6dbf4f140fbf22 | active | requirement | project:VSPi | requirement.vspi.model-picker-generation-price-order | - |
 | requirement-b5632341374b9eda4562c59c56e1e5e9 | inactive (superseded) | requirement | project:VSPi | requirement.vspi.interactive-panel-density | requirement-4ec7c0718ad2d8da33763e040c25d2b6 |
 | requirement-d350a326aebf15cee022d4ca8d85482e | inactive (superseded) | requirement | project:VSPi | requirement.vspi.interactive-panel-density | requirement-d964d07c3a6671ab7b3702649d3734f6 |
 | requirement-d964d07c3a6671ab7b3702649d3734f6 | inactive (superseded) | requirement | project:VSPi | requirement.vspi.interactive-panel-density | requirement-aba0169a5c698bb5539131b2d634d5a4 |
+| requirement-e96cd7513b17e77d74d85e1f8df66229 | active | requirement | project:VSPi | requirement.vspi.policy-switch-runtime-authority | - |
 | requirement-e9d688a0505fffb6626c54cc08f0d3ef | active | requirement | project:VSPi | requirement.vspi.external-session-import | - |
 
-Records: 131
+Records: 134

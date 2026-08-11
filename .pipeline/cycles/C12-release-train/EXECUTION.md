@@ -1,7 +1,7 @@
 ---
 kind: execution-log
 cycle: C12-release-train
-updated: 2026-08-09T16:56:25+08:00
+updated: 2026-08-11T19:40:31+08:00
 ---
 
 # VSPi v0.6.0 Release Train 执行记录
@@ -105,3 +105,33 @@ updated: 2026-08-09T16:56:25+08:00
 - **计划影响：** C12 回到 waiting-review，等待 Windows 最终验收。
 - **遇到的问题：** 无。
 - **下一步：** 用户执行 Windows 安装命令并接受或反馈。
+
+## 2026-08-11 - 最终结果拒绝并返回 R8
+
+- **计划项：** `R8`
+- **目的：** 记录 Windows 实机最终验收中暴露的 TUI 回归，并将同一 Cycle 返回定向修订。
+- **结果：** 用户报告新 TUI 与旧历史会话刷新机制冲突、permission 切换为 Auto 偶发失败，并要求模型按代际从新到旧、同代从贵到便宜排序；C12 从 waiting-review 恢复为 active。
+- **证据：** 当前 Session Discussion Ledger 中的用户原文；0.6.1 仅覆盖 named-pipe lease，既有门禁没有覆盖上述三条交互契约。
+- **计划影响：** 新增 R8；R1-R7 保持 completed，不重放既有发布动作。
+- **遇到的问题：** 旧验收假设将 0.6.1 Windows 启动成功视为充分条件，未包含 fullscreen TUI 状态权威、Auto policy 切换事务和模型排序语义。
+- **下一步：** 定位三条实现路径，增加失败先行回归测试，完成最小修复并运行 fullscreen/PTY 与全量门禁。
+
+## 2026-08-11 - R8 本地修订与门禁完成
+
+- **计划项：** `R8`
+- **目的：** 修复 Windows 最终验收报告的三项交互回归，并取得 corrective release 前的本地证据。
+- **结果：** fullscreen 会话恢复绕过 regular scrollback epoch/rebase 并保留全部历史；Policy runtime 切换不再因可选 Session 元数据持久化失败而回滚；模型在 Provider 组内按代际降序、同代输入输出总单价降序稳定排列。
+- **证据：** 新增长历史 fullscreen、Policy 持久化失败和模型排序回归；定向 10 files / 78 tests；全量 114 files / 836 tests；独立 PTY 3 files / 11 tests；check、build、smoke、package/install test 与 `npm audit --omit=dev`（0 vulnerabilities）全部通过。
+- **计划影响：** R8 保持 in_progress，发布与 Windows 安装验收尚未执行。
+- **遇到的问题：** 工作区另有未提交的 Provider request compatibility 实现；本轮保留并共同验证，没有将其归入 R8 修订范围。
+- **下一步：** 用户决定是否授权 0.6.2 版本、提交、推送、tag 与 GitLab Release；若授权，R8 发布提交应与未归属的 Provider compatibility 改动明确分离。
+
+## 2026-08-11 - R8-only 0.6.2 发布授权
+
+- **计划项：** `R8`
+- **目的：** 确认 corrective release 的远端副作用与精确内容边界。
+- **结果：** 用户选择“仅发布 R8 为 0.6.2”；授权版本、提交、推送、annotated tag、GitLab Release 与公开资产复验。
+- **证据：** 当前 Session 的结构化 release authorization 决策。
+- **计划影响：** R8 继续 in progress；新增选择性 staging 与隔离提交树复验，未归属的 Provider request compatibility 改动明确排除。
+- **遇到的问题：** `README.md` 与 `src/backend/pi-runtime-backend.ts` 同时包含 R8 和 Provider compatibility hunks，必须按 hunk 构造提交并审查 staged diff。
+- **下一步：** 提升版本至 0.6.2、添加 release notes、构造 R8-only index，并在隔离 worktree 重跑门禁。

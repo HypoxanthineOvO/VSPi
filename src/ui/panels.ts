@@ -321,6 +321,42 @@ function commandMatches(query: string): CommandMatch[] {
   });
 }
 
+function compareModelGeneration(left: ModelOption, right: ModelOption): number {
+  if (left.releasedAt && right.releasedAt) {
+    const release = right.releasedAt.localeCompare(left.releasedAt);
+    if (release !== 0) return release;
+  } else if (left.releasedAt) {
+    return -1;
+  } else if (right.releasedAt) {
+    return 1;
+  }
+
+  const leftGeneration = modelGeneration(left);
+  const rightGeneration = modelGeneration(right);
+  const length = Math.max(leftGeneration.length, rightGeneration.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = (rightGeneration[index] ?? -1) - (leftGeneration[index] ?? -1);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function modelGeneration(model: ModelOption): number[] {
+  const identity = `${model.id} ${model.label}`
+    .toLowerCase()
+    .replace(/\b(?:19|20)\d{2}(?:[-_/]?(?:0[1-9]|1[0-2])(?:[-_/]?(?:0[1-9]|[12]\d|3[01]))?)?\b/gu, " ");
+  const candidates = [...identity.matchAll(/\d+(?:[._-]\d+)*/gu)].map((match) =>
+    (match[0] ?? "").split(/[._-]/u).map(Number).filter(Number.isFinite),
+  );
+  return candidates.sort((left, right) => right.length - left.length)[0] ?? [];
+}
+
+function modelCombinedPrice(model: ModelOption): number {
+  const input = Number.isFinite(model.price.inputUsdPerMillion) ? model.price.inputUsdPerMillion : 0;
+  const output = Number.isFinite(model.price.outputUsdPerMillion) ? model.price.outputUsdPerMillion : 0;
+  return input + output;
+}
+
 export class PanelController {
   private state: PanelState = { kind: "plan", selected: 0, scroll: 0 };
   private commandQuery = "";
@@ -1653,14 +1689,10 @@ export class PanelController {
         if (priority !== 0) return priority;
         const brand = left.brand.localeCompare(right.brand);
         if (brand !== 0) return brand;
-        if (left.releasedAt && right.releasedAt) {
-          const release = right.releasedAt.localeCompare(left.releasedAt);
-          if (release !== 0) return release;
-        } else if (left.releasedAt) {
-          return -1;
-        } else if (right.releasedAt) {
-          return 1;
-        }
+        const generation = compareModelGeneration(left, right);
+        if (generation !== 0) return generation;
+        const price = modelCombinedPrice(right) - modelCombinedPrice(left);
+        if (price !== 0) return price;
         return left.label.localeCompare(right.label) || left.id.localeCompare(right.id);
       });
   }

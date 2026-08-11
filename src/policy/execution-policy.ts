@@ -23,6 +23,7 @@ export interface PolicySnapshot {
   sandboxed: false;
   recovery: boolean;
   sessionAllowlist: ApprovalCategory[];
+  persistenceWarning?: string;
 }
 
 export interface PolicyAction {

@@ -133,6 +133,50 @@ describe("model panel responsive layout", () => {
     expect(render(panel, 60, 16).join("\n")).not.toContain("没有匹配的模型组");
   });
 
+  it("sorts each provider by newest generation, then highest combined price", () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    panel.setModels([
+      {
+        id: "gpt-5.3-premium",
+        brand: "OpenAI",
+        label: "GPT 5.3 Premium",
+        vision: false,
+        efforts: ["off"],
+        price: { inputUsdPerMillion: 100, outputUsdPerMillion: 100 },
+      },
+      {
+        id: "gpt-5.4-economy",
+        brand: "OpenAI",
+        label: "GPT 5.4 Economy",
+        vision: false,
+        efforts: ["off"],
+        price: { inputUsdPerMillion: 1, outputUsdPerMillion: 2 },
+      },
+      {
+        id: "gpt-5.4-premium",
+        brand: "OpenAI",
+        label: "GPT 5.4 Premium",
+        vision: false,
+        efforts: ["off"],
+        price: { inputUsdPerMillion: 20, outputUsdPerMillion: 40 },
+      },
+      {
+        id: "gpt-5.4-standard",
+        brand: "OpenAI",
+        label: "GPT 5.4 Standard",
+        vision: false,
+        efforts: ["off"],
+        price: { inputUsdPerMillion: 5, outputUsdPerMillion: 10 },
+      },
+    ]);
+    panel.open("models");
+
+    const list = splitPanes(render(panel, 80, 16)).left;
+    expect(list.indexOf("GPT 5.4 Premium")).toBeLessThan(list.indexOf("GPT 5.4 Standard"));
+    expect(list.indexOf("GPT 5.4 Standard")).toBeLessThan(list.indexOf("GPT 5.4 Economy"));
+    expect(list.indexOf("GPT 5.4 Economy")).toBeLessThan(list.indexOf("GPT 5.3 Premium"));
+  });
+
   it("uses explicit list/detail navigation at 40 columns without leaking price into the list", () => {
     const panel = new PanelController(DEFAULT_SETTINGS);
     panel.setModels(MODELS, MODEL_GROUPS, "kimi-k3");

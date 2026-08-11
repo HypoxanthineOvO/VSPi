@@ -49,6 +49,7 @@ active_by_dedupe_key:
   decision.vspi.release-history-authority: decision-742e18820d6fb2c8634af1a38a93c583
   decision.vspi.release-train.v0.6.0: decision-a85be902c538b0b1b552cbf35f8dbe7d
   decision.vspi.skill-install-default-scope: decision-fc08c040b86a57bf2800480f6c5e4baa
+  feedback.vspi.fullscreen-session-history-authority: feedback-14e57c568f1c796ca2702e6439cd6c96
   feedback.vspi.release-ledger.v0.1.0: feedback-7da490d7b5b02157c2be6d408c609c43
   feedback.vspi.release-ledger.v0.2.0: feedback-05b2c0d4fb86a081d2871fc9f08a58e2
   feedback.vspi.release-ledger.v0.2.1-v0.2.7: feedback-286ce0c0ce667f86cdf15febe3fc54eb
@@ -78,7 +79,9 @@ active_by_dedupe_key:
   requirement.vspi.effective-model-context: requirement-20a9cf868d16c64e5b00e67052ba3e6e
   requirement.vspi.external-session-import: requirement-e9d688a0505fffb6626c54cc08f0d3ef
   requirement.vspi.interactive-panel-density: requirement-101351de724bb1025bd13fda2f4dba70
+  requirement.vspi.model-picker-generation-price-order: requirement-b07059defab206566f6dbf4f140fbf22
   requirement.vspi.model-picker-recent: requirement-80e6d448ecc68c4229ce7209ac7fbbad
+  requirement.vspi.policy-switch-runtime-authority: requirement-e96cd7513b17e77d74d85e1f8df66229
   requirement.vspi.question-interaction-depth: requirement-062a4899aad721f16efe298ef24365a3
   requirement.vspi.skill-mcp-management: requirement-8fa3774fbc6fce3c20d507c1a0b55e90
   requirement.vspi.test-validation-discipline: requirement-41375d415c1c7b031bdc0aa1f8bddb81
@@ -1120,6 +1123,24 @@ records:
         type: user_feedback
     supersedes: []
     updated_at: 2026-07-23T04:26:08.544Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-08-11T11:35:37.000Z
+    dedupe_key: feedback.vspi.fullscreen-session-history-authority
+    id: feedback-14e57c568f1c796ca2702e6439cd6c96
+    kind: feedback
+    path: .pipeline/memory/records/project-33aa1007aa14/feedback/feedback-14e57c568f1c796ca2702e6439cd6c96.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 14e57c568f1c796ca2702e6439cd6c9600c855a89157c9b05a684ddf981254cd
+    source_refs:
+      - locator: 2026-08-11-c12-r8-windows-tui-feedback
+        ref: current-chat
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-08-11T11:35:37.000Z
   - active: true
     confidence: confirmed
     created_at: 2026-07-25T07:10:06.304Z
@@ -2419,6 +2440,24 @@ records:
     supersedes:
       - requirement-425d1183157473cee73d160be5970a70
     updated_at: 2026-07-26T09:17:02.634Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-08-11T11:35:37.000Z
+    dedupe_key: requirement.vspi.model-picker-generation-price-order
+    id: requirement-b07059defab206566f6dbf4f140fbf22
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-b07059defab206566f6dbf4f140fbf22.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: b07059defab206566f6dbf4f140fbf220b62ae537be0d9c4a681f90e31b9c2c3
+    source_refs:
+      - locator: 2026-08-11-c12-r8-windows-tui-feedback
+        ref: current-chat
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-08-11T11:35:37.000Z
   - active: false
     confidence: confirmed
     created_at: 2026-07-26T10:34:00.875Z
@@ -2475,6 +2514,24 @@ records:
     supersedes:
       - requirement-aba0169a5c698bb5539131b2d634d5a4
     updated_at: 2026-07-26T11:08:40.405Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-08-11T11:35:37.000Z
+    dedupe_key: requirement.vspi.policy-switch-runtime-authority
+    id: requirement-e96cd7513b17e77d74d85e1f8df66229
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-e96cd7513b17e77d74d85e1f8df66229.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: e96cd7513b17e77d74d85e1f8df662297e4e4fd74d708edb308d1c5396c13d54
+    source_refs:
+      - locator: 2026-08-11-c12-r8-windows-tui-feedback
+        ref: current-chat
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-08-11T11:35:37.000Z
   - active: true
     confidence: confirmed
     created_at: 2026-07-26T14:48:52.631Z

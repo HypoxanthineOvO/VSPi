@@ -1013,6 +1013,10 @@ export class VspiApp implements Component, Focusable {
   private presentRestoredTranscript(mode: "append" | "replace" = "append"): void {
     this.startupSurface = [];
     this.committedMessageCount = 0;
+    if (this.tui.mode === "fullscreen") {
+      this.requestRender(true);
+      return;
+    }
     this.committedMessageCount = this.currentTranscriptWindow().nodes[0]?.messageIndexes[0] ?? this.messages.length;
     if (mode === "append") this.beginTuiSurfaceEpoch();
     else this.requestRender(true);
@@ -1936,7 +1940,10 @@ export class VspiApp implements Component, Focusable {
           : await this.executionPolicy.switchPolicy(event.policy);
         this.panels.setPolicySnapshot(snapshot);
         this.completeOneShotPanel();
-        this.showNotice(`Policy 已切换为 ${snapshot.policy} · ${snapshot.boundary}`, "success");
+        this.showNotice(
+          snapshot.persistenceWarning ?? `Policy 已切换为 ${snapshot.policy} · ${snapshot.boundary}`,
+          snapshot.persistenceWarning ? "warning" : "success",
+        );
       } catch (error) {
         this.panels.setPolicySnapshot(this.executionPolicy.snapshot());
         this.showNotice(`Policy 切换失败：${error instanceof Error ? error.message : "未知错误"}`, "error");

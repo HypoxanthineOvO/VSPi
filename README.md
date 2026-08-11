@@ -248,7 +248,7 @@ Teammate 是受信项目内的持久角色，定义位于 `<workspace>/.vspi/age
 
 ## Model 与 Provider
 
-出厂内置 VSPLab 中转站 Provider（`https://api.vsplab.cn/v1`，OpenAI Responses 协议）；可通过 `vspi login` 交给 Pi 安全保存凭据，也可设置环境变量 `VSPLAB_API_KEY`。Provider 面板与模型列表按 VSPLab、DeepSeek、Xiaomi（MiMo）、Kimi、GLM（Zai）、MiniMax、OpenAI、Anthropic 优先排序，其余按字母序。Model 列表按 Provider 显示标题与模型数量，组内按发布日期和名称稳定排序；超长标题只截断标题本身，不挤占右侧数量。没有可用角色预设时隐藏“模型组”页及对应 Tab 提示。
+出厂内置 VSPLab 中转站 Provider（`https://api.vsplab.cn/v1`，OpenAI Responses 协议）；可通过 `vspi login` 交给 Pi 安全保存凭据，也可设置环境变量 `VSPLAB_API_KEY`。Provider 面板与模型列表按 VSPLab、DeepSeek、Xiaomi（MiMo）、Kimi、GLM（Zai）、MiniMax、OpenAI、Anthropic 优先排序，其余按字母序。Model 列表按 Provider 显示标题与模型数量，组内按显式发布日期或模型 identity 中的代际从新到旧排序；同代模型按输入、输出 USD 单价之和从高到低，再按名称与 id 稳定排序。超长标题只截断标题本身，不挤占右侧数量。没有可用角色预设时隐藏“模型组”页及对应 Tab 提示。
 
 Model 列表来自当前 Pi `ModelRuntime.getAvailable()`，不再使用生产 hard-coded catalog。选择模型会先 await `session.setModel()`；成功后才更新 Model、vision、Context、Profile model identity 和 UI，失败保留原状态。`/effort` 直接读取当前模型的 `getAvailableThinkingLevels()`，只显示该模型支持的 `Off / Minimal / Low / Medium / High / Xhigh / Max` 子集；展示名首字母大写，持久值保留 Pi 原生小写名称。VSPLab GPT 5.4 支持到 Xhigh，GPT 5.5 不提供 Minimal，GPT 5.6 系列支持到 Max；这些差异通过 `thinkingLevelMap` 原样注册到 Pi runtime。Enter 应用、Esc 取消，不再循环切换或立即落盘；旧中文低/中/高配置在读取时迁移为 low/medium/high。成功提示只报告当前 Model/Effort，不显示配置文件路径。外层 60 列及以上使用左列表/右详情；窄屏使用显式列表/详情导航。单模型 CNY 输入、输出单价仅显示在右侧详情，模型组不显示价格，也不显示汇率参考行。
 
