@@ -1,7 +1,7 @@
 ---
 kind: execution-log
 cycle: C12-release-train
-updated: 2026-08-11T19:40:31+08:00
+updated: 2026-08-11T19:50:38+08:00
 ---
 
 # VSPi v0.6.0 Release Train 执行记录
@@ -135,3 +135,13 @@ updated: 2026-08-11T19:40:31+08:00
 - **计划影响：** R8 继续 in progress；新增选择性 staging 与隔离提交树复验，未归属的 Provider request compatibility 改动明确排除。
 - **遇到的问题：** `README.md` 与 `src/backend/pi-runtime-backend.ts` 同时包含 R8 和 Provider compatibility hunks，必须按 hunk 构造提交并审查 staged diff。
 - **下一步：** 提升版本至 0.6.2、添加 release notes、构造 R8-only index，并在隔离 worktree 重跑门禁。
+
+## 2026-08-11 - R8-only 0.6.2 发布完成
+
+- **计划项：** `R8`
+- **目的：** 从精确隔离的 R8 提交构建、发布并复验可安装 corrective release。
+- **结果：** R8-only commit `18a9284` 已推送；main pipeline `#368` 的 quality/test/package/install-smoke 四关成功；annotated tag `v0.6.2` 指向同一 commit，tag pipeline `#369` 五关成功并创建 Release。
+- **证据：** 隔离 worktree 113 files / 833 tests、check/smoke/audit 通过；pipeline jobs 1119-1127 全绿；匿名 pinned/latest 资产字节一致，SHA-256 `a3400a01e34a4c76051cce68625a832afdf297675a0269ca79cbc9ff3fd606ad`；tarball 287 files，clean install 146 production packages，`vspi --version` 与 Fixture smoke 均为 0.6.2。
+- **计划影响：** R8 completed；C12 回到 waiting-review，等待 Windows 最终验收。
+- **遇到的问题：** staged tree 与工作树测试数分别为 833/836，差异正好是被排除的 3 个 Provider compatibility tests；发布 tarball 的 dist/README 复验确认未包含该兼容层。
+- **下一步：** 用户在 Windows 安装 latest 资产，验证版本、会话恢复、Auto permission 与模型顺序后接受或反馈。

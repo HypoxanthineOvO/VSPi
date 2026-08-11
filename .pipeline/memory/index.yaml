@@ -57,6 +57,7 @@ active_by_dedupe_key:
   feedback.vspi.release-ledger.v0.3.8-v0.3.11: feedback-0a04be071178907334e0e47b60963e0b
   feedback.vspi.release-ledger.v0.6.0: feedback-b6abe47c831810e3daca7bfbecde498d
   feedback.vspi.release-ledger.v0.6.1: feedback-0c1ac0036058ec0494dc5d7c1b2e62c0
+  feedback.vspi.release-ledger.v0.6.2: feedback-6ab983baa57b87a1967b8a8f1e34780d
   feedback.vspi.status-layout-fixed-tracks: feedback-7cc38e004361e3431e700a74e251d0e0
   feedback.vspi.windows-session-lease-named-pipe: feedback-c4f72332aa932996be667c3bb7d2d876
   goal.vspi-live-run-control.feedback.3f4c4ce3670b5fb2: feedback-2dc39de0dbbb77493cac3135e83d2a25
@@ -1631,6 +1632,24 @@ records:
         type: user_feedback
     supersedes: []
     updated_at: 2026-07-25T05:32:08.672Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-08-11T11:50:38.000Z
+    dedupe_key: feedback.vspi.release-ledger.v0.6.2
+    id: feedback-6ab983baa57b87a1967b8a8f1e34780d
+    kind: feedback
+    path: .pipeline/memory/records/project-33aa1007aa14/feedback/feedback-6ab983baa57b87a1967b8a8f1e34780d.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 6ab983baa57b87a1967b8a8f1e34780db9ad873dcf19df27d0c8732ddb2e9249
+    source_refs:
+      - locator: gitlab-pipeline-369
+        ref: v0.6.2
+        type: release
+    supersedes: []
+    updated_at: 2026-08-11T11:50:38.000Z
   - active: true
     confidence: confirmed
     created_at: 2026-07-25T03:58:33.835Z

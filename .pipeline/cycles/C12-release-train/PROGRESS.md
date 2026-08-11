@@ -2,17 +2,17 @@
 kind: progress
 cycle: C12-release-train
 plan: PLAN.md
-status: active
-updated: 2026-08-11T19:40:31+08:00
+status: waiting-review
+updated: 2026-08-11T19:50:38+08:00
 current: R8
-next: 构造并验证 R8-only 0.6.2 提交，排除 Provider request compatibility 改动
+next: 用户在 Windows 安装运行 0.6.2 后接受或反馈
 ---
 
 # VSPi v0.6.0 Release Train 进度
 
 ## 当前状态
 
-0.6.1 corrective release 已完成并通过公开资产复验；Windows 最终验收发现的三项 TUI 回归已在 R8 本地修复并通过完整门禁，用户已授权仅发布 R8 为 0.6.2。
+0.6.2 R8-only corrective release 已完成并通过公开资产复验，等待用户在 Windows 上最终验收。
 
 ## 完整计划状态
 
@@ -25,7 +25,7 @@ next: 构造并验证 R8-only 0.6.2 提交，排除 Provider request compatibili
 | `R5` | Tag 与 GitLab Release | `completed` | annotated tag v0.6.0；pipeline #349 五关全绿；Release 已创建 | R6 |
 | `R6` | Release 安装复验 | `completed` | 匿名 latest/pinned 字节一致；SHA 匹配；clean install 与 Fixture smoke 为 0.6.0 | 最终人工验收 |
 | `R7` | Windows 0.6.1 corrective release | `completed` | tag v0.6.1；pipeline #352 五关全绿；匿名安装复验 0.6.1 | Windows 最终验收 |
-| `R8` | Windows TUI corrective revision | `in_progress` | fullscreen 不再使用 regular history rebase；Auto 不因恢复元数据写入失败而回滚；模型按代际/同代总单价排序；114 files / 836 tests、PTY 11 tests、check/build/smoke/audit 全绿；R8-only 0.6.2 已授权 | 构造隔离提交、重跑门禁并发布 |
+| `R8` | Windows TUI corrective revision | `completed` | commit 18a9284；main #368 四关全绿；tag v0.6.2 / #369 五关全绿；匿名 latest/pinned SHA 一致；clean install 与 Fixture smoke 为 0.6.2；Provider compatibility 已排除 | Windows 最终验收 |
 
 ## 阻塞
 
@@ -33,4 +33,4 @@ next: 构造并验证 R8-only 0.6.2 提交，排除 Provider request compatibili
 
 ## 下一步
 
-只推进新的 0.6.2 corrective release，不重放 R1-R7；选择性排除未归属的 Provider request compatibility 改动。
+用户在 Windows 使用 latest 安装 0.6.2 并接受结果后关闭 C12；若失败则按真实错误返回 R8 修订。

@@ -1,7 +1,7 @@
 ---
 kind: discussion-summary
 cycle: C12-release-train
-updated: 2026-08-11T19:40:31+08:00
+updated: 2026-08-11T19:50:38+08:00
 ---
 
 # VSPi v0.6.0 Release Train 讨论摘要
@@ -24,7 +24,7 @@ updated: 2026-08-11T19:40:31+08:00
 
 ## 未决问题
 
-- R8 本地修订与门禁已完成；用户已授权仅将 R8 发布为 0.6.2，明确排除未归属的 Provider request compatibility 改动。
+- 无产品或发布未决问题；等待用户在 Windows 安装运行 0.6.2 后最终接受或报告真实错误。
 
 ## R7 Windows 启动失败
 
@@ -42,3 +42,5 @@ updated: 2026-08-11T19:40:31+08:00
 - 实现决定：Policy runtime 切换成功即生效；可选的 Session 恢复元数据写入失败只显示 warning，不回滚用户选择。
 - 实现决定：保留 Provider 分组优先级；组内按显式发布日期或 identity 代际降序，同代按输入与输出 USD 单价之和降序，最后以名称/id 稳定排序。
 - 发布决定：0.6.2 只包含 R8 三项修订、测试、文档、版本与语义记录；工作区现有 Provider request compatibility 改动不进入该发布。
+- 发布结果：R8-only commit `18a9284`；main pipeline `#368` 与 tag pipeline `#369` 全绿；annotated tag/Release `v0.6.2` 已创建。
+- 公开复验：匿名 pinned/latest 资产字节一致，SHA-256 `a3400a01e34a4c76051cce68625a832afdf297675a0269ca79cbc9ff3fd606ad`；clean install 与 Fixture smoke 均为 0.6.2，tarball 不含 Provider compatibility 实现。
