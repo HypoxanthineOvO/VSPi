@@ -171,7 +171,7 @@ describe("M5 Markdown and streaming rendering", () => {
     expect(
       plain(wrapped)
         .join("")
-        .replaceAll(/[│|\s]/g, ""),
+        .replaceAll(/[❘|\s]/g, ""),
     ).toContain(token.replaceAll(/\s/g, ""));
   });
 
@@ -199,7 +199,7 @@ describe("M5 Markdown and streaming rendering", () => {
       expect(partialText.join("\n")).toContain("const answer =");
       expect(completeText.join("\n")).toContain("const answer = 42;");
       expect(completeText.join("\n")).toContain("完成。");
-      expect(completeText.join("\n")).not.toContain("▋");
+      expect(completeText.join("\n")).not.toContain("❙");
       expect(partialText.findIndex((line) => line.includes("const answer ="))).toBe(
         completeText.findIndex((line) => line.includes("const answer =")),
       );
@@ -303,7 +303,7 @@ describe("M5 thinking visibility and persistence", () => {
     );
 
     const hidden = plain(app.render(80)).join("\n");
-    expect(hidden).toContain("◇ 思考 · 已隐藏");
+    expect(hidden).toContain("⋄ 思考 ⋅ 已隐藏");
     expect(hidden).not.toContain("PRIVATE_THINKING_DETAIL");
 
     app.handleInput("\t");

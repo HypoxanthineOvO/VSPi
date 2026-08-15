@@ -47,7 +47,7 @@ export function alignRight(left: string, right: string, width: number): string {
     // 溢出时保留右值，截断左值并加省略提示，而不是让整个右值静默丢失。
     if (rightWidth + 1 >= width) return padLine(right, width);
     const available = width - rightWidth - 1;
-    const raw = truncateToWidth(left, available, "…");
+    const raw = truncateToWidth(left, available, "...");
     const truncated = left.includes("\u001b") ? raw : stripAnsi(raw);
     return `${truncated}${" ".repeat(Math.max(0, width - visibleWidth(truncated) - rightWidth))}${right}`;
   }
@@ -61,7 +61,9 @@ export function emphasizePrefix(text: string, prefix: string, theme: VspiTheme):
   const matched = text.slice(start, prefix.length);
   const remainder = text.slice(prefix.length);
   if (!matched) return theme.blue(text);
-  const modifiers = `\u001b[1;4;7m${theme.focus(matched)}\u001b[27;24;22m`;
+  // 关闭序列用 \x1b[0m 全量复位：仅关属性不关颜色的重置会把 focus 颜色
+  // 泄漏到后续内容（包括编辑器反白光标格）上。
+  const modifiers = `\u001b[1;4;7m${theme.focus(matched)}\u001b[0m`;
   return `${theme.blue(leading)}${modifiers}${theme.blue(remainder)}`;
 }
 
@@ -104,7 +106,10 @@ export function emphasizeVisibleRange(text: string, target: string, theme: VspiT
     if (codePoint === undefined) break;
     const character = String.fromCodePoint(codePoint);
     if (plainOffset >= rangeStart && plainOffset < end) {
-      output += `\u001b[1;4;7m${theme.focus(character)}\u001b[27;24;22m`;
+      // 按连续明文段整体包裹并在段尾用 \x1b[0m 全量复位：逐字符发
+      // \x1b[27;24;22m 只关属性不关颜色，会把 focus 颜色泄漏到编辑器
+      // 的反白光标格上，且高频 SGR 抖动放大重绘成本。
+      output += `\u001b[1;4;7m${theme.focus(character)}\u001b[0m`;
     } else {
       output += character;
     }
@@ -127,10 +132,9 @@ export interface FrameOptions {
 export function frame(lines: string[], width: number, theme: VspiTheme, options: FrameOptions = {}): string[] {
   const safeWidth = Math.max(4, width);
   const innerWidth = safeWidth - 2;
-  const unicode = theme.capabilities.unicode;
-  const chars = unicode
-    ? { tl: "╭", tr: "╮", bl: "╰", br: "╯", h: "─", v: "│" }
-    : { tl: "+", tr: "+", bl: "+", br: "+", h: "-", v: "|" };
+  // 制表符全部走 ASCII：box-drawing（╭─│…）在 Unicode EAW 里是 Ambiguous，
+  // 「ambiguous 按宽渲染」的中文终端会把它们画成 2 列，整个边框错位。
+  const chars = { tl: "+", tr: "+", bl: "+", br: "+", h: "-", v: "|" };
   const borderStyle = options.focused ? theme.focus : theme.border;
   const body = options.maxBodyLines === undefined ? lines : lines.slice(0, options.maxBodyLines);
   const rawRightTitle = options.rightTitle ? ` ${options.rightTitle} ` : "";
@@ -161,5 +165,5 @@ export function fillBackground(line: string, width: number, background: (text: s
 }
 
 export function horizontalRule(width: number, theme: VspiTheme): string {
-  return theme.border((theme.capabilities.unicode ? "─" : "-").repeat(Math.max(0, width)));
+  return theme.border("-".repeat(Math.max(0, width)));
 }

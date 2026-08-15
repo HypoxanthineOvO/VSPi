@@ -465,7 +465,7 @@ export class VspiApp implements Component, Focusable {
               text: "Session 已移交到新终端；此终端已退出。",
             });
             this.showNotice("Session 已移交；当前终端退出", "info");
-            this.requestRender(true);
+            this.forceRepaint();
           }
           setImmediate(() => this.options.onExit());
         },
@@ -552,7 +552,7 @@ export class VspiApp implements Component, Focusable {
       this.providerCatalogHash = catalog?.hash;
       const providers = runtimeProviders.map((provider) => {
         const source = catalog?.providers.find((item) => item.id === provider.id)?.source ?? "builtin";
-        return { ...provider, detail: `${source} · ${provider.detail}` };
+        return { ...provider, detail: `${source} ⋅ ${provider.detail}` };
       });
       this.providerOptions = structuredClone(providers);
       this.panels.setProviders(providers);
@@ -883,12 +883,12 @@ export class VspiApp implements Component, Focusable {
               {
                 indicator: this.activityReducedMotion()
                   ? this.theme.capabilities.unicode
-                    ? "■"
+                    ? "▪"
                     : "*"
                   : this.theme.capabilities.unicode
                     ? this.workingFrame % 2 === 0
-                      ? "■"
-                      : "□"
+                      ? "▪"
+                      : "▫"
                     : this.workingFrame % 2 === 0
                       ? "*"
                       : "+",
@@ -987,6 +987,7 @@ export class VspiApp implements Component, Focusable {
       maxCharacters: 60_000,
       thinkingDisplay: this.options.settings.thinkingDisplay,
       collapseCompletedTools: this.options.settings.collapseTools,
+      cache: this.transcriptRenderCache,
     });
     const firstVisibleMessage = visibleTail.nodes[0]?.messageIndexes[0] ?? stableMessages.length;
     const commitEnd = this.committedMessageCount + firstVisibleMessage;
@@ -1014,12 +1015,38 @@ export class VspiApp implements Component, Focusable {
     this.startupSurface = [];
     this.committedMessageCount = 0;
     if (this.tui.mode === "fullscreen") {
-      this.requestRender(true);
+      this.forceRepaint();
       return;
     }
-    this.committedMessageCount = this.currentTranscriptWindow().nodes[0]?.messageIndexes[0] ?? this.messages.length;
-    if (mode === "append") this.beginTuiSurfaceEpoch();
-    else this.requestRender(true);
+    if (mode === "append") {
+      // Keep committedMessageCount at 0 and run the normal settle pipeline: the
+      // settling render paints every restored message, then the stable commit
+      // rebases all but the active window into native scrollback. Advancing the
+      // counter to the window start instead would mark the earlier restored
+      // history as committed without ever printing it.
+      this.beginTuiSurfaceEpoch();
+      this.scheduleStableTranscriptCommit();
+      return;
+    }
+    this.forceRepaint();
+  }
+
+  /**
+   * Commit stable regular-mode content before a clearing force render so it
+   * survives in native scrollback instead of being wiped by the repaint.
+   */
+  private forceRepaint(): void {
+    if (this.tui.mode === "regular") {
+      // Render the pending state first so the stable-commit prefix matches the
+      // current frame; process.nextTick renders flush before setImmediate.
+      this.requestRender();
+      setImmediate(() => {
+        this.commitStableTranscript();
+        this.requestRender(true);
+      });
+      return;
+    }
+    this.requestRender(true);
   }
 
   private beginTuiSurfaceEpoch(): void {
@@ -1247,7 +1274,7 @@ export class VspiApp implements Component, Focusable {
     } else {
       const selectedAttachment = this.composer.selectedAttachment();
       if (selectedAttachment) {
-        lines = [this.theme.blue(padLine(`〔${selectedAttachment.alias}〕  重命名 · 预览 · 移除 · 保存到项目`, width))];
+        lines = [this.theme.blue(padLine(`〔${selectedAttachment.alias}〕  重命名 ⋅ 预览 ⋅ 移除 ⋅ 保存到项目`, width))];
       } else {
         const policy = this.executionPolicy.snapshot();
         const mode =
@@ -1276,7 +1303,7 @@ export class VspiApp implements Component, Focusable {
           width,
           this.theme,
         );
-        noticeContext = `${statusModel} · Effort ${effortLabel(this.effort)} · ${this.options.cwd} · Policy ${runtime.policy}`;
+        noticeContext = `${statusModel} ⋅ Effort ${effortLabel(this.effort)} ⋅ ${this.options.cwd} ⋅ Policy ${runtime.policy}`;
       }
     }
     if (this.notice && lines.length > 0) {
@@ -1300,7 +1327,7 @@ export class VspiApp implements Component, Focusable {
       ? this.notice.progress
         ? "◌"
         : this.notice.tone === "error"
-          ? "×"
+          ? "x"
           : this.notice.tone === "warning"
             ? "!"
             : this.notice.tone === "success"
@@ -1324,7 +1351,7 @@ export class VspiApp implements Component, Focusable {
           : this.notice.tone === "success"
             ? "完成"
             : "通知";
-    return padLine(`${style(`${icon} ${label}`)} ${this.theme.muted("·")} ${this.notice.text}`, width);
+    return padLine(`${style(`${icon} ${label}`)} ${this.theme.muted("⋅")} ${this.notice.text}`, width);
   }
 
   private showNotice(text: string, tone: NoticeTone): void {
@@ -1434,6 +1461,15 @@ export class VspiApp implements Component, Focusable {
         this.scheduleStableTranscriptCommit(attempt + 1);
         return;
       }
+      if (requiresRebase && committed === 0 && attempt === 20) {
+        // Prefix validation has failed for ~0.5s, likely because the rendered
+        // frame drifted from the committed prefix. Rebuild the surface from a
+        // fresh append-only epoch and retry once; otherwise the uncommitted
+        // window would stay stuck out of scrollback forever.
+        this.beginTuiSurfaceEpoch();
+        this.scheduleStableTranscriptCommit(attempt + 1);
+        return;
+      }
       this.waterfallSettling = false;
       this.requestRender();
     }, 24);
@@ -1484,7 +1520,7 @@ export class VspiApp implements Component, Focusable {
         if (compact === "list") {
           const defaultProfile = this.backend.getPlanBinding?.() ? "execution-continuity" : "pi-native";
           this.showNotice(
-            `Compact profiles: ${COMPACTION_PROFILES.map((profile) => profile.id).join(", ")} · default ${defaultProfile}`,
+            `Compact profiles: ${COMPACTION_PROFILES.map((profile) => profile.id).join(", ")} ⋅ default ${defaultProfile}`,
             "info",
           );
           return;
@@ -1500,7 +1536,7 @@ export class VspiApp implements Component, Focusable {
     }
     if (action.handler === "update") {
       this.panels.close();
-      this.showProgress("正在检查 VSPi 更新…");
+      this.showProgress("正在检查 VSPi 更新...");
       this.requestRender();
       try {
         const result = await (this.options.selfUpdate ?? updateVspi)(VSPI_VERSION);
@@ -1551,15 +1587,15 @@ export class VspiApp implements Component, Focusable {
         } else if (command.kind === "reset") {
           if (!this.backend.resetTeammateLane) throw new Error("当前后端不支持 Teammate lane 重置");
           await this.backend.resetTeammateLane(command.id, command.lane);
-          this.showNotice(`Teammate ${command.id} · lane ${command.lane ?? "default"} 已重置`, "success");
+          this.showNotice(`Teammate ${command.id} ⋅ lane ${command.lane ?? "default"} 已重置`, "success");
         } else if (command.kind === "pool") {
           if (!this.backend.setAgentPoolRole) throw new Error("当前后端不支持 Agent Pool 配置");
           await this.backend.setAgentPoolRole(command.provider, command.role, command.model);
-          this.showNotice(`${command.provider} · ${command.role} 已映射到 ${command.model}`, "success");
+          this.showNotice(`${command.provider} ⋅ ${command.role} 已映射到 ${command.model}`, "success");
         } else if (command.kind === "override") {
           if (!this.backend.overrideRequiredTeammate) throw new Error("当前后端不支持 Teammate required override");
           await this.backend.overrideRequiredTeammate(command.id, command.scope);
-          this.showNotice(`Required routing override: ${command.id} · ${command.scope}`, "success");
+          this.showNotice(`Required routing override: ${command.id} ⋅ ${command.scope}`, "success");
         }
         this.panels.setAgentSnapshot(
           this.backend.getAgentSnapshot?.() ?? {
@@ -1611,7 +1647,7 @@ export class VspiApp implements Component, Focusable {
       try {
         if (!this.backend.listExternalSessions) throw new Error("当前后端不支持外部会话导入");
         const source = parseExternalImportSource(raw);
-        this.showProgress("正在扫描 Codex 与 Claude Code 历史…");
+        this.showProgress("正在扫描 Codex 与 Claude Code 历史...");
         const sessions = await this.backend.listExternalSessions({ limit: 5_000 });
         this.panels.setExternalSessions(sessions, source);
         this.panels.open("externalImport");
@@ -1622,7 +1658,7 @@ export class VspiApp implements Component, Focusable {
     } else if (action.handler === "skills") {
       try {
         if (!this.backend.listSkills) throw new Error("当前后端不支持 Skill 管理");
-        this.showProgress("正在读取 Pi、Codex 与 Claude Code Skill…");
+        this.showProgress("正在读取 Pi、Codex 与 Claude Code Skill...");
         const catalog = await this.backend.listSkills();
         this.panels.setSkillCatalog(catalog);
         this.panels.open("skills");
@@ -1689,8 +1725,8 @@ export class VspiApp implements Component, Focusable {
             switchingDuringActivity
               ? needsCompaction
                 ? `下一次模型调用将使用 ${this.modelLabel}；上下文超过目标安全阈值，将先自动压缩`
-                : `下一次模型调用将使用 ${this.modelLabel} · Effort ${effortLabel(this.effort)}`
-              : `模型已切换为 ${this.modelLabel} · Effort ${effortLabel(this.effort)}`,
+                : `下一次模型调用将使用 ${this.modelLabel} ⋅ Effort ${effortLabel(this.effort)}`
+              : `模型已切换为 ${this.modelLabel} ⋅ Effort ${effortLabel(this.effort)}`,
             needsCompaction ? "warning" : "success",
           );
         }
@@ -1730,8 +1766,8 @@ export class VspiApp implements Component, Focusable {
         if (defaultsSaved)
           this.showNotice(
             switchingDuringActivity
-              ? `下一次模型调用将使用模型组 ${event.group.label} · Effort ${effortLabel(this.effort)}`
-              : `模型组已切换为 ${event.group.label} · Effort ${effortLabel(this.effort)}`,
+              ? `下一次模型调用将使用模型组 ${event.group.label} ⋅ Effort ${effortLabel(this.effort)}`
+              : `模型组已切换为 ${event.group.label} ⋅ Effort ${effortLabel(this.effort)}`,
             "success",
           );
       } catch (error) {
@@ -1820,7 +1856,7 @@ export class VspiApp implements Component, Focusable {
         if (!this.backend.previewExternalSession || !this.backend.importExternalSession) {
           throw new Error("当前后端不支持外部会话导入");
         }
-        this.showProgress("正在读取外部会话的完整可见记录…");
+        this.showProgress("正在读取外部会话的完整可见记录...");
         const preview = await this.backend.previewExternalSession(event.session.id);
         const contextWarning =
           this.usage.contextWindow > 0 && preview.estimatedTokens > this.usage.contextWindow * 0.8
@@ -1861,7 +1897,7 @@ export class VspiApp implements Component, Focusable {
           this.panels.open("skills");
           return;
         }
-        this.showProgress("正在安装 Skill 包…");
+        this.showProgress("正在安装 Skill 包...");
         const result = await this.backend.installSkill(source, event.scope, answered.answer === "install-enable");
         this.panels.setSkillCatalog(await this.backend.listSkills());
         this.panels.open("skills");
@@ -1941,7 +1977,7 @@ export class VspiApp implements Component, Focusable {
         this.panels.setPolicySnapshot(snapshot);
         this.completeOneShotPanel();
         this.showNotice(
-          snapshot.persistenceWarning ?? `Policy 已切换为 ${snapshot.policy} · ${snapshot.boundary}`,
+          snapshot.persistenceWarning ?? `Policy 已切换为 ${snapshot.policy} ⋅ ${snapshot.boundary}`,
           snapshot.persistenceWarning ? "warning" : "success",
         );
       } catch (error) {
@@ -2033,7 +2069,7 @@ export class VspiApp implements Component, Focusable {
     const providerRef = raw.trim().split(/\s+/, 2)[1];
     if (!providerRef) {
       this.panels.open("providers");
-      this.showNotice("带有已保存凭据的 Provider 会显示“移除凭据”操作", "info");
+      this.showNotice('带有已保存凭据的 Provider 会显示"移除凭据"操作', "info");
       this.requestRender();
       return;
     }
@@ -2216,7 +2252,7 @@ export class VspiApp implements Component, Focusable {
           id: `goal-start:${goal.id}`,
           role: "assistant",
           kind: "session",
-          text: `Goal 已开始 · ${goal.id} · Plan ${goal.planId}`,
+          text: `Goal 已开始 ⋅ ${goal.id} ⋅ Plan ${goal.planId}`,
         });
         await this.submit(command.request, { skipPlanRoute: true });
         return;
@@ -2248,7 +2284,7 @@ export class VspiApp implements Component, Focusable {
         id: `goal-${command.kind}:${goal.id}:${goal.revision}`,
         role: "assistant",
         kind: "session",
-        text: `Goal ${command.kind} · ${goal.state}`,
+        text: `Goal ${command.kind} ⋅ ${goal.state}`,
       });
       if (command.kind === "resume") await this.runGoalResume(goal);
       else {
@@ -2428,7 +2464,7 @@ export class VspiApp implements Component, Focusable {
           {
             id: "skill-enable",
             title: "启用 Skill",
-            prompt: `${skill.name}\n${skill.sourceLabel} · 原路径登记，不复制源文件。`,
+            prompt: `${skill.name}\n${skill.sourceLabel} ⋅ 原路径登记，不复制源文件。`,
             kind: "singleChoice",
             options,
           },
@@ -2443,7 +2479,7 @@ export class VspiApp implements Component, Focusable {
           {
             id: enabled ? "skill-enable" : "skill-disable",
             title: enabled ? "启用 Skill" : "停用 Skill",
-            prompt: `${skill.name}\n${skill.sourceLabel} · ${skill.scope}`,
+            prompt: `${skill.name}\n${skill.sourceLabel} ⋅ ${skill.scope}`,
             kind: "singleChoice",
             options: [
               {
@@ -2480,7 +2516,7 @@ export class VspiApp implements Component, Focusable {
         {
           id: `skill-${action}`,
           title: action === "update" ? "更新 Skill" : "移除 Skill",
-          prompt: `${skill.name}\n${skill.sourceLabel} · ${skill.scope}${action === "remove" && skill.packageSource ? "\n将移除该受管包提供的全部 Skill。" : ""}`,
+          prompt: `${skill.name}\n${skill.sourceLabel} ⋅ ${skill.scope}${action === "remove" && skill.packageSource ? "\n将移除该受管包提供的全部 Skill。" : ""}`,
           kind: "singleChoice",
           options: [
             {
@@ -2546,7 +2582,7 @@ export class VspiApp implements Component, Focusable {
       {
         id: `session-owner:${session.id}`,
         title: "Session 正在使用",
-        prompt: `${owner.hostname} · PID ${owner.pid} 正在运行这个 Session。接管会等待当前任务和队列完成，不会中断。`,
+        prompt: `${owner.hostname} ⋅ PID ${owner.pid} 正在运行这个 Session。接管会等待当前任务和队列完成，不会中断。`,
         kind: "singleChoice",
         options: [
           { id: "takeover", label: "接管此会话", description: "默认；等待安全点后继续同一线程" },
@@ -2636,7 +2672,7 @@ export class VspiApp implements Component, Focusable {
       text: "Session 已在另一终端继续；此终端已退出前台。",
     });
     this.showNotice("Session 已在另一终端继续", "info");
-    this.requestRender(true);
+    this.forceRepaint();
     this.foregroundRelinquished = true;
     setImmediate(() => this.options.onForegroundRelinquish?.());
   }
@@ -2870,6 +2906,10 @@ export class VspiApp implements Component, Focusable {
       maxCharacters: unboundedActiveTail ? Number.MAX_SAFE_INTEGER : 60_000,
       thinkingDisplay: this.options.settings.thinkingDisplay,
       collapseCompletedTools: this.options.settings.collapseTools,
+      cache: this.transcriptRenderCache,
+      // 精确 hiddenBlocks 只有锚点浏览（Inspect 翻页）需要；尾随模式下它
+      // 只用于 requiresRebase 的 >0 判断，走 tail 快捷路径免掉每帧全量
+      // buildTranscriptNodes 扫描（长会话下是每键 O(N) 热点）。
       exactHiddenBlocks: this.tui.mode !== "fullscreen",
       ...(this.workspaceFocus === "transcript" && this.inspectNodeId ? { pinnedNodeId: this.inspectNodeId } : {}),
       ...(this.workspaceFocus === "transcript" && this.transcriptStartNodeId

@@ -46,7 +46,7 @@ function formatExponential(input: number): string {
     .replace(/(\.\d*?[1-9])0+e/, "$1e");
 }
 
-// 临界值不允许四舍五入进位升档（999.95 → 999.9 而不是 1000），否则显示宽度会突破状态栏列宽预算。
+// 临界值不允许四舍五入进位升档（999.95 ⟶ 999.9 而不是 1000），否则显示宽度会突破状态栏列宽预算。
 function fixedWithoutCarry(value: number, decimals: number): string {
   const rounded = value.toFixed(decimals);
   const factor = 10 ** decimals;
@@ -80,7 +80,7 @@ export function formatContextUsage(
 
 function fitColumn(text: string, width: number): string {
   if (width <= 0) return "";
-  const raw = truncateToWidth(text, width, "…");
+  const raw = truncateToWidth(text, width, "...");
   const truncated = text.includes("\u001b") ? raw : stripAnsi(raw);
   return `${truncated}${" ".repeat(Math.max(0, width - visibleWidth(truncated)))}`;
 }
@@ -100,7 +100,7 @@ function composeColumns(fields: Array<{ start: number; value: string }>, width: 
 
 function variableField(prefix: string, variable: string, suffix: string, width: number, theme: VspiTheme): string {
   const available = Math.max(0, width - visibleWidth(prefix) - visibleWidth(suffix));
-  const raw = truncateToWidth(variable, available, "…");
+  const raw = truncateToWidth(variable, available, "...");
   const fitted = variable.includes("\u001b") ? raw : stripAnsi(raw);
   return `${prefix}${theme.text(fitted)}${suffix}`;
 }
@@ -118,14 +118,14 @@ function effortField(input: StatusLineInput, theme: VspiTheme, compact = false):
             input.working.followUp ? `后续 ${input.working.followUp}` : "",
           ]
             .filter(Boolean)
-            .join(" · ");
+            .join(" ⋅ ");
       parts.push(theme.warning(working));
     } else if (!compact) {
       parts.push(theme.warning("生成中"));
     }
   }
   if (!compact && input.mode) parts.push(theme.blue(input.mode));
-  return `${label("Effort", "warning", theme)}${join(parts, compact ? " " : " · ", theme)}`;
+  return `${label("Effort", "warning", theme)}${join(parts, compact ? " " : " ⋅ ", theme)}`;
 }
 
 function modelEffortField(input: StatusLineInput, width: number, theme: VspiTheme, compact = false): string {
@@ -147,7 +147,7 @@ function contextField(input: StatusLineInput, theme: VspiTheme, compact = false)
 function pathField(input: StatusLineInput, width: number, statusWidth: number, theme: VspiTheme): string {
   const policy =
     statusWidth >= 80 && input.policy && input.boundary
-      ? `${theme.muted(" · Policy ")}${theme.focus(input.policy)}${theme.muted(" · ")}${theme.blue(input.boundary)}${theme.muted(" ")}`
+      ? `${theme.muted(" ⋅ Policy ")}${theme.focus(input.policy)}${theme.muted(" ⋅ ")}${theme.blue(input.boundary)}${theme.muted(" ")}`
       : theme.muted(" ");
   return variableField("", input.cwd, policy, width, theme);
 }
@@ -155,11 +155,11 @@ function pathField(input: StatusLineInput, width: number, statusWidth: number, t
 function tokenField(input: StatusLineInput, theme: VspiTheme, compact = false): string {
   if (compact) {
     // 40 列允许省略 Token 输出；连输入也放不下时整体省略 Token，不用 "?" 冒充未知值。
-    const inputOnly = `↑${formatTokens(input.usage.inputTokens)}`;
+    const inputOnly = `▴${formatTokens(input.usage.inputTokens)}`;
     if (visibleWidth(`Token ${inputOnly}`) <= 12) return `${label("Token", "blue", theme)}${value(inputOnly, theme)}`;
     return "";
   }
-  const both = `↑${formatTokens(input.usage.inputTokens)} ↓${formatTokens(input.usage.outputTokens)}`;
+  const both = `▴${formatTokens(input.usage.inputTokens)} ▾${formatTokens(input.usage.outputTokens)}`;
   return `${label("Token", "blue", theme)}${value(both, theme)}`;
 }
 
@@ -168,7 +168,7 @@ function costField(input: StatusLineInput, theme: VspiTheme, compactAvailable?: 
   const exact = `¥${isFiniteNumber(cost) ? fixedWithoutCarry(cost, 2) : "?"}`;
   const rounded = `¥${isFiniteNumber(cost) ? Math.round(cost) : "?"}`;
   const formatted =
-    compactAvailable !== undefined ? (visibleWidth(`Cost ${rounded}`) <= compactAvailable ? rounded : "…") : exact;
+    compactAvailable !== undefined ? (visibleWidth(`Cost ${rounded}`) <= compactAvailable ? rounded : "...") : exact;
   return `${label("Cost", "warning", theme)}${value(formatted, theme)}`;
 }
 

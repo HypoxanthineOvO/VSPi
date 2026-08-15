@@ -92,7 +92,7 @@ describe("M4 recovery startup boundary", () => {
     const output = `${stdout}\n${stderr}`;
     const plainOutput = stripAnsi(output);
     expect(plainOutput).toMatch(/Recovery|恢复模式/i);
-    expect(plainOutput).toContain("Policy Standard · Host");
+    expect(plainOutput).toContain("Policy Standard ⋅ Host");
     expect(plainOutput).not.toContain("Policy YOLO");
     await expect(access(sentinel)).rejects.toThrow();
   });

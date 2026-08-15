@@ -146,7 +146,7 @@ describe("responsive status anchoring", () => {
             visibleWidth("Model Pi / Short  "),
           );
         } else {
-          expect(plain[0]?.slice(0, plain[0].indexOf("Effort")), `${name}: long Model truncation`).toMatch(/… {2}$/);
+          expect(plain[0]?.slice(0, plain[0].indexOf("Effort")), `${name}: long Model truncation`).toMatch(/... {2}$/);
         }
         expect(visibleColumn(plain[0] ?? "", "Context"), `${name}: Context`).toBe(56);
         expect(plain[1], `${name}: unlabeled cwd`).toMatch(/^\//);
@@ -171,7 +171,7 @@ describe("responsive status anchoring", () => {
       expect(visibleColumn(plain[0] ?? "", "Model")).toBe(0);
       expectFixedModelEffortGap(plain[0] ?? "");
       if (overrides.modelLabel) {
-        expect(plain[0]?.slice(0, plain[0].indexOf("Effort"))).toMatch(/… {2}$/);
+        expect(plain[0]?.slice(0, plain[0].indexOf("Effort"))).toMatch(/... {2}$/);
       } else {
         expect(visibleColumn(plain[0] ?? "", "Effort")).toBe(visibleWidth("Model OpenAI / GPT-5.4  "));
       }
@@ -212,8 +212,8 @@ describe("responsive status anchoring", () => {
       expect(visibleColumn(telemetry, "Token"), `${width}: finite Token anchor`).toBe(track.token);
       expect(visibleColumn(telemetry, "Cost"), `${width}: finite Cost anchor`).toBe(track.cost);
       expect(lines.join("\n")).not.toMatch(/Infinity|NaN|Infi/);
-      expect(contextSlot, `${width}: finite Context truncation`).toMatch(/^Context .*…$/);
-      expect(tokenSlot, `${width}: finite Token truncation`).toMatch(/^Token .*…$/);
+      expect(contextSlot, `${width}: finite Context truncation`).toMatch(/^Context .*...$/);
+      expect(tokenSlot, `${width}: finite Token truncation`).toMatch(/^Token .*...$/);
       expect(costSlot, `${width}: finite overflow cost fallback`).toMatch(/^Cost\s+.*\?$/);
 
       let referenceSlots: string[] | undefined;
@@ -256,8 +256,8 @@ describe("responsive status anchoring", () => {
       const telemetry = plain[1] ?? "";
 
       expect(identity).not.toContain(`Backend ${backend}`);
-      expect(identity).not.toContain("Policy Standard · Sandboxed");
-      expect(telemetry).toContain("Policy Standard · Sandboxed");
+      expect(identity).not.toContain("Policy Standard ⋅ Sandboxed");
+      expect(telemetry).toContain("Policy Standard ⋅ Sandboxed");
       expect(telemetry).not.toContain(`Backend ${backend}`);
       expect(visibleColumn(identity, "Effort")).toBe(visibleWidth("Model OpenAI / GPT-5.4  "));
       expectFixedModelEffortGap(identity);
@@ -299,8 +299,8 @@ describe("responsive status anchoring", () => {
     expect(long[0]?.indexOf("Context")).toBe(short[0]?.indexOf("Context"));
     expect(long[1]?.indexOf("Token")).toBe(short[1]?.indexOf("Token"));
     expect(long[1]?.indexOf("Cost")).toBe(short[1]?.indexOf("Cost"));
-    expect(long[0]?.slice(0, long[0]?.indexOf("Effort"))).toContain("…");
-    expect(long[1]?.slice(0, long[1]?.indexOf("Token"))).toContain("…");
+    expect(long[0]?.slice(0, long[0]?.indexOf("Effort"))).toContain("...");
+    expect(long[1]?.slice(0, long[1]?.indexOf("Token"))).toContain("...");
     expect(long.join("\n")).toContain("Context 50K / 128K 39%");
   });
 
@@ -361,17 +361,17 @@ describe("carry-safe telemetry at rounding boundaries", () => {
 
       expect(ansi.every((line) => visibleWidth(line) === width)).toBe(true);
       expect(identity).toContain("Context 999K / 1000K 100%");
-      expect(telemetry).toContain("Token ↑999k ↓999k");
+      expect(telemetry).toContain("Token ▴999k ▾999k");
       expect(telemetry).toContain("Cost ¥9999.99");
-      expect(identity.slice(identity.indexOf("Context"))).not.toContain("…");
-      expect(telemetry.slice(telemetry.indexOf("Token"))).not.toContain("…");
+      expect(identity.slice(identity.indexOf("Context"))).not.toContain("...");
+      expect(telemetry.slice(telemetry.indexOf("Token"))).not.toContain("...");
     },
   );
 
   it("formats sub-10K token counts without decimal carry", () => {
     const usage: UsageSnapshot = { ...ACTIVE_USAGE, inputTokens: 9_999, outputTokens: 9_999 };
     const telemetry = render(statusInput({ usage }), 80).plain[1] ?? "";
-    expect(telemetry).toContain("Token ↑9.9k ↓9.9k");
+    expect(telemetry).toContain("Token ▴9.9k ▾9.9k");
     expect(telemetry).not.toContain("10.0k");
   });
 
@@ -380,7 +380,7 @@ describe("carry-safe telemetry at rounding boundaries", () => {
     const telemetry = render(statusInput({ usage }), 59).plain[1] ?? "";
 
     expect(telemetry).toContain("Cost ¥10034");
-    expect(telemetry).not.toContain("Cost …");
+    expect(telemetry).not.toContain("Cost ...");
   });
 
   it("omits the Token field entirely at 40 columns when even the input side cannot fit", () => {

@@ -696,8 +696,8 @@ describe("M8 Pi compaction event state machine", () => {
         .mock.calls.map(([message]) => (message.kind === "session" ? message.text : ""))
         .filter(Boolean);
       expect(evidence).toEqual([
-        "上下文压缩开始 · reason threshold · usage 28500/32000 · reserve 16384",
-        "上下文压缩完成 · reason threshold · usage 28500→12000/32000 · reserve 16384 · retry no",
+        "上下文压缩开始 ⋅ reason threshold ⋅ usage 28500/32000 ⋅ reserve 16384",
+        "上下文压缩完成 ⋅ reason threshold ⋅ usage 28500⟶12000/32000 ⋅ reserve 16384 ⋅ retry no",
       ]);
       expect(evidence.join(" ")).not.toMatch(/approval|批准|审批/i);
     } finally {

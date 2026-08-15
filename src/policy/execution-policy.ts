@@ -173,7 +173,7 @@ export function createExecutionPolicyService(options: ExecutionPolicyServiceOpti
 
   async function switchPolicy(next: PolicyLevel): Promise<PolicySnapshot> {
     if (!POLICY_LEVELS.includes(next)) throw new Error(`未知 Policy：${next}`);
-    if (recovery && next !== "Standard") throw new Error("Recovery 强制 Standard · Host，拒绝切换 Policy");
+    if (recovery && next !== "Standard") throw new Error("Recovery 强制 Standard ⋅ Host，拒绝切换 Policy");
     policy = next;
     return snapshotFor(policy, recovery, sessionAllowlist);
   }

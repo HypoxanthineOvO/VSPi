@@ -26,10 +26,10 @@ describe("terminal mock inspector shell", () => {
   });
 
   it("labels interaction phases from child content rather than the workspace path", () => {
-    expect(inferPhase(["╭ Sessions ─╮"])).toBe("resume-picker");
+    expect(inferPhase(["+ Sessions ‒+"])).toBe("resume-picker");
     expect(inferPhase(["MOCK_RESUME_072_END"])).toBe("resume-restored");
     expect(inferPhase(["Trace Question"])).toBe("question");
-    expect(inferPhase(["● Working 00:01"])).toBe("working");
+    expect(inferPhase(["◉ Working 00:01"])).toBe("working");
     expect(inferPhase(["◈ VSPi", "Mock Deterministic"])).toBe("startup");
     expect(inferPhase(["/home/heyx/VSPi", "Mock Deterministic"])).toBe("idle");
   });

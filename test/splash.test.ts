@@ -4,7 +4,7 @@ import { renderSplash, renderStartupPlaceholder, runStartupSequence, type Startu
 import { plainTheme } from "./helpers.js";
 
 const VERSION = "9.8.7-test";
-const LEGACY_COPY = ["Home · auto/safe · Web", "Kimi / OpenAI / DeepSeek"] as const;
+const LEGACY_COPY = ["Home ⋅ auto/safe ⋅ Web", "Kimi / OpenAI / DeepSeek"] as const;
 
 function renderedText(lines: string[]): string {
   return lines.map(stripAnsi).join("\n");
@@ -14,7 +14,7 @@ function expectTruthfulStatus(lines: string[], status: StartupStatus): void {
   const text = renderedText(lines);
   expect(text).toContain(status.model);
   expect(text).toContain(`Backend ${status.backend}`);
-  expect(text).toContain(`Policy ${status.policy} · ${status.boundary}`);
+  expect(text).toContain(`Policy ${status.policy} ⋅ ${status.boundary}`);
   expect(text).not.toMatch(/\bMode\b|\bAuto\b/);
   for (const legacy of LEGACY_COPY) expect(text).not.toContain(legacy);
 }

@@ -52,7 +52,7 @@ describe("PTY continuity scenarios", () => {
       await new Promise((resolve) => setTimeout(resolve, 150));
       const screen = harness.screenText().split("\n");
       const questionTop = screen.findIndex((line) => line.includes("Question"));
-      const questionBottom = screen.findIndex((line, index) => index > questionTop && /^[+╰]/u.test(line));
+      const questionBottom = screen.findIndex((line, index) => index > questionTop && /^[+]/u.test(line));
       expect(questionTop).toBeGreaterThanOrEqual(0);
       expect(questionBottom).toBeGreaterThan(questionTop);
       expect(screen[questionBottom + 1]?.trim()).toBe("");

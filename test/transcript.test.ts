@@ -135,7 +135,7 @@ describe("transcript rendering", () => {
       80,
       plainTheme(),
     );
-    expect(lines).toEqual(["◇ 上一轮在完成前中断；已恢复落盘内容，未自动重试。"]);
+    expect(lines).toEqual(["⋄ 上一轮在完成前中断；已恢复落盘内容，未自动重试。"]);
   });
 
   it("renders a short user message as a full-width three-line dark surface", () => {
@@ -145,9 +145,9 @@ describe("transcript rendering", () => {
       plainTheme({ colorLevel: 3, truecolor: true, unicode: true }),
     );
     expect(lines).toHaveLength(3);
-    expect(stripAnsi(lines[1] ?? "")).toContain("▌  hello");
+    expect(stripAnsi(lines[1] ?? "")).toContain("▮  hello");
     expect(lines.every((line) => visibleWidth(line) === 40)).toBe(true);
-    expect(stripAnsi(lines.join("\n"))).not.toMatch(/[╭╮╰╯│]/);
+    expect(stripAnsi(lines.join("\n"))).not.toMatch(/[╭╮╰╯❘]/);
     const content = cellsForText(lines[1] ?? "", "hello");
     expect(content.every((cell) => cell.background === "rgb(32,36,40)")).toBe(true);
     expect(content.every((cell) => cell.foreground === "rgb(244,247,250)")).toBe(true);
@@ -167,7 +167,7 @@ describe("transcript rendering", () => {
       );
       expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
       expect(lines.every((line) => visibleWidth(line) === width)).toBe(true);
-      expect(stripAnsi(lines.join("\n"))).not.toMatch(/[╭╮╰╯│]/);
+      expect(stripAnsi(lines.join("\n"))).not.toMatch(/[╭╮╰╯❘]/);
       if (colorLevel === 2) {
         expect(
           cellsForText(lines.join("\n"), "message surface").every((cell) => cell.background === "ansi256(236)"),
@@ -185,7 +185,7 @@ describe("transcript rendering", () => {
     expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
     expect(plain.join(" ")).toContain("first hard line");
     expect(plain.join(" ")).toContain("second hard line");
-    expect(plain.join("").replaceAll(/[▌\s]/g, "")).toContain("〔登录页-修改前·1440×900·PNG〕");
+    expect(plain.join("").replaceAll(/[▮\s]/g, "")).toContain("〔登录页-修改前⋅1440x900⋅PNG〕");
   });
 
   it("keeps the user surface full-width and applies Inspect selection without changing layout", () => {
@@ -204,7 +204,7 @@ describe("transcript rendering", () => {
     const userLines = renderTranscriptMessage(user, 60, plainTheme());
     const transcript = renderTranscript([user, assistant], 60, plainTheme());
     expect(transcript[userLines.length]).toBe("");
-    expect(stripAnsi(transcript.slice(userLines.length + 1).join("\n"))).toContain("• Answer");
+    expect(stripAnsi(transcript.slice(userLines.length + 1).join("\n"))).toContain("▪ Answer");
   });
 
   it("keeps queued deliveries out of the waterfall and Inspect nodes until consumed", () => {
@@ -242,10 +242,10 @@ describe("transcript rendering", () => {
     const rendered = renderTranscript(messages, 80, plainTheme()).map(stripAnsi);
 
     expect(rendered).toHaveLength(4);
-    expect(rendered[0]).toContain("工具调用 · 3 项 · 已完成");
-    expect(rendered[1]).toMatch(/^├─ ✓ Read\s+file-0\.ts/);
-    expect(rendered[2]).toMatch(/^├─ ✓ Bash\s+npm test -- shard-1/);
-    expect(rendered[3]).toMatch(/^└─ ✓ Read\s+file-2\.ts/);
+    expect(rendered[0]).toContain("工具调用 ⋅ 3 项 ⋅ 已完成");
+    expect(rendered[1]).toMatch(/^❘‒ ✓ Read\s+file-0\.ts/);
+    expect(rendered[2]).toMatch(/^❘‒ ✓ Bash\s+npm test -- shard-1/);
+    expect(rendered[3]).toMatch(/^❘‒ ✓ Read\s+file-2\.ts/);
   });
 
   it("builds stable top-level nodes and reveals tool children only after entering the group", () => {
@@ -265,7 +265,7 @@ describe("transcript rendering", () => {
       collapseCompletedTools: true,
       selectedNodeId: "tool-group:turn-1",
     }).map(stripAnsi);
-    expect(selectedGroup.join("\n")).toContain("▌ ◇ 工具调用 · 2 项 · 已完成");
+    expect(selectedGroup.join("\n")).toContain("▮ ⋄ 工具调用 ⋅ 2 项 ⋅ 已完成");
     expect(selectedGroup.join("\n")).not.toContain("file-0.ts");
 
     const selectedTool = renderTranscript(messages, 80, plainTheme(), {
@@ -274,26 +274,26 @@ describe("transcript rendering", () => {
       selectedToolId: "tool-1",
     }).map(stripAnsi);
     expect(selectedTool.join("\n")).toContain("file-0.ts");
-    expect(selectedTool.join("\n")).toContain("▌ └─ ✓ Bash");
+    expect(selectedTool.join("\n")).toContain("▮ ❘‒ ✓ Bash");
   });
 
   it("keeps the live waterfall expanded and collapses to one summary row only after completion", () => {
     const running = [toolMessage(0), toolMessage(1, "running"), toolMessage(2, "queued")];
     const live = renderTranscript(running, 80, plainTheme(), { collapseCompletedTools: true }).map(stripAnsi);
-    expect(live[0]).toContain("工具调用 · 3 项 · 执行中");
+    expect(live[0]).toContain("工具调用 ⋅ 3 项 ⋅ 执行中");
     expect(live).toHaveLength(4);
-    expect(live.at(-1)).toMatch(/^└─ ● Read\s+file-2\.ts · 等待中/);
+    expect(live.at(-1)).toMatch(/^❘‒ ◉ Read\s+file-2\.ts ⋅ 等待中/);
 
     const completed = [toolMessage(0), toolMessage(1), toolMessage(2, "error")];
     const collapsed = renderTranscript(completed, 80, plainTheme(), { collapseCompletedTools: true }).map(stripAnsi);
-    expect(collapsed).toEqual([expect.stringContaining("工具调用 · 3 项 · 1 失败")]);
+    expect(collapsed).toEqual([expect.stringContaining("工具调用 ⋅ 3 项 ⋅ 1 失败")]);
 
     const inspected = renderTranscript(completed, 80, plainTheme(), {
       collapseCompletedTools: true,
       inspectedId: "tool-0",
     }).map(stripAnsi);
     expect(inspected).toHaveLength(4);
-    expect(inspected.at(-1)).toMatch(/^└─ × Read\s+file-2\.ts · 失败/);
+    expect(inspected.at(-1)).toMatch(/^❘‒ x Read\s+file-2\.ts ⋅ 失败/);
   });
 
   it("keeps completed tool groups fully expanded when the setting is disabled", () => {
@@ -301,7 +301,7 @@ describe("transcript rendering", () => {
     const rendered = renderTranscript(messages, 80, plainTheme(), { collapseCompletedTools: false }).map(stripAnsi);
     expect(rendered).toHaveLength(10);
     expect(rendered.join("\n")).toContain("shard-5");
-    expect(rendered.at(-1)).toMatch(/^└─ ✓ Read\s+file-8\.ts/);
+    expect(rendered.at(-1)).toMatch(/^❘‒ ✓ Read\s+file-8\.ts/);
   });
 
   it("aligns tool names and action summaries in stable columns", () => {
@@ -355,11 +355,11 @@ describe("transcript rendering", () => {
       thinkingDisplay: "expanded",
     }).map(stripAnsi);
 
-    expect(hidden).toEqual(["◇ 思考 · 已隐藏"]);
-    expect(collapsed.join("\n")).toContain("Effort High · 1.2s · 已折叠");
-    expect(collapsed.join("\n")).toContain("LATEST_THINKING · 2 段");
+    expect(hidden).toEqual(["⋄ 思考 ⋅ 已隐藏"]);
+    expect(collapsed.join("\n")).toContain("Effort High ⋅ 1.2s ⋅ 已折叠");
+    expect(collapsed.join("\n")).toContain("LATEST_THINKING ⋅ 2 段");
     expect(collapsed.join("\n")).not.toContain("EARLIER_THINKING");
-    expect(expanded.join("\n")).toContain("Effort High · 1.2s · 已展开");
+    expect(expanded.join("\n")).toContain("Effort High ⋅ 1.2s ⋅ 已展开");
     expect(expanded.join("\n")).toContain("EARLIER_THINKING");
     expect(expanded.join("\n")).toContain("LATEST_THINKING");
   });
@@ -397,7 +397,7 @@ describe("transcript rendering", () => {
       streaming: true,
     };
     const rendered = renderTranscript([streaming], 80, plainTheme(), { thinkingDisplay: "hidden" }).map(stripAnsi);
-    expect(rendered).toEqual(["◇ 思考中 · Effort Xhigh"]);
+    expect(rendered).toEqual(["⋄ 思考中 ⋅ Effort Xhigh"]);
     expect(rendered.join("\n")).not.toContain("LIVE_PRIVATE_BODY");
   });
 
@@ -411,7 +411,7 @@ describe("transcript rendering", () => {
     };
     const lines = renderTranscriptMessage(message, 40, plainTheme());
     expect(lines.every((line) => visibleWidth(line) <= 40)).toBe(true);
-    expect(stripAnsi(lines.at(-1) ?? "")).toMatch(/▋$/);
+    expect(stripAnsi(lines.at(-1) ?? "")).toMatch(/❙$/);
   });
 
   it("renders Subagent context, lane, model, and fallback status within narrow widths", () => {
@@ -440,11 +440,105 @@ describe("transcript rendering", () => {
     expect(full).toContain("preferred kimi/k2");
     expect(full).toContain("lane main");
     expect(full).toContain("fallback quota_exhausted");
-    expect(full).toContain("Budget · run 117K left · tree 495K / $19.600 left");
+    expect(full).toContain("Budget ⋅ run 117K left ⋅ tree 495K / $19.600 left");
     for (const width of [40, 80, 120]) {
       expect(renderTranscriptMessage(message, width, plainTheme()).every((line) => visibleWidth(line) <= width)).toBe(
         true,
       );
     }
+  });
+});
+
+describe("neutral-width UI chrome", () => {
+  // 中文宽渲染终端把 East Asian Ambiguous 字符画成 2 列，导致行溢出与光标
+  // 错位；所有 UI chrome 必须由 neutral/narrow 字符构成。
+  it("keeps rendered transcript chrome free of East Asian Ambiguous glyphs", async () => {
+    const { eastAsianWidthType } = await import("get-east-asian-width");
+    const messages: TranscriptMessage[] = [
+      userMessage("hello"),
+      { id: "think", role: "assistant", kind: "thinking", text: "thinking body", effort: "medium", collapsed: true },
+      toolMessage(0),
+      toolMessage(1),
+    ];
+    const lines = [
+      ...renderTranscript(messages, 80, plainTheme(), { collapseCompletedTools: true }),
+      ...renderTranscriptMessage(
+        {
+          id: "sub",
+          role: "assistant",
+          kind: "subagent",
+          model: "m",
+          task: "t",
+          status: "success",
+          effort: "medium",
+        } as TranscriptMessage,
+        80,
+        plainTheme(),
+      ),
+    ];
+    const offenders: string[] = [];
+    for (const line of lines) {
+      for (const character of stripAnsi(line)) {
+        const codePoint = character.codePointAt(0) ?? 0;
+        if (codePoint >= 0x80 && eastAsianWidthType(codePoint) === "ambiguous") {
+          offenders.push(character);
+          break;
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe("regular tail window and row-estimate cache", () => {
+  it("keeps tool groups intact on the exact-free tail path", () => {
+    const messages: TranscriptMessage[] = [
+      ...Array.from({ length: 40 }, (_, index) => ({
+        id: `tail-old-${index}`,
+        role: "assistant" as const,
+        kind: "text" as const,
+        text: `tail old ${index}`,
+      })),
+      toolMessage(0),
+      toolMessage(1),
+    ];
+    const window = selectTranscriptWindow(messages, {
+      width: 80,
+      maxRows: 10_000,
+      maxBlocks: 2,
+      maxCharacters: 1_000_000,
+      exactHiddenBlocks: false,
+    });
+    // Tool group is one block and never split; the second block is the last
+    // plain message before it.
+    expect(window.messages.at(-2)).toMatchObject({ id: "tool-0" });
+    expect(window.messages.at(-1)).toMatchObject({ id: "tool-1" });
+    expect(window.nodes).toHaveLength(2);
+    expect(window.nodes[1]).toMatchObject({ kind: "toolGroup", messageIndexes: [40, 41] });
+    // Tail path only reports presence of hidden blocks; exact counts require
+    // the anchored (exact) path.
+    expect(window.hiddenBlocks).toBe(1);
+  });
+
+  it("invalidates row estimates when tool expansion state changes", () => {
+    const cache = new TranscriptRenderCache();
+    const collapsedTool = { ...toolMessage(0), output: "line\n".repeat(30), expanded: false };
+    const messages: TranscriptMessage[] = [collapsedTool];
+    const base = { width: 80, maxRows: 10_000, cache, collapseCompletedTools: false };
+    const collapsedRows = selectTranscriptWindow(messages, { ...base, maxBlocks: 1 }).nodes.length;
+    expect(collapsedRows).toBeGreaterThan(0);
+
+    const expanded: TranscriptMessage[] = [{ ...collapsedTool, expanded: true }];
+    const windowAfterExpand = selectTranscriptWindow(expanded, { ...base, maxBlocks: 1 });
+    // The estimate must reflect the expanded output rather than the cached
+    // collapsed height: with 30 wrapped output lines the block exceeds a
+    // small row budget and must not reuse the stale collapsed estimate.
+    const tightWindow = selectTranscriptWindow(expanded, { ...base, maxRows: 5, maxBlocks: 1 });
+    expect(windowAfterExpand.nodes).toHaveLength(1);
+    // Row budget smaller than the expanded block height: the block itself is
+    // always kept, but the stale collapsed estimate must not let MORE blocks
+    // in than the budget allows.
+    expect(tightWindow.nodes).toHaveLength(1);
+    expect(tightWindow.nodes[0]?.messageIndexes).toHaveLength(1);
   });
 });

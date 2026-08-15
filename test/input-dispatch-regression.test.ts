@@ -612,11 +612,11 @@ describe("busy submission guard", () => {
       ref.events?.onBusy(true);
       expect(testable.workingFrame).toBe(0);
       const firstFrame = app.render(120).map(stripAnsi).join("\n");
-      expect(firstFrame).toContain("○ Working 00:00  ⣾⣻⡿");
-      expect(firstFrame).not.toMatch(/▌ Working|插入 2|后续 1|队列 3/);
+      expect(firstFrame).toContain("◦ Working 00:00  ⣾⣻⡿");
+      expect(firstFrame).not.toMatch(/▮ Working|插入 2|后续 1|队列 3/);
       vi.advanceTimersByTime(240);
       expect(testable.workingFrame).toBe(1);
-      expect(app.render(120).map(stripAnsi).join("\n")).toContain("◉ Working 00:00  ⣽⢿⣟");
+      expect(app.render(120).map(stripAnsi).join("\n")).toContain("◌ Working 00:00  ⣽⢿⣟");
     } finally {
       await app.dispose();
       vi.useRealTimers();
@@ -744,15 +744,15 @@ describe("Plan router question", () => {
     const testable = app as unknown as TestableApp;
     try {
       const initial = app.render(80).map(stripAnsi).join("\n");
-      expect(initial).not.toMatch(/(?:\+|╭) Plan\b/);
+      expect(initial).not.toMatch(/\+ Plan\b/);
       expect(initial).not.toContain("Shift+Tab 下一个区域");
 
       await app.runStartupCommand("/plan");
       const explicit = app.render(80).map(stripAnsi).join("\n");
-      expect(explicit).toMatch(/(?:\+|╭) Plan\b/);
+      expect(explicit).toMatch(/\+ Plan\b/);
 
       app.handleInput("\u001b");
-      expect(app.render(80).map(stripAnsi).join("\n")).not.toMatch(/(?:\+|╭) Plan\b/);
+      expect(app.render(80).map(stripAnsi).join("\n")).not.toMatch(/\+ Plan\b/);
 
       testable.panels.setPlanSnapshot(PLAN);
       expect(app.render(80).map(stripAnsi).join("\n")).toContain(PLAN.title);
@@ -1286,8 +1286,8 @@ describe("Plan focus and hints", () => {
       const focusedHint = app
         .render(80)
         .map(stripAnsi)
-        .find((line) => line.includes("Shift+Tab") || line.includes("↑↓"));
-      expect(focusedHint).toContain("↑↓ 选择");
+        .find((line) => line.includes("Shift+Tab") || line.includes("▴▾"));
+      expect(focusedHint).toContain("▴▾ 选择");
       expect(focusedHint).toContain("Enter 操作");
 
       app.handleInput("\x1b[Z");
@@ -1296,9 +1296,9 @@ describe("Plan focus and hints", () => {
       const unfocusedHint = app
         .render(80)
         .map(stripAnsi)
-        .find((line) => line.includes("Shift+Tab") || line.includes("↑↓"));
+        .find((line) => line.includes("Shift+Tab") || line.includes("▴▾"));
       expect(unfocusedHint).toContain("Shift+Tab");
-      expect(unfocusedHint).not.toContain("↑↓");
+      expect(unfocusedHint).not.toContain("▴▾");
       expect(unfocusedHint).not.toContain("Enter 操作");
     } finally {
       await app.dispose();

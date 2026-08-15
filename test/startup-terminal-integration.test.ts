@@ -16,7 +16,7 @@ const PI_STATUS = {
   boundary: "Host" as const,
   version: "9.8.7-test",
 };
-const DYNAMIC_MARKERS = ["╭ Plan ", "输入消息", PI_STATUS.model] as const;
+const DYNAMIC_MARKERS = ["+ Plan ", "输入消息", PI_STATUS.model] as const;
 
 type StartupResult = "success" | "backend-failure" | "attachment-failure";
 
@@ -513,10 +513,10 @@ async function exerciseSessionReset(command: "/new" | "/clear"): Promise<void> {
   expect(terminal.splashWrites).toEqual(splashWritesBeforeReset);
   expect(terminal.starts).toBe(startsBeforeReset);
   expect(terminal.stops).toBe(stopsBeforeReset);
-  expect(plain).toMatch(/╭─+╮[\s\S]*╰─+╯/u);
+  expect(plain).toMatch(/\+-+\+[\s\S]*\+-+\+/u);
   expect(plain).toContain(PI_STATUS.model);
   expect(plain).not.toContain("PERSISTED_HISTORY");
-  expect(plain).not.toContain("╭ Plan ");
+  expect(plain).not.toContain("+ Plan ");
 
   await app.dispose();
   tui.stop();

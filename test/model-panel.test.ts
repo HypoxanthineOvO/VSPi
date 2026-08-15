@@ -18,7 +18,7 @@ function render(panel: PanelController, width: number, rows = 22): string[] {
 function splitPanes(lines: string[], minimumRows = 3) {
   const rows = lines.slice(1, -1).map((line) => line.slice(1, -1));
   const splitRows = rows.flatMap((line) => {
-    const divider = line.indexOf("│");
+    const divider = line.indexOf("❘");
     if (divider < 0) return [];
     return [
       { left: line.slice(0, divider), right: line.slice(divider + 1), column: visibleWidth(line.slice(0, divider)) },
@@ -123,7 +123,7 @@ describe("model panel responsive layout", () => {
 
     const lines = render(panel, 60, 16);
     const panes = splitPanes(lines);
-    expect(panes.left).toMatch(/A Provider.*…\s+2/);
+    expect(panes.left).toMatch(/A Provider.*...\s+2/);
     expect(panes.left.indexOf("Alpha One")).toBeLessThan(panes.left.indexOf("Alpha Two"));
     expect(panes.left.indexOf("Alpha Two")).toBeLessThan(panes.left.indexOf("Z Provider"));
     expect(lines[1]).not.toContain("模型组");

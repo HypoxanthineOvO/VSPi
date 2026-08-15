@@ -15,9 +15,9 @@ describe("VSPi Markdown rendering", () => {
       "12. 这是一个会在窄终端中自动换行并与正文首列对齐的有序列表项目",
     ].join("\n");
     const lines = renderMarkdown(source, 34, plainTheme()).map(stripAnsi);
-    expect(lines.some((line) => line.includes("• 一级"))).toBe(true);
+    expect(lines.some((line) => line.includes("▪ 一级"))).toBe(true);
     expect(lines.some((line) => line.includes("◦ 二级"))).toBe(true);
-    expect(lines.some((line) => line.includes("▪ 三级"))).toBe(true);
+    expect(lines.some((line) => line.includes("⋅ 三级"))).toBe(true);
     const ordered = lines.filter((line) => line.includes("12.") || line.includes("正文首列"));
     expect(ordered.length).toBeGreaterThan(1);
   });
@@ -26,9 +26,9 @@ describe("VSPi Markdown rendering", () => {
     const rendered = renderMarkdown("- one\n    - two\n        - three", 40, plainTheme({ unicode: false })).map(
       stripAnsi,
     );
-    expect(rendered.join("\n")).toContain("• one");
+    expect(rendered.join("\n")).toContain("▪ one");
     expect(rendered.join("\n")).toContain("◦ two");
-    expect(rendered.join("\n")).toContain("▪ three");
+    expect(rendered.join("\n")).toContain("⋅ three");
   });
 
   it("renders H1 as the primary heading and H2 as a subordinate heading", () => {
@@ -94,7 +94,7 @@ describe("VSPi Markdown rendering", () => {
     expect(text).toContain("项目文档");
     expect(raw).toContain("https://example.com/docs");
     expect(text).toContain("✓ 已完成");
-    expect(text).toContain("○ 待处理");
+    expect(text).toContain("▫ 待处理");
     expect(text).not.toContain("[x]");
     expect(text).toContain("TUI");
     expect(lines.every((line) => visibleWidth(line) <= 36)).toBe(true);
@@ -103,8 +103,8 @@ describe("VSPi Markdown rendering", () => {
   it("styles table borders with the shared muted border color", () => {
     const theme = createTheme(capabilities({ colorLevel: 3, truecolor: true }));
     const rendered = renderMarkdown("| A | B |\n|---|---|\n| x | y |", 36, theme).join("\n");
-    expect(cellsForText(rendered, "┌").every((cell) => cell.foreground === "rgb(70,80,88)")).toBe(true);
-    expect(cellsForText(rendered, "│").every((cell) => cell.foreground === "rgb(70,80,88)")).toBe(true);
+    expect(cellsForText(rendered, "+").every((cell) => cell.foreground === "rgb(70,80,88)")).toBe(true);
+    expect(cellsForText(rendered, "❘").every((cell) => cell.foreground === "rgb(70,80,88)")).toBe(true);
   });
 
   it("renders upstream inline and matrix LaTeX without overflowing", () => {
@@ -121,7 +121,7 @@ describe("VSPi Markdown rendering", () => {
     const complete = renderMarkdown(source, 60, plainTheme(), { mermaidRendering: "final" }).map(stripAnsi).join("\n");
     expect(complete).toContain("Start");
     expect(complete).toContain("Done");
-    expect(complete).toContain("───▶");
+    expect(complete).toContain("‒‒‒▶");
     expect(complete).not.toContain("flowchart");
 
     const pending = renderMarkdown(source, 60, plainTheme(), { mermaidRendering: "final", streaming: true })
@@ -133,7 +133,7 @@ describe("VSPi Markdown rendering", () => {
     const live = renderMarkdown(source, 60, plainTheme(), { mermaidRendering: "streaming", streaming: true })
       .map(stripAnsi)
       .join("\n");
-    expect(live).toContain("───▶");
+    expect(live).toContain("‒‒‒▶");
   });
 
   it("falls back to a bounded code block for narrow or non-Unicode Mermaid", () => {

@@ -355,7 +355,7 @@ describe("M7 effective prompt provenance", () => {
     ]);
     expect(result.text).not.toContain("sk-context-sentinel");
     expect(result.text).not.toContain("PROFILE_SECRET_SENTINEL");
-    expect(result.segments.map((segment) => segment.content).join("\n")).toMatch(/\[REDACTED\]|•••/);
+    expect(result.segments.map((segment) => segment.content).join("\n")).toMatch(/\[REDACTED\]|▪▪▪/);
   });
 
   it("does not rewrite Pi SYSTEM, APPEND_SYSTEM, or AGENTS files while loading and composing", async () => {

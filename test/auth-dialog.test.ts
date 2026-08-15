@@ -16,7 +16,7 @@ describe("provider authentication dialog", () => {
 
     const rendered = dialog.render(60, plainTheme()).map(stripAnsi).join("\n");
     expect(rendered).not.toContain("sk-private-value");
-    expect(rendered).toContain("•".repeat("sk-private-value".length));
+    expect(rendered).toContain("▪".repeat("sk-private-value".length));
 
     dialog.handleInput("\r");
     await expect(result).resolves.toBe("sk-private-value");
@@ -45,7 +45,7 @@ describe("provider authentication dialog", () => {
 
     const rendered = dialog.render(60, plainTheme()).map(stripAnsi).join("\n");
     expect(rendered).not.toContain("sk-pasted-secret");
-    expect(rendered).toContain("•".repeat("sk-pasted-secret".length));
+    expect(rendered).toContain("▪".repeat("sk-pasted-secret".length));
 
     dialog.handleInput("\r");
     await expect(result).resolves.toBe("sk-pasted-secret");
@@ -78,7 +78,7 @@ describe("provider authentication dialog", () => {
       ],
     });
 
-    expect(dialog.render(80, plainTheme()).map(stripAnsi).join("\n")).toContain("Device code login · SSH 推荐");
+    expect(dialog.render(80, plainTheme()).map(stripAnsi).join("\n")).toContain("Device code login ⋅ SSH 推荐");
     dialog.handleInput("\r");
     await expect(result).resolves.toBe("device_code");
   });

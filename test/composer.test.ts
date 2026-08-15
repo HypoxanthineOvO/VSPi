@@ -75,7 +75,7 @@ describe("composer", () => {
     const composer = new Composer(fakeTui(), plainTheme({ colorLevel: 3, truecolor: true }));
     composer.focused = true;
     composer.addAttachment(attachment);
-    expect(composer.render(80).join("\n")).toContain("〔登录页-修改前 · 1440×900 · PNG〕");
+    expect(composer.render(80).join("\n")).toContain("〔登录页-修改前 ⋅ 1440x900 ⋅ PNG〕");
   });
 
   it("renders Working styles 2 and 3 inside the top border without changing composer height", () => {

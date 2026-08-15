@@ -38,7 +38,7 @@ describe("real PTY scrollback", () => {
         await new Promise((resolve) => setTimeout(resolve, 200));
         const screen = harness.screenText().split("\n");
         const splashRuntime = screen.findIndex((line) => line.includes("Backend Fixture"));
-        const composerTop = screen.findIndex((line, index) => index > splashRuntime && /^[+-]|^╭/u.test(line));
+        const composerTop = screen.findIndex((line, index) => index > splashRuntime && /^[+-]|[+-]/u.test(line));
         const dynamicStatus = screen.findIndex((line) => line.includes("Model Offline Fixture"));
         const buffer = harness.terminal.buffer.active;
 

@@ -29,7 +29,7 @@ Release 包已经包含编译后的 `dist`，目标机器不需要 TypeScript �
 ## 环境与启动
 
 - Node.js `>=22.19.0`
-- 最低终端：`80×24`、256 色
+- 最低终端：`80x24`、256 色
 - 推荐终端：UTF-8、truecolor、Kitty keyboard protocol
 
 ```bash
@@ -98,7 +98,7 @@ VSPi 沿用 Pi 的模型、Provider、凭据和 session 目录，不另建 Secre
 
 ## 启动与默认界面
 
-启动序列会先立即写出一行 VSPi 初始品牌占位，它不含 Logo、运行状态或模型声明；最终帧等待应用初始化完成。应用只清理一次当前 viewport，并把保留现有六行块字符 Logo 的最终状态帧作为统一 TUI 瀑布的第一个内容块，不播放多段进度动画，也不制造一整屏换行。最终帧使用初始化后解析得到的真实 Model、`package.json` 解析出的包版本、真实 Backend 与执行 Policy。真实 pi 显示 `Backend Pi`，显式离线后端显示 `Backend Fixture`；执行边界统一显示 `Policy … · Host`，Policy 只控制审批强度，Backend 与 Policy 是两项独立元数据。
+启动序列会先立即写出一行 VSPi 初始品牌占位，它不含 Logo、运行状态或模型声明；最终帧等待应用初始化完成。应用只清理一次当前 viewport，并把保留现有六行块字符 Logo 的最终状态帧作为统一 TUI 瀑布的第一个内容块，不播放多段进度动画，也不制造一整屏换行。最终帧使用初始化后解析得到的真实 Model、`package.json` 解析出的包版本、真实 Backend 与执行 Policy。真实 pi 显示 `Backend Pi`，显式离线后端显示 `Backend Fixture`；执行边界统一显示 `Policy ... ⋅ Host`，Policy 只控制审批强度，Backend 与 Policy 是两项独立元数据。
 
 默认 `fullscreen` 使用 Pi 0.84 的 alternate screen：Transcript 位于独立 `ScrollView`，Panel、queued/activity、Composer 与 Status 组成固定 dock。`PageUp/PageDown`、`Home/End` 和鼠标滚轮只移动 Transcript；滚动条可设为滚动时显示、常驻或隐藏。Settings 可切换到 `regular` 回退；regular 继续把 Splash、Transcript、面板、Composer 与 Status 放在同一物理瀑布中，通过原生 terminal scrollback 保存稳定前缀，并过滤 redraw 中的 `CSI 3J`。切换 renderer 不替换当前 Session、draft 或焦点，退出时恢复原屏。`VSPi_TUI_MODE=fullscreen|regular` 可仅为本次启动覆盖持久设置。Splash 每个进程只出现一次；`/new` 和 alias `/clear` 不重播 Splash。
 
@@ -107,21 +107,21 @@ VSPi 沿用 Pi 的模型、Provider、凭据和 session 目录，不另建 Secre
 默认的新工作区动态界面为空，不加载或预置对话、工具消息、演示计划、usage 或 session；文档中的对话和工具消息一律标为“交互示例”，不是启动内容。空 Plan 只保留安静的标题与留白，不展示 Workflow 缺失、未初始化或“当前计划为空”之类的提示；离线后端明确标识为 `Offline Fixture`。`80` 列状态固定为两行，并且每行可见宽度严格为 80 列：
 
 ```text
-╭ Plan ────────────────────────────────────────────────────────────────────────╮
-│                                                                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
++ Plan ‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒+
+❘                                                                              ❘
++‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒+
 ```
 
 ```text
 Model OpenAI / GPT-5.4  Effort High                     Context 50K / 128K 39%  
-/workspace/vspi · Policy Standard · Host            Token ↑12k ↓3.0k  Cost ¥1.01
+/workspace/vspi ⋅ Policy Standard ⋅ Host            Token ▴12k ▾3.0k  Cost ¥1.01
 ```
 
-动态状态区只包含两条语义轨道：第一行严格为 `Model / Effort / Context`；第二行直接从路径值开始，再显示 `Policy / Token / Cost`，不显示冗余的 `Path` 标题。Backend 只保留在永久 Splash 与诊断信息中，不进入动态行。五个标签与对应值、以及无标题路径值分别着色，不把整行统一处理为弱文本。80/120 列的路径 flex 区从右侧保留完整 `Policy <name> · Host` suffix；只有 Model 和路径变量值可以显示省略号，Effort、Context、Policy/Boundary、Token 与 Cost 不截断。
+动态状态区只包含两条语义轨道：第一行严格为 `Model / Effort / Context`；第二行直接从路径值开始，再显示 `Policy / Token / Cost`，不显示冗余的 `Path` 标题。Backend 只保留在永久 Splash 与诊断信息中，不进入动态行。五个标签与对应值、以及无标题路径值分别着色，不把整行统一处理为弱文本。80/120 列的路径 flex 区从右侧保留完整 `Policy <name> ⋅ Host` suffix；只有 Model 和路径变量值可以显示省略号，Effort、Context、Policy/Boundary、Token 与 Cost 不截断。
 
-M1 把 `Context` 明确定义为当前上下文占用、模型窗口和百分比，`Token` 则是独立的累计输入/输出量。三个状态例子分别是活动会话 `Context 50K / 128K 39%  Token ↑12K ↓3K`、空容量 `Context 0K / 0K 0%  Token ↑0 ↓0`，以及压缩后尚无法估算的 `Context ?K / 128K ?%  Token ↑12K ↓3K`。`K` 使用十进制千 token：10K 以下保留一位小数，10K 及以上显示整数；百分比始终由未格式化的原始占用量与窗口计算。
+M1 把 `Context` 明确定义为当前上下文占用、模型窗口和百分比，`Token` 则是独立的累计输入/输出量。三个状态例子分别是活动会话 `Context 50K / 128K 39%  Token ▴12K ▾3K`、空容量 `Context 0K / 0K 0%  Token ▴0 ▾0`，以及压缩后尚无法估算的 `Context ?K / 128K ?%  Token ▴12K ▾3K`。`K` 使用十进制千 token：10K 以下保留一位小数，10K 及以上显示整数；百分比始终由未格式化的原始占用量与窗口计算。
 
-Status 在 40、80、120 列都恰好两行，并按终端可见列而不是原始 ANSI 字节计算。Model 与 Effort 使用固定两个空格的小间距并组成连续左侧轨道；空间不足时只截断 Model，Effort 保持完整。80/120 的固定右轨从内容预算反向排布：Context 为 24 列并可为批准最大值扩到 25 列；Token 为 18 列，Cost 为 10 列并可扩到 13 列。剩余空间交给 Model/Effort 组合区和无标题路径 flex 区，因此长身份只截断自身，不会覆盖或推动右侧字段。代表最大值 `Context 999K / 1000K 100%`、`Token ↑999k ↓999k`、`Cost ¥9999.99` 必须完整显示。40 列仍严格保持两行、五个标签与直接路径值，可省略 busy/mode、Context token 细节、Token 输出；无法容纳的高位 Cost 显示明确的 `Cost …`，不冒充未知值 `?`。顺序不变且每行不超过 40；永久 Splash 已记录完整 Backend 真相。
+Status 在 40、80、120 列都恰好两行，并按终端可见列而不是原始 ANSI 字节计算。Model 与 Effort 使用固定两个空格的小间距并组成连续左侧轨道；空间不足时只截断 Model，Effort 保持完整。80/120 的固定右轨从内容预算反向排布：Context 为 24 列并可为批准最大值扩到 25 列；Token 为 18 列，Cost 为 10 列并可扩到 13 列。剩余空间交给 Model/Effort 组合区和无标题路径 flex 区，因此长身份只截断自身，不会覆盖或推动右侧字段。代表最大值 `Context 999K / 1000K 100%`、`Token ▴999k ▾999k`、`Cost ¥9999.99` 必须完整显示。40 列仍严格保持两行、五个标签与直接路径值，可省略 busy/mode、Context token 细节、Token 输出；无法容纳的高位 Cost 显示明确的 `Cost ...`，不冒充未知值 `?`。顺序不变且每行不超过 40；永久 Splash 已记录完整 Backend 真相。
 
 Status 的短模型样例左右锚是：80 列第一行 `Model 0 / Effort 24 / Context 56`、第二行 `路径值 0 / Token 52 / Cost 70`；120 列第一行 `Model 0 / Effort 24 / Context 96`、第二行 `路径值 0 / Token 92 / Cost 110`；40 列使用原生 `High` 时第一行是 `Model 0 / Effort 13 / Context 25`，第二行是 `路径值 0 / Token 20 / Cost 32`。Effort 的位置随 Model 与原生档位名的实际宽度变化，但两者始终只隔两个空格；Context/Token/Cost 的右锚不受 Model 或路径长度影响。长路径只截断自身，不会推动 Token/Cost；批准最大值会让 Context/Cost 固定区向左扩展。
 
@@ -142,7 +142,7 @@ Status 的短模型样例左右锚是：80 列第一行 `Model 0 / Effort 24 / C
 
 退出候选显示为 `quit (exit)`。canonical `/new` 的 alias 是 `/clear`；`/sessions` 的 aliases 是 `/session` 与 `/resume`；`/providers` 的 alias 是 `/provider`；`/policy` 的 alias 是 `/permission`；canonical `/quit` 的 aliases 是 `/exit` 和 `/q`，输入 alias 时显示 `/exit  (/quit)`，canonical 注释使用弱化灰色。`/thinking`、`/login` 与 `/logout` 是 canonical 命令。插件/扩展命令保留 package `source` 来源，而内置命令显示 Built-in。
 
-`Tab` 是唯一补全键，只处理无参数的单一 slash token，并且必须只有唯一候选：`/ex → /exit`，其可见结果只强调 `ex`，斜杠与 `it` 保持普通；`/qui → /quit` 只强调 `qui`，斜杠与 `t` 保持普通；`/ses → /sessions`、`/provi → /providers`、`/cl → /clear`。存在参数、普通文本或多个 token 候选时不改写。`Tab` 只修改 composer 文本，不会执行命令，也不写入 history（历史记录）；最终执行始终使用 canonical 命令身份。若两个不同 canonical 命令注册了同一个 exact alias，解析和面板 Enter 都会 fail closed，不会静默执行注册顺序中的第一项。composer 中的 slash token 与 Command 候选中的匹配前缀同时使用颜色和粗体、下划线、反显（bold / underline / inverse），因此无色终端仍可辨认，普通文本不受影响。
+`Tab` 是唯一补全键，只处理无参数的单一 slash token，并且必须只有唯一候选：`/ex ⟶ /exit`，其可见结果只强调 `ex`，斜杠与 `it` 保持普通；`/qui ⟶ /quit` 只强调 `qui`，斜杠与 `t` 保持普通；`/ses ⟶ /sessions`、`/provi ⟶ /providers`、`/cl ⟶ /clear`。存在参数、普通文本或多个 token 候选时不改写。`Tab` 只修改 composer 文本，不会执行命令，也不写入 history（历史记录）；最终执行始终使用 canonical 命令身份。若两个不同 canonical 命令注册了同一个 exact alias，解析和面板 Enter 都会 fail closed，不会静默执行注册顺序中的第一项。composer 中的 slash token 与 Command 候选中的匹配前缀同时使用颜色和粗体、下划线、反显（bold / underline / inverse），因此无色终端仍可辨认，普通文本不受影响。
 
 Command 工作区在 40 列把每个命令排成身份行与详情/source 行，滚动时两行保持成组；80 列和 120 列使用稳定的“身份 / 描述 / source”三列。三档 Command 与 Status 都按终端可见列宽计算，不使用特殊全角填充。
 
@@ -244,7 +244,7 @@ Teammate 是受信项目内的持久角色，定义位于 `<workspace>/.vspi/age
 
 模型可用 `skill_list` 只读检查目录，并用 `skill_manage` 提议安装、启停、更新或移除；所有 mutation 仍进入同一套 Question 确认。资源变更后会刷新 Pi ResourceLoader，并重建当前会话下一轮使用的 Skill system prompt。MCP 不属于 `0.6.0`，仍在 `/tools` 中显示 `Not connected`。
 
-每个已接入工作区都有 contextual hint。hint 位于面板 frame外，并直接位于 composer上方；Command 的完整提示是 `↑↓ 选择  Tab 补全  Enter 执行  Esc 关闭`。Plan、Provider、Sessions、Settings、Usage、Theme、Question 和 Model 按当前真实可用动作生成提示；未来工作区接入前不得宣告无效键位。
+每个已接入工作区都有 contextual hint。hint 位于面板 frame外，并直接位于 composer上方；Command 的完整提示是 `▴▾ 选择  Tab 补全  Enter 执行  Esc 关闭`。Plan、Provider、Sessions、Settings、Usage、Theme、Question 和 Model 按当前真实可用动作生成提示；未来工作区接入前不得宣告无效键位。
 
 ## Model 与 Provider
 
@@ -293,7 +293,7 @@ npm run dev -- --recovery
 
 审批 Panel 与模型主动调用的 Question 完全分离。Question 使用进度元数据、粗体标题、正文、分隔线、选项标题与次级说明建立层次；它本身也作为 `Question` Tool 节点出现在瀑布时间线中。Markdown 标题使用内容蓝色前景与字重建立层次，不增加背景块，也不复用运行状态色。Question、审批、Effort、Settings、预览和 Inspect 中的 Esc 先退出当前界面；回到主界面后 Esc 才中断当前生成或工具，Ctrl+C 保留直接中断。取消后的 generation 事件保持隔离到下一次主动发送，迟到的 retry、文本和 Tool 事件不能重新进入 Transcript；运行中的 Pi Bash 同时接收 AbortSignal 并终止子进程组。取消不会重置 Session 或回滚已显示的瀑布记录。
 
-`--recovery` 无条件覆盖 `--policy`、`--trust-project` 与 `--workflow`，强制 `Standard · Host`、拒绝需提升审批的工具、global-only settings/models，并且完全不读取项目 Policy 配置；Pi ResourceLoader 同时禁用 extensions、skills、prompt templates、themes 与 project context files，界面会明确显示 `Recovery`。它不加载 Workflow Adapter，也不叫 `--safe`。
+`--recovery` 无条件覆盖 `--policy`、`--trust-project` 与 `--workflow`，强制 `Standard ⋅ Host`、拒绝需提升审批的工具、global-only settings/models，并且完全不读取项目 Policy 配置；Pi ResourceLoader 同时禁用 extensions、skills、prompt templates、themes 与 project context files，界面会明确显示 `Recovery`。它不加载 Workflow Adapter，也不叫 `--safe`。
 
 ## Workflow Adapter Bootstrap
 
@@ -332,7 +332,7 @@ Loader 在 import 前验证 archive digest、bundle/runtime manifest digest、re
 图片附件已接入真实模型提交。本机使用 `Ctrl+V` 或 `Alt+V` 读取图片剪贴板；Linux 只以固定参数调用 Wayland `wl-paste` 或 X11 `xclip`，macOS 使用 `pngpaste`。附件显示为原子节点：
 
 ```text
-〔登录页-修改前 · 1440×900 · PNG〕
+〔登录页-修改前 ⋅ 1440x900 ⋅ PNG〕
 ```
 
 选中节点后可用 `F2` 重命名、`F3` 预览、`Delete` 移除、`F4` 保存到项目。缓存默认位于：
@@ -383,7 +383,9 @@ npm run smoke
 npm audit
 ```
 
-依赖固定在 pi `0.84.1`。VSPi 自有渲染、状态机和 SDK adapter 相互分离；升级 pi 时必须通过终端快照、适配契约和 80×24 回归测试。当前 lockfile 使用 `protobufjs 7.6.5`，`npm audit --omit=dev` 报告 0 个漏洞。
+依赖固定在 pi `0.84.1`。VSPi 自有渲染、状态机和 SDK adapter 相互分离；升级 pi 时必须通过终端快照、适配契约和 80x24 回归测试。当前 lockfile 使用 `protobufjs 7.6.5`，`npm audit --omit=dev` 报告 0 个漏洞。
+
+VSPi 自有 UI chrome（状态行、面板边框、Markdown 装饰、splash 与附件标记）只使用窄宽度字形；East Asian Ambiguous 字符一律替换为等价窄字符，保证在把 ambiguous 按宽渲染的中文终端上光标定位与行宽计算仍然精确。regular 模式的 resume 会把恢复的完整历史写入原生 scrollback；stable-commit 前缀校验失败时在固定重试后重建渲染面再提交，不再静默丢弃未提交内容。
 
 ## v1 边界
 

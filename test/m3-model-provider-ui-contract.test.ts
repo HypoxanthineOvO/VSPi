@@ -114,7 +114,7 @@ describe("M3 Provider and Model 80x24 interaction contract", () => {
       setProviders(providers: unknown[]): void;
     };
     panel.setProviders([
-      { id: "openai", label: "OpenAI", protocol: "Responses", status: "已配置", detail: "Global · stored" },
+      { id: "openai", label: "OpenAI", protocol: "Responses", status: "已配置", detail: "Global ⋅ stored" },
     ]);
     panel.open("providers");
     const action = panel.handleInput("\r") as { type?: string; actions?: string[] } | undefined;
