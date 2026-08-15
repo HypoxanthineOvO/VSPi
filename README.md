@@ -256,6 +256,11 @@ Provider Enter 只打开本地 action menu，不会隐式验证。`check-config`
 
 Provider catalog 按 built-in、Pi global `models.json`、trusted project `.vspi/models.json` 合并，模型按 id 稳定 override。项目默认不受信任；只有命令行显式传入 `--trust-project`，VSPi 才以 `SettingsManager.create(..., { projectTrusted: true })` 为启动时 workspace realpath 启用项目资源。该 trust 不通过环境变量自动授予，也不会在 Session 切换到其他 cwd 时继承。无 flag 时项目 Provider overlay 和 `.vspi/settings.json` 不读取，Provider、project settings 与 project defaults 的保存都会拒绝；global settings 始终可用。
 
+OpenAI Completions 模型显式声明 `compat.supportsStrictMode=false` 时，VSPi 在 provider request
+边界从工具 schema 的 wire copy 中移除 `min/maxLength` 与 `min/maxItems`。原始 TypeBox schema
+仍用于 host-side 工具参数校验；该兼容层避免 llama.cpp 把大型嵌套边界展开成超过阈值的
+GBNF grammar，同时不会改变其他 Provider 或工具的结构、required 字段和执行权限。
+
 项目层禁止 API key、token、secret、credential、命令值和敏感 header；Provider/model 协议必须映射到四个原生协议，模型 input 只能是包含 `text` 的非空 `text/image` 集合。Provider 编辑器保存新 protocol 时会移除同一项目 Provider/模型上的旧 `api`；runtime 的确定性优先级是 `protocol > api`，因此旧 api-only 文件仍可导入，而新选择不会被旧 wire API 覆盖。保存使用 canonical SHA-256 expected-hash 并发检查与 0600 临时文件原子 rename。Provider、VSPi settings 与 runtime defaults 的项目路径都会对 `.vspi`、目标、lock（适用时）和临时文件执行 `lstat`，并在 mkdir/rename 前后复验 realpath 仍位于 workspace；symlink scope 会 fail closed。损坏 JSON 会 fail closed，绝不自动覆盖。
 
 ## Execution Policy 与 Recovery

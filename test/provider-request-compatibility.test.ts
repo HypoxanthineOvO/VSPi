@@ -1,0 +1,84 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  createProviderRequestCompatibilityExtension,
+  sanitizeOpenAiToolSchemaBounds,
+} from "../src/providers/request-compatibility.js";
+
+describe("provider request compatibility", () => {
+  it("removes only repetition bounds from OpenAI function parameter schemas", () => {
+    const payload = {
+      model: "local-model",
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "plan_update",
+            parameters: {
+              type: "object",
+              properties: {
+                title: { type: "string", minLength: 1, maxLength: 2_000 },
+                items: {
+                  type: "array",
+                  minItems: 1,
+                  maxItems: 500,
+                  items: { type: "string", minLength: 1, maxLength: 500 },
+                },
+                count: { type: "integer", minimum: 1, maximum: 500 },
+              },
+              required: ["title", "items"],
+              additionalProperties: false,
+            },
+          },
+        },
+      ],
+    };
+
+    const sanitized = sanitizeOpenAiToolSchemaBounds(payload);
+    expect(sanitized).not.toBe(payload);
+    expect(JSON.stringify(sanitized)).not.toMatch(/minLength|maxLength|minItems|maxItems/);
+    expect(sanitized).toMatchObject({
+      tools: [
+        {
+          function: {
+            parameters: {
+              properties: { count: { minimum: 1, maximum: 500 } },
+              required: ["title", "items"],
+              additionalProperties: false,
+            },
+          },
+        },
+      ],
+    });
+    expect(payload.tools[0]?.function.parameters.properties.title.maxLength).toBe(2_000);
+  });
+
+  it("keeps payload identity when no OpenAI function schema needs sanitizing", () => {
+    const payload = { tools: [{ type: "custom", name: "shell" }] };
+    expect(sanitizeOpenAiToolSchemaBounds(payload)).toBe(payload);
+  });
+
+  it("applies only to explicitly non-strict OpenAI Completions models", async () => {
+    let handler: ((event: { payload: unknown }, context: { model?: unknown }) => unknown) | undefined;
+    const on = vi.fn((event, registered) => {
+      if (event === "before_provider_request") handler = registered;
+    });
+    createProviderRequestCompatibilityExtension()({ on } as never);
+    const payload = {
+      tools: [
+        {
+          type: "function",
+          function: { name: "question", parameters: { type: "string", maxLength: 2_000 } },
+        },
+      ],
+    };
+
+    expect(handler).toBeTypeOf("function");
+    expect(
+      await handler?.({ payload }, { model: { api: "openai-completions", compat: { supportsStrictMode: false } } }),
+    ).not.toBe(payload);
+    expect(
+      await handler?.({ payload }, { model: { api: "openai-completions", compat: { supportsStrictMode: true } } }),
+    ).toBeUndefined();
+    expect(await handler?.({ payload }, { model: { api: "openai-responses" } })).toBeUndefined();
+  });
+});
