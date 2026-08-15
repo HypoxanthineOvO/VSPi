@@ -86,7 +86,7 @@ describe("M1 new-session Splash ownership", () => {
       expect(cleared).not.toContain("OLD_TRANSCRIPT_SENTINEL");
       expect(cleared).not.toContain("Plan");
       expect(cleared).not.toMatch(/Workflow|当前计划为空/);
-      expect(cleared).toMatch(/╭─+╮[\s\S]*╰─+╯/u);
+      expect(cleared).toMatch(/\+-+\+[\s\S]*\+-+\+/u);
       expect(writes).toEqual([]);
 
       app.composer.setText("first message after reset");

@@ -4,7 +4,7 @@
 
 VSPi v1 是工作型终端界面，不使用营销页、装饰卡片或多层模态框。默认 fullscreen 使用应用内 Transcript viewport 与固定 dock；regular 回退保留终端原生 scrollback。应用不改变终端字体，只使用 ANSI 前景色、背景色和文本属性。
 
-最低布局为 `80×24`。低于 80 列仍保持所有行宽安全，但只作为紧急降级，不作为完整验收面。终端能力分为：
+最低布局为 `80x24`。低于 80 列仍保持所有行宽安全，但只作为紧急降级，不作为完整验收面。终端能力分为：
 
 1. truecolor + Unicode：完整色值、圆角框、分级符号、终端图片。
 2. 256 色 + Unicode：近似色、圆角框、分级符号、图片按终端协议检测。
@@ -28,7 +28,7 @@ Plan 背景       #182529
 用户消息正文    #F4F7FA
 ```
 
-颜色从不单独承担状态：成功、当前、未开始和错误同时使用 `✓ / ● / ○ / ×`。
+颜色从不单独承担状态：成功、当前、未开始和错误同时使用 `✓ / ◉ / ◦ / x`。
 
 ## 启动封面
 
@@ -37,74 +37,74 @@ Plan 背景       #182529
 最终帧等待应用初始化完成，使用真实 Model、包版本、Backend 与独立 Policy；真实后端显示 `Backend Pi`，离线后端显示 `Backend Fixture`。Fullscreen 将 Splash/Transcript 放入 upstream `ScrollView`，Panel/Composer/Status 保持在 dock。Regular 中 Splash、Transcript、面板、Composer 与 Status 共享物理瀑布，内容触底后才通过 linefeed 推入原生 scrollback；不得用顶部 padding 固定 Composer。两种 renderer 可在 Settings 中切换且不替换 Session/draft；退出必须恢复原屏。
 
 ```text
-╭──────────────────────────────────────────────────────────────────────────────╮
-│ ◈ VSPi                                                                       │
-│                                                                              │
-│   ██╗   ██╗███████╗██████╗ ██╗                                               │
-│   ██║   ██║██╔════╝██╔══██╗██║                                               │
-│   ██║   ██║███████╗██████╔╝██║                                               │
-│   ╚██╗ ██╔╝╚════██║██╔═══╝ ██║                                               │
-│    ╚████╔╝ ███████║██║     ██║                                               │
-│     ╚═══╝  ╚══════╝╚═╝     ╚═╝                                               │
-│                                                                              │
-│ Model  OpenAI / GPT-5.4                                                      │
-│ Backend Pi                                                                   │
-│ Policy Standard · Host                                                 v0.6.0│
-╰──────────────────────────────────────────────────────────────────────────────╯
++‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒+
+❘ ◈ VSPi                                                                       ❘
+❘                                                                              ❘
+❘   ██╗   ██╗███████╗██████╗ ██╗                                               ❘
+❘   ██║   ██║██╔════╝██╔══██╗██║                                               ❘
+❘   ██║   ██║███████╗██████╔╝██║                                               ❘
+❘   ╚██╗ ██╔╝╚════██║██╔═══╝ ██║                                               ❘
+❘    ╚████╔╝ ███████║██║     ██║                                               ❘
+❘     ╚═══╝  ╚══════╝╚═╝     ╚═╝                                               ❘
+❘                                                                              ❘
+❘ Model  OpenAI / GPT-5.4                                                      ❘
+❘ Backend Pi                                                                   ❘
+❘ Policy Standard ⋅ Host                                                 v0.6.0❘
++‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒+
 ```
 
 ## 主界面
 
 ```text
-╭ Plan ────────────────────────────────────────────────────────────────────────╮
-│                                                                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
++ Plan ‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒+
+❘                                                                              ❘
++‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒+
 Shift+Tab 下一个区域
-╭──────────────────────────────────────────────────────────────────────────────╮
-│ 输入内容                                                                     │
-╰──────────────────────────────────────────────────────────────────────────────╯
++‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒+
+❘ 输入内容                                                                     ❘
++‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒+
 Model OpenAI / GPT-5.4  Effort High                     Context 50K / 128K 39%  
-/workspace/vspi · Policy Standard · Host            Token ↑12k ↓3.0k  Cost ¥1.01
+/workspace/vspi ⋅ Policy Standard ⋅ Host            Token ▴12k ▾3.0k  Cost ¥1.01
 ```
 
 80 列普通 Status 区固定为两行：第一行语义固定为 `Model / Effort / Context`；第二行直接从路径值开始，再显示 `Policy / Token / Cost`，不显示 `Path` 标题。Backend 不进入动态行，只存在于永久 Splash 和诊断信息。五个字段标签与字段值、以及无标题路径值分别着色；80/120 列的路径 flex 区从右侧保留完整 Policy/Boundary suffix，只有 Model 与路径变量值可截断。默认的新会话动态界面为空，不加载或预置对话、工具消息；空 Plan 只保留标题与留白，不显示 Workflow 缺失或初始化提示。`Shift+Tab` 在 Composer、Transcript、Plan 间循环，Transcript 为空时直接跳到 Plan。后文出现的消息、工具与 active telemetry 均为“交互示例”，不是启动内容。显式离线入口 `VSPi_FIXTURE=1` 或 `VSPi_BACKEND=fixture` 的真实模型标签是 `Offline Fixture`，但不作为主界面的模型示例；正常启动若 Pi 模型配置缺失或损坏会显示 setup error，不会静默切换到 Fixture。
 
 自更新由 `/update` 与 `vspi update` 共同提供；只接受 VSPi 公共 GitLab 项目的稳定 SemVer Release，并在 npm 全局安装前校验固定资产地址和 SHA-256。
 
-主界面末端的顺序固定为 Plan bottom → contextual hint → 运行时 Working 活动带（仅 active 时）→ composer → 两行 status。hint 位于面板框外；Working 是独立的全宽状态层，不挤入 Effort 或其他 telemetry 字段，也不会抢 composer 焦点。普通 Composer 模式最多保留三个终端高度的活动瀑布，完全越过 viewport 的稳定前缀通过坐标 rebase 退出活动布局；Inspect 使用单屏窗口，保证当前选择可见。
+主界面末端的顺序固定为 Plan bottom ⟶ contextual hint ⟶ 运行时 Working 活动带（仅 active 时）⟶ composer ⟶ 两行 status。hint 位于面板框外；Working 是独立的全宽状态层，不挤入 Effort 或其他 telemetry 字段，也不会抢 composer 焦点。普通 Composer 模式最多保留三个终端高度的活动瀑布，完全越过 viewport 的稳定前缀通过坐标 rebase 退出活动布局；Inspect 使用单屏窗口，保证当前选择可见。
 
 ## M1 Context 与 Usage
 
-`Context` 描述当前上下文占用，不是累计账单：它同时展示 current/used tokens、模型 context window（窗口）与 percent（百分比）。`Token ↑… ↓…` 独立展示当前 session 的 cumulative（累计）输入和输出；压缩会改变 Context，却不会重置累计 Token 与费用。
+`Context` 描述当前上下文占用，不是累计账单：它同时展示 current/used tokens、模型 context window（窗口）与 percent（百分比）。`Token ▴... ▾...` 独立展示当前 session 的 cumulative（累计）输入和输出；压缩会改变 Context，却不会重置累计 Token 与费用。
 
 ```text
-活动    Context 50K / 128K 39%   Token ↑12K ↓3K
-空容量  Context 0K / 0K 0%      Token ↑0 ↓0
-未知    Context ?K / 128K ?%     Token ↑12K ↓3K
+活动    Context 50K / 128K 39%   Token ▴12K ▾3K
+空容量  Context 0K / 0K 0%      Token ▴0 ▾0
+未知    Context ?K / 128K ?%     Token ▴12K ▾3K
 ```
 
 pi adapter 用 `getContextUsage()` 读取当前占用 token 和窗口，并由原始 token/window 计算百分比；SDK 自带 percent 不作为显示真值。`getSessionStats()` 单独提供累计 input、output 与 cost。窗口为 0 时显式输出 `0K / 0K 0%`；窗口已知但当前 token 暂不可估时输出 `?K / 128K ?%`。
 
 `K` 按十进制千 token 格式化：0 固定为 `0K`，10K 以下保留一位小数，10K 及以上四舍五入为整数。百分比直接用未格式化的原始 token/window 计算，不能从已经舍入的 `K` 文本反算。
 
-Status 响应式规则按固定区的内容预算计算，不使用只对单个样例有效的绝对 anchor。Model 与 Effort 组成连续左侧轨道，两者固定只隔两个空格；空间不足时只截断 Model，并在 Effort 与 Context 之间保留至少一个可见分隔单元。80/120 列从右向左预留：Context 最少 24 列并可为批准最大值扩到 25；Cost 最少 10 列并可扩到 13，Token 18。无标题路径获得第二行所有剩余空间，其完整 `Policy <name> · Host` 是不可截断 suffix；长 Model/路径只截断各自变量值。代表最大值 `Context 999K / 1000K 100%`、`Token ↑999k ↓999k` 和 `Cost ¥9999.99` 在 80/120 列必须完整且不重叠。
+Status 响应式规则按固定区的内容预算计算，不使用只对单个样例有效的绝对 anchor。Model 与 Effort 组成连续左侧轨道，两者固定只隔两个空格；空间不足时只截断 Model，并在 Effort 与 Context 之间保留至少一个可见分隔单元。80/120 列从右向左预留：Context 最少 24 列并可为批准最大值扩到 25；Cost 最少 10 列并可扩到 13，Token 18。无标题路径获得第二行所有剩余空间，其完整 `Policy <name> ⋅ Host` 是不可截断 suffix；长 Model/路径只截断各自变量值。代表最大值 `Context 999K / 1000K 100%`、`Token ▴999k ▾999k` 和 `Cost ¥9999.99` 在 80/120 列必须完整且不重叠。
 
 Status 的短模型样例左右锚是：80 列第一行 `Model 0 / Effort 24 / Context 56`、第二行 `路径值 0 / Token 52 / Cost 70`；120 列第一行 `Model 0 / Effort 24 / Context 96`、第二行 `路径值 0 / Token 92 / Cost 110`；40 列使用原生 `High` 时第一行是 `Model 0 / Effort 13 / Context 25`，第二行是 `路径值 0 / Token 20 / Cost 32`。Effort 的位置随 Model 与原生档位名的实际宽度变化，但固定小间距不变；Context/Token/Cost 的右锚不受 Model 或路径长度影响。长路径只截断自身，不会推动 Token/Cost；代表最大值会按前述预算扩展固定区，因此这些坐标不是 max case 的硬编码常量。
 
-40 列 emergency 仍恰好两行：第一行 `Model / Effort / Context` 在 `High` 档位下从 `0 / 13 / 25` 开始，第二行从路径值开始，`Token / Cost` 从 `20 / 32` 开始。它保留五个有色标签、直接路径值与语义顺序，可以省略 busy/mode、Context token/window 与 Token output；无法容纳的高位费用使用明确的 `Cost …` omission marker，不能显示会被误解为未知数据的 `Cost ?`。Model/路径变量值仍按各自 flex 宽度截断。Backend 与 Policy 可由永久 Splash 提供完整真相。
+40 列 emergency 仍恰好两行：第一行 `Model / Effort / Context` 在 `High` 档位下从 `0 / 13 / 25` 开始，第二行从路径值开始，`Token / Cost` 从 `20 / 32` 开始。它保留五个有色标签、直接路径值与语义顺序，可以省略 busy/mode、Context token/window 与 Token output；无法容纳的高位费用使用明确的 `Cost ...` omission marker，不能显示会被误解为未知数据的 `Cost ?`。Model/路径变量值仍按各自 flex 宽度截断。Backend 与 Policy 可由永久 Splash 提供完整真相。
 
 120 列 literal 状态行：
 
 ```text
 Model OpenAI / GPT-5.4  Effort High                                                             Context 50K / 128K 39%  
-/workspace/vspi · Policy Standard · Host                                                    Token ↑12k ↓3.0k  Cost ¥1.01
+/workspace/vspi ⋅ Policy Standard ⋅ Host                                                    Token ▴12k ▾3.0k  Cost ¥1.01
 ```
 
 40 列 emergency 状态行：
 
 ```text
-Model Open…  Effort High Context 39%    
-/workspace/vspi     Token ↑12k  Cost ¥1 
+Model Op...  Effort High Context 39%    
+/workspace/vspi     Token ▴12k  Cost ¥1 
 ```
 
 ## M1 命令身份与补全
@@ -117,7 +117,7 @@ Command 以 canonical id 作为唯一执行身份。canonical `/new` 的 alias �
 
 插件/扩展命令同样显示 canonical 与 alias 关系，并在 source 列保留 package 来源，例如 `@acme/deploy`，Enter 返回 canonical command。单独输入 `/` 打开完整命令目录，但 slash 和目录中的所有 cell 都不强调。composer 与 Command 面板的匹配前缀都有颜色，并叠加粗体、下划线、反显（bold / underline / inverse）作为非颜色 SGR 信号；即使 cursor 位于 slash token 中间，匹配字符仍保持强调，普通文本不强调。
 
-`Tab` 是唯一补全键，只补全无参数的单一 slash token，且要求唯一候选：`/ex → /exit` 的强调范围只强调 `ex`，斜杠与 `it` 普通；`/qui → /quit` 只强调 `qui`，斜杠与 `t` 普通；`/ses → /sessions`、`/provi → /providers`、`/cl → /clear`。同一 command 的多个 token 候选、已有参数和普通文本均不改写；`Tab` 不会执行命令，也不写入 history（历史记录），空输入时 transcript Inspect 仍优先。若同一个 exact token 或 alias 指向两个不同 canonical command，domain resolver 与 Command 面板 Enter 都必须 fail closed；同一 canonical 的重复 token 仍按唯一执行身份处理。
+`Tab` 是唯一补全键，只补全无参数的单一 slash token，且要求唯一候选：`/ex ⟶ /exit` 的强调范围只强调 `ex`，斜杠与 `it` 普通；`/qui ⟶ /quit` 只强调 `qui`，斜杠与 `t` 普通；`/ses ⟶ /sessions`、`/provi ⟶ /providers`、`/cl ⟶ /clear`。同一 command 的多个 token 候选、已有参数和普通文本均不改写；`Tab` 不会执行命令，也不写入 history（历史记录），空输入时 transcript Inspect 仍优先。若同一个 exact token 或 alias 指向两个不同 canonical command，domain resolver 与 Command 面板 Enter 都必须 fail closed；同一 canonical 的重复 token 仍按唯一执行身份处理。
 
 以下结构标记逐 cell 记录普通与强调范围，可直接重构可见 token：
 
@@ -129,9 +129,9 @@ Command 响应式规则：40 列使用“身份行 + 描述/source 行”的两�
 
 ## M1 Contextual Hints
 
-contextual hint 只宣告当前真实可用的操作。普通面板 hint 位于 frame 外、composer 上方；Sessions 接管主内容区时把 `↑↓ / Enter / Shift+F / Esc` 放入底边并保留 Status，不渲染 Transcript、Plan、Composer 或 Working，同时在终端底部预留一个物理行，避免首次绘制把标题推出视口。Command 的 literal 文案固定为 `↑↓ 选择  Tab 补全  Enter 执行  Esc 关闭`；Plan、Provider、Settings、Usage、Theme、Question 与 Model 使用各自的上下文提示，未接入动作不得出现在 hint 中。
+contextual hint 只宣告当前真实可用的操作。普通面板 hint 位于 frame 外、composer 上方；Sessions 接管主内容区时把 `▴▾ / Enter / Shift+F / Esc` 放入底边并保留 Status，不渲染 Transcript、Plan、Composer 或 Working，同时在终端底部预留一个物理行，避免首次绘制把标题推出视口。Command 的 literal 文案固定为 `▴▾ 选择  Tab 补全  Enter 执行  Esc 关闭`；Plan、Provider、Settings、Usage、Theme、Question 与 Model 使用各自的上下文提示，未接入动作不得出现在 hint 中。
 
-Model 以外层 60 列为 breakpoint：小于 60 列是窄屏列表/详情布局，hint 显示 `←→ 详情`，Right 进入详情、Left 返回；外层 60 列及以上是宽屏双栏，左侧列表、右侧详情，hint 不宣告无效的左右切换。
+Model 以外层 60 列为 breakpoint：小于 60 列是窄屏列表/详情布局，hint 显示 `◂⟶ 详情`，Right 进入详情、Left 返回；外层 60 列及以上是宽屏双栏，左侧列表、右侧详情，hint 不宣告无效的左右切换。
 
 v0.6 的生产命令清单是：
 
@@ -152,11 +152,11 @@ v0.6.0 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动
 
 ```text
 
-▌  message
+▮  message
 
 ```
 
-回答只用弱化的 `•` 标记开始。Transcript 按后端事件只追加，每个节点有稳定 ID。完整 Session 历史不删除；fullscreen tail-follow 反向读取最近最多 80 个内容块/60K 字符，regular 活动瀑布最多三个终端高度，逐消息/工具组 cache 避免 Working frame 重复解析。Inspect/锚点浏览使用精确历史索引。`thinkingDisplay` 提供隐藏、折叠、展开三态；可选翻译只改变展示。Tool 组在运行中展示完整树，完成后由 `collapseTools` 决定是否收束。Markdown 标题使用内容蓝色前景和字重，不增加背景块。
+回答只用弱化的 `▪` 标记开始。Transcript 按后端事件只追加，每个节点有稳定 ID。完整 Session 历史不删除；fullscreen tail-follow 反向读取最近最多 80 个内容块/60K 字符，regular 活动瀑布最多三个终端高度，逐消息/工具组 cache 避免 Working frame 重复解析。Inspect/锚点浏览使用精确历史索引。`thinkingDisplay` 提供隐藏、折叠、展开三态；可选翻译只改变展示。Tool 组在运行中展示完整树，完成后由 `collapseTools` 决定是否收束。Markdown 标题使用内容蓝色前景和字重，不增加背景块。
 
 ## Composer
 
@@ -165,7 +165,7 @@ composer 正文空态为一行，随内容增长，最多显示 10 行；之后�
 附件节点有三态：光标在左侧、整块选中、光标在右侧。选中时状态行替换为：
 
 ```text
-〔登录页-修改前〕  重命名 · 预览 · 移除 · 保存到项目
+〔登录页-修改前〕  重命名 ⋅ 预览 ⋅ 移除 ⋅ 保存到项目
 ```
 
 删除附件同时删除缓存文件和 manifest 条目；保存到项目只由显式用户动作触发。附件缓存按真实 Pi session id 隔离；manifest 恢复和 `readBase64`/Pi image payload 的每次读取都使用非跟随 symlink 的文件句柄，并复验 session containment、普通文件、inode、实际大小、MIME magic 和图片尺寸。Pi 在这些检查完成前不会调用 `session.prompt`。项目保存逐级验证 project、`.vspi` 与 `attachments` 是未变化的真实目录，拒绝 symlink，并使用同目录 `O_EXCL|O_NOFOLLOW` 临时文件和原子 rename。Session reset 会切换并恢复对应 manifest 的 composer 节点，epoch 校验阻止较慢的旧恢复覆盖新会话。AttachmentService 的 store 操作和 switch 使用同一队列；switch 请求同步推进 generation，使旧 paste/Bridge delivery 在 callback 前回滚。retention cleanup 只删除超过期限且不在 retain list 中的 session 目录。
@@ -177,7 +177,7 @@ Markdown 以 Pi 0.84 upstream renderer/LaTeX 为基础，再应用 VSPi 主题�
 - H1/H2：焦点青、粗体、下划线。
 - H3 及以下：彩色粗体，保留层级前缀。
 - 有序列表：序号后一个空格；续行与正文首列对齐。
-- 无序列表：一级 `•`、二级 `◦`、三级 `▪`，继续嵌套时循环。
+- 无序列表：一级 `▪`、二级 `◦`、三级 `▪`，继续嵌套时循环。
 - 粗体、斜体、删除线和链接使用终端原生属性；不支持的属性自然降级。
 - 行内代码使用琥珀前景与代码背景。
 - fenced code 使用整行背景、语言标签和语法色；流式未闭合 fence 不闪烁。
@@ -194,17 +194,17 @@ Plan、Commands、Model、Provider、Sessions、历史导入、Skills、Settings
 
 Skills 工作区使用“已启用 / 可导入 / 问题”Tab、搜索和列表/详情布局；外层 58 列以下用 Enter 进入详情、Esc 返回。Pi Native ResourceLoader/SettingsManager/DefaultPackageManager 是唯一资源与包真相源。Codex/Claude Code Skill 只登记原始 `SKILL.md` 路径；Git/npm 安装固定 `autoload: false`，extension、prompt、theme 为空，只允许包目录内发现的 Skill pattern。所有 mutation 先通过 Question；安装确认包含“安装并启用 / 仅安装 / 取消”。`skill_list` 与 `skill_manage` 进入模型工具表，但管理调用仍不能绕过 Question。失败安装原子回滚，既有包不被清理，URL 凭据在面板、diagnostic 和错误中脱敏。MCP 保持独立后续版本，不在此工作区注册。
 
-M3 已将 Model 接到 Pi ModelRuntime 真相源。Model 有“选择模型 / 模型组”两个横向 Tab。外层 60 列及以上固定为左侧模型/模型组列表、右侧详情/角色，内部使用一个稳定的 `│` 分隔；上下移动只替换右侧内容，行数不变。CNY/人民币价格仅出现在单模型右侧详情，模型组右侧不出现 `¥`，并且`不显示汇率参考行`。Enter 只提出选择；必须等待 `session.setModel()` 成功后才更新勾选、Model、vision、Context 和 Profile model identity。
+M3 已将 Model 接到 Pi ModelRuntime 真相源。Model 有“选择模型 / 模型组”两个横向 Tab。外层 60 列及以上固定为左侧模型/模型组列表、右侧详情/角色，内部使用一个稳定的 `❘` 分隔；上下移动只替换右侧内容，行数不变。CNY/人民币价格仅出现在单模型右侧详情，模型组右侧不出现 `¥`，并且`不显示汇率参考行`。Enter 只提出选择；必须等待 `session.setModel()` 成功后才更新勾选、Model、vision、Context 和 Profile model identity。
 
 ```text
-╭ Model ───────────────────────────────────────────────────────────────────────╮
-│ 选择模型   模型组                                                            │
-│› ✓ GPT-5.4 ◉                 │GPT-5.4                                        │
-│    Kimi K3 ◉                 │Provider  OpenAI  Model ID  gpt-5.4            │
-│    Kimi K2.5 ◉               │能力  文本 · 图片  Effort  Off / Low / High   │
-│    GLM-5                     │发布  2026-06-30                               │
-│    Qwen3 Coder               │输入 ¥14.36 / 百万  输出 ¥57.44 / 百万         │
-╰──────────────────────────────────────────────────────────────────────────────╯
++ Model ‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒+
+❘ 选择模型   模型组                                                            ❘
+❘› ✓ GPT-5.4 ◉                 ❘GPT-5.4                                        ❘
+❘    Kimi K3 ◉                 ❘Provider  OpenAI  Model ID  gpt-5.4            ❘
+❘    Kimi K2.5 ◉               ❘能力  文本 ⋅ 图片  Effort  Off / Low / High   ❘
+❘    GLM-5                     ❘发布  2026-06-30                               ❘
+❘    Qwen3 Coder               ❘输入 ¥14.36 / 百万  输出 ¥57.44 / 百万         ❘
++‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒+
 ```
 
 外层小于 60 列（包括 40 列紧急窄屏）默认只显示列表且不显示价格，`Right` 切为详情视图，`Left` 回到列表；`Tab` 切换模型/模型组并重置为列表。Enter 在两种视图中都选择当前项。Provider 在 80 列同样使用左列表/右详情。Provider action menu 按 Pi 元数据增加订阅登录、API Key 和移除凭据；API Key 在独立认证层中遮蔽输入，Esc abort，Secret 不进入 transcript、notice 或诊断。Provider URL/协议编辑仍不收集 secret，`Ctrl+S` 是唯一保存键。离线 check-config、显式 test-connection、二次费用确认后的 minimal-generation 是三个不同动作。
@@ -240,7 +240,7 @@ Question、审批、Effort、Settings、预览和 Inspect 共享底部工作区�
 
 保存结果与短时状态临时替换固定 contextual hint 行，约 3.5 秒后恢复；出现和消失前后总布局高度不变，不创建 overlay，也不改变 composer 焦点。
 
-`--recovery` 在任何 `--policy`/`--trust-project`/`--workflow` 之前生效，固定 `Standard · Host`、拒绝需提升审批的工具、`trustedProject:false`、`global-only`。VSPi project Policy/settings/Provider/defaults 不读取；Pi services 同时使用 `noExtensions/noSkills/noPromptTemplates/noThemes/noContextFiles`。Splash 和状态区显示 Recovery，不能从 Policy Panel 切走。
+`--recovery` 在任何 `--policy`/`--trust-project`/`--workflow` 之前生效，固定 `Standard ⋅ Host`、拒绝需提升审批的工具、`trustedProject:false`、`global-only`。VSPi project Policy/settings/Provider/defaults 不读取；Pi services 同时使用 `noExtensions/noSkills/noPromptTemplates/noThemes/noContextFiles`。Splash 和状态区显示 Recovery，不能从 Policy Panel 切走。
 
 Workflow bootstrap 使用 TypeScript adapter 包裹同进程 ESM JavaScript Core。只有显式 `--workflow` 才进入 loader；loader 以绝对安装根、原始 portable archive、accepted source commit、archive SHA-256、bundle manifest SHA-256 与 runtime manifest SHA-256 为一组不可拆分的 identity 输入。import 前验证 release descriptor、manifest identity、全部声明 Core 文件和 materialized runtime dependency 字节，要求 bundle manifest 绑定 descriptor/Core root export，并拒绝 `node_modules` 未声明文件或 symlink；import 后检查 required exports。显式启用后，`/plan` 只读展示真实 foreground Delivery、revision、status、plan hash 与 Milestone；`/hw:init`、`/hw:resume`、`/hw:accept` 等 Receipt-bearing 生命周期命令不注册到 VSPi，authority 一律 deny。Recovery 在 loader/env discovery 之前分叉，永不读取或导入 Workflow bundle。
 
@@ -252,4 +252,4 @@ Settings 分别加载 Global 与 Project 层，Tab 切换只更换草稿，Enter
 
 ## 升级边界
 
-`pi-tui` 负责终端 I/O、差分更新、宽度算法、Editor/IME 和图片协议；VSPi 负责主题、布局、Markdown 规则、业务状态与面板。`pi-coding-agent` 只经 `ChatBackend` adapter 进入应用。上游升级必须保持 adapter contract，并重新运行完整 check/test/build/smoke、真实 SDK 启动和 80×24 PTY 检查。
+`pi-tui` 负责终端 I/O、差分更新、宽度算法、Editor/IME 和图片协议；VSPi 负责主题、布局、Markdown 规则、业务状态与面板。`pi-coding-agent` 只经 `ChatBackend` adapter 进入应用。上游升级必须保持 adapter contract，并重新运行完整 check/test/build/smoke、真实 SDK 启动和 80x24 PTY 检查。

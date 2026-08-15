@@ -53,7 +53,7 @@ describe("status rendering", () => {
     expect(stripAnsi(lines[1] ?? "")).toMatch(/^\/home\/heyx/);
     expect(rendered).not.toMatch(/\bPath\b/);
     expect(rendered).not.toContain(LONG_CWD);
-    expect(rendered).toContain("…");
+    expect(rendered).toContain("...");
   });
 
   it("retains the emergency identity fields at 40 columns", () => {

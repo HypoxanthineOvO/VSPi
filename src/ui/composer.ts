@@ -27,7 +27,9 @@ export interface ComposerActivity {
   reducedMotion: boolean;
 }
 
-const BALL_FRAMES = ["○", "◉", "●", "⬤", "●", "◉"] as const;
+// 所有帧都必须是 neutral 宽度字符：East Asian Ambiguous 字符（○●x）在
+// 「ambiguous 按宽渲染」的中文终端里实际占 2 列，会导致输入框行溢出与光标错位。
+const BALL_FRAMES = ["◦", "◌", "◉", "⬤", "◉", "◌"] as const;
 const BRAILLE_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"] as const;
 
 export type AttachmentCursorState = "left" | "selected" | "right";
@@ -194,7 +196,7 @@ export class Composer implements Component, Focusable {
     access.state.cursorCol = originalCursorCol;
     let body = raw.slice(1, -1);
     if (this.editor.getText() === "" && body[0]) {
-      body[0] = `${body[0]}${this.theme.muted(" 输入消息…")}`;
+      body[0] = `${body[0]}${this.theme.muted(" 输入消息...")}`;
     }
     body = body.map((line) => this.styleAttachmentMarkers(line));
     body = this.styleSlashCommand(body);
@@ -202,25 +204,31 @@ export class Composer implements Component, Focusable {
     let hiddenAbove = 0;
     let hiddenBelow = 0;
     if (body.length > 10) {
-      const cursorIndex = Math.max(
-        0,
-        body.findIndex((line) => line.includes(CURSOR_MARKER) || line.includes("\u001b[7m")),
-      );
+      // CURSOR_MARKER 是权威定位；高亮改写行内 ANSI 后可能找不到 marker，
+      // 此时退回用 editor 逻辑行 + 折行估算定位，避免 10 行窗口以错行居中。
+      let cursorIndex = body.findIndex((line) => line.includes(CURSOR_MARKER) || line.includes("\u001b[7m"));
+      if (cursorIndex < 0) {
+        const textWidth = Math.max(1, innerWidth - 2);
+        let rows = 0;
+        for (const [lineIndex, line] of access.state.lines.entries()) {
+          if (lineIndex === access.state.cursorLine) break;
+          rows += Math.max(1, Math.ceil(visibleWidth(line) / textWidth));
+        }
+        cursorIndex = rows;
+      }
       const start = Math.max(0, Math.min(cursorIndex - 5, body.length - 10));
       hiddenAbove = start;
       hiddenBelow = body.length - start - 10;
       body = body.slice(start, start + 10);
     }
 
-    const chars = this.theme.capabilities.unicode
-      ? { tl: "╭", tr: "╮", bl: "╰", br: "╯", h: "─", v: "│" }
-      : { tl: "+", tr: "+", bl: "+", br: "+", h: "-", v: "|" };
-    const hiddenLabel = hiddenAbove > 0 ? `↑ ${hiddenAbove}` : "";
+    const chars = { tl: "+", tr: "+", bl: "+", br: "+", h: "-", v: "|" };
+    const hiddenLabel = hiddenAbove > 0 ? `▴ ${hiddenAbove}` : "";
     const activityLabel = activity ? this.workingLabel(activity) : "";
     const labelParts = [activityLabel, hiddenLabel].filter(Boolean).join("  ");
     const topLabel = labelParts ? ` ${labelParts} ` : "";
-    const clippedTopLabel = truncateToWidth(topLabel, innerWidth, "…");
-    const bottomLabel = hiddenBelow > 0 ? ` ↓ ${hiddenBelow} ` : "";
+    const clippedTopLabel = truncateToWidth(topLabel, innerWidth, "...");
+    const bottomLabel = hiddenBelow > 0 ? ` ▾ ${hiddenBelow} ` : "";
     const top = `${chars.tl}${clippedTopLabel}${chars.h.repeat(Math.max(0, innerWidth - visibleWidth(clippedTopLabel)))}${chars.tr}`;
     const bottom = `${chars.bl}${chars.h.repeat(Math.max(0, innerWidth - visibleWidth(bottomLabel)))}${bottomLabel}${chars.br}`;
     return [
@@ -242,7 +250,7 @@ export class Composer implements Component, Focusable {
         : (BALL_FRAMES[activity.frame % BALL_FRAMES.length] ?? BALL_FRAMES[0])
       : "*";
     const ball =
-      ballValue === "○"
+      ballValue === "◦" || ballValue === "◌"
         ? this.theme.muted(ballValue)
         : ballValue === "◉"
           ? this.theme.blue(ballValue)
@@ -271,7 +279,7 @@ export class Composer implements Component, Focusable {
   }
 
   private marker(attachment: Attachment): string {
-    return `〔${attachment.alias} · ${attachment.width}×${attachment.height} · ${attachment.mimeType.split("/")[1]?.toUpperCase()}〕`;
+    return `〔${attachment.alias} ⋅ ${attachment.width}x${attachment.height} ⋅ ${attachment.mimeType.split("/")[1]?.toUpperCase()}〕`;
   }
 
   private styleAttachmentMarkers(line: string): string {

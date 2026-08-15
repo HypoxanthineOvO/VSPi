@@ -10,7 +10,7 @@ export interface ActivityRailInput {
 
 export function renderActivityRail(input: ActivityRailInput, width: number, theme: VspiTheme): string {
   const indicator = theme.focus(theme.bold(input.indicator));
-  const text = truncateToWidth(`${indicator} ${theme.bold("Working")}`, Math.max(1, width), "…");
+  const text = truncateToWidth(`${indicator} ${theme.bold("Working")}`, Math.max(1, width), "...");
   return padLine(text, width);
 }
 
@@ -19,9 +19,9 @@ export function renderQueuedMessage(
   width: number,
   theme: VspiTheme,
 ): string {
-  const attachmentText = (message.attachments ?? []).map((attachment) => attachment.alias).join(" · ");
-  const content = [message.text.replace(/\s+/g, " ").trim(), attachmentText].filter(Boolean).join(" · ");
-  const left = `${theme.focus("▌")} ${theme.muted(content)}`;
+  const attachmentText = (message.attachments ?? []).map((attachment) => attachment.alias).join(" ⋅ ");
+  const content = [message.text.replace(/\s+/g, " ").trim(), attachmentText].filter(Boolean).join(" ⋅ ");
+  const left = `${theme.focus("▮")} ${theme.muted(content)}`;
   const right = theme.muted(theme.capabilities.unicode ? "↪" : ">");
   return theme.activitySurface(alignRight(left, right, width));
 }

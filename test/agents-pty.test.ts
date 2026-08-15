@@ -30,21 +30,21 @@ describe("real /agents PTY", () => {
     try {
       await harness.waitFor("Offline Fixture", 20_000);
       harness.write("/agents\r");
-      await harness.waitFor("Agents · Map", 10_000);
+      await harness.waitFor("Agents ⋅ Map", 10_000);
       expect(harness.screenText()).toContain("Map  Timeline  Tools  Pools");
       expect(harness.screenText()).toContain("limits d3");
 
       harness.write("\t");
-      await harness.waitFor("Agents · Timeline", 5_000);
+      await harness.waitFor("Agents ⋅ Timeline", 5_000);
       harness.write("\t");
-      await harness.waitFor("Agents · Tools", 5_000);
+      await harness.waitFor("Agents ⋅ Tools", 5_000);
       harness.write("\t");
-      await harness.waitFor("Agents · Pools", 5_000);
+      await harness.waitFor("Agents ⋅ Pools", 5_000);
 
       for (const columns of [80, 120]) {
         harness.resize(columns, 24);
         await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
-        expect(harness.screenText()).toContain("Agents · Pools");
+        expect(harness.screenText()).toContain("Agents ⋅ Pools");
       }
     } finally {
       harness.write("\u001b");

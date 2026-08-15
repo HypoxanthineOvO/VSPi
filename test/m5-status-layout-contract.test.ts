@@ -68,7 +68,7 @@ describe("M5 dynamic status layout", () => {
       expect(plain.join("\n")).not.toContain("Backend");
       if (width >= 80) {
         expect(plain[0]).not.toContain("Policy");
-        expect(plain[1]).toContain("Policy Standard · Sandboxed");
+        expect(plain[1]).toContain("Policy Standard ⋅ Sandboxed");
         expectOrder(plain[1] ?? "", ["Policy", "Token", "Cost"]);
       }
     }
@@ -84,11 +84,11 @@ describe("M5 dynamic status layout", () => {
     expect(identity).toContain("Context 999K / 1000K 100%");
     expect(telemetry).toMatch(/^\//);
     expect(telemetry).not.toMatch(/\bPath\b/);
-    expect(telemetry).toContain("Policy Standard · Sandboxed");
-    expect(telemetry).toContain("Token ↑999k ↓999k");
+    expect(telemetry).toContain("Policy Standard ⋅ Sandboxed");
+    expect(telemetry).toContain("Token ▴999k ▾999k");
     expect(telemetry).toContain("Cost ¥9999.99");
-    expect(identity.slice(identity.indexOf("Effort"))).not.toContain("…");
-    expect(telemetry.slice(telemetry.indexOf("Token"))).not.toContain("…");
+    expect(identity.slice(identity.indexOf("Effort"))).not.toContain("...");
+    expect(telemetry.slice(telemetry.indexOf("Token"))).not.toContain("...");
   });
 
   it.each([80, 120] as const)("keeps exactly two cells between the fitted Model and Effort at %s columns", (width) => {
@@ -98,7 +98,7 @@ describe("M5 dynamic status layout", () => {
 
     expect(effort).toBeGreaterThan(-1);
     expect(modelPrefix).toMatch(/^Model\s+.*\S {2}$/);
-    expect(modelPrefix).not.toMatch(/… {3,}$|Backend|Policy/);
+    expect(modelPrefix).not.toMatch(/... {3,}$|Backend|Policy/);
   });
 
   it("keeps the 40-column fallback on exactly two coherent bounded rows", () => {
@@ -112,7 +112,7 @@ describe("M5 dynamic status layout", () => {
     expect(plain[1]).not.toMatch(/\bPath\b/);
     expectOrder(plain[1] ?? "", ["Token", "Cost"]);
     expect(plain.join("\n")).not.toContain("Backend");
-    expect(plain[1]).toContain("Cost …");
+    expect(plain[1]).toContain("Cost ...");
     expect(plain[1]).not.toContain("Cost ?");
   });
 
@@ -133,7 +133,7 @@ describe("M5 dynamic status layout", () => {
     for (const label of ["Model", "Effort", "Context", "Token", "Cost"]) {
       expect(isAnsiStyled(rendered, label), `${label} label color`).toBe(true);
     }
-    for (const value of ["OpenAI / GPT-5.4", "High", "50K / 128K 39%", "/workspace/vspi", "↑0 ↓0", "¥0.00"]) {
+    for (const value of ["OpenAI / GPT-5.4", "High", "50K / 128K 39%", "/workspace/vspi", "▴0 ▾0", "¥0.00"]) {
       expect(isAnsiStyled(rendered, value), `${value} value color`).toBe(true);
     }
   });

@@ -142,7 +142,7 @@ describe("responsive layout", () => {
 
       const frame = app.render(width).map(stripAnsi);
       const questionStart = frame.findIndex((line) => line.includes("Question"));
-      const questionBottom = frame.findIndex((line, index) => index > questionStart && /^[+╰]/u.test(line));
+      const questionBottom = frame.findIndex((line, index) => index > questionStart && /^[++]/u.test(line));
       expect(questionStart).toBeGreaterThanOrEqual(0);
       expect(questionBottom).toBeGreaterThan(questionStart);
       expect(frame[questionBottom + 1]?.trim()).toBe("");
@@ -188,13 +188,13 @@ describe("responsive layout", () => {
     const after = app.render(80).map(stripAnsi);
     const coordinates = (frame: string[]) => ({
       question: frame.findIndex((line) => line.includes("Question 1 / 1")),
-      questionBottom: frame.findIndex((line, index) => index > 0 && line.startsWith("╰")),
+      questionBottom: frame.findIndex((line, index) => index > 0 && line.startsWith("+")),
       statusLast: frame.length - 1,
     });
 
     expect(after).toHaveLength(before.length);
     expect(coordinates(after)).toEqual(coordinates(before));
-    expect(after.join("\n")).toContain("! 警告 · 首选模型额度不足，已使用 fallback");
+    expect(after.join("\n")).toContain("! 警告 ⋅ 首选模型额度不足，已使用 fallback");
     expect(after.join("\n")).not.toContain("输入消息");
     expect(after.at(-1)).toContain("Offline Fixture");
     expect(after.at(-1)).toContain("/workspace/question-notice");

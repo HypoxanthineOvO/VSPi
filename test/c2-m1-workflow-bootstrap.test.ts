@@ -148,7 +148,7 @@ describe("C2 M1 Workflow Adapter bootstrap", () => {
     panel.open("plan");
     const rendered = panel.render(100, 16, plainTheme(), DEFAULT_USAGE, true).map(stripAnsi).join("\n");
     expect(rendered).toContain("VSPi V0.2.0 Workflow Integration");
-    expect(rendered).toContain("执行中 · 修订 1");
+    expect(rendered).toContain("执行中 ⋅ 修订 1");
     expect(rendered).toContain("契约 v1");
     expect(rendered).toContain("M1 Workflow Adapter Bootstrap");
     expect(rendered).not.toContain("pending");

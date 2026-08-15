@@ -29,7 +29,7 @@ describe("Skills panel", () => {
     const rendered = panel.render(80, 14, plainTheme(), DEFAULT_USAGE).map(stripAnsi).join("\n");
     expect(rendered).toContain("web-search");
     expect(rendered).toContain("Codex");
-    expect(rendered).not.toContain("Codex · Codex");
+    expect(rendered).not.toContain("Codex ⋅ Codex");
     expect(panel.handleInput(" ")).toMatchObject({
       type: "skillToggle",
       skill: { id: "external" },

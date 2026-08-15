@@ -345,7 +345,7 @@ function startupSessionMode(): {
 }
 
 function printHelp(): void {
-  process.stdout.write(`vspi ${VSPI_VERSION} — VSPi 中文 TUI AI 编程助手
+  process.stdout.write(`vspi ${VSPI_VERSION} - VSPi 中文 TUI AI 编程助手
 
 用法：
   vspi                     启动新会话（交互 TUI）
@@ -365,7 +365,7 @@ function printHelp(): void {
   --policy <level>         Safe | Standard | YOLO | Auto（只控制审批强度）
   --trust-project          信任当前项目（读取 .vspi/ 配置与 Provider overlay）
   --workflow               启用只读 Workflow Plan 投影（默认关闭）
-  --recovery               恢复模式：强制 Standard · Host，禁用项目资源与 Workflow
+  --recovery               恢复模式：强制 Standard ⋅ Host，禁用项目资源与 Workflow
   --render-once            渲染一帧后退出（smoke 用）
   -h, --help               显示本帮助
   -v, --version            显示版本号

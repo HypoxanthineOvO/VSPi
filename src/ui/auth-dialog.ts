@@ -39,7 +39,7 @@ export class AuthDialog implements ProviderAuthInteraction {
         { text: terminalHyperlink(event.verificationUri), tone: "focus" },
         { text: `设备码  ${event.userCode}`, tone: "warning" },
         { text: "请在任意设备打开链接完成授权；远程终端会自动轮询，不需要 localhost 回调。", tone: "muted" },
-        { text: "VSPi 正在等待授权结果…", tone: "muted" },
+        { text: "VSPi 正在等待授权结果...", tone: "muted" },
       ];
     } else if (event.type === "auth_url") {
       this.messages = [
@@ -151,16 +151,16 @@ export class AuthDialog implements ProviderAuthInteraction {
         const inputValue = this.input;
         const visible =
           prompt.type === "secret"
-            ? `${"•".repeat(Array.from(inputValue).length)}${theme.inverse(" ")}`
+            ? `${"▪".repeat(Array.from(inputValue).length)}${theme.inverse(" ")}`
             : (this.textInput.render(Math.max(1, bodyWidth - 2))[0] ?? "");
         const placeholder = !inputValue && prompt.placeholder ? theme.muted(prompt.placeholder) : visible;
         body.push(theme.selected(padLine(`  ${placeholder}`, bodyWidth)));
       }
     } else if (body.length === 0) {
-      body.push(theme.muted(this.purpose === "配置" ? "正在保存配置…" : "正在建立登录…"));
+      body.push(theme.muted(this.purpose === "配置" ? "正在保存配置..." : "正在建立登录..."));
     }
-    body.push("", theme.muted(prompt ? "Enter 确认 · Esc 取消" : "Esc 取消"));
-    return frame(body, width, theme, { title: `${this.providerName} · ${this.purpose}`, focused: true });
+    body.push("", theme.muted(prompt ? "Enter 确认 ⋅ Esc 取消" : "Esc 取消"));
+    return frame(body, width, theme, { title: `${this.providerName} ⋅ ${this.purpose}`, focused: true });
   }
 
   private resolvePending(value: string): void {
@@ -233,7 +233,7 @@ function preferDeviceCodeInRemoteSession(prompt: ProviderAuthPrompt): ProviderAu
   if (!device) return prompt;
   const preferred = {
     ...device,
-    label: /SSH/iu.test(device.label) ? device.label : `${device.label} · SSH 推荐`,
+    label: /SSH/iu.test(device.label) ? device.label : `${device.label} ⋅ SSH 推荐`,
     description: device.description ?? "可在本地浏览器完成，远程终端自动接收结果",
   };
   return {

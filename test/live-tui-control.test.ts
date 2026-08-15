@@ -166,7 +166,7 @@ describe("real TUI live run control", () => {
     const rendered = renderActivityRail({ indicator: "⣾", steering: 2, followUp: 1 }, width, plainTheme());
     expect(visibleWidth(rendered)).toBe(width);
     expect(stripAnsi(rendered)).toContain("⣾ Working");
-    expect(stripAnsi(rendered)).not.toMatch(/▌|插入|后续|队列/);
+    expect(stripAnsi(rendered)).not.toMatch(/▮|插入|后续|队列/);
   });
 
   it.each([40, 80, 120] as const)("renders a queued message as one quiet row at %s columns", (width) => {
@@ -176,7 +176,7 @@ describe("real TUI live run control", () => {
       plainTheme(),
     );
     expect(visibleWidth(rendered)).toBe(width);
-    expect(stripAnsi(rendered)).toContain("▌");
+    expect(stripAnsi(rendered)).toContain("▮");
     expect(stripAnsi(rendered)).toContain("↪");
     expect(stripAnsi(rendered)).not.toMatch(/等待|下一次调用|已插入/);
   });

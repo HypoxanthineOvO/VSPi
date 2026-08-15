@@ -409,7 +409,7 @@ describe("M6 Local Plan workspace projection", () => {
     expect(rendered).not.toContain(PLAN.background ?? "");
     for (const challenge of PLAN.challenges) expect(rendered).not.toContain(challenge);
     expect(rendered).not.toContain(PLAN.nextAction ?? "");
-    expect(rendered).toContain("╰─ ● Persist session binding");
+    expect(rendered).toContain("❘‒ ◉ Persist session binding");
     expect(rendered).not.toMatch(/[▸▾]/);
     // focus 不再拼接文字标记；blocked 项单独一行显示真实阻塞原因
     expect(rendered).not.toContain("[焦点]");
@@ -466,13 +466,13 @@ describe("M6 Local Plan workspace projection", () => {
     panel.handleInput(Key.left);
     const collapsed = planRender(panel, 80).split("\n");
     expect(collapsed).toHaveLength(1);
-    expect(collapsed[0]).toContain("Plan · Release readiness");
+    expect(collapsed[0]).toContain("Plan ⋅ Release readiness");
     expect(collapsed[0]).not.toContain("Runtime integration");
 
     panel.handleInput(Key.right);
     const expanded = planRender(panel, 80);
     expect(expanded).toContain("Runtime integration");
-    expect(expanded).toContain("╰─ ● Persist session binding");
+    expect(expanded).toContain("❘‒ ◉ Persist session binding");
   });
 });
 

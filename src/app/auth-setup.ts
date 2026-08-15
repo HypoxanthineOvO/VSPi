@@ -111,7 +111,7 @@ class AuthSetupApp implements Component, Focusable {
           providerId: "custom",
           providerName: "自定义中转站",
           type: "custom",
-          label: "名称 · Base URL · API Key · 类型",
+          label: "名称 ⋅ Base URL ⋅ API Key ⋅ 类型",
           configured: false,
         })
         .sort(compareEntries);
@@ -175,16 +175,16 @@ class AuthSetupApp implements Component, Focusable {
       const selected = start + offset === this.selected;
       const status = entry.configured ? this.theme.success("已配置") : this.theme.muted("未配置");
       const line = alignRight(
-        `${selected ? this.theme.focus("› ") : "  "}${entry.providerName} · ${entry.label}`,
+        `${selected ? this.theme.focus("› ") : "  "}${entry.providerName} ⋅ ${entry.label}`,
         status,
         bodyWidth,
       );
       return selected ? this.theme.selected(padLine(line, bodyWidth)) : line;
     });
     if (this.notice) rows.push("", ...wrapTextWithAnsi(this.theme.warning(this.notice), bodyWidth));
-    rows.push("", this.theme.muted("↑↓ 选择 · Enter 确认 · Esc 退出"));
+    rows.push("", this.theme.muted("▴▾ 选择 ⋅ Enter 确认 ⋅ Esc 退出"));
     return frame(rows, width, this.theme, {
-      title: this.mode === "logout" ? "移除凭据" : "VSPi Init · Provider 登录",
+      title: this.mode === "logout" ? "移除凭据" : "VSPi Init ⋅ Provider 登录",
       focused: true,
     });
   }
@@ -244,7 +244,7 @@ class AuthSetupApp implements Component, Focusable {
       }
       dialog.notify({
         type: "progress",
-        message: entry.type === "oauth" ? "正在启动账号登录…" : "正在保存 API Key…",
+        message: entry.type === "oauth" ? "正在启动账号登录..." : "正在保存 API Key...",
       });
       await loginProviderWithoutModelNetwork(this.runtime, entry.providerId, entry.type, dialog);
       if (cancelled || dialog.signal.aborted) return;
@@ -304,7 +304,7 @@ class AuthSetupApp implements Component, Focusable {
     });
     if (!name || !baseUrl || !apiKey) throw new Error("名称、Base URL 和 API Key 都不能为空");
     try {
-      dialog.notify({ type: "progress", message: "正在读取模型列表（最多 5 秒）…" });
+      dialog.notify({ type: "progress", message: "正在读取模型列表（最多 5 秒）..." });
       let models: ProviderModelRecord[];
       try {
         models = await discoverProviderModels({ name, baseUrl, protocol, apiKey }, { signal: dialog.signal });

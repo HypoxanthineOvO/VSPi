@@ -34,6 +34,8 @@ export interface TranscriptWindowOptions {
   startNodeId?: string;
   /** Skip the exact hidden-block count so tail-follow redraws only inspect the bounded visible tail. */
   exactHiddenBlocks?: boolean;
+  /** Row-estimate cache shared with rendering; avoids per-frame visibleWidth walks. */
+  cache?: TranscriptRenderCache;
 }
 
 export interface TranscriptWindow {
@@ -54,6 +56,7 @@ export class TranscriptRenderCache {
   private entries = new Map<string, TranscriptCacheEntry>();
   private hits = 0;
   private misses = 0;
+  private rowEstimates = new Map<string, number>();
 
   render(key: string, references: TranscriptMessage[], state: string, factory: () => string[]): string[] {
     const cached = this.entries.get(key);
@@ -72,6 +75,25 @@ export class TranscriptRenderCache {
     return lines;
   }
 
+  /**
+   * Cache window-selection row estimates per message identity + width. The
+   * estimator walks every line with visibleWidth (Intl.Segmenter slow path for
+   * CJK), and selectTranscriptWindow runs it on every frame otherwise. Bounded
+   * FIFO: streaming messages keep their id but change size, so entries must
+   * not be treated as permanently valid — they are recomputed once evicted.
+   */
+  estimateRows(key: string, width: number, factory: () => number): number {
+    const cacheKey = `${key}@${width}`;
+    if (this.rowEstimates.has(cacheKey)) return this.rowEstimates.get(cacheKey) as number;
+    if (this.rowEstimates.size >= 512) {
+      const oldest = this.rowEstimates.keys().next().value;
+      if (oldest !== undefined) this.rowEstimates.delete(oldest);
+    }
+    const rows = factory();
+    this.rowEstimates.set(cacheKey, rows);
+    return rows;
+  }
+
   retain(keys: Set<string>): void {
     for (const key of this.entries.keys()) {
       if (!keys.has(key)) this.entries.delete(key);
@@ -80,6 +102,7 @@ export class TranscriptRenderCache {
 
   clear(): void {
     this.entries.clear();
+    this.rowEstimates.clear();
     this.hits = 0;
     this.misses = 0;
   }
@@ -288,6 +311,27 @@ function estimatedWrappedRows(text: string, width: number): number {
 function estimateTranscriptBlockRows(block: TranscriptMessage[], options: TranscriptWindowOptions): number {
   const first = block[0];
   if (!first) return 0;
+  const compute = () => estimateTranscriptBlockRowsUncached(block, options);
+  const cache = options.cache;
+  if (!cache || block.length > 64) return compute();
+  // Key on message ids plus every row-affecting mutable state: tool expansion,
+  // thinking collapse, and streaming patches all change rendered height while
+  // keeping ids stable, and a stale estimate mis-places the window boundary.
+  const state = block
+    .map((message) => {
+      if (message.kind === "tool") return message.expanded ? "1" : "0";
+      if (message.kind === "thinking") return message.collapsed ? "c" : message.streaming ? "s" : "e";
+      if (message.kind === "text") return message.streaming ? "s" : "e";
+      return "";
+    })
+    .join("");
+  const key = `rows:${block.map((message) => message.id).join("|")}:${state}`;
+  return cache.estimateRows(key, options.width, compute);
+}
+
+function estimateTranscriptBlockRowsUncached(block: TranscriptMessage[], options: TranscriptWindowOptions): number {
+  const first = block[0];
+  if (!first) return 0;
   const width = Math.max(1, options.width - 2);
   if (first.kind === "tool") {
     const tools = block.filter(
@@ -319,7 +363,7 @@ function estimateTranscriptBlockRows(block: TranscriptMessage[], options: Transc
 function attachmentSummary(message: Extract<TranscriptMessage, { kind: "text" }>): string[] {
   return (message.attachments ?? []).map(
     (attachment) =>
-      `〔${attachment.alias} · ${attachment.width}×${attachment.height} · ${attachment.mimeType.split("/")[1]?.toUpperCase()}〕`,
+      `〔${attachment.alias} ⋅ ${attachment.width}x${attachment.height} ⋅ ${attachment.mimeType.split("/")[1]?.toUpperCase()}〕`,
   );
 }
 
@@ -350,7 +394,7 @@ export function renderTranscriptMessage(
     const status = deliverySummary(message);
     lines = [
       theme.userSurface(padLine("", width)),
-      ...contentLines.map((line) => theme.userSurface(padLine(`${theme.focus("▌")}  ${line || " "}`, width))),
+      ...contentLines.map((line) => theme.userSurface(padLine(`${theme.focus("▮")}  ${line || " "}`, width))),
       ...(status ? [theme.userSurface(padLine(`   ${theme.muted(status)}`, width))] : []),
       theme.userSurface(padLine("", width)),
     ];
@@ -360,7 +404,7 @@ export function renderTranscriptMessage(
       ...(options.mermaidRendering ? { mermaidRendering: options.mermaidRendering } : {}),
       streaming: message.streaming ?? false,
     });
-    lines = markdown.map((line, index) => `${index === 0 ? `${theme.muted("•")} ` : "  "}${line}`);
+    lines = markdown.map((line, index) => `${index === 0 ? `${theme.muted("▪")} ` : "  "}${line}`);
     if (message.streaming && lines.length > 0) {
       // 满宽行先把内容截到 width-1，再追加光标，避免后续 padLine 把光标切掉。
       const last = lines[lines.length - 1] ?? "";
@@ -369,28 +413,28 @@ export function renderTranscriptMessage(
         const raw = truncateToWidth(last, Math.max(0, width - 1), "");
         clipped = last.includes("\u001b") ? raw : stripAnsi(raw);
       }
-      lines[lines.length - 1] = `${clipped}${theme.focus("▋")}`;
+      lines[lines.length - 1] = `${clipped}${theme.focus("❙")}`;
     }
   } else if (message.kind === "thinking") {
     if (options.thinkingDisplay === "hidden" && message.streaming && !selected) {
-      return [theme.muted(`◇ 思考中 · Effort ${effortLabel(message.effort)}`)];
+      return [theme.muted(`⋄ 思考中 ⋅ Effort ${effortLabel(message.effort)}`)];
     }
     if (options.thinkingDisplay === "hidden" && !selected) {
-      return [theme.muted("◇ 思考 · 已隐藏")];
+      return [theme.muted("⋄ 思考 ⋅ 已隐藏")];
     }
-    const duration = message.durationMs === undefined ? "" : ` · ${(message.durationMs / 1000).toFixed(1)}s`;
+    const duration = message.durationMs === undefined ? "" : ` ⋅ ${(message.durationMs / 1000).toFixed(1)}s`;
     const translation =
       message.translationStatus === "pending"
-        ? " · 翻译中"
+        ? " ⋅ 翻译中"
         : message.translationStatus === "translated"
-          ? " · 已翻译"
+          ? " ⋅ 已翻译"
           : message.translationStatus === "error"
-            ? " · 翻译失败"
+            ? " ⋅ 翻译失败"
             : "";
     const displayText = message.translatedText || message.text;
     lines = [
       theme.muted(
-        `◇ 思考 · Effort ${effortLabel(message.effort)}${duration}${translation} · ${message.collapsed ? "已折叠" : "已展开"}`,
+        `⋄ 思考 ⋅ Effort ${effortLabel(message.effort)}${duration}${translation} ⋅ ${message.collapsed ? "已折叠" : "已展开"}`,
       ),
     ];
     if (message.collapsed) {
@@ -408,26 +452,26 @@ export function renderTranscriptMessage(
   } else if (message.kind === "tool") {
     return renderToolGroup([message], width, theme, options);
   } else if (message.kind === "session") {
-    lines = [theme.muted(`◇ ${message.text}`)];
+    lines = [theme.muted(`⋄ ${message.text}`)];
   } else {
     const symbol =
       message.status === "success"
         ? theme.success("✓")
         : message.status === "error"
-          ? theme.error("×")
+          ? theme.error("x")
           : message.status === "cancelled"
             ? theme.warning("−")
-            : theme.focus("●");
+            : theme.focus("◉");
     const identity = message.agentKind === "teammate" ? (message.teammateId ?? "teammate") : "task";
-    const lane = message.lane ? ` · lane ${message.lane}` : "";
+    const lane = message.lane ? ` ⋅ lane ${message.lane}` : "";
     const preferred =
       message.preferredModel && message.preferredModel !== message.model
-        ? ` · preferred ${message.preferredModel}`
+        ? ` ⋅ preferred ${message.preferredModel}`
         : "";
-    const fallback = message.fallbackReason ? ` · fallback ${message.fallbackReason}` : "";
-    const context = message.contextMode ? ` · ${message.contextMode}` : "";
-    const agentRole = message.agentRole ? ` · ${message.agentRole}` : "";
-    const metadata = `${symbol} ${identity}${agentRole} · ${theme.blue(message.model)}${preferred} · ${effortLabel(message.effort)}${context}${lane}${fallback}`;
+    const fallback = message.fallbackReason ? ` ⋅ fallback ${message.fallbackReason}` : "";
+    const context = message.contextMode ? ` ⋅ ${message.contextMode}` : "";
+    const agentRole = message.agentRole ? ` ⋅ ${message.agentRole}` : "";
+    const metadata = `${symbol} ${identity}${agentRole} ⋅ ${theme.blue(message.model)}${preferred} ⋅ ${effortLabel(message.effort)}${context}${lane}${fallback}`;
     const bodyWidth = Math.max(1, width - 2);
     const body = [
       padLine(metadata, bodyWidth),
@@ -436,15 +480,15 @@ export function renderTranscriptMessage(
         ? [
             theme.muted(
               truncateToWidth(
-                `Budget · run ${formatSubagentTokens(message.runTokensLeft)} left · tree ${formatSubagentTokens(message.treeTokensLeft)} / $${(message.treeCostUsdLeft ?? 0).toFixed(3)} left`,
+                `Budget ⋅ run ${formatSubagentTokens(message.runTokensLeft)} left ⋅ tree ${formatSubagentTokens(message.treeTokensLeft)} / $${(message.treeCostUsdLeft ?? 0).toFixed(3)} left`,
                 bodyWidth,
-                "…",
+                "...",
               ),
             ),
           ]
         : []),
       ...(message.outputPreview
-        ? [theme.muted(truncateToWidth(message.outputPreview, bodyWidth, "…"))]
+        ? [theme.muted(truncateToWidth(message.outputPreview, bodyWidth, "..."))]
         : message.status === "running"
           ? [theme.muted("Working...")]
           : []),
@@ -479,8 +523,8 @@ function collapsedThinkingPreview(text: string, width: number): string | undefin
     .map((item) => item.trim())
     .find(Boolean);
   if (!line) return undefined;
-  const suffix = sections.length > 1 ? ` · ${sections.length} 段` : "";
-  return truncateToWidth(`${line}${suffix}`, width, "…");
+  const suffix = sections.length > 1 ? ` ⋅ ${sections.length} 段` : "";
+  return truncateToWidth(`${line}${suffix}`, width, "...");
 }
 
 function toolLabel(name: string): string {
@@ -586,7 +630,7 @@ function renderToolGroup(
     (message) => message.id === options.selectedToolId || message.id === options.inspectedId,
   );
   const expanded = !options.collapseCompletedTools || messages.some((message) => message.expanded) || childSelected;
-  const summary = `◇ 工具调用 · ${messages.length} 项 · ${toolGroupStatus(messages)}`;
+  const summary = `⋄ 工具调用 ⋅ ${messages.length} 项 ⋅ ${toolGroupStatus(messages)}`;
   if (options.collapseCompletedTools && allToolsTerminal(messages) && !expanded) {
     const line = fitLine(theme.muted(summary), width);
     return options.selectedNodeId === nodeId ? renderSelectedLines([line], width, theme) : [line];
@@ -617,10 +661,10 @@ function renderToolEntry(
     message.status === "success"
       ? theme.success("✓")
       : message.status === "error"
-        ? theme.error("×")
+        ? theme.error("x")
         : message.status === "cancelled"
           ? theme.warning("−")
-          : theme.focus("●");
+          : theme.focus("◉");
   const state =
     message.status === "error"
       ? "失败"
@@ -632,14 +676,14 @@ function renderToolEntry(
             ? "运行中"
             : "";
   const summary = message.summary.replace(/\s+/g, " ").trim();
-  const label = padLine(truncateToWidth(toolLabel(message.name), labelWidth, "…"), labelWidth);
-  const detail = state ? `${summary} · ${state}` : summary;
+  const label = padLine(truncateToWidth(toolLabel(message.name), labelWidth, "..."), labelWidth);
+  const detail = state ? `${summary} ⋅ ${state}` : summary;
   const lines = [
     fitLine(`${theme.muted(treeConnector(last, theme))} ${symbol} ${theme.bold(label)}  ${theme.muted(detail)}`, width),
   ];
   const legacyRestricted = options.inspectedId !== undefined && options.selectedToolId === undefined;
   if (message.expanded && message.output && (!legacyRestricted || options.inspectedId === message.id)) {
-    const continuation = last ? "   " : theme.muted(theme.capabilities.unicode ? "│  " : "|  ");
+    const continuation = last ? "   " : theme.muted(theme.capabilities.unicode ? "❘  " : "|  ");
     if (message.name === "edit" && message.output.startsWith("@@")) {
       lines.push(
         ...renderDiff(parseDiff(message.output), Math.max(1, width - 6), theme).map((line) =>
@@ -662,8 +706,8 @@ function renderToolEntry(
 
 function renderSelectedLines(lines: string[], width: number, theme: VspiTheme): string[] {
   return lines.map((line, index) => {
-    const content = truncateToWidth(line, Math.max(1, width - 2), "…");
-    return theme.selected(padLine(`${index === 0 ? theme.focus("▌ ") : "  "}${content}`, width));
+    const content = truncateToWidth(line, Math.max(1, width - 2), "...");
+    return theme.selected(padLine(`${index === 0 ? theme.focus("▮ ") : "  "}${content}`, width));
   });
 }
 
@@ -672,7 +716,7 @@ function toolGroupStatus(messages: Extract<TranscriptMessage, { kind: "tool" }>[
   const errors = messages.filter((message) => message.status === "error").length;
   const cancelled = messages.filter((message) => message.status === "cancelled").length;
   if (errors > 0 || cancelled > 0) {
-    return [errors > 0 ? `${errors} 失败` : "", cancelled > 0 ? `${cancelled} 已取消` : ""].filter(Boolean).join(" · ");
+    return [errors > 0 ? `${errors} 失败` : "", cancelled > 0 ? `${cancelled} 已取消` : ""].filter(Boolean).join(" ⋅ ");
   }
   return "已完成";
 }
@@ -682,10 +726,11 @@ function allToolsTerminal(messages: Extract<TranscriptMessage, { kind: "tool" }>
 }
 
 function treeConnector(last: boolean, theme: VspiTheme): string {
-  if (theme.capabilities.unicode) return last ? "└─" : "├─";
+  // ❘‒ 均为 neutral 宽度；├└─ 在 ambiguous 按宽渲染的中文终端里占 2 列导致工具树错位。
+  if (theme.capabilities.unicode) return "❘‒";
   return last ? "\\-" : "|-";
 }
 
 function fitLine(line: string, width: number): string {
-  return visibleWidth(line) > width ? truncateToWidth(line, width, "…") : line;
+  return visibleWidth(line) > width ? truncateToWidth(line, width, "...") : line;
 }

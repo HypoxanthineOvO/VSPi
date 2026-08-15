@@ -105,8 +105,8 @@ describe("M1 two-line status contract", () => {
       expect(shortColumn, `${label} must be present on status line 2`).toBeGreaterThan(-1);
       expect(longColumn).toBe(shortColumn);
     }
-    expect(long[0]).toContain("…");
-    expect(long[1]).toContain("…");
+    expect(long[0]).toContain("...");
+    expect(long[1]).toContain("...");
   });
 
   it("keeps Backend in Splash while retaining dynamic Policy truth", () => {
@@ -203,15 +203,15 @@ describe("M1 two-line status contract", () => {
       if (width === 80) expect(rendered).not.toContain(longModel);
       expect(rendered).not.toContain(longPath);
       expectFixedModelEffortGap(plain[0] ?? "");
-      if (width === 80) expect(plain[0]?.slice(0, visibleColumn(plain[0] ?? "", "Effort"))).toContain("…");
-      expect(plain[1]?.slice(0, visibleColumn(plain[1] ?? "", "Token"))).toContain("…");
+      if (width === 80) expect(plain[0]?.slice(0, visibleColumn(plain[0] ?? "", "Effort"))).toContain("...");
+      expect(plain[1]?.slice(0, visibleColumn(plain[1] ?? "", "Token"))).toContain("...");
       expect(plain[1]).toMatch(/^\//);
       expect(plain[1]).not.toMatch(/\bPath\b/);
       expect(rendered).not.toContain("Backend Fixture");
       expect(rendered).toContain("Policy Standard");
       expect(rendered).toContain("Sandboxed");
       expect(rendered).toContain("Context 50K / 128K 39%");
-      expect(rendered).toContain("Token ↑42k ↓8.1k");
+      expect(rendered).toContain("Token ▴42k ▾8.1k");
       expect(rendered).toContain("Cost ¥2.97");
     }
   });

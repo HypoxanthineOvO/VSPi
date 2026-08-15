@@ -611,7 +611,7 @@ export class PiRuntimeBackend implements ChatBackend {
         // compaction_end is the single completion path and must not be completed a second time here.
         this.reviewTracker.noteCompaction();
         this.publishUsage();
-        this.events?.onNotice(`上下文压缩完成 · ${resolved.profile}`, "success");
+        this.events?.onNotice(`上下文压缩完成 ⋅ ${resolved.profile}`, "success");
       }
     } finally {
       if (this.compacting) {
@@ -706,7 +706,7 @@ export class PiRuntimeBackend implements ChatBackend {
         label: formatProviderName(provider.name || provider.id),
         protocol: protocolLabel(provider.getModels()[0]?.api),
         status: configured ? "已配置" : "未配置",
-        detail: `${count} 个展示模型 · ${authSourceLabel(auth?.source)}`,
+        detail: `${count} 个展示模型 ⋅ ${authSourceLabel(auth?.source)}`,
         authMethods: [
           ...(provider.auth?.oauth && oauthAvailableInCurrentTerminal(provider.id)
             ? [
@@ -1615,7 +1615,7 @@ export class PiRuntimeBackend implements ChatBackend {
           id: `goal-boundary:${updated.id}:${updated.revision}`,
           role: "assistant",
           kind: "session",
-          text: `Goal 自动续跑已停止 · ${updated.state} · ${reason}`,
+          text: `Goal 自动续跑已停止 ⋅ ${updated.state} ⋅ ${reason}`,
         });
         this.events?.onNotice(`Goal 已停止自动续跑：${reason}`, updated.state === "stalled" ? "warning" : "info");
         return;
@@ -2027,7 +2027,7 @@ export class PiRuntimeBackend implements ChatBackend {
         id: `${prefix}-external-reference`,
         role: "assistant",
         kind: "session",
-        text: `只读参考 · ${source} · ${title} · ${messageCount} 条对话 · ${toolCount} 条工具记录`,
+        text: `只读参考 ⋅ ${source} ⋅ ${title} ⋅ ${messageCount} 条对话 ⋅ ${toolCount} 条工具记录`,
       });
       return;
     }
@@ -2131,7 +2131,7 @@ export class PiRuntimeBackend implements ChatBackend {
       id: `external-import:${session.sessionId}`,
       role: "assistant",
       kind: "session",
-      text: `从 ${source} 导入 · ${title} · ${details.join(" · ")}`,
+      text: `从 ${source} 导入 ⋅ ${title} ⋅ ${details.join(" ⋅ ")}`,
     });
 
     let historyIndex = 0;
@@ -2243,7 +2243,7 @@ export class PiRuntimeBackend implements ChatBackend {
         id: `${id}:start`,
         role: "assistant",
         kind: "session",
-        text: `上下文压缩开始 · reason ${event.reason} · usage ${formatEvidenceUsage(usage.tokens, usage.contextWindow)} · reserve ${formatEvidenceToken(usage.reserveTokens)}`,
+        text: `上下文压缩开始 ⋅ reason ${event.reason} ⋅ usage ${formatEvidenceUsage(usage.tokens, usage.contextWindow)} ⋅ reserve ${formatEvidenceToken(usage.reserveTokens)}`,
       });
       this.publishActivity();
       return;
@@ -2265,7 +2265,7 @@ export class PiRuntimeBackend implements ChatBackend {
         id: `${id}:end`,
         role: "assistant",
         kind: "session",
-        text: `上下文压缩${outcome} · reason ${event.reason} · usage ${formatEvidenceToken(before)}→${formatEvidenceToken(after.tokens)}/${window} · reserve ${formatEvidenceToken(reserve)} · retry ${event.willRetry ? "yes" : "no"}`,
+        text: `上下文压缩${outcome} ⋅ reason ${event.reason} ⋅ usage ${formatEvidenceToken(before)}⟶${formatEvidenceToken(after.tokens)}/${window} ⋅ reserve ${formatEvidenceToken(reserve)} ⋅ retry ${event.willRetry ? "yes" : "no"}`,
       });
       this.compactionEvidence = undefined;
       const compactionTaskEpoch = this.compactionTaskEpoch;
@@ -3202,21 +3202,21 @@ function formatToolActionSummary(name: string, rawArgs: unknown): string {
   if (name === "bash") detail = `$ ${stringField(args, "command")}`;
   else if (["read", "edit", "write", "ls"].includes(name)) detail = stringField(args, "path") || ".";
   else if (name === "find") {
-    detail = [stringField(args, "pattern"), stringField(args, "path") || "."].filter(Boolean).join(" · ");
+    detail = [stringField(args, "pattern"), stringField(args, "path") || "."].filter(Boolean).join(" ⋅ ");
   } else if (name === "grep") {
     const pattern = stringField(args, "pattern");
-    detail = [`/${pattern}/`, stringField(args, "path") || "."].filter(Boolean).join(" · ");
+    detail = [`/${pattern}/`, stringField(args, "path") || "."].filter(Boolean).join(" ⋅ ");
   } else if (name === "question") {
     const questions = Array.isArray(args.questions) ? args.questions.filter(isRecord) : [];
     const first = questions[0];
     const title = first ? stringField(first, "header") || stringField(first, "title") : "";
-    detail = `${questions.length || 1} 个问题${title ? ` · ${title}` : ""}`;
+    detail = `${questions.length || 1} 个问题${title ? ` ⋅ ${title}` : ""}`;
   } else {
     detail = Object.entries(args)
       .filter(([, value]) => typeof value === "string" || typeof value === "number" || typeof value === "boolean")
       .slice(0, 2)
       .map(([key, value]) => `${key}=${String(value)}`)
-      .join(" · ");
+      .join(" ⋅ ");
   }
   const bounded = redact(detail.replace(/\s+/g, " ").trim());
   return Array.from(bounded || "调用工具")

@@ -18,11 +18,11 @@ describe("width-safe terminal primitives", () => {
     const lines = frame(["body"], 24, plainTheme(), {
       title: "Sessions with a long title",
       rightTitle: "999 个会话",
-      footer: "↑↓ 选择 Enter 打开 Shift+F 创建分支 Esc 返回",
+      footer: "▴▾ 选择 Enter 打开 Shift+F 创建分支 Esc 返回",
       footerPosition: "left",
     }).map(stripAnsi);
-    expect(lines[0]).toMatch(/^╭.*╮$/u);
-    expect(lines.at(-1)).toMatch(/^╰.*╯$/u);
+    expect(lines[0]).toMatch(/^\+.*\+$/u);
+    expect(lines.at(-1)).toMatch(/^\+.*\+$/u);
     expect(lines.every((line) => visibleWidth(line) === 24)).toBe(true);
   });
 
@@ -30,6 +30,7 @@ describe("width-safe terminal primitives", () => {
     const line = alignRight("原始费用超出可用宽度", "$0.0000 USD", 14);
     expect(visibleWidth(line)).toBe(14);
     expect(line).toContain("$0.0000 USD");
-    expect(line).toContain("…");
+    // ASCII ellipsis 按剩余宽度截取（14 列预算下为 2 点）；只要保留截断提示即可。
+    expect(line).toContain("..");
   });
 });

@@ -144,7 +144,7 @@ describe("M2 session identity isolation", () => {
     const surface = sessions.join("\n");
     expect(sessions).toHaveLength(24);
     // Sessions surface is vertically centered: title stays below the top padding.
-    const titleRow = sessions.findIndex((line) => line.startsWith("╭ Sessions"));
+    const titleRow = sessions.findIndex((line) => line.startsWith("+ Sessions"));
     expect(titleRow).toBeGreaterThan(0);
     expect(surface).toContain("Sessions");
     expect(surface).toContain("2 个会话");
@@ -159,7 +159,7 @@ describe("M2 session identity isolation", () => {
     await flush();
     const restored = app.render(80).map(stripAnsi).join("\n");
     expect(restored).toContain("OLD_SESSION_SENTINEL");
-    expect(restored).toMatch(/╭─+╮[\s\S]*╰─+╯/u);
+    expect(restored).toMatch(/\+-+\+[\s\S]*\+-+\+/u);
     await app.dispose();
   });
 
@@ -174,7 +174,7 @@ describe("M2 session identity isolation", () => {
     app.setStartupSurface(["SPLASH-LINE-A", "SPLASH-LINE-B"]);
 
     const surface = app.render(80).map(stripAnsi);
-    const titleRow = surface.findIndex((line) => line.startsWith("╭ Sessions"));
+    const titleRow = surface.findIndex((line) => line.startsWith("+ Sessions"));
     expect(titleRow).toBeGreaterThan(0);
     expect(surface.join("\n")).not.toContain("SPLASH-LINE");
     await app.dispose();
@@ -202,7 +202,7 @@ describe("M2 session identity isolation", () => {
       const rendered = app.render(80).map(stripAnsi);
 
       expect(rendered).toHaveLength(expectedRows);
-      expect(rendered[0]).toMatch(/^╭ Sessions/u);
+      expect(rendered[0]).toMatch(/^\+ Sessions/u);
       expect(rendered.slice(-2).join("\n")).toContain("Context");
       expect(rendered.at(-1)).toContain("Policy Standard");
       expect(rendered.join("\n")).toContain("会话 0");
@@ -569,4 +569,66 @@ describe("M2 cancellation recovery", () => {
       await app.dispose();
     }
   });
+});
+
+describe("M2 restored-history scrollback replay", () => {
+  it("replays all restored history through the settle pipeline instead of skipping to the window start", async () => {
+    const controlled = sessionBackend(120);
+    const tui = fakeTui() as TUI & {
+      beginSurfaceEpoch: ReturnType<typeof vi.fn>;
+      commitStatic: ReturnType<typeof vi.fn>;
+    };
+    tui.beginSurfaceEpoch = vi.fn();
+    // Simulate the ScrollbackTUI prefix rebase: accept every commit and report
+    // how many lines were pushed into native scrollback.
+    const committedPrefixes: string[] = [];
+    tui.commitStatic = vi.fn((lines: readonly string[]) => {
+      committedPrefixes.push(...lines.map((line) => line));
+      return true;
+    });
+    const app = await createApp(controlled.backend, tui);
+    const testable = app as unknown as TestableApp;
+
+    await testable.applyPanelEvent({
+      type: "session",
+      session: { id: "replay-session", label: "Replay", relativeTime: "刚刚", branchDepth: 0 },
+    });
+
+    expect(tui.beginSurfaceEpoch).toHaveBeenCalledOnce();
+    // 24ms settle timer must fire so the stable commit rebase runs.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const replayed = committedPrefixes.join("\n");
+    expect(replayed).toContain("TRANSCRIPT_replay-session_0");
+    expect(replayed).toContain("TRANSCRIPT_replay-session_60");
+    // The active window tail stays in the live waterfall, not in scrollback.
+    const active = app.render(80).map(stripAnsi).join("\n");
+    expect(active).toContain("TRANSCRIPT_replay-session_119");
+    await app.dispose();
+  }, 10_000);
+
+  it("keeps regular-mode committed history reachable after the replay settles", async () => {
+    const controlled = sessionBackend(120);
+    const tui = fakeTui() as TUI & {
+      beginSurfaceEpoch: ReturnType<typeof vi.fn>;
+      commitStatic: ReturnType<typeof vi.fn>;
+    };
+    tui.beginSurfaceEpoch = vi.fn();
+    tui.commitStatic = vi.fn(() => true);
+    const app = await createApp(controlled.backend, tui);
+    const testable = app as unknown as TestableApp;
+
+    await testable.applyPanelEvent({
+      type: "session",
+      session: { id: "reach-session", label: "Reach", relativeTime: "刚刚", branchDepth: 0 },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    // committedMessageCount advances past the window start: earlier restored
+    // history was printed, not silently marked as committed.
+    expect(testable.committedMessageCount).toBeGreaterThan(0);
+    const window = testable.currentTranscriptWindow(80);
+    expect(window.messages.length).toBeGreaterThan(0);
+    expect(window.messages.length).toBeLessThan(120);
+    await app.dispose();
+  }, 10_000);
 });

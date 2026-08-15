@@ -11,7 +11,7 @@ import { renderInteractionHint } from "../src/ui/interactions.js";
 import { PanelController } from "../src/ui/panels.js";
 import { plainTheme } from "./helpers.js";
 
-const COMMAND_HINT = "↑↓ 选择  Tab 补全  Enter 执行  Esc 关闭";
+const COMMAND_HINT = "▴▾ 选择  Tab 补全  Enter 执行  Esc 关闭";
 
 const QUESTION: Question = {
   id: "density",
@@ -108,11 +108,22 @@ async function renderPanel(
 }
 
 function contextualRow(plain: string[]): { frameBottom: number; hint: string; composerTop: string } {
-  const composerTopIndex = plain.findLastIndex((line) => line.startsWith("╭"));
-  const frameBottom = composerTopIndex - 2;
+  // 布局自上而下：面板边框 → hint → composer 顶框 → composer 体 → status。
+  // ASCII 边框下 "+" 开头的行不再唯一；从 status 行向上找 composer 顶框
+  // （第一个非 chrome 行即 hint，再上一行是面板底框）。
+  const statusIndex = plain.findLastIndex((line) => /\bModel\b/.test(line) && line.includes("Context"));
+  let hintIndex = -1;
+  for (let index = statusIndex - 1; index >= 0; index -= 1) {
+    const line = plain[index];
+    if (line === undefined || line.trim() === "" || /^[+|]/.test(line)) continue;
+    hintIndex = index;
+    break;
+  }
+  const composerTopIndex = hintIndex + 1;
+  const frameBottom = hintIndex - 1;
   return {
     frameBottom,
-    hint: plain[composerTopIndex - 1]?.trim() ?? "",
+    hint: plain[hintIndex]?.trim() ?? "",
     composerTop: plain[composerTopIndex] ?? "",
   };
 }
@@ -132,7 +143,7 @@ describe("contextual panel hints", () => {
       expect(row.frameBottom).toBeGreaterThan(-1);
       if (expected === COMMAND_HINT) expect(row.hint).toBe(COMMAND_HINT);
       else expect(row.hint).toContain(expected);
-      expect(row.composerTop).toMatch(/^╭/);
+      expect(row.composerTop).toMatch(/^\+/);
       expect(result.mutedSgr).not.toBe("");
       expect(result.ansi[row.frameBottom + 1]).toContain(result.mutedSgr);
       expect(result.ansi.every((line) => visibleWidth(line) === 80)).toBe(true);
@@ -146,10 +157,10 @@ describe("contextual panel hints", () => {
     const result = await renderPanel("/sessions");
     try {
       const rendered = result.plain.join("\n");
-      expect(result.plain.findIndex((line) => /^╭ Sessions/.test(line))).toBeGreaterThanOrEqual(2);
+      expect(result.plain.findIndex((line) => /^\+ Sessions/.test(line))).toBeGreaterThanOrEqual(2);
       expect(rendered).toContain("0 个会话");
       expect(rendered).toContain("暂无会话");
-      expect(result.plain.find((line) => line.startsWith("╰"))).toContain("Esc 返回");
+      expect(result.plain.find((line) => line.includes("Esc 返回"))).toContain("+");
       expect(rendered).not.toContain("输入消息");
       expect(result.ansi).toHaveLength(24);
       expect(result.ansi.every((line) => visibleWidth(line) === 80)).toBe(true);
@@ -162,7 +173,7 @@ describe("contextual panel hints", () => {
     const result = await renderPanel(undefined);
     try {
       const rendered = result.plain.join("\n");
-      expect(rendered).not.toMatch(/╭ Plan\b/);
+      expect(rendered).not.toMatch(/\+ Plan\b/);
       expect(rendered).not.toContain("Shift+Tab 下一个区域");
       expect(result.ansi.every((line) => visibleWidth(line) === 80)).toBe(true);
     } finally {
@@ -188,7 +199,7 @@ describe("contextual panel hints", () => {
       const row = contextualRow(result.plain);
       expect(result.plain[row.frameBottom]).toMatch(/\d+-\d+ \/ \d+/);
       expect(row.hint).toBe(COMMAND_HINT);
-      expect(row.composerTop).toMatch(/^╭/);
+      expect(row.composerTop).toMatch(/^\+/);
       expect(result.ansi.length).toBeLessThanOrEqual(24);
     } finally {
       await result.app.dispose();
@@ -207,7 +218,7 @@ describe("contextual panel hints", () => {
       const notified = result.app.render(80).map(stripAnsi);
       expect(notified).toHaveLength(before.length);
       expect(notified.join("\n")).toContain("已保存到 /workspace/.vspi/settings.json");
-      expect(notified.join("\n")).toContain("✓ 完成 ·");
+      expect(notified.join("\n")).toContain("✓ 完成 ⋅");
       expect(notified.at(-1)).toContain("Offline Fixture");
       expect(notified.at(-1)).toContain("/workspace/contextual-hints");
 
@@ -230,13 +241,13 @@ describe("contextual panel hints", () => {
     };
     vi.useFakeTimers();
     try {
-      testable.showProgress("正在扫描历史…");
-      expect(result.app.render(80).map(stripAnsi).join("\n")).toContain("◌ 进行中 · 正在扫描历史…");
+      testable.showProgress("正在扫描历史...");
+      expect(result.app.render(80).map(stripAnsi).join("\n")).toContain("◌ 进行中 ⋅ 正在扫描历史...");
       vi.advanceTimersByTime(10_000);
-      expect(result.app.render(80).map(stripAnsi).join("\n")).toContain("正在扫描历史…");
+      expect(result.app.render(80).map(stripAnsi).join("\n")).toContain("正在扫描历史...");
 
       testable.showNotice("扫描完成", "success");
-      expect(result.app.render(80).map(stripAnsi).join("\n")).toContain("✓ 完成 · 扫描完成");
+      expect(result.app.render(80).map(stripAnsi).join("\n")).toContain("✓ 完成 ⋅ 扫描完成");
       vi.advanceTimersByTime(2_500);
       expect(result.app.render(80).map(stripAnsi).join("\n")).not.toContain("扫描完成");
     } finally {
@@ -263,8 +274,8 @@ describe("contextual panel hints", () => {
       expect(inspected.join("\n")).toContain("Inspect");
       expect(row.hint).toBe(expected);
       expect(row.hint).toContain("Esc 返回输入");
-      expect(row.hint).toContain("↑↓/PgUp/PgDn 浏览");
-      expect(row.hint).toContain("Enter/→ 进入/展开");
+      expect(row.hint).toContain("▴▾/PgUp/PgDn 浏览");
+      expect(row.hint).toContain("Enter/⟶ 进入/展开");
       expect(row.hint).toContain("Shift+Tab 返回输入");
 
       result.app.handleInput("\u001b[C");
@@ -291,7 +302,7 @@ describe("contextual panel hints", () => {
     const editingHint = stripAnsi(panel.renderHint(80, plainTheme()));
     expect(editing).toContain("› 名称");
     expect(editingHint).toContain("Ctrl+S 保存");
-    expect(editingHint).toContain("↓");
+    expect(editingHint).toContain("▾");
     expect(editingHint).toContain("Esc 取消");
     const beforeEnter = editing;
     panel.handleInput("\r");
@@ -318,11 +329,11 @@ describe("contextual panel hints", () => {
 
     expect(hint).toContain("Tab 切换视图");
     if (narrow) {
-      expect.soft(hint).toContain("←→ 详情");
+      expect.soft(hint).toContain("◂⟶ 详情");
       expect(afterRight).not.toBe(beforeRight);
       expect(afterRight).toContain("Provider");
     } else {
-      expect(hint).not.toContain("←→");
+      expect(hint).not.toContain("◂⟶");
       expect(afterRight).toBe(beforeRight);
       expect(beforeRight).toContain("Provider");
     }

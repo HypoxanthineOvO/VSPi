@@ -30,7 +30,7 @@ const PRODUCTION_COMMANDS = [
 
 const REMOVED_COMMANDS = ["/demo-question", "/demo-tool"] as const;
 
-const COMMAND_HINT = "↑↓ 选择  Tab 补全  Enter 执行  Esc 关闭";
+const COMMAND_HINT = "▴▾ 选择  Tab 补全  Enter 执行  Esc 关闭";
 
 let readme = "";
 let docs = "";
@@ -90,7 +90,7 @@ function expectMarkedToken(token: string, expected: ReadonlyArray<MarkedSpan["ki
 }
 
 function expectSharedFacts(content: string, artifact: string): void {
-  expect.soft(content, `${artifact}: fresh Plan surface`).toContain("╭ Plan ");
+  expect.soft(content, `${artifact}: fresh Plan surface`).toContain("+ Plan ");
   expect.soft(content, `${artifact}: examples are not preset`).toContain("交互示例");
   expect
     .soft(content, `${artifact}: default dynamic interface is empty`)
@@ -118,7 +118,7 @@ function expectSharedFacts(content: string, artifact: string): void {
   expect.soft(content, `${artifact}: Policy boundary`).toMatch(/Policy[^。\n]{0,100}(?:Sandboxed|Host)/);
   expect.soft(content, `${artifact}: no legacy Mode Auto`).not.toMatch(/Mode[^。\n]{0,60}Auto/);
   expect.soft(content, `${artifact}: package-derived version`).toMatch(/package\.json|package version|包版本/i);
-  expect.soft(content, `${artifact}: no legacy pseudo-status`).not.toContain("Home · auto/safe · Web");
+  expect.soft(content, `${artifact}: no legacy pseudo-status`).not.toContain("Home ⋅ auto/safe ⋅ Web");
   expect.soft(content, `${artifact}: no legacy provider list`).not.toContain("Kimi / OpenAI / DeepSeek");
   expect
     .soft(content, `${artifact}: splash shares the physical waterfall`)
@@ -149,7 +149,7 @@ function expectSharedFacts(content: string, artifact: string): void {
   expect.soft(content, `${artifact}: no displayed FX row`).toContain("不显示汇率参考行");
   expect
     .soft(content, `${artifact}: no stale displayed FX sample`)
-    .not.toMatch(/中国外汇交易中心参考价\s*·|USD\/CNY\s*7\.18/);
+    .not.toMatch(/中国外汇交易中心参考价\s*⋅|USD\/CNY\s*7\.18/);
 
   const commandBlock = productionCommandBlock(content);
   expect.soft(commandBlock, `${artifact}: literal production command block`).toBeDefined();
@@ -203,7 +203,7 @@ function expectRevisionFiveFacts(content: string, artifact: string): void {
   for (const sample of ["Context 50K / 128K 39%", "Context 0K / 0K 0%", "Context ?K / 128K ?%"] as const) {
     expect.soft(content, `${artifact}: Context sample ${sample}`).toContain(sample);
   }
-  expect.soft(content, `${artifact}: cumulative Token mock`).toMatch(/Token\s*↑[^\s]+\s*↓[^\s]+/);
+  expect.soft(content, `${artifact}: cumulative Token mock`).toMatch(/Token\s*▴[^\s]+\s*▾[^\s]+/);
   expect
     .soft(
       hasNearby(content, ["Context"], ["当前", "占用", "current", "used"]),
@@ -236,11 +236,11 @@ function expectRevisionFiveFacts(content: string, artifact: string): void {
     .soft(content, `${artifact}: /provider belongs to /providers`)
     .toMatch(/(?:\/provider[^s][^。\n]{0,100}\/providers|\/providers[^。\n]{0,100}\/provider(?:\W|$))/);
   expect.soft(content, `${artifact}: /thinking is canonical, not an alias`).not.toMatch(/别名[^。\n]{0,180}\/thinking/);
-  expect.soft(normalized, `${artifact}: alias completion`).toMatch(/\/ex\s*→\s*\/exit/);
-  expect.soft(normalized, `${artifact}: canonical completion`).toMatch(/\/qui\s*→\s*\/quit/);
-  expect.soft(normalized, `${artifact}: session completion`).toMatch(/\/ses\s*→\s*\/sessions/);
-  expect.soft(normalized, `${artifact}: provider completion`).toMatch(/\/provi\s*→\s*\/providers/);
-  expect.soft(normalized, `${artifact}: clear completion`).toMatch(/\/cl\s*→\s*\/clear/);
+  expect.soft(normalized, `${artifact}: alias completion`).toMatch(/\/ex\s*⟶\s*\/exit/);
+  expect.soft(normalized, `${artifact}: canonical completion`).toMatch(/\/qui\s*⟶\s*\/quit/);
+  expect.soft(normalized, `${artifact}: session completion`).toMatch(/\/ses\s*⟶\s*\/sessions/);
+  expect.soft(normalized, `${artifact}: provider completion`).toMatch(/\/provi\s*⟶\s*\/providers/);
+  expect.soft(normalized, `${artifact}: clear completion`).toMatch(/\/cl\s*⟶\s*\/clear/);
   expect
     .soft(content, `${artifact}: slash directory has no emphasis`)
     .toMatch(/(?:单独|仅|输入)[^。\n]{0,40}`?\/?`?[^。\n]{0,120}(?:目录|完整命令)[^。\n]{0,120}不(?:高亮|强调)/);
@@ -394,22 +394,24 @@ describe("delivered TUI documentation contract", () => {
     const blocks = textBlocks(docs);
     const splash = blocks.find((block) => BLOCK_LOGO.every((line) => block.includes(line)));
     expect(splash, "Docs splash mock must retain all six exact block-logo lines").toBeDefined();
-    expect(splash).not.toContain("Home · auto/safe · Web");
+    expect(splash).not.toContain("Home ⋅ auto/safe ⋅ Web");
     expect(splash).not.toContain("Kimi / OpenAI / DeepSeek");
     expect(splash).toMatch(/Model\s+\S+/);
     expect(splash).toMatch(/Backend\s+(?:Pi|Fixture)/);
-    expect(splash).toMatch(/Policy\s+\S+\s+·\s+(?:Sandboxed|Host)/);
+    expect(splash).toMatch(/Policy\s+\S+\s+⋅\s+(?:Sandboxed|Host)/);
     expect(splash).not.toMatch(/\bMode\b|\bAuto\b/);
     expect(splash).toMatch(/v\d+\.\d+\.\d+/);
 
-    const main = blocks.find((block) => block.includes("╭ Plan "));
+    const main = blocks.find((block) => block.includes("+ Plan "));
     expect(main, "Docs main mock must show the fresh empty Plan").toBeDefined();
     const mainLines = main?.split("\n") ?? [];
-    const planBottom = mainLines.findIndex((line) => line.startsWith("╰"));
-    expect(mainLines[planBottom + 1]).toMatch(/(?:Shift\+Tab|↑↓|Enter|Esc)/);
+    // ASCII 边框下首行即顶框；底框是下一个 "+" 开头的行，hint 紧随其后。
+    const planTop = mainLines.findIndex((line) => line.startsWith("+"));
+    const planBottom = mainLines.findIndex((line, index) => index > planTop && line.startsWith("+"));
+    expect(mainLines[planBottom + 1]).toMatch(/(?:Shift\+Tab|▴▾|Enter|Esc)/);
     const composerTop = planBottom + 2;
-    expect(mainLines[composerTop]).toMatch(/^╭/);
-    const composerBottom = mainLines.findIndex((line, index) => index > composerTop && line.startsWith("╰"));
+    expect(mainLines[composerTop]).toMatch(/^\+/);
+    const composerBottom = mainLines.findIndex((line, index) => index > composerTop && line.startsWith("+"));
     expect(composerBottom).toBeGreaterThan(composerTop);
     const firstStatusLine = composerBottom + 1;
     const identity80 = mainLines[firstStatusLine] ?? "";
@@ -456,24 +458,24 @@ describe("delivered TUI documentation contract", () => {
 
     const model = blocks.find(
       (block) =>
-        block.includes("Provider") && block.includes("Model ID") && block.includes("输入 ¥") && block.includes("│"),
+        block.includes("Provider") && block.includes("Model ID") && block.includes("输入 ¥") && block.includes("❘"),
     );
     expect(model, "Docs model mock must show left-list/right-detail content").toBeDefined();
-    expect(blocks.join("\n")).not.toMatch(/中国外汇交易中心参考价\s*·|USD\/CNY\s*7\.18/);
+    expect(blocks.join("\n")).not.toMatch(/中国外汇交易中心参考价\s*⋅|USD\/CNY\s*7\.18/);
   });
 
   it("mocks the compact user-message marker without a full-width frame", () => {
     const blocks = textBlocks(docs);
-    const marker = blocks.find((block) => block.trim() === "▌  message");
+    const marker = blocks.find((block) => block.trim() === "▮  message");
     expect(marker, "Docs must include the compact user-message marker mock").toBeDefined();
-    expect(marker).not.toMatch(/[╭╮╰╯│+|-]/);
+    expect(marker).not.toMatch(/[++++❘+|-]/);
   });
 
   it("retains the attachment and Markdown boundaries", () => {
-    expect(readme).toContain("〔登录页-修改前 · 1440×900 · PNG〕");
+    expect(readme).toContain("〔登录页-修改前 ⋅ 1440x900 ⋅ PNG〕");
     expect(readme).toMatch(/Attachment Bridge[\s\S]{0,500}(?:loopback|127\.0\.0\.1)/i);
     expect(docs).toContain("H1/H2");
-    for (const bullet of ["•", "◦", "▪"]) expect(docs).toContain(bullet);
+    for (const bullet of ["▪", "◦", "▪"]) expect(docs).toContain(bullet);
     expect(docs).toMatch(/行内代码[\s\S]{0,200}fenced code[\s\S]{0,200}引用/i);
   });
 });
