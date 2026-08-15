@@ -11,3 +11,4 @@ tmp/
 .artifacts/
 .package-smoke/
 .pty-plans/
+.zcode/
