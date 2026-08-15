@@ -66,6 +66,7 @@ import { createProviderConfigService } from "../providers/config-service.js";
 import { loginProviderWithoutModelNetwork, oauthAvailableInCurrentTerminal } from "../providers/login.js";
 import { isVisibleRuntimeModel } from "../providers/model-visibility.js";
 import { type ProviderProtocol, runProtocolProbe } from "../providers/protocol-probe.js";
+import { createProviderRequestCompatibilityExtension } from "../providers/request-compatibility.js";
 import { normalizeProjectProvider, registerBuiltinProviders } from "../providers/runtime-registration.js";
 import { createQuestionToolDefinition } from "../questions/tool.js";
 import {
@@ -1228,6 +1229,7 @@ export class PiRuntimeBackend implements ChatBackend {
             })
           : undefined;
       const externalImportCompatibilityExtension = createExternalImportCompatibilityExtension();
+      const providerRequestCompatibilityExtension = createProviderRequestCompatibilityExtension();
       const services = await createAgentSessionServices({
         cwd,
         agentDir,
@@ -1255,6 +1257,7 @@ export class PiRuntimeBackend implements ChatBackend {
                   ? {
                       extensionFactories: [
                         externalImportCompatibilityExtension,
+                        providerRequestCompatibilityExtension,
                         promptProfileExtension,
                         planCapsuleExtension,
                         workflowPlanExtension,
