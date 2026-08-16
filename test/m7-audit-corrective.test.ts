@@ -268,7 +268,7 @@ interface TestableApp {
 async function appHarness(profiles = promptUiHarness()) {
   const app = new VspiApp(fakeTui(), plainTheme(), fakeBackend(), {
     cwd: "/workspace/m7-corrective",
-    settings: { ...DEFAULT_SETTINGS, bridgeEnabled: false },
+    settings: { ...DEFAULT_SETTINGS },
     attachments: fakeAttachments(),
     renderOnce: true,
     promptProfiles: profiles.service,

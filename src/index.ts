@@ -2,13 +2,12 @@
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { type Terminal, TuiAltScreen, TuiMainScreen } from "@earendil-works/pi-tui";
+import { type Terminal, TuiMainScreen } from "@earendil-works/pi-tui";
 import { runAuthSetup } from "./app/auth-setup.js";
+import { startParentDeathWatchdog } from "./app/parent-watchdog.js";
 import { shutdownInteractiveSession, startUiAfterSplash } from "./app/startup.js";
 import { VspiApp } from "./app/vspi-app.js";
-import { AttachmentBridge } from "./attachments/bridge.js";
 import { AttachmentService } from "./attachments/service.js";
-import { AttachmentStore } from "./attachments/store.js";
 import { AdaptiveBackend, type BackendMode } from "./backend/adaptive-backend.js";
 import { createRuntimeDefaultsService } from "./config/runtime-defaults.js";
 import { loadSettings } from "./config/settings.js";
@@ -32,6 +31,7 @@ import { applySettingsToCapabilities, detectTerminalCapabilities } from "./ui/ca
 import { ScrollbackProcessTerminal, ScrollbackTUI } from "./ui/scrollback-terminal.js";
 import { openTerminalUrl } from "./ui/terminal-link.js";
 import { createTheme } from "./ui/theme.js";
+import { VspiTuiAltScreen } from "./ui/tui-frame-pacer.js";
 import { updateVspi } from "./update/self-update.js";
 import { VSPI_VERSION } from "./version.js";
 import { createStartupWorkflowAdapter } from "./workflow/startup.js";
@@ -65,7 +65,7 @@ async function renderOnce(): Promise<void> {
   const detected = { ...detectTerminalCapabilities(), reducedMotion: true, ssh: false };
   const capabilities = applySettingsToCapabilities(detected, settings);
   const theme = createTheme(capabilities, settings.theme);
-  const attachments = new AttachmentService(randomUUID(), capabilities, theme);
+  const attachments = new AttachmentService(randomUUID(), theme);
   const promptProfileService = createPromptProfileService({
     cwd: workspace,
     home: process.env.HOME ?? homedir(),
@@ -152,7 +152,7 @@ async function interactive(): Promise<void> {
       : settings.tuiMode;
   const tui =
     configuredTuiMode === "fullscreen"
-      ? new TuiAltScreen(terminal, true, undefined, { openUrl: openTerminalUrl })
+      ? new VspiTuiAltScreen(terminal, true, undefined, { openUrl: openTerminalUrl })
       : new ScrollbackTUI(terminal, true);
   const capabilities = applySettingsToCapabilities(detectTerminalCapabilities(), settings);
   const theme = createTheme(capabilities, settings.theme);
@@ -190,7 +190,7 @@ async function interactive(): Promise<void> {
     },
     goalBackend,
   );
-  const attachments = new AttachmentService(randomUUID(), capabilities, theme);
+  const attachments = new AttachmentService(randomUUID(), theme);
   const app = new VspiApp(tui, theme, backend, {
     cwd: workspace,
     settings,
@@ -228,6 +228,7 @@ async function interactive(): Promise<void> {
   const shutdown = async () => {
     if (closing) return;
     closing = true;
+    stopParentWatchdog();
     process.removeListener("SIGTERM", terminate);
     process.removeListener("SIGHUP", terminate);
     await shutdownInteractiveSession({
@@ -240,6 +241,7 @@ async function interactive(): Promise<void> {
   const terminate = () => void shutdown();
   process.once("SIGTERM", terminate);
   process.once("SIGHUP", terminate);
+  const stopParentWatchdog = startParentDeathWatchdog(() => void shutdown());
 
   tui.addChild(app);
   tui.setFocus(app);
@@ -308,19 +310,6 @@ async function startupPolicy(workspace: string): Promise<{
   return { security, executionPolicy, approvalBroker, yoloAcknowledgementBroker, workflowAdapter };
 }
 
-async function bridge(): Promise<void> {
-  const store = new AttachmentStore(`bridge-${randomUUID()}`);
-  await store.initialize();
-  const server = new AttachmentBridge(store);
-  await server.start();
-  process.stdout.write(`${server.url}\n`);
-  await new Promise<void>((resolve) => {
-    const stop = () => void server.stop().then(resolve);
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
-  });
-}
-
 /** 启动会话语义：默认新会话；`vspi continue` 续接最近会话；`vspi resume` 打开会话选择器。 */
 function startupSessionMode(): {
   continueRecent: boolean;
@@ -331,7 +320,7 @@ function startupSessionMode(): {
   return {
     continueRecent: argv[0] === "continue",
     ...(argv[0] === "resume" ? { openOnStart: "sessions" as const } : {}),
-    ...(argv[0] === "init" ? { openOnStart: "providers" as const } : {}),
+    ...(argv[0] === "config" || argv[0] === "init" ? { openOnStart: "providers" as const } : {}),
     ...(argv[0] === "import"
       ? { initialCommand: ["/import", argv[1]].filter(Boolean).join(" ") }
       : argv[0] === "skills" || argv[0] === "skill"
@@ -349,7 +338,8 @@ function printHelp(): void {
 
 用法：
   vspi                     启动新会话（交互 TUI）
-  vspi init                打开首次配置与 Provider 登录
+  vspi config [custom]     配置 Provider、账号与 API Key
+  vspi init [custom]       兼容旧入口；请迁移到 vspi config
   vspi login [provider]    登录订阅账号或保存 API Key
   vspi logout [provider]   移除 Pi 保存的 Provider 凭据
   vspi continue            续接最近的会话
@@ -358,7 +348,6 @@ function printHelp(): void {
                             导入外部 Agent 的历史会话
   vspi skills               管理、安装与导入 Skill
   vspi run "<prompt>"      非交互模式：执行单个 prompt，结果输出到 stdout
-  vspi bridge              启动附件 Bridge（SSH 粘贴图片）
   vspi update              检查并安装最新稳定版本
 
 选项：
@@ -451,10 +440,10 @@ async function runOnce(prompt: string): Promise<void> {
 }
 
 const entry = process.argv[2];
-if (entry === "bridge") await bridge();
-else if (entry === "run") await runOnce(process.argv.slice(3).join(" "));
+if (entry === "run") await runOnce(process.argv.slice(3).join(" "));
 else if (entry === "update") await selfUpdate();
-else if (entry === "init" || entry === "login" || entry === "logout") {
+else if (entry === "config" || entry === "init" || entry === "login" || entry === "logout") {
+  if (entry === "init") process.stderr.write("vspi init 已更名为 vspi config；本次继续执行配置。\n");
   const settings = await loadSettings(process.cwd());
   await runAuthSetup({
     mode: entry === "logout" ? "logout" : "login",

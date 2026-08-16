@@ -43,7 +43,6 @@ describe("startup orchestration", () => {
       startApp: () => PI_STATUS,
       startTui,
     });
-
     expect(chunks).toHaveLength(2);
     expect(stripAnsi(chunks[0] ?? "").split("\n")).toHaveLength(1);
     expect(chunks[1]).toContain("\u001b[2J\u001b[H");
@@ -117,7 +116,7 @@ describe("startup orchestration", () => {
       expect.soft(outputAtTuiStart.endsWith("\n")).toBe(true);
       expect.soft(output).toContain(PI_STATUS.model);
       expect.soft(output).toContain("Backend Pi");
-      expect.soft(output).toContain("Policy Standard ⋅ Sandboxed");
+      expect.soft(output).toContain("Policy Standard · Sandboxed");
       expect.soft(output).not.toMatch(/\bMode\b|\bAuto\b/);
       expect.soft(output).toContain(PI_STATUS.version);
       expect.soft(output.indexOf(PI_STATUS.model)).toBeLessThan(output.indexOf("当前计划为空"));

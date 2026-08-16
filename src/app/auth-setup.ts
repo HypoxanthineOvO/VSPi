@@ -366,7 +366,7 @@ export async function runAuthSetup(options: {
   providerRef?: string;
   settings: AppSettings;
 }): Promise<void> {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("vspi init/login/logout 需要交互式 TTY");
+  if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("vspi config/login/logout 需要交互式 TTY");
   const terminal = new ProcessTerminal();
   const tui = new TerminalUi(terminal, true);
   const capabilities = applySettingsToCapabilities(detectTerminalCapabilities(), options.settings);

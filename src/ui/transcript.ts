@@ -1,9 +1,15 @@
+import { AssistantMessageComponent } from "@earendil-works/pi-coding-agent";
 import { effortLabel } from "../domain/effort.js";
 import type { TranscriptMessage } from "../domain/types.js";
 import { frame, padLine, stripAnsi, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./ansi.js";
 import { type DiffLine, renderDiff } from "./diff.js";
-import { renderMarkdown } from "./markdown.js";
+import { createVspiMarkdownTransformer, renderMarkdown } from "./markdown.js";
 import type { VspiTheme } from "./theme.js";
+
+/** Render cap for a single thinking block. Full text stays in the message for
+ *  persistence/export; only the tail is sent through Markdown/layout so a giant
+ *  streaming block cannot wedge the TUI renderer or grow the write without bound. */
+const MAX_THINKING_RENDER_CHARS = 200_000;
 
 export interface TranscriptRenderOptions {
   inspectedId?: string;
@@ -52,14 +58,29 @@ interface TranscriptCacheEntry {
   lines: string[];
 }
 
+interface TranscriptRowEstimateEntry {
+  references: TranscriptMessage[];
+  rows: number;
+}
+
+interface OfficialAssistantCacheEntry {
+  component: AssistantMessageComponent;
+  initialized: boolean;
+  reference: Extract<TranscriptMessage, { kind: "text" }>;
+  state: string;
+  theme: VspiTheme;
+}
+
 export class TranscriptRenderCache {
-  private entries = new Map<string, TranscriptCacheEntry>();
+  private entries = new Map<string, Map<string, TranscriptCacheEntry>>();
   private hits = 0;
   private misses = 0;
-  private rowEstimates = new Map<string, number>();
+  private rowEstimates = new Map<string, TranscriptRowEstimateEntry>();
+  private officialAssistants = new Map<string, OfficialAssistantCacheEntry>();
 
   render(key: string, references: TranscriptMessage[], state: string, factory: () => string[]): string[] {
-    const cached = this.entries.get(key);
+    const variants = this.entries.get(key);
+    const cached = variants?.get(state);
     if (
       cached &&
       cached.state === state &&
@@ -71,7 +92,13 @@ export class TranscriptRenderCache {
     }
     this.misses += 1;
     const lines = factory();
-    this.entries.set(key, { references: [...references], state, lines });
+    const nextVariants = variants ?? new Map<string, TranscriptCacheEntry>();
+    if (nextVariants.size >= 4 && !nextVariants.has(state)) {
+      const oldest = nextVariants.keys().next().value;
+      if (oldest !== undefined) nextVariants.delete(oldest);
+    }
+    nextVariants.set(state, { references: [...references], state, lines });
+    this.entries.set(key, nextVariants);
     return lines;
   }
 
@@ -79,30 +106,74 @@ export class TranscriptRenderCache {
    * Cache window-selection row estimates per message identity + width. The
    * estimator walks every line with visibleWidth (Intl.Segmenter slow path for
    * CJK), and selectTranscriptWindow runs it on every frame otherwise. Bounded
-   * FIFO: streaming messages keep their id but change size, so entries must
-   * not be treated as permanently valid — they are recomputed once evicted.
+   * FIFO: entries also retain message references so immutable streaming
+   * patches invalidate estimates even when ids and streaming state are stable.
    */
-  estimateRows(key: string, width: number, factory: () => number): number {
+  estimateRows(key: string, width: number, references: TranscriptMessage[], factory: () => number): number {
     const cacheKey = `${key}@${width}`;
-    if (this.rowEstimates.has(cacheKey)) return this.rowEstimates.get(cacheKey) as number;
+    const cached = this.rowEstimates.get(cacheKey);
+    if (
+      cached &&
+      cached.references.length === references.length &&
+      cached.references.every((reference, index) => reference === references[index])
+    ) {
+      return cached.rows;
+    }
     if (this.rowEstimates.size >= 512) {
       const oldest = this.rowEstimates.keys().next().value;
       if (oldest !== undefined) this.rowEstimates.delete(oldest);
     }
     const rows = factory();
-    this.rowEstimates.set(cacheKey, rows);
+    this.rowEstimates.set(cacheKey, { references: [...references], rows });
     return rows;
   }
 
-  retain(keys: Set<string>): void {
+  renderOfficialAssistant(
+    key: string,
+    message: Extract<TranscriptMessage, { kind: "text" }>,
+    width: number,
+    theme: VspiTheme,
+    options: Pick<TranscriptRenderOptions, "wrapCode" | "mermaidRendering">,
+  ): string[] {
+    const state = `${options.wrapCode === false ? "nowrap" : "wrap"}:${options.mermaidRendering ?? "final"}`;
+    let cached = this.officialAssistants.get(key);
+    if (!cached || cached.state !== state || cached.theme !== theme) {
+      cached = {
+        component: new AssistantMessageComponent(undefined, false, theme.markdown, "Thinking...", 0, [
+          createVspiMarkdownTransformer({ ...options, unicode: theme.capabilities.unicode }),
+        ]),
+        initialized: false,
+        reference: message,
+        state,
+        theme,
+      };
+      this.officialAssistants.set(key, cached);
+    }
+    if (!cached.initialized || cached.reference !== message) {
+      cached.initialized = true;
+      cached.reference = message;
+      cached.component.updateContent(toOfficialAssistantMessage(message.text), message.streaming ?? false);
+    }
+    return normalizeOfficialAssistantLines(cached.component.render(width));
+  }
+
+  retain(keys: Set<string>, references: TranscriptMessage[]): void {
     for (const key of this.entries.keys()) {
       if (!keys.has(key)) this.entries.delete(key);
+    }
+    for (const key of this.officialAssistants.keys()) {
+      if (!keys.has(key)) this.officialAssistants.delete(key);
+    }
+    const retainedReferences = new Set(references);
+    for (const [key, entry] of this.rowEstimates) {
+      if (!entry.references.some((reference) => retainedReferences.has(reference))) this.rowEstimates.delete(key);
     }
   }
 
   clear(): void {
     this.entries.clear();
     this.rowEstimates.clear();
+    this.officialAssistants.clear();
     this.hits = 0;
     this.misses = 0;
   }
@@ -325,8 +396,8 @@ function estimateTranscriptBlockRows(block: TranscriptMessage[], options: Transc
       return "";
     })
     .join("");
-  const key = `rows:${block.map((message) => message.id).join("|")}:${state}`;
-  return cache.estimateRows(key, options.width, compute);
+  const key = `rows:${block.map((message) => message.id).join("|")}:${state}:${options.thinkingDisplay ?? "collapsed"}:${options.collapseCompletedTools ? "collapse" : "expand"}`;
+  return cache.estimateRows(key, options.width, block, compute);
 }
 
 function estimateTranscriptBlockRowsUncached(block: TranscriptMessage[], options: TranscriptWindowOptions): number {
@@ -354,7 +425,10 @@ function estimateTranscriptBlockRowsUncached(block: TranscriptMessage[], options
   }
   if (first.kind === "thinking") {
     if (options.thinkingDisplay === "hidden") return 2;
-    return first.collapsed ? 3 : 2 + estimatedWrappedRows(first.translatedText || first.text, width);
+    const displayText = first.translatedText || first.text;
+    const boundedText =
+      displayText.length > MAX_THINKING_RENDER_CHARS ? displayText.slice(-MAX_THINKING_RENDER_CHARS) : displayText;
+    return first.collapsed ? 3 : 2 + estimatedWrappedRows(boundedText, width);
   }
   if (first.kind === "text") return 1 + estimatedWrappedRows(first.text, width);
   return 2;
@@ -363,7 +437,7 @@ function estimateTranscriptBlockRowsUncached(block: TranscriptMessage[], options
 function attachmentSummary(message: Extract<TranscriptMessage, { kind: "text" }>): string[] {
   return (message.attachments ?? []).map(
     (attachment) =>
-      `〔${attachment.alias} ⋅ ${attachment.width}x${attachment.height} ⋅ ${attachment.mimeType.split("/")[1]?.toUpperCase()}〕`,
+      `〔${attachment.alias} · ${attachment.width}×${attachment.height} · ${attachment.mimeType.split("/")[1]?.toUpperCase()}〕`,
   );
 }
 
@@ -394,17 +468,16 @@ export function renderTranscriptMessage(
     const status = deliverySummary(message);
     lines = [
       theme.userSurface(padLine("", width)),
-      ...contentLines.map((line) => theme.userSurface(padLine(`${theme.focus("▮")}  ${line || " "}`, width))),
+      ...contentLines.map((line) => theme.userSurface(padLine(`${theme.focus("▌")}  ${line || " "}`, width))),
       ...(status ? [theme.userSurface(padLine(`   ${theme.muted(status)}`, width))] : []),
       theme.userSurface(padLine("", width)),
     ];
   } else if (message.kind === "text") {
-    const markdown = renderMarkdown(message.text, Math.max(1, width - 2), theme, {
-      ...(options.wrapCode !== undefined ? { wrapCode: options.wrapCode } : {}),
-      ...(options.mermaidRendering ? { mermaidRendering: options.mermaidRendering } : {}),
-      streaming: message.streaming ?? false,
-    });
-    lines = markdown.map((line, index) => `${index === 0 ? `${theme.muted("▪")} ` : "  "}${line}`);
+    const markdownWidth = Math.max(1, width - 2);
+    const markdown = options.cache
+      ? options.cache.renderOfficialAssistant(`message:${message.id}`, message, markdownWidth, theme, options)
+      : renderOfficialAssistant(message, markdownWidth, theme, options);
+    lines = markdown.map((line, index) => `${index === 0 ? `${theme.muted("•")} ` : "  "}${line}`);
     if (message.streaming && lines.length > 0) {
       // 满宽行先把内容截到 width-1，再追加光标，避免后续 padLine 把光标切掉。
       const last = lines[lines.length - 1] ?? "";
@@ -413,30 +486,36 @@ export function renderTranscriptMessage(
         const raw = truncateToWidth(last, Math.max(0, width - 1), "");
         clipped = last.includes("\u001b") ? raw : stripAnsi(raw);
       }
-      lines[lines.length - 1] = `${clipped}${theme.focus("❙")}`;
+      lines[lines.length - 1] = `${clipped}${theme.focus("▋")}`;
     }
   } else if (message.kind === "thinking") {
     if (options.thinkingDisplay === "hidden" && message.streaming && !selected) {
-      return [theme.muted(`⋄ 思考中 ⋅ Effort ${effortLabel(message.effort)}`)];
+      return [theme.muted(`◇ 思考中 · Effort ${effortLabel(message.effort)}`)];
     }
     if (options.thinkingDisplay === "hidden" && !selected) {
-      return [theme.muted("⋄ 思考 ⋅ 已隐藏")];
+      return [theme.muted("◇ 思考 · 已隐藏")];
     }
-    const duration = message.durationMs === undefined ? "" : ` ⋅ ${(message.durationMs / 1000).toFixed(1)}s`;
+    const duration = message.durationMs === undefined ? "" : ` · ${(message.durationMs / 1000).toFixed(1)}s`;
     const translation =
       message.translationStatus === "pending"
-        ? " ⋅ 翻译中"
+        ? " · 翻译中"
         : message.translationStatus === "translated"
-          ? " ⋅ 已翻译"
+          ? " · 已翻译"
           : message.translationStatus === "error"
-            ? " ⋅ 翻译失败"
+            ? " · 翻译失败"
             : "";
-    const displayText = message.translatedText || message.text;
+    const fullDisplayText = message.translatedText || message.text;
+    const renderBounded = fullDisplayText.length > MAX_THINKING_RENDER_CHARS;
+    const displayText = renderBounded ? fullDisplayText.slice(-MAX_THINKING_RENDER_CHARS) : fullDisplayText;
+    const truncationNotice = renderBounded
+      ? `  … 思考过长，仅显示末尾 ${MAX_THINKING_RENDER_CHARS.toLocaleString()} 字符（共 ${fullDisplayText.length.toLocaleString()}）`
+      : undefined;
     lines = [
       theme.muted(
-        `⋄ 思考 ⋅ Effort ${effortLabel(message.effort)}${duration}${translation} ⋅ ${message.collapsed ? "已折叠" : "已展开"}`,
+        `◇ 思考 · Effort ${effortLabel(message.effort)}${duration}${translation} · ${message.collapsed ? "已折叠" : "已展开"}`,
       ),
     ];
+    if (truncationNotice) lines.push(theme.warning(truncationNotice));
     if (message.collapsed) {
       const preview = collapsedThinkingPreview(displayText, Math.max(1, width - 2));
       if (preview) lines.push(theme.muted(`  ${preview}`));
@@ -452,26 +531,26 @@ export function renderTranscriptMessage(
   } else if (message.kind === "tool") {
     return renderToolGroup([message], width, theme, options);
   } else if (message.kind === "session") {
-    lines = [theme.muted(`⋄ ${message.text}`)];
+    lines = [theme.muted(`◇ ${message.text}`)];
   } else {
     const symbol =
       message.status === "success"
         ? theme.success("✓")
         : message.status === "error"
-          ? theme.error("x")
+          ? theme.error("×")
           : message.status === "cancelled"
             ? theme.warning("−")
-            : theme.focus("◉");
+            : theme.focus("●");
     const identity = message.agentKind === "teammate" ? (message.teammateId ?? "teammate") : "task";
-    const lane = message.lane ? ` ⋅ lane ${message.lane}` : "";
+    const lane = message.lane ? ` · lane ${message.lane}` : "";
     const preferred =
       message.preferredModel && message.preferredModel !== message.model
-        ? ` ⋅ preferred ${message.preferredModel}`
+        ? ` · preferred ${message.preferredModel}`
         : "";
-    const fallback = message.fallbackReason ? ` ⋅ fallback ${message.fallbackReason}` : "";
-    const context = message.contextMode ? ` ⋅ ${message.contextMode}` : "";
-    const agentRole = message.agentRole ? ` ⋅ ${message.agentRole}` : "";
-    const metadata = `${symbol} ${identity}${agentRole} ⋅ ${theme.blue(message.model)}${preferred} ⋅ ${effortLabel(message.effort)}${context}${lane}${fallback}`;
+    const fallback = message.fallbackReason ? ` · fallback ${message.fallbackReason}` : "";
+    const context = message.contextMode ? ` · ${message.contextMode}` : "";
+    const agentRole = message.agentRole ? ` · ${message.agentRole}` : "";
+    const metadata = `${symbol} ${identity}${agentRole} · ${theme.blue(message.model)}${preferred} · ${effortLabel(message.effort)}${context}${lane}${fallback}`;
     const bodyWidth = Math.max(1, width - 2);
     const body = [
       padLine(metadata, bodyWidth),
@@ -480,15 +559,15 @@ export function renderTranscriptMessage(
         ? [
             theme.muted(
               truncateToWidth(
-                `Budget ⋅ run ${formatSubagentTokens(message.runTokensLeft)} left ⋅ tree ${formatSubagentTokens(message.treeTokensLeft)} / $${(message.treeCostUsdLeft ?? 0).toFixed(3)} left`,
+                `Budget · run ${formatSubagentTokens(message.runTokensLeft)} left · tree ${formatSubagentTokens(message.treeTokensLeft)} / $${(message.treeCostUsdLeft ?? 0).toFixed(3)} left`,
                 bodyWidth,
-                "...",
+                "…",
               ),
             ),
           ]
         : []),
       ...(message.outputPreview
-        ? [theme.muted(truncateToWidth(message.outputPreview, bodyWidth, "..."))]
+        ? [theme.muted(truncateToWidth(message.outputPreview, bodyWidth, "…"))]
         : message.status === "running"
           ? [theme.muted("Working...")]
           : []),
@@ -503,6 +582,51 @@ export function renderTranscriptMessage(
 
   if (selected) return renderSelectedLines(lines, width, theme);
   return lines.map((line) => (visibleWidth(line) > width ? padLine(line, width) : line));
+}
+
+const ESCAPE = String.fromCharCode(27);
+const BELL = String.fromCharCode(7);
+const OSC133_ZONE = new RegExp(`${ESCAPE}\\]133;[ABC](?:${BELL}|${ESCAPE}\\\\)`, "gu");
+
+type OfficialAssistantMessage = NonNullable<ConstructorParameters<typeof AssistantMessageComponent>[0]>;
+
+function toOfficialAssistantMessage(text: string): OfficialAssistantMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    api: "openai-completions",
+    provider: "vspi",
+    model: "transcript",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 0,
+  } as OfficialAssistantMessage;
+}
+
+function normalizeOfficialAssistantLines(lines: string[]): string[] {
+  const normalized = lines.map((line) => line.replace(OSC133_ZONE, ""));
+  while (normalized.length > 0 && stripAnsi(normalized[0] ?? "").trim() === "") normalized.shift();
+  return normalized;
+}
+
+function renderOfficialAssistant(
+  message: Extract<TranscriptMessage, { kind: "text" }>,
+  width: number,
+  theme: VspiTheme,
+  options: Pick<TranscriptRenderOptions, "wrapCode" | "mermaidRendering">,
+): string[] {
+  const component = new AssistantMessageComponent(undefined, false, theme.markdown, "Thinking...", 0, [
+    createVspiMarkdownTransformer({ ...options, unicode: theme.capabilities.unicode }),
+  ]);
+  component.updateContent(toOfficialAssistantMessage(message.text), message.streaming ?? false);
+  return normalizeOfficialAssistantLines(component.render(width));
 }
 
 function formatSubagentTokens(value: number): string {
@@ -523,8 +647,8 @@ function collapsedThinkingPreview(text: string, width: number): string | undefin
     .map((item) => item.trim())
     .find(Boolean);
   if (!line) return undefined;
-  const suffix = sections.length > 1 ? ` ⋅ ${sections.length} 段` : "";
-  return truncateToWidth(`${line}${suffix}`, width, "...");
+  const suffix = sections.length > 1 ? ` · ${sections.length} 段` : "";
+  return truncateToWidth(`${line}${suffix}`, width, "…");
 }
 
 function toolLabel(name: string): string {
@@ -603,7 +727,7 @@ export function renderTranscript(
     }
     if (index < visible.length && stripAnsi(output.at(-1) ?? "") !== "") output.push("");
   }
-  options.cache?.retain(retainedCacheKeys);
+  options.cache?.retain(retainedCacheKeys, visible);
   return output;
 }
 
@@ -630,7 +754,7 @@ function renderToolGroup(
     (message) => message.id === options.selectedToolId || message.id === options.inspectedId,
   );
   const expanded = !options.collapseCompletedTools || messages.some((message) => message.expanded) || childSelected;
-  const summary = `⋄ 工具调用 ⋅ ${messages.length} 项 ⋅ ${toolGroupStatus(messages)}`;
+  const summary = `◇ 工具调用 · ${messages.length} 项 · ${toolGroupStatus(messages)}`;
   if (options.collapseCompletedTools && allToolsTerminal(messages) && !expanded) {
     const line = fitLine(theme.muted(summary), width);
     return options.selectedNodeId === nodeId ? renderSelectedLines([line], width, theme) : [line];
@@ -661,10 +785,10 @@ function renderToolEntry(
     message.status === "success"
       ? theme.success("✓")
       : message.status === "error"
-        ? theme.error("x")
+        ? theme.error("×")
         : message.status === "cancelled"
           ? theme.warning("−")
-          : theme.focus("◉");
+          : theme.focus("●");
   const state =
     message.status === "error"
       ? "失败"
@@ -676,14 +800,14 @@ function renderToolEntry(
             ? "运行中"
             : "";
   const summary = message.summary.replace(/\s+/g, " ").trim();
-  const label = padLine(truncateToWidth(toolLabel(message.name), labelWidth, "..."), labelWidth);
-  const detail = state ? `${summary} ⋅ ${state}` : summary;
+  const label = padLine(truncateToWidth(toolLabel(message.name), labelWidth, "…"), labelWidth);
+  const detail = state ? `${summary} · ${state}` : summary;
   const lines = [
     fitLine(`${theme.muted(treeConnector(last, theme))} ${symbol} ${theme.bold(label)}  ${theme.muted(detail)}`, width),
   ];
   const legacyRestricted = options.inspectedId !== undefined && options.selectedToolId === undefined;
   if (message.expanded && message.output && (!legacyRestricted || options.inspectedId === message.id)) {
-    const continuation = last ? "   " : theme.muted(theme.capabilities.unicode ? "❘  " : "|  ");
+    const continuation = last ? "   " : theme.muted(theme.capabilities.unicode ? "│  " : "|  ");
     if (message.name === "edit" && message.output.startsWith("@@")) {
       lines.push(
         ...renderDiff(parseDiff(message.output), Math.max(1, width - 6), theme).map((line) =>
@@ -706,8 +830,8 @@ function renderToolEntry(
 
 function renderSelectedLines(lines: string[], width: number, theme: VspiTheme): string[] {
   return lines.map((line, index) => {
-    const content = truncateToWidth(line, Math.max(1, width - 2), "...");
-    return theme.selected(padLine(`${index === 0 ? theme.focus("▮ ") : "  "}${content}`, width));
+    const content = truncateToWidth(line, Math.max(1, width - 2), "…");
+    return theme.selected(padLine(`${index === 0 ? theme.focus("▌ ") : "  "}${content}`, width));
   });
 }
 
@@ -716,7 +840,7 @@ function toolGroupStatus(messages: Extract<TranscriptMessage, { kind: "tool" }>[
   const errors = messages.filter((message) => message.status === "error").length;
   const cancelled = messages.filter((message) => message.status === "cancelled").length;
   if (errors > 0 || cancelled > 0) {
-    return [errors > 0 ? `${errors} 失败` : "", cancelled > 0 ? `${cancelled} 已取消` : ""].filter(Boolean).join(" ⋅ ");
+    return [errors > 0 ? `${errors} 失败` : "", cancelled > 0 ? `${cancelled} 已取消` : ""].filter(Boolean).join(" · ");
   }
   return "已完成";
 }
@@ -726,11 +850,10 @@ function allToolsTerminal(messages: Extract<TranscriptMessage, { kind: "tool" }>
 }
 
 function treeConnector(last: boolean, theme: VspiTheme): string {
-  // ❘‒ 均为 neutral 宽度；├└─ 在 ambiguous 按宽渲染的中文终端里占 2 列导致工具树错位。
-  if (theme.capabilities.unicode) return "❘‒";
+  if (theme.capabilities.unicode) return last ? "└─" : "├─";
   return last ? "\\-" : "|-";
 }
 
 function fitLine(line: string, width: number): string {
-  return visibleWidth(line) > width ? truncateToWidth(line, width, "...") : line;
+  return visibleWidth(line) > width ? truncateToWidth(line, width, "…") : line;
 }

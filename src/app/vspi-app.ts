@@ -89,7 +89,7 @@ import {
 } from "../ui/interactions.js";
 import { PanelController, type PanelEvent } from "../ui/panels.js";
 import { ScrollbackTUI } from "../ui/scrollback-terminal.js";
-import type { StartupStatus } from "../ui/splash.js";
+import { renderSplash, type StartupStatus } from "../ui/splash.js";
 import { renderStatusLines } from "../ui/status.js";
 import { openTerminalUrl } from "../ui/terminal-link.js";
 import type { VspiTheme } from "../ui/theme.js";
@@ -102,6 +102,7 @@ import {
   TranscriptRenderCache,
   type TranscriptWindow,
 } from "../ui/transcript.js";
+import { VspiTuiAltScreen } from "../ui/tui-frame-pacer.js";
 import { type SelfUpdateResult, updateVspi } from "../update/self-update.js";
 import { VSPI_VERSION } from "../version.js";
 import type { WorkflowAdapter, WorkflowSnapshot } from "../workflow/types.js";
@@ -229,6 +230,15 @@ interface AppRenderSections {
   dock: string[];
 }
 
+interface AppRenderDock {
+  lines: string[];
+  activityActive: boolean;
+  composer: string[];
+  activity: string[];
+  queuedMessages: string[];
+  status: string[];
+}
+
 export class VspiApp implements Component, Focusable {
   readonly composer: Composer;
   private tui: TUI;
@@ -312,11 +322,13 @@ export class VspiApp implements Component, Focusable {
   private readonly fullscreenDockSurface: Component;
   private readonly fullscreenScrollView: ScrollView;
   private readonly fullscreenLayout: VStack;
-  private mainScreenRenderState: TuiMainScreenRenderState | undefined;
-  private renderRevision = 0;
-  private renderSectionsCache:
-    | { width: number; revision: number; mode: TuiMode; sections: AppRenderSections }
+  private fullscreenRenderRevision = 0;
+  private fullscreenBodyCache: { revision: number; width: number; lines: string[] } | undefined;
+  private fullscreenDockCache: { revision: number; width: number; dock: AppRenderDock } | undefined;
+  private pendingFullscreenDock:
+    | { width: number; dock: AppRenderDock; bodyRendered: boolean; dockRendered: boolean }
     | undefined;
+  private mainScreenRenderState: TuiMainScreenRenderState | undefined;
 
   get focused(): boolean {
     return this._focused;
@@ -340,8 +352,8 @@ export class VspiApp implements Component, Focusable {
     } as TUI;
     this.composer = new Composer(renderingTui, theme);
     this.panels = new PanelController(options.settings);
-    this.fullscreenTranscriptSurface = this.createRenderSurface((width) => this.renderSections(width).body);
-    this.fullscreenDockSurface = this.createRenderSurface((width) => this.renderSections(width).dock);
+    this.fullscreenTranscriptSurface = this.createRenderSurface((width) => this.renderFullscreenBody(width));
+    this.fullscreenDockSurface = this.createRenderSurface((width) => this.renderFullscreenDock(width));
     this.fullscreenScrollView = new ScrollView(this.fullscreenTranscriptSurface, {
       follow: "end",
       primary: true,
@@ -493,22 +505,19 @@ export class VspiApp implements Component, Focusable {
           else for (const task of hydration) void task;
         },
       });
-      await this.options.attachments.start(
-        {
-          onAttachment: (attachment, ownership) => {
-            if (
-              ownership &&
-              (ownership.sessionId !== this.attachmentSessionId ||
-                ownership.generation !== this.options.attachments.sessionGeneration)
-            ) {
-              return;
-            }
-            this.composer.addAttachment(attachment);
-          },
-          onNotice: (text, tone) => this.showNotice(text, tone),
+      await this.options.attachments.start({
+        onAttachment: (attachment, ownership) => {
+          if (
+            ownership &&
+            (ownership.sessionId !== this.attachmentSessionId ||
+              ownership.generation !== this.options.attachments.sessionGeneration)
+          ) {
+            return;
+          }
+          this.composer.addAttachment(attachment);
         },
-        this.options.settings.bridgeEnabled,
-      );
+        onNotice: (text, tone) => this.showNotice(text, tone),
+      });
       this.renderReady = true;
       this.startupShellReady = true;
       this.backendSessionReady = this.backend.isSessionReady?.() ?? true;
@@ -552,7 +561,7 @@ export class VspiApp implements Component, Focusable {
       this.providerCatalogHash = catalog?.hash;
       const providers = runtimeProviders.map((provider) => {
         const source = catalog?.providers.find((item) => item.id === provider.id)?.source ?? "builtin";
-        return { ...provider, detail: `${source} ⋅ ${provider.detail}` };
+        return { ...provider, detail: `${source} · ${provider.detail}` };
       });
       this.providerOptions = structuredClone(providers);
       this.panels.setProviders(providers);
@@ -609,12 +618,7 @@ export class VspiApp implements Component, Focusable {
   }
 
   private createRenderSurface(render: (width: number) => string[]): Component {
-    return {
-      render,
-      invalidate: () => {
-        this.renderSectionsCache = undefined;
-      },
-    };
+    return { render, invalidate() {} };
   }
 
   private bindTui(tui: TUI): void {
@@ -640,7 +644,7 @@ export class VspiApp implements Component, Focusable {
 
     const next: TUI =
       mode === "fullscreen"
-        ? new TuiAltScreen(terminal, showHardwareCursor, undefined, { openUrl: openTerminalUrl })
+        ? new VspiTuiAltScreen(terminal, showHardwareCursor, undefined, { openUrl: openTerminalUrl })
         : new ScrollbackTUI(terminal, showHardwareCursor);
     next.setClearOnShrink(clearOnShrink);
     if (onDebug) next.onDebug = onDebug;
@@ -651,8 +655,6 @@ export class VspiApp implements Component, Focusable {
     this.bindTui(next);
     next.addChild(this);
     next.setFocus(this);
-    this.renderRevision += 1;
-    this.renderSectionsCache = undefined;
     next.start();
     return true;
   }
@@ -664,6 +666,7 @@ export class VspiApp implements Component, Focusable {
   }
 
   handleInput(data: string): void {
+    this.fullscreenRenderRevision += 1;
     if (this.notice && !this.notice.progress && (this.notice.tone === "warning" || this.notice.tone === "error")) {
       this.notice = undefined;
     }
@@ -833,6 +836,7 @@ export class VspiApp implements Component, Focusable {
     // active frame makes the frame taller than the terminal and scrolls the
     // picker title above the visible area.
     this.startupSurface = this.panels.kind === "sessions" ? [] : [...lines];
+    this.fullscreenRenderRevision += 1;
   }
 
   render(width: number): string[] {
@@ -840,38 +844,79 @@ export class VspiApp implements Component, Focusable {
     return [...sections.body, ...sections.dock];
   }
 
-  private renderSections(width: number): AppRenderSections {
-    const cached = this.renderSectionsCache;
-    if (cached && cached.width === width && cached.revision === this.renderRevision && cached.mode === this.tui.mode) {
-      return cached.sections;
+  private renderFullscreenBody(width: number): string[] {
+    let pending = this.pendingFullscreenDock;
+    if (!pending || pending.bodyRendered) {
+      const terminalWidth = Number.isFinite(this.tui.terminal.columns) ? this.tui.terminal.columns : width;
+      pending = this.stageFullscreenDock(Math.max(1, terminalWidth));
     }
-    const sections = this.buildRenderSections(width);
-    this.renderSectionsCache = { width, revision: this.renderRevision, mode: this.tui.mode, sections };
-    return sections;
+    pending.bodyRendered = true;
+    let cached = this.fullscreenBodyCache;
+    if (!cached || cached.revision !== this.fullscreenRenderRevision || cached.width !== width) {
+      cached = {
+        revision: this.fullscreenRenderRevision,
+        width,
+        lines: this.buildRenderBody(width, pending.dock),
+      };
+      this.fullscreenBodyCache = cached;
+    }
+    if (pending.dockRendered) this.pendingFullscreenDock = undefined;
+    return cached.lines;
+  }
+
+  private renderFullscreenDock(width: number): string[] {
+    let pending = this.pendingFullscreenDock;
+    if (!pending || pending.width !== width || pending.dockRendered) pending = this.stageFullscreenDock(width);
+    pending.dockRendered = true;
+    const lines = pending.dock.lines;
+    if (pending.bodyRendered) this.pendingFullscreenDock = undefined;
+    return lines;
+  }
+
+  private stageFullscreenDock(width: number): NonNullable<VspiApp["pendingFullscreenDock"]> {
+    this.pendingFullscreenDock = undefined;
+    let cached = this.fullscreenDockCache;
+    if (!cached || cached.revision !== this.fullscreenRenderRevision || cached.width !== width) {
+      cached = { revision: this.fullscreenRenderRevision, width, dock: this.buildRenderDock(width) };
+      this.fullscreenDockCache = cached;
+    }
+    const pending = { width, dock: cached.dock, bodyRendered: false, dockRendered: false };
+    this.pendingFullscreenDock = pending;
+    queueMicrotask(() => {
+      if (this.pendingFullscreenDock === pending) this.pendingFullscreenDock = undefined;
+    });
+    return pending;
   }
 
   private buildRenderSections(width: number): AppRenderSections {
+    const dock = this.buildRenderDock(width);
+    return { body: this.buildRenderBody(width, dock), dock: dock.lines };
+  }
+
+  private buildRenderDock(width: number): AppRenderDock {
     const questionActive = this.panels.kind === "question";
     this.composer.focused = this._focused && !questionActive;
-    if (this.authDialog) return { body: this.withStartupSurface(this.authDialog.render(width, this.theme)), dock: [] };
+    if (this.authDialog) {
+      return {
+        lines: [],
+        activityActive: false,
+        composer: [],
+        activity: [],
+        queuedMessages: [],
+        status: [],
+      };
+    }
     if (this.panels.kind === "sessions") {
       const status = this.renderStatus(width);
-      const terminalRows = Number.isFinite(this.tui.terminal.rows) ? this.tui.terminal.rows : 24;
-      // Sessions owns the viewport but is vertically centered: content-sized surface with
-      // remaining rows split above/below (at least 2 blank rows on top) so the panel title
-      // never hugs row 0, which real terminals can hide behind their own chrome.
-      const availableRows = Math.max(3, terminalRows - status.length);
-      const contentHeight = this.panels.sessionsContentHeight(width, this.theme);
-      const surfaceRows = Math.min(contentHeight, availableRows);
-      const surface = this.panels.renderSessionsSurface(width, surfaceRows, this.theme);
-      const remaining = Math.max(0, availableRows - surface.length);
-      const topPad = Math.min(remaining, Math.max(2, Math.floor(remaining / 2)));
-      const bottomPad = Math.max(0, remaining - topPad);
-      const blank = Array.from({ length: topPad }, () => padLine("", width));
-      const blankBottom = Array.from({ length: bottomPad }, () => padLine("", width));
-      return { body: [...blank, ...surface, ...blankBottom], dock: status };
+      return {
+        lines: status,
+        activityActive: false,
+        composer: [],
+        activity: [],
+        queuedMessages: [],
+        status,
+      };
     }
-    const transcriptFocused = this.workspaceFocus === "transcript";
     const activityActive = this.activityActive();
     const composer = questionActive
       ? []
@@ -883,12 +928,12 @@ export class VspiApp implements Component, Focusable {
               {
                 indicator: this.activityReducedMotion()
                   ? this.theme.capabilities.unicode
-                    ? "▪"
+                    ? "■"
                     : "*"
                   : this.theme.capabilities.unicode
                     ? this.workingFrame % 2 === 0
-                      ? "▪"
-                      : "▫"
+                      ? "■"
+                      : "□"
                     : this.workingFrame % 2 === 0
                       ? "*"
                       : "+",
@@ -905,6 +950,36 @@ export class VspiApp implements Component, Focusable {
           .filter(isQueuedTranscriptMessage)
           .map((message) => renderQueuedMessage(message, width, this.theme));
     const status = this.renderStatus(width);
+    return {
+      lines: [...activity, ...queuedMessages, ...composer, ...status],
+      activityActive,
+      composer,
+      activity,
+      queuedMessages,
+      status,
+    };
+  }
+
+  private buildRenderBody(width: number, dock: AppRenderDock): string[] {
+    if (this.authDialog) return this.withStartupSurface(this.authDialog.render(width, this.theme));
+    if (this.panels.kind === "sessions") {
+      const terminalRows = Number.isFinite(this.tui.terminal.rows) ? this.tui.terminal.rows : 24;
+      // Sessions owns the viewport but is vertically centered: content-sized surface with
+      // remaining rows split above/below (at least 2 blank rows on top) so the panel title
+      // never hugs row 0, which real terminals can hide behind their own chrome.
+      const availableRows = Math.max(3, terminalRows - dock.status.length);
+      const contentHeight = this.panels.sessionsContentHeight(width, this.theme);
+      const surfaceRows = Math.min(contentHeight, availableRows);
+      const surface = this.panels.renderSessionsSurface(width, surfaceRows, this.theme);
+      const remaining = Math.max(0, availableRows - surface.length);
+      const topPad = Math.min(remaining, Math.max(2, Math.floor(remaining / 2)));
+      const bottomPad = Math.max(0, remaining - topPad);
+      const blank = Array.from({ length: topPad }, () => padLine("", width));
+      const blankBottom = Array.from({ length: bottomPad }, () => padLine("", width));
+      return [...blank, ...surface, ...blankBottom];
+    }
+    const { activityActive, composer, activity, queuedMessages, status } = dock;
+    const transcriptFocused = this.workspaceFocus === "transcript";
     const planSurfaceVisible =
       !transcriptFocused && (this.panels.kind !== "plan" || this.panels.hasPlanContent() || this.planPanelExplicit);
     const panelRows = this.panelRowBudget(composer.length, activity.length, queuedMessages.length, status.length);
@@ -960,10 +1035,7 @@ export class VspiApp implements Component, Focusable {
       if (hint !== undefined) output.push(hint);
     }
     if (questionGutterRows > 0) output.push("");
-    return {
-      body: this.withStartupSurface(output),
-      dock: [...activity, ...queuedMessages, ...composer, ...status],
-    };
+    return this.withStartupSurface(output);
   }
 
   commitStableTranscript(): number {
@@ -1091,15 +1163,14 @@ export class VspiApp implements Component, Focusable {
       return Math.max(3, (this.panels.kind === "models" ? 10 : 9) - activityRows - queuedRows - (statusRows - 1));
     }
     return Math.min(
-      this.panels.kind === "question" ? 22 : 16,
+      this.panels.kind === "models" ? 24 : this.panels.kind === "question" ? 22 : 16,
       Math.max(3, this.tui.terminal.rows - composerRows - activityRows - queuedRows - 7 - statusRows),
     );
   }
 
   invalidate(): void {
-    this.renderRevision += 1;
-    this.renderSectionsCache = undefined;
     this.composer.invalidate();
+    this.fullscreenRenderRevision += 1;
   }
 
   private renderPanelHint(width: number): string | undefined {
@@ -1250,6 +1321,7 @@ export class VspiApp implements Component, Focusable {
         return;
       }
       this.modelLabel = this.backend.modelLabel;
+      this.refreshModelPresentation();
       this.composer.editor.addToHistory(text);
     } catch (error) {
       if (submission.cancelled) {
@@ -1274,7 +1346,7 @@ export class VspiApp implements Component, Focusable {
     } else {
       const selectedAttachment = this.composer.selectedAttachment();
       if (selectedAttachment) {
-        lines = [this.theme.blue(padLine(`〔${selectedAttachment.alias}〕  重命名 ⋅ 预览 ⋅ 移除 ⋅ 保存到项目`, width))];
+        lines = [this.theme.blue(padLine(`〔${selectedAttachment.alias}〕  重命名 · 预览 · 移除 · 保存到项目`, width))];
       } else {
         const policy = this.executionPolicy.snapshot();
         const mode =
@@ -1303,7 +1375,7 @@ export class VspiApp implements Component, Focusable {
           width,
           this.theme,
         );
-        noticeContext = `${statusModel} ⋅ Effort ${effortLabel(this.effort)} ⋅ ${this.options.cwd} ⋅ Policy ${runtime.policy}`;
+        noticeContext = `${statusModel} · Effort ${effortLabel(this.effort)} · ${this.options.cwd} · Policy ${runtime.policy}`;
       }
     }
     if (this.notice && lines.length > 0) {
@@ -1327,7 +1399,7 @@ export class VspiApp implements Component, Focusable {
       ? this.notice.progress
         ? "◌"
         : this.notice.tone === "error"
-          ? "x"
+          ? "×"
           : this.notice.tone === "warning"
             ? "!"
             : this.notice.tone === "success"
@@ -1351,7 +1423,7 @@ export class VspiApp implements Component, Focusable {
           : this.notice.tone === "success"
             ? "完成"
             : "通知";
-    return padLine(`${style(`${icon} ${label}`)} ${this.theme.muted("⋅")} ${this.notice.text}`, width);
+    return padLine(`${style(`${icon} ${label}`)} ${this.theme.muted("·")} ${this.notice.text}`, width);
   }
 
   private showNotice(text: string, tone: NoticeTone): void {
@@ -1520,7 +1592,7 @@ export class VspiApp implements Component, Focusable {
         if (compact === "list") {
           const defaultProfile = this.backend.getPlanBinding?.() ? "execution-continuity" : "pi-native";
           this.showNotice(
-            `Compact profiles: ${COMPACTION_PROFILES.map((profile) => profile.id).join(", ")} ⋅ default ${defaultProfile}`,
+            `Compact profiles: ${COMPACTION_PROFILES.map((profile) => profile.id).join(", ")} · default ${defaultProfile}`,
             "info",
           );
           return;
@@ -1536,7 +1608,7 @@ export class VspiApp implements Component, Focusable {
     }
     if (action.handler === "update") {
       this.panels.close();
-      this.showProgress("正在检查 VSPi 更新...");
+      this.showProgress("正在检查 VSPi 更新…");
       this.requestRender();
       try {
         const result = await (this.options.selfUpdate ?? updateVspi)(VSPI_VERSION);
@@ -1587,15 +1659,15 @@ export class VspiApp implements Component, Focusable {
         } else if (command.kind === "reset") {
           if (!this.backend.resetTeammateLane) throw new Error("当前后端不支持 Teammate lane 重置");
           await this.backend.resetTeammateLane(command.id, command.lane);
-          this.showNotice(`Teammate ${command.id} ⋅ lane ${command.lane ?? "default"} 已重置`, "success");
+          this.showNotice(`Teammate ${command.id} · lane ${command.lane ?? "default"} 已重置`, "success");
         } else if (command.kind === "pool") {
           if (!this.backend.setAgentPoolRole) throw new Error("当前后端不支持 Agent Pool 配置");
           await this.backend.setAgentPoolRole(command.provider, command.role, command.model);
-          this.showNotice(`${command.provider} ⋅ ${command.role} 已映射到 ${command.model}`, "success");
+          this.showNotice(`${command.provider} · ${command.role} 已映射到 ${command.model}`, "success");
         } else if (command.kind === "override") {
           if (!this.backend.overrideRequiredTeammate) throw new Error("当前后端不支持 Teammate required override");
           await this.backend.overrideRequiredTeammate(command.id, command.scope);
-          this.showNotice(`Required routing override: ${command.id} ⋅ ${command.scope}`, "success");
+          this.showNotice(`Required routing override: ${command.id} · ${command.scope}`, "success");
         }
         this.panels.setAgentSnapshot(
           this.backend.getAgentSnapshot?.() ?? {
@@ -1647,7 +1719,7 @@ export class VspiApp implements Component, Focusable {
       try {
         if (!this.backend.listExternalSessions) throw new Error("当前后端不支持外部会话导入");
         const source = parseExternalImportSource(raw);
-        this.showProgress("正在扫描 Codex 与 Claude Code 历史...");
+        this.showProgress("正在扫描 Codex 与 Claude Code 历史…");
         const sessions = await this.backend.listExternalSessions({ limit: 5_000 });
         this.panels.setExternalSessions(sessions, source);
         this.panels.open("externalImport");
@@ -1658,7 +1730,7 @@ export class VspiApp implements Component, Focusable {
     } else if (action.handler === "skills") {
       try {
         if (!this.backend.listSkills) throw new Error("当前后端不支持 Skill 管理");
-        this.showProgress("正在读取 Pi、Codex 与 Claude Code Skill...");
+        this.showProgress("正在读取 Pi、Codex 与 Claude Code Skill…");
         const catalog = await this.backend.listSkills();
         this.panels.setSkillCatalog(catalog);
         this.panels.open("skills");
@@ -1715,18 +1787,28 @@ export class VspiApp implements Component, Focusable {
         if (switchingDuringActivity && this.activityActive()) this.pendingModelLabel = this.modelLabel;
         this.currentModelIdentity = { provider: event.model.provider, id: selected.modelId };
         this.effort = selected.effort;
+        this.refreshModelPresentation();
         this.panels.confirmModelSelection({ provider: event.model.provider, id: selected.modelId });
         const defaultsSaved = await this.persistRuntimeDefaults();
-        this.completeOneShotPanel();
+        const catalogEffortLevels = event.model.efforts.length > 0 ? event.model.efforts : (["off"] as EffortLevel[]);
+        let effortLevels = catalogEffortLevels;
+        if (this.backend.getEffortOptions) {
+          try {
+            effortLevels = await this.backend.getEffortOptions();
+          } catch {
+            effortLevels = catalogEffortLevels;
+          }
+        }
+        this.panels.openEffort(this.effort, effortLevels);
         if (defaultsSaved) {
           const threshold = Math.max(0, selected.contextWindow - 16_384);
           const needsCompaction = selected.contextWindow > 0 && (this.usage.contextTokens ?? 0) > threshold;
           this.showNotice(
             switchingDuringActivity
               ? needsCompaction
-                ? `下一次模型调用将使用 ${this.modelLabel}；上下文超过目标安全阈值，将先自动压缩`
-                : `下一次模型调用将使用 ${this.modelLabel} ⋅ Effort ${effortLabel(this.effort)}`
-              : `模型已切换为 ${this.modelLabel} ⋅ Effort ${effortLabel(this.effort)}`,
+                ? `下一次模型调用将使用 ${this.modelLabel}；上下文超过目标安全阈值，将先自动压缩；请选择 Effort`
+                : `下一次模型调用将使用 ${this.modelLabel}；请选择 Effort`
+              : `模型已切换为 ${this.modelLabel}；请选择 Effort`,
             needsCompaction ? "warning" : "success",
           );
         }
@@ -1759,6 +1841,7 @@ export class VspiApp implements Component, Focusable {
         if (switchingDuringActivity && this.activityActive()) this.pendingModelLabel = this.modelLabel;
         this.currentModelIdentity = { provider: model.provider, id: selected.modelId };
         this.effort = role.effort;
+        this.refreshModelPresentation();
         this.panels.confirmModelSelection(this.currentModelIdentity);
         this.panels.confirmModelGroupSelection(event.group.id);
         const defaultsSaved = await this.persistRuntimeDefaults();
@@ -1766,8 +1849,8 @@ export class VspiApp implements Component, Focusable {
         if (defaultsSaved)
           this.showNotice(
             switchingDuringActivity
-              ? `下一次模型调用将使用模型组 ${event.group.label} ⋅ Effort ${effortLabel(this.effort)}`
-              : `模型组已切换为 ${event.group.label} ⋅ Effort ${effortLabel(this.effort)}`,
+              ? `下一次模型调用将使用模型组 ${event.group.label} · Effort ${effortLabel(this.effort)}`
+              : `模型组已切换为 ${event.group.label} · Effort ${effortLabel(this.effort)}`,
             "success",
           );
       } catch (error) {
@@ -1856,7 +1939,7 @@ export class VspiApp implements Component, Focusable {
         if (!this.backend.previewExternalSession || !this.backend.importExternalSession) {
           throw new Error("当前后端不支持外部会话导入");
         }
-        this.showProgress("正在读取外部会话的完整可见记录...");
+        this.showProgress("正在读取外部会话的完整可见记录…");
         const preview = await this.backend.previewExternalSession(event.session.id);
         const contextWarning =
           this.usage.contextWindow > 0 && preview.estimatedTokens > this.usage.contextWindow * 0.8
@@ -1897,7 +1980,7 @@ export class VspiApp implements Component, Focusable {
           this.panels.open("skills");
           return;
         }
-        this.showProgress("正在安装 Skill 包...");
+        this.showProgress("正在安装 Skill 包…");
         const result = await this.backend.installSkill(source, event.scope, answered.answer === "install-enable");
         this.panels.setSkillCatalog(await this.backend.listSkills());
         this.panels.open("skills");
@@ -1977,7 +2060,7 @@ export class VspiApp implements Component, Focusable {
         this.panels.setPolicySnapshot(snapshot);
         this.completeOneShotPanel();
         this.showNotice(
-          snapshot.persistenceWarning ?? `Policy 已切换为 ${snapshot.policy} ⋅ ${snapshot.boundary}`,
+          snapshot.persistenceWarning ?? `Policy 已切换为 ${snapshot.policy} · ${snapshot.boundary}`,
           snapshot.persistenceWarning ? "warning" : "success",
         );
       } catch (error) {
@@ -2069,7 +2152,7 @@ export class VspiApp implements Component, Focusable {
     const providerRef = raw.trim().split(/\s+/, 2)[1];
     if (!providerRef) {
       this.panels.open("providers");
-      this.showNotice('带有已保存凭据的 Provider 会显示"移除凭据"操作', "info");
+      this.showNotice("带有已保存凭据的 Provider 会显示“移除凭据”操作", "info");
       this.requestRender();
       return;
     }
@@ -2252,7 +2335,7 @@ export class VspiApp implements Component, Focusable {
           id: `goal-start:${goal.id}`,
           role: "assistant",
           kind: "session",
-          text: `Goal 已开始 ⋅ ${goal.id} ⋅ Plan ${goal.planId}`,
+          text: `Goal 已开始 · ${goal.id} · Plan ${goal.planId}`,
         });
         await this.submit(command.request, { skipPlanRoute: true });
         return;
@@ -2284,7 +2367,7 @@ export class VspiApp implements Component, Focusable {
         id: `goal-${command.kind}:${goal.id}:${goal.revision}`,
         role: "assistant",
         kind: "session",
-        text: `Goal ${command.kind} ⋅ ${goal.state}`,
+        text: `Goal ${command.kind} · ${goal.state}`,
       });
       if (command.kind === "resume") await this.runGoalResume(goal);
       else {
@@ -2464,7 +2547,7 @@ export class VspiApp implements Component, Focusable {
           {
             id: "skill-enable",
             title: "启用 Skill",
-            prompt: `${skill.name}\n${skill.sourceLabel} ⋅ 原路径登记，不复制源文件。`,
+            prompt: `${skill.name}\n${skill.sourceLabel} · 原路径登记，不复制源文件。`,
             kind: "singleChoice",
             options,
           },
@@ -2479,7 +2562,7 @@ export class VspiApp implements Component, Focusable {
           {
             id: enabled ? "skill-enable" : "skill-disable",
             title: enabled ? "启用 Skill" : "停用 Skill",
-            prompt: `${skill.name}\n${skill.sourceLabel} ⋅ ${skill.scope}`,
+            prompt: `${skill.name}\n${skill.sourceLabel} · ${skill.scope}`,
             kind: "singleChoice",
             options: [
               {
@@ -2516,7 +2599,7 @@ export class VspiApp implements Component, Focusable {
         {
           id: `skill-${action}`,
           title: action === "update" ? "更新 Skill" : "移除 Skill",
-          prompt: `${skill.name}\n${skill.sourceLabel} ⋅ ${skill.scope}${action === "remove" && skill.packageSource ? "\n将移除该受管包提供的全部 Skill。" : ""}`,
+          prompt: `${skill.name}\n${skill.sourceLabel} · ${skill.scope}${action === "remove" && skill.packageSource ? "\n将移除该受管包提供的全部 Skill。" : ""}`,
           kind: "singleChoice",
           options: [
             {
@@ -2582,7 +2665,7 @@ export class VspiApp implements Component, Focusable {
       {
         id: `session-owner:${session.id}`,
         title: "Session 正在使用",
-        prompt: `${owner.hostname} ⋅ PID ${owner.pid} 正在运行这个 Session。接管会等待当前任务和队列完成，不会中断。`,
+        prompt: `${owner.hostname} · PID ${owner.pid} 正在运行这个 Session。接管会等待当前任务和队列完成，不会中断。`,
         kind: "singleChoice",
         options: [
           { id: "takeover", label: "接管此会话", description: "默认；等待安全点后继续同一线程" },
@@ -2711,6 +2794,7 @@ export class VspiApp implements Component, Focusable {
       this.messages.push(...queued.filter((message) => !seen.has(message.id)));
       this.handoffSnapshotQueued = [];
       this.modelLabel = projection.modelLabel;
+      this.refreshModelPresentation();
       this.currentModelIdentity = projection.modelProvider
         ? { provider: projection.modelProvider, id: projection.modelId }
         : undefined;
@@ -2847,6 +2931,7 @@ export class VspiApp implements Component, Focusable {
         await this.backend.selectModel(defaults.value.model.provider, defaults.value.model.id);
         this.currentModelIdentity = { ...defaults.value.model };
         this.modelLabel = this.backend.modelLabel;
+        this.refreshModelPresentation();
         this.panels.confirmModelSelection(defaults.value.model);
       } catch (error) {
         diagnostics.push(
@@ -3439,6 +3524,7 @@ export class VspiApp implements Component, Focusable {
         return;
       }
       this.modelLabel = this.backend.modelLabel;
+      this.refreshModelPresentation();
       this.composer.editor.addToHistory(text);
     } catch (error) {
       if (submission.cancelled) {
@@ -3532,9 +3618,16 @@ export class VspiApp implements Component, Focusable {
   }
 
   private requestRender(force = false): void {
-    this.renderRevision += 1;
-    this.renderSectionsCache = undefined;
+    this.fullscreenRenderRevision += 1;
     if (this.renderReady && !this.sessionTransition) this.tui.requestRender(force);
+  }
+
+  private refreshModelPresentation(): void {
+    if (this.startupSurface.length > 0) {
+      const width = Math.max(4, this.tui.terminal.columns ?? 80);
+      this.startupSurface = renderSplash(width, this.theme, 1, this.startupStatus());
+    }
+    if (this.goalSnapshot) this.panels.setGoalSnapshot(this.goalSnapshot, this.modelLabel);
   }
 }
 

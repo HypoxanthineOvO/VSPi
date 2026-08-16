@@ -66,7 +66,7 @@ async function createApp(
   const onExit = vi.fn();
   const app = new VspiApp(fakeTui(), plainTheme(), backend, {
     cwd: "/workspace/m1-actions",
-    settings: { ...DEFAULT_SETTINGS, bridgeEnabled: false },
+    settings: { ...DEFAULT_SETTINGS },
     attachments: fakeAttachments(),
     renderOnce: true,
     ...(selfUpdate ? { selfUpdate } : {}),
@@ -234,7 +234,7 @@ describe("M1 production action contract", () => {
       const rendered = app.render(80).map(stripAnsi).join("\n");
 
       expect(rendered).toContain("Policy");
-      expect(rendered).toMatch(/Safe[\s\S]*Standard[\s\S]*Auto[\s\S]*YOLO/);
+      expect(rendered).toMatch(/Safe[\s\S]*Standard[\s\S]*YOLO[\s\S]*Auto/);
       expect(rendered).not.toMatch(/暂未接入|不可用|后续里程碑|disabled/i);
       expect(backend.send).not.toHaveBeenCalled();
       expect(backend.compact).not.toHaveBeenCalled();

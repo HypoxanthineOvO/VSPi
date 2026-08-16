@@ -18,7 +18,7 @@ function render(panel: PanelController, width: number, rows = 22): string[] {
 function splitPanes(lines: string[], minimumRows = 3) {
   const rows = lines.slice(1, -1).map((line) => line.slice(1, -1));
   const splitRows = rows.flatMap((line) => {
-    const divider = line.indexOf("❘");
+    const divider = line.indexOf("│");
     if (divider < 0) return [];
     return [
       { left: line.slice(0, divider), right: line.slice(divider + 1), column: visibleWidth(line.slice(0, divider)) },
@@ -34,6 +34,31 @@ function splitPanes(lines: string[], minimumRows = 3) {
 }
 
 describe("model panel responsive layout", () => {
+  it("uses the full supplied row budget on tall terminals", () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    panel.setModels(MODELS, MODEL_GROUPS, "kimi-k3");
+    panel.open("models");
+
+    const lines = render(panel, 80, 24);
+    expect(lines).toHaveLength(24);
+    expect(splitPanes(lines, 20).rows).toHaveLength(21);
+  });
+
+  it("uses the full supplied row budget for the wide Provider selector", () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    panel.setProviders([
+      { id: "opencode-go", label: "OpenCode Go", protocol: "OpenAI Responses", status: "已配置", detail: "stored" },
+    ]);
+    panel.open("providers");
+
+    const lines = render(panel, 100, 16);
+    expect(lines).toHaveLength(16);
+    const panes = splitPanes(lines, 14);
+    expect(panes.rows).toHaveLength(14);
+    expect(panes.right).toContain("Provider ID");
+    expect(panes.right).toContain("opencode-go");
+  });
+
   it.each([80, 100])("keeps the model list left and selected detail right at width %i", (width) => {
     const panel = new PanelController(DEFAULT_SETTINGS);
     panel.setModels(MODELS, MODEL_GROUPS, "kimi-k3");
@@ -123,7 +148,7 @@ describe("model panel responsive layout", () => {
 
     const lines = render(panel, 60, 16);
     const panes = splitPanes(lines);
-    expect(panes.left).toMatch(/A Provider.*...\s+2/);
+    expect(panes.left).toMatch(/A Provider.*…\s+2/);
     expect(panes.left.indexOf("Alpha One")).toBeLessThan(panes.left.indexOf("Alpha Two"));
     expect(panes.left.indexOf("Alpha Two")).toBeLessThan(panes.left.indexOf("Z Provider"));
     expect(lines[1]).not.toContain("模型组");

@@ -298,7 +298,7 @@ class ControlledAttachments {
 
   constructor(private readonly result: StartupResult) {}
 
-  async start(_events: AttachmentServiceEvents, _bridgeEnabled: boolean): Promise<void> {
+  async start(_events: AttachmentServiceEvents): Promise<void> {
     this.startCalls();
     if (this.result !== "attachment-failure") return;
     await this.gate.promise;
@@ -513,7 +513,7 @@ async function exerciseSessionReset(command: "/new" | "/clear"): Promise<void> {
   expect(terminal.splashWrites).toEqual(splashWritesBeforeReset);
   expect(terminal.starts).toBe(startsBeforeReset);
   expect(terminal.stops).toBe(stopsBeforeReset);
-  expect(plain).toMatch(/\+-+\+[\s\S]*\+-+\+/u);
+  expect(plain).toMatch(/╭[─-]+╮[\s\S]*╰[─-]+╯/u);
   expect(plain).toContain(PI_STATUS.model);
   expect(plain).not.toContain("PERSISTED_HISTORY");
   expect(plain).not.toContain("+ Plan ");

@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Build release assets
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          test "$GITHUB_REF_NAME" = "v$VERSION"
+          mkdir -p .artifacts
+          npm pack --json --pack-destination .artifacts > .artifacts/pack.json
+          node scripts/ci/verify-package.mjs .artifacts/pack.json
+          cp ".artifacts/vspi-$VERSION.tgz" .artifacts/vspi-latest.tgz
+          (cd .artifacts && sha256sum "vspi-$VERSION.tgz" vspi-latest.tgz > SHA256SUMS)
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          gh release create "$GITHUB_REF_NAME" \
+            ".artifacts/vspi-$VERSION.tgz" \
+            .artifacts/vspi-latest.tgz \
+            .artifacts/SHA256SUMS \
+            --verify-tag \
+            --title "VSPi $VERSION" \
+            --notes-file "Docs/releases/v$VERSION.md"

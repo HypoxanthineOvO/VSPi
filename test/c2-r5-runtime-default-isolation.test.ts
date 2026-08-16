@@ -62,7 +62,7 @@ describe("C2 Revision 5 runtime-default backend isolation", () => {
     const save = vi.fn(async () => "/tmp/runtime-defaults.json");
     const app = new VspiApp(fakeTui(), plainTheme(), new FixtureBackend(), {
       cwd: "/workspace/r5-fixture-defaults",
-      settings: { ...DEFAULT_SETTINGS, bridgeEnabled: false },
+      settings: { ...DEFAULT_SETTINGS },
       attachments: fakeAttachments(),
       renderOnce: true,
       runtimeDefaultsFactory: () => ({
@@ -87,13 +87,13 @@ describe("C2 Revision 5 runtime-default backend isolation", () => {
     const backend = piBackend({ selectModel, setEffort });
     const attachments = {
       start: vi.fn(async (events: { onNotice(text: string, tone: "info"): void }) => {
-        events.onNotice("Attachment Bridge ready", "info");
+        events.onNotice("附件服务已就绪", "info");
       }),
       dispose: vi.fn(async () => {}),
     } as unknown as AttachmentService;
     const app = new VspiApp(fakeTui(), plainTheme(), backend, {
       cwd: "/workspace/r5-polluted-defaults",
-      settings: { ...DEFAULT_SETTINGS, bridgeEnabled: false },
+      settings: { ...DEFAULT_SETTINGS },
       attachments,
       renderOnce: true,
       runtimeDefaultsFactory: () => ({
@@ -121,7 +121,7 @@ describe("C2 Revision 5 runtime-default backend isolation", () => {
     const backend = piBackend({ setEffort });
     const app = new VspiApp(fakeTui(), plainTheme(), backend, {
       cwd: "/workspace/r5-unsupported-effort",
-      settings: { ...DEFAULT_SETTINGS, bridgeEnabled: false },
+      settings: { ...DEFAULT_SETTINGS },
       attachments: fakeAttachments(),
       renderOnce: true,
       runtimeDefaultsFactory: () => ({

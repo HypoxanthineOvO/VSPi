@@ -246,7 +246,7 @@ describe("panel controller", () => {
     expect(plain[1]).toContain("删除或覆盖文件");
     expect(plain[2]).toContain("rm -rf build/output");
     expect(plain.join("\n")).toContain("提升到 Auto 并执行");
-    expect(plain.some((line) => /^\|\s{4,}› 1\. 允许本次/.test(line))).toBe(true);
+    expect(plain.some((line) => /^│\s{4,}› 1\. 允许本次/.test(line))).toBe(true);
     for (const option of [
       "1. 允许本次",
       "2. 本会话允许同类命令",
@@ -441,7 +441,7 @@ describe("panel controller", () => {
     const rendered = text(panel, 16);
 
     expect(rendered).toContain("$0.0000 USD");
-    expect(rendered).toContain("...");
+    expect(rendered).toContain("…");
   });
 
   it("types an uppercase S in the free-text question instead of skipping", () => {
@@ -529,11 +529,11 @@ describe("panel controller", () => {
     const other = lines.findIndex((line) => line.includes("其他"));
     expect(second).toBe(first + 1);
     expect(other).toBe(second + 1);
-    expect(lines.find((line) => line.includes("Question spacing"))).toMatch(/^\|\s{2,}/);
-    expect(lines.join("\n")).toContain("› (◉) First option");
+    expect(lines.find((line) => line.includes("Question spacing"))).toMatch(/^│\s{2,}/);
+    expect(lines.join("\n")).toContain("› (●) First option");
     expect(lines.join("\n")).toContain("  ( ) Second option");
     expect(lines.join("\n")).not.toContain("┃");
-    expect(lines.slice(first, other + 1).join("\n")).not.toMatch(/[┌┐└┘]|‒{8,}/u);
+    expect(lines.slice(first, other + 1).join("\n")).not.toMatch(/[┌┐└┘]|─{8,}/u);
     expect(lines[other + 1]?.slice(1, -1).trim()).toBe("");
     expect(lines[other + 2]).toContain("Enter 确认");
   });
@@ -599,7 +599,7 @@ describe("panel controller", () => {
     for (let index = 0; index < 7; index += 1) panel.handleInput(DOWN);
     const lines = panel.render(60, 18, plainTheme(), DEFAULT_USAGE).map(stripAnsi);
     expect(lines.join("\n")).toContain("Box scrolling");
-    const selected = lines.findIndex((line) => line.includes("› (◉) Option 7"));
+    const selected = lines.findIndex((line) => line.includes("› (●) Option 7"));
     expect(selected).toBeGreaterThan(0);
     expect(lines.slice(selected + 1).join("\n")).toContain("Last selected description");
     expect(lines.at(-2)?.slice(1, -1).trim()).toBe("");

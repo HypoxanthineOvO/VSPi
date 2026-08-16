@@ -32,7 +32,7 @@ export function createPolicyConfigService(options: {
     const diagnostics: string[] = [];
     const global = await readConfig(globalPath, "global", diagnostics);
     const project = projectEnabled ? await readProjectConfig(projectPath, diagnostics) : undefined;
-    const globalPolicy = global.value?.policy ?? "Standard";
+    const globalPolicy = global.value?.policy ?? "Auto";
     const projectPolicy = project?.value?.policy;
     const effectivePolicy = options.recovery
       ? "Standard"

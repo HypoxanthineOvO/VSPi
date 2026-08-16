@@ -20,6 +20,16 @@ async function fixture() {
 }
 
 describe("M4 guarded Policy configuration", () => {
+  it("defaults an absent global policy configuration to Auto", async () => {
+    const module = await configModule();
+    if (!module) return;
+    const paths = await fixture();
+    const loaded = await module
+      .createPolicyConfigService({ cwd: paths.cwd, home: paths.home, trustedProject: false })
+      .load();
+    expect(loaded).toMatchObject({ globalPolicy: "Auto", effectivePolicy: "Auto" });
+  });
+
   it("loads global upper/default, trusted project lowering, and intersected network allowlist", async () => {
     const module = await configModule();
     if (!module) return;

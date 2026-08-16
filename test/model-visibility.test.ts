@@ -20,12 +20,21 @@ describe("curated runtime model visibility", () => {
     expect(visible("xiaomi", "mimo-v2.5-pro-ultraspeed")).toBe(true);
     expect(visible("deepseek", "deepseek-v4-pro")).toBe(true);
     expect(visible("zai", "glm-5.2")).toBe(true);
+    expect(visible("zai", "glm-5.3")).toBe(true);
+    expect(visible("zai-coding-cn", "GLM-5.3-highspeed")).toBe(true);
     expect(visible("qwen-token-plan", "qwen3.8-max-preview")).toBe(true);
     expect(visible("minimax", "MiniMax-M2.7-highspeed")).toBe(true);
   });
 
   it("hides unrelated built-ins while preserving user-defined providers", () => {
     expect(visible("google", "gemini-3-pro")).toBe(false);
+    expect(visible("baseten", "any-model")).toBe(false);
+    expect(visible("qwen-token-plan-individual", "qwen3.8-max-preview")).toBe(false);
     expect(visible("my-lab", "experimental-model")).toBe(true);
+  });
+
+  it("shows the complete configured OpenCode Go catalog without hardcoding model ids", () => {
+    expect(visible("opencode-go", "gpt-5.6-luna")).toBe(true);
+    expect(visible("opencode-go", "future-catalog-model")).toBe(true);
   });
 });

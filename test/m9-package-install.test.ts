@@ -36,7 +36,9 @@ describe("M9 npm package artifact", () => {
 
     const dry = parsePack((await npm(["pack", "--dry-run", "--json", "--ignore-scripts"], ROOT)).stdout);
     const dryPaths = dry.files.map((entry) => entry.path);
-    expect(dryPaths).toEqual(expect.arrayContaining(["package.json", "README.md", "Docs/tui-v1.md", "dist/index.js"]));
+    expect(dryPaths).toEqual(
+      expect.arrayContaining(["package.json", "README.md", "LICENSE", "Docs/usage.md", "Docs/tui-v1.md", "dist/index.js"]),
+    );
     expect(dryPaths.some((path) => /^(?:src|test|\.pipeline|tmp)\//.test(path))).toBe(false);
     expect(dryPaths).toContain("dist/update/self-update.js");
 

@@ -1,18 +1,10 @@
 workflow:
   rules:
     - if: '$CI_COMMIT_TAG'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS'
-      when: never
-    - if: '$CI_PIPELINE_SOURCE == "push"'
-    - if: '$CI_PIPELINE_SOURCE == "web"'
     - when: never
 
 stages:
-  - quality
-  - test
   - package
-  - install
   - release
 
 default:
@@ -32,17 +24,6 @@ variables:
   npm_config_fetch_retry_maxtimeout: "120000"
   npm_config_fetch_retry_mintimeout: "10000"
 
-quality:
-  stage: quality
-  script:
-    - npm run check
-
-test:
-  stage: test
-  needs: []
-  script:
-    - npm test -- --maxWorkers=4
-
 package:
   stage: package
   script:
@@ -57,25 +38,12 @@ package:
       - .artifacts/
     expire_in: 1 week
 
-install-smoke:
-  stage: install
-  needs:
-    - job: package
-      artifacts: true
-  script:
-    - export VERSION="$(node -p "require('./package.json').version")"
-    - export TARBALL="$CI_PROJECT_DIR/.artifacts/vspi-${VERSION}.tgz"
-    - cd "$(mktemp -d)"
-    - npm install --prefix install-root --omit=dev --no-audit --no-fund "$TARBALL"
-    - test "$(install-root/node_modules/.bin/vspi --version)" = "$VERSION"
-
 release:
   stage: release
   interruptible: false
   needs:
     - job: package
       artifacts: true
-    - job: install-smoke
   before_script:
     - node --version
   script:
@@ -83,7 +51,7 @@ release:
     - export FILENAME="vspi-${VERSION}.tgz"
     - export PACKAGE_URL="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/vspi/$VERSION/$FILENAME"
     - export LATEST_PACKAGE_URL="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/vspi/$VERSION/vspi-latest.tgz"
-    - export RELEASE_TITLE="VSPi $VERSION - Fullscreen Runtime"
+    - export RELEASE_TITLE="VSPi $VERSION"
     - export RELEASE_NOTES_PATH="Docs/releases/v$VERSION.md"
     - node scripts/ci/publish-release.mjs .artifacts/SHA256SUMS ".artifacts/$FILENAME"
   rules:

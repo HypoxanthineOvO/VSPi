@@ -52,7 +52,6 @@ async function writeGlobalSettings(home: string): Promise<AppSettings> {
   const settings = {
     ...DEFAULT_SETTINGS,
     scope: "global" as const,
-    bridgeEnabled: false,
     reducedMotion: false,
   };
   await mkdir(join(home, ".config", "vspi"), { recursive: true });
@@ -74,7 +73,6 @@ describe("M3 corrective round 2 settings and protocol boundaries", () => {
     const trustedProjectSettings = {
       ...DEFAULT_SETTINGS,
       scope: "project" as const,
-      bridgeEnabled: true,
       reducedMotion: true,
     };
     await writeFile(join(trustedCwd, ".vspi", "settings.json"), JSON.stringify(trustedProjectSettings));
@@ -98,7 +96,6 @@ describe("M3 corrective round 2 settings and protocol boundaries", () => {
     const outsideSettings = {
       ...DEFAULT_SETTINGS,
       scope: "project" as const,
-      bridgeEnabled: true,
       reducedMotion: true,
       wrapCode: false,
     };
@@ -114,7 +111,7 @@ describe("M3 corrective round 2 settings and protocol boundaries", () => {
       .soft(await capturedError(() => trustAwareLoadSettings(symlinkCwd, home, { trustedProject: true })))
       .toMatch(/symlink|符号链接|scope|边界/i);
 
-    const projectUpdate = { ...outsideSettings, bridgeEnabled: false, reducedMotion: false, wrapCode: true };
+    const projectUpdate = { ...outsideSettings, reducedMotion: false, wrapCode: true };
     expect
       .soft(await capturedError(() => trustAwareSaveSettings(symlinkCwd, projectUpdate, home)))
       .toMatch(/trust|信任|拒绝/i);

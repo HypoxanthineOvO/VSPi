@@ -198,7 +198,6 @@ const tui = new ScrollbackTUI(terminal, true, process.env.VSPI_MOCK_LOG_DIR);
 const requestedTheme = process.env.VSPI_TERMINAL_MOCK_THEME;
 const settings = {
   ...DEFAULT_SETTINGS,
-  bridgeEnabled: false,
   reducedMotion: false,
   workingStyle: 3 as const,
   theme:

@@ -262,7 +262,7 @@ describe("M9 injected Pi end-to-end state flow", () => {
     };
     const app = new VspiApp(tui, plainTheme(), backend, {
       cwd,
-      settings: { ...DEFAULT_SETTINGS, scope: "global", bridgeEnabled: false },
+      settings: { ...DEFAULT_SETTINGS, scope: "global" },
       attachments: attachments as never,
       renderOnce: true,
       planBackend: { read: readPlan, update: updatePlan },
@@ -355,7 +355,7 @@ describe("M9 injected Pi end-to-end state flow", () => {
 
     const restarted = new VspiApp(new TuiMainScreen(new TestTerminal()), plainTheme(), backend, {
       cwd,
-      settings: { ...DEFAULT_SETTINGS, scope: "global", bridgeEnabled: false },
+      settings: { ...DEFAULT_SETTINGS, scope: "global" },
       attachments: attachments as never,
       renderOnce: true,
       planBackend: { read: readPlan, update: updatePlan },
@@ -434,7 +434,7 @@ async function modelGroupHarness(models: RuntimeModelOption[]) {
   };
   const app = new VspiApp(new TuiMainScreen(new TestTerminal()), plainTheme(), backend, {
     cwd: await mkdtemp(join(tmpdir(), "vspi-m9-model-group-")),
-    settings: { ...DEFAULT_SETTINGS, scope: "global", bridgeEnabled: false },
+    settings: { ...DEFAULT_SETTINGS, scope: "global" },
     attachments: new StatefulAttachments() as never,
     renderOnce: true,
     onExit: vi.fn(),

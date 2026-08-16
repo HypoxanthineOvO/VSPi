@@ -225,9 +225,9 @@ function statusStyle(status: ProviderOption["status"], theme: VspiTheme) {
 }
 
 function workingStyleLabel(style: AppSettings["workingStyle"]): string {
-  if (style === 1) return "1 ⋅ 小方块";
-  if (style === 2) return "2 ⋅ 大圆";
-  return "3 ⋅ 大圆 + 思考格";
+  if (style === 1) return "1 · 小方块";
+  if (style === 2) return "2 · 大圆";
+  return "3 · 大圆 + 思考格";
 }
 
 function thinkingDisplayLabel(mode: AppSettings["thinkingDisplay"]): string {
@@ -256,13 +256,13 @@ function selectedLine(text: string, selected: boolean, width: number, theme: Vsp
 
 function truncateStart(text: string, width: number): string {
   if (visibleWidth(text) <= width) return text;
-  if (width <= 1) return ".".slice(0, width);
+  if (width <= 1) return "…".slice(0, width);
   let suffix = "";
   for (const character of Array.from(text).reverse()) {
-    if (visibleWidth(`...${character}${suffix}`) > width) break;
+    if (visibleWidth(`…${character}${suffix}`) > width) break;
     suffix = `${character}${suffix}`;
   }
-  return `...${suffix}`;
+  return `…${suffix}`;
 }
 
 function centerText(text: string, width: number): string {
@@ -366,6 +366,7 @@ export class PanelController {
   private selectedModelKey = "";
   private selectedGroupId = "";
   private models: ModelOption[] = [];
+  private filteredModelCache: { query: string; models: ModelOption[] } | undefined;
   private modelGroups: ModelGroup[] = [];
   private providers: ProviderOption[] = [];
   private sessions: SessionOption[] = [];
@@ -426,7 +427,7 @@ export class PanelController {
   private approvalReason = "";
   private lastBodyWidth = 78;
   private policySnapshot: PolicySnapshot = {
-    policy: "Standard",
+    policy: "Auto",
     boundary: "Host",
     sandboxed: false,
     recovery: false,
@@ -577,6 +578,7 @@ export class PanelController {
     selectedModel?: string | { provider: string; id: string },
   ): void {
     this.models = structuredClone(models);
+    this.filteredModelCache = undefined;
     this.modelGroups = structuredClone(groups);
     if (this.modelGroups.length === 0) this.modelTab = 0;
     if (selectedModel) {
@@ -787,8 +789,8 @@ export class PanelController {
     if (this.kind === "commands") [title, body] = ["命令", this.renderCommands(bodyWidth, theme)];
     else if (this.kind === "goal") [title, body] = ["Goal", this.renderGoal(bodyWidth, theme)];
     else if (this.kind === "prompt") [title, body] = ["Prompt Profile", this.renderPrompt(bodyWidth, theme)];
-    else if (this.kind === "models") [title, body] = ["Model", this.renderModels(bodyWidth, theme)];
-    else if (this.kind === "providers") [title, body] = ["Provider", this.renderProviders(bodyWidth, theme)];
+    else if (this.kind === "models") [title, body] = ["Model", this.renderModels(bodyWidth, bodyRows, theme)];
+    else if (this.kind === "providers") [title, body] = ["Provider", this.renderProviders(bodyWidth, bodyRows, theme)];
     else if (this.kind === "sessions") [title, body] = ["Sessions", this.renderSessions(bodyWidth, theme)];
     else if (this.kind === "externalImport")
       [title, body] = ["导入会话", this.renderExternalImport(bodyWidth, bodyRows, theme)];
@@ -801,15 +803,15 @@ export class PanelController {
     else if (this.kind === "effort") [title, body] = ["Effort", this.renderEffort(bodyWidth, theme)];
     else if (this.kind === "tools") [title, body] = ["Tools", this.renderTools(bodyWidth, theme)];
     else if (this.kind === "agents")
-      [title, body] = [`Agents ⋅ ${capitalize(this.agentTab)}`, this.renderAgents(bodyWidth, theme)];
+      [title, body] = [`Agents · ${capitalize(this.agentTab)}`, this.renderAgents(bodyWidth, theme)];
     else if (this.kind === "policy") [title, body] = ["Policy", this.renderPolicy(bodyWidth, theme)];
     else [title, body] = ["Plan", this.renderPlan(bodyWidth, theme, planFocused)];
 
     if (this.kind === "plan" && this.planPanelCollapsed && this.planItems.length > 0) {
-      return [padLine(`${theme.focus("Plan")} ⋅ ${theme.blue(theme.bold(this.planDisplayTitle()))}`, width)];
+      return [padLine(`${theme.focus("Plan")} · ${theme.blue(theme.bold(this.planDisplayTitle()))}`, width)];
     }
 
-    let footer = this.kind === "question" ? theme.muted(this.questionHintText()) : undefined;
+    let footer = this.kind === "question" ? this.renderQuestionFooter(theme) : undefined;
     let rightTitle: string | undefined;
     const questionFooterGap =
       this.kind === "question" && (this.questionSelectionRange !== undefined || this.questionReview);
@@ -928,6 +930,18 @@ export class PanelController {
 
   private questionHintText(): string {
     return this.questionHint(renderInteractionHint("panel", "question", this.interactionState()));
+  }
+
+  private renderQuestionFooter(theme: VspiTheme): string {
+    const hint = this.questionHintText();
+    const submitLabel = "Enter 提交";
+    const submitIndex = hint.indexOf(submitLabel);
+    if (submitIndex < 0) return theme.muted(hint);
+    return [
+      theme.muted(hint.slice(0, submitIndex)),
+      theme.focus(theme.bold(submitLabel)),
+      theme.muted(hint.slice(submitIndex + submitLabel.length)),
+    ].join("");
   }
 
   // Registry 的 Question hint 按 questionMode 粗粒度生成，这里按真实题型补齐/剔除键位。
@@ -1651,7 +1665,7 @@ export class PanelController {
     const identity =
       match.matchKind === "alias"
         ? `${matchedToken}${theme.muted(`  (${match.canonicalToken})`)}`
-        : `${matchedToken}${aliases.length > 0 ? theme.muted(`  ${aliases.join(" ⋅ ")}`) : ""}`;
+        : `${matchedToken}${aliases.length > 0 ? theme.muted(`  ${aliases.join(" · ")}`) : ""}`;
     const source = match.source === BUILTIN_COMMAND_SOURCE ? "Built-in" : match.source;
     const action = getActionDefinition(match.command);
     const description =
@@ -1678,11 +1692,12 @@ export class PanelController {
 
   private filteredModels(): ModelOption[] {
     const query = this.modelSearch.toLowerCase();
+    if (this.filteredModelCache?.query === query) return this.filteredModelCache.models;
     const brandIndex = (brand: string) => {
       const index = BRAND_PRIORITY.indexOf(brand);
       return index === -1 ? BRAND_PRIORITY.length : index;
     };
-    return this.models
+    const models = this.models
       .filter((model) => !query || `${model.brand} ${model.label} ${model.id}`.toLowerCase().includes(query))
       .sort((left, right) => {
         const priority = brandIndex(left.brand) - brandIndex(right.brand);
@@ -1695,19 +1710,21 @@ export class PanelController {
         if (price !== 0) return price;
         return left.label.localeCompare(right.label) || left.id.localeCompare(right.id);
       });
+    this.filteredModelCache = { query, models };
+    return models;
   }
 
-  private renderModels(width: number, theme: VspiTheme): string[] {
-    const modelTab = this.modelSearch ? `选择模型 ⋅ ${this.modelSearch}` : "选择模型";
+  private renderModels(width: number, bodyRows: number, theme: VspiTheme): string[] {
+    const modelTab = this.modelSearch ? `选择模型 · ${this.modelSearch}` : "选择模型";
     const tabs = tabLine(this.modelGroups.length > 0 ? [modelTab, "模型组"] : [modelTab], this.modelTab, width, theme);
+    const listRows = Math.max(2, bodyRows - 1);
     const body = usesWideModelLayout(width)
-      ? this.renderWideModels(width, theme)
-      : this.renderNarrowModels(width, theme);
+      ? this.renderWideModels(width, listRows, theme)
+      : this.renderNarrowModels(width, listRows, theme);
     return [tabs, ...body];
   }
 
-  private renderWideModels(width: number, theme: VspiTheme): string[] {
-    const rowCount = 6;
+  private renderWideModels(width: number, rowCount: number, theme: VspiTheme): string[] {
     const leftWidth = Math.max(18, Math.floor((width - 1) * 0.4));
     const rightWidth = width - leftWidth - 1;
     const left = this.modelListRows(rowCount, leftWidth, theme);
@@ -1718,12 +1735,11 @@ export class PanelController {
     return Array.from({ length: rowCount }, (_, index) => {
       const leftRow = left[index] ?? padLine("", leftWidth);
       const rightRow = padLine(right[index] ?? "", rightWidth);
-      return `${leftRow}${theme.border("❘")}${rightRow}`;
+      return `${leftRow}${theme.border("│")}${rightRow}`;
     });
   }
 
-  private renderNarrowModels(width: number, theme: VspiTheme): string[] {
-    const rowCount = 6;
+  private renderNarrowModels(width: number, rowCount: number, theme: VspiTheme): string[] {
     if (this.modelNarrowDetail) {
       const details =
         this.modelTab === 0 ? this.modelDetailRows(rowCount, width, theme) : this.modelGroupDetailRows(rowCount, theme);
@@ -1806,7 +1822,7 @@ export class PanelController {
     const output = model.price.outputUsdPerMillion * FX.fxRate;
     const provider = `${theme.muted("Provider  ")}${model.brand}`;
     const modelId = `${theme.muted("Model ID  ")}${model.id}`;
-    const capability = `${theme.muted("能力      ")}${model.vision ? "文本 ⋅ 图片 ⋅ Tools" : "文本 ⋅ Tools"}`;
+    const capability = `${theme.muted("能力      ")}${model.vision ? "文本 · 图片 · Tools" : "文本 · Tools"}`;
     const effort = `${theme.muted("Effort  ")}${model.efforts.map(effortLabel).join(" / ")}`;
     const release = model.releasedAt ? `${theme.muted("发布  ")}${model.releasedAt}` : "";
     const price = `${theme.warning("输入 ¥")}${input.toFixed(2)} / 百万  ${theme.warning("输出 ¥")}${output.toFixed(2)} / 百万`;
@@ -1823,12 +1839,12 @@ export class PanelController {
     const rows = [theme.bold(theme.focus(group.label))];
     for (const role of group.roles) {
       const model = this.models.find((item) => item.id === role.modelId);
-      rows.push(`${theme.muted(`${role.role}  `)}${model?.label ?? role.modelId} ⋅ Effort ${effortLabel(role.effort)}`);
+      rows.push(`${theme.muted(`${role.role}  `)}${model?.label ?? role.modelId} · Effort ${effortLabel(role.effort)}`);
     }
     return rows.slice(0, rowCount);
   }
 
-  private renderProviders(width: number, theme: VspiTheme): string[] {
+  private renderProviders(width: number, bodyRows: number, theme: VspiTheme): string[] {
     if (this.providerEditing) {
       const fields = [
         ["名称", this.providerDraft.label || "自定义 Provider"],
@@ -1862,7 +1878,7 @@ export class PanelController {
     }
     if (this.providers.length === 0) return [theme.muted(padLine("没有可用 Provider", width))];
     if (width >= MODEL_WIDE_MIN_BODY_WIDTH) {
-      const rowCount = 5;
+      const rowCount = Math.max(1, bodyRows);
       const leftWidth = Math.max(20, Math.floor((width - 1) * 0.4));
       const rightWidth = width - leftWidth - 1;
       const list = this.providerListRows(rowCount, leftWidth, theme);
@@ -1879,7 +1895,7 @@ export class PanelController {
       return Array.from(
         { length: rowCount },
         (_, index) =>
-          `${list[index] ?? padLine("", leftWidth)}${theme.border("❘")}${padLine(details[index] ?? "", rightWidth)}`,
+          `${list[index] ?? padLine("", leftWidth)}${theme.border("│")}${padLine(details[index] ?? "", rightWidth)}`,
       );
     }
     return this.providerListRows(this.providers.length, width, theme);
@@ -1907,8 +1923,8 @@ export class PanelController {
   private renderSessions(width: number, theme: VspiTheme): string[] {
     if (this.sessions.length === 0) return [theme.muted(padLine("暂无会话", width))];
     return this.sessions.flatMap((session, index) => {
-      const branch = session.branchDepth > 0 ? `${theme.muted("❘‒")} ` : "";
-      const current = session.current ? theme.success("◉ ") : "";
+      const branch = session.branchDepth > 0 ? `${theme.muted("└─")} ` : "";
+      const current = session.current ? theme.success("● ") : "";
       const status = session.owner ? theme.warning("使用中") : session.relativeTime;
       const selected = index === this.state.selected;
       const marker = selected ? theme.focus("› ") : "  ";
@@ -1944,7 +1960,7 @@ export class PanelController {
       ...Array.from({ length: contentRows }, (_, index) => {
         const left = list[index] ?? padLine("", listWidth);
         const right = detail[index] ?? padLine("", detailWidth);
-        return `${left}${theme.muted("❘")}${right}`;
+        return `${left}${theme.muted("│")}${right}`;
       }),
     ];
   }
@@ -1981,7 +1997,7 @@ export class PanelController {
       ...Array.from({ length: contentRows }, (_, index) => {
         const left = list[index] ?? padLine("", listWidth);
         const right = detail[index] ?? padLine("", detailWidth);
-        return `${left}${theme.muted("❘")}${right}`;
+        return `${left}${theme.muted("│")}${right}`;
       }),
     ];
   }
@@ -1995,7 +2011,7 @@ export class PanelController {
     const value =
       this.skillAddText || theme.muted(this.skillAddMode === "source" ? "Git URL 或 npm:package" : "描述 Skill 用途");
     const global = this.skillScope === "user" ? theme.selected(" Global ") : theme.muted(" Global ");
-    const projectLabel = this.skillSnapshot.projectTrusted ? " Project " : " Project ⋅ Untrusted ";
+    const projectLabel = this.skillSnapshot.projectTrusted ? " Project " : " Project · Untrusted ";
     const project = this.skillScope === "project" ? theme.selected(projectLabel) : theme.muted(projectLabel);
     const body = [
       padLine(tabs, width),
@@ -2024,10 +2040,10 @@ export class PanelController {
           theme,
         );
       }
-      const status = row.item.enabled ? theme.success("◉ ") : theme.muted("◦ ");
+      const status = row.item.enabled ? theme.success("● ") : theme.muted("○ ");
       const scope =
         row.item.scope === "project" ? "Project" : row.item.scope === "user" ? "Global" : row.item.sourceLabel;
-      const source = row.item.scope === "external" ? scope : `${scope} ⋅ ${row.item.sourceLabel}`;
+      const source = row.item.scope === "external" ? scope : `${scope} · ${row.item.sourceLabel}`;
       return selectedLine(
         alignRight(`${status}${row.item.name}`, source, Math.max(1, width - 2)),
         index === this.state.selected,
@@ -2047,11 +2063,11 @@ export class PanelController {
             `${theme.muted("路径  ")}${truncateStart(row.issue.path ?? "未知", Math.max(1, width - 6))}`,
           ]
         : [
-            theme.bold(truncateToWidth(row.item.name, width, "...")),
+            theme.bold(truncateToWidth(row.item.name, width, "…")),
             wrapTextWithAnsi(row.item.description, width)[0] ?? "",
             "",
-            `${theme.muted("状态  ")}${row.item.enabled ? theme.success("当前会话已启用") : theme.muted(row.item.installed ? "已安装 ⋅ 未启用" : "可导入")}`,
-            `${theme.muted("来源  ")}${row.item.sourceLabel}${row.item.packageDisplaySource ? ` ⋅ ${truncateStart(row.item.packageDisplaySource, Math.max(1, width - 12))}` : ""}`,
+            `${theme.muted("状态  ")}${row.item.enabled ? theme.success("当前会话已启用") : theme.muted(row.item.installed ? "已安装 · 未启用" : "可导入")}`,
+            `${theme.muted("来源  ")}${row.item.sourceLabel}${row.item.packageDisplaySource ? ` · ${truncateStart(row.item.packageDisplaySource, Math.max(1, width - 12))}` : ""}`,
             `${theme.muted("路径  ")}${truncateStart(row.item.filePath, Math.max(1, width - 6))}`,
             `${theme.muted("触发  ")}/skill:${row.item.name}`,
             `${theme.muted("Model ")}${row.item.disableModelInvocation ? "仅显式调用" : "可自动调用"}`,
@@ -2116,8 +2132,8 @@ export class PanelController {
     if (!session) return Array.from({ length: rows }, () => padLine("", width));
     const source = session.source === "codex" ? "Codex" : "Claude Code";
     const detail = [
-      theme.bold(truncateToWidth(session.title, width, "...")),
-      `${theme.muted("来源  ")}${source}${session.archived ? theme.muted(" ⋅ 已归档") : ""}`,
+      theme.bold(truncateToWidth(session.title, width, "…")),
+      `${theme.muted("来源  ")}${source}${session.archived ? theme.muted(" · 已归档") : ""}`,
       `${theme.muted("时间  ")}${formatExternalTimestamp(session.updatedAt)}`,
       `${theme.muted("路径  ")}${truncateStart(session.cwd ?? "将在预览时读取", Math.max(1, width - 6))}`,
       "",
@@ -2148,8 +2164,7 @@ export class PanelController {
       | "thinkingDisplay"
       | "thinkingTranslationEndpoint"
       | "wrapCode"
-      | "collapseTools"
-      | "bridgeEnabled";
+      | "collapseTools";
     group: string;
   }> {
     return [
@@ -2176,7 +2191,6 @@ export class PanelController {
         label: `完成后收起工具  ${this.settings.collapseTools ? "开" : "关"}`,
         key: "collapseTools",
       },
-      { group: "附件", label: `SSH 图片桥接  ${this.settings.bridgeEnabled ? "开" : "关"}`, key: "bridgeEnabled" },
       {
         group: "终端",
         label: `TUI 模式  ${this.settings.tuiMode === "fullscreen" ? "Fullscreen" : "Regular"}`,
@@ -2245,7 +2259,7 @@ export class PanelController {
     const rows = POLICY_LEVELS.map((policy, index) => {
       const active = policy === this.policySnapshot.policy;
       return selectedLine(
-        `${active ? theme.success("✓ ") : "  "}${policy} ⋅ Host`,
+        `${active ? theme.success("✓ ") : "  "}${policy} · Host`,
         index === this.state.selected,
         width,
         theme,
@@ -2253,11 +2267,11 @@ export class PanelController {
     });
     const selected = POLICY_LEVELS[this.state.selected];
     if (selected === "Auto") {
-      rows.push(theme.warning(padLine("Auto ⋅ Host：本会话所有工具调用都不再询问", width)));
+      rows.push(theme.warning(padLine("Auto · Host：本会话所有工具调用都不再询问", width)));
     } else if (this.policySnapshot.recovery) {
-      rows.push(theme.warning(padLine("Recovery 强制 Standard ⋅ Host，拒绝切换", width)));
+      rows.push(theme.warning(padLine("Recovery 强制 Standard · Host，拒绝切换", width)));
     } else {
-      rows.push(theme.muted(padLine("Safe 最严格 ⋅ Standard 日常开发 ⋅ YOLO 仅高风险询问 ⋅ Auto 不询问", width)));
+      rows.push(theme.muted(padLine("Safe 最严格 · Standard 日常开发 · YOLO 仅高风险询问 · Auto 不询问", width)));
     }
     if ((this.policySnapshot.sessionAllowlist?.length ?? 0) > 0) {
       rows.push(theme.muted(padLine(`本会话已允许  ${this.policySnapshot.sessionAllowlist.join("、")}`, width)));
@@ -2278,14 +2292,14 @@ export class PanelController {
         capability.status === "native" || capability.status === "available"
           ? theme.success("✓")
           : capability.status === "not-connected"
-            ? theme.warning("◦")
-            : theme.muted("...");
+            ? theme.warning("○")
+            : theme.muted("…");
       const header = alignRight(
         `${symbol} ${theme.bold(capability.label)}`,
         theme.muted(statusLabel[capability.status]),
         Math.max(1, width - 2),
       );
-      const detail = padLine(`    ${capability.route} ⋅ ${capability.boundary}`, width);
+      const detail = padLine(`    ${capability.route} · ${capability.boundary}`, width);
       return [selectedLine(header, selected, width, theme), selected ? theme.selected(detail) : theme.muted(detail)];
     });
   }
@@ -2359,7 +2373,7 @@ export class PanelController {
     if (!goal) return [theme.muted(padLine("当前 Session 没有绑定 Goal", width))];
     const marker = goal.markers.at(-1);
     const state = GOAL_STATE_LABELS[goal.state];
-    const progress = `${goal.autoRounds}/${goal.limits.maxAutoRounds} rounds ⋅ ${goal.noProgressRounds}/${goal.limits.maxNoProgressRounds} no-progress`;
+    const progress = `${goal.autoRounds}/${goal.limits.maxAutoRounds} rounds · ${goal.noProgressRounds}/${goal.limits.maxNoProgressRounds} no-progress`;
     const tokenBudget = `${goal.consumedTokens}/${goal.limits.maxTokens} tokens`;
     const rows = [
       alignRight(theme.bold(theme.focus(state)), theme.muted(`r${goal.revision}`), width),
@@ -2392,14 +2406,14 @@ export class PanelController {
     const headers = [
       theme.muted(padLine("Map  Timeline  Tools  Pools", width)),
       ...wrapTextWithAnsi(
-        `limits d${limits.maxDepth} ⋅ tree ${limits.maxAgentsPerTree} ⋅ gen ${limits.maxConcurrency} ⋅ run ${formatAgentTokens(limits.maxRunTokens)}/${limits.maxRunSeconds}s ⋅ tree ${formatAgentTokens(limits.maxTreeTokens)}/$${limits.maxTreeCostUsd}`,
+        `limits d${limits.maxDepth} · tree ${limits.maxAgentsPerTree} · gen ${limits.maxConcurrency} · run ${formatAgentTokens(limits.maxRunTokens)}/${limits.maxRunSeconds}s · tree ${formatAgentTokens(limits.maxTreeTokens)}/$${limits.maxTreeCostUsd}`,
         width,
       ).map((line) => theme.muted(line)),
     ];
     if (this.agentTab === "pools") {
       const lines = [...headers];
       for (const pool of this.agentSnapshot.pools) {
-        lines.push(theme.bold(`${pool.provider} ⋅ ${pool.source}`));
+        lines.push(theme.bold(`${pool.provider} · ${pool.source}`));
         for (const role of ["orchestrator", "researcher", "analyst", "worker"] as const) {
           lines.push(...wrapTextWithAnsi(`  ${role.padEnd(12)} ${pool.roles[role]}`, width));
         }
@@ -2414,15 +2428,15 @@ export class PanelController {
       const lines = [...headers, theme.focus(`Root › ${breadcrumb.join(" › ")}`)];
       lines.push(
         ...wrapTextWithAnsi(
-          `${selected.role} ⋅ ${selected.provider}/${selected.model.split("/").at(-1)} ⋅ ${selected.effort} ⋅ ${selected.status}`,
+          `${selected.role} · ${selected.provider}/${selected.model.split("/").at(-1)} · ${selected.effort} · ${selected.status}`,
           width,
         ),
         ...wrapTextWithAnsi(
-          `run ${selected.id} ⋅ tree ${selected.treeId}${selected.parentId ? ` ⋅ parent ${selected.parentId}` : ""}`,
+          `run ${selected.id} · tree ${selected.treeId}${selected.parentId ? ` · parent ${selected.parentId}` : ""}`,
           width,
         ).map((line) => theme.muted(line)),
         ...wrapTextWithAnsi(
-          `${selected.modelReason} ⋅ context ${selected.contextMode}/${selected.contextChars} chars`,
+          `${selected.modelReason} · context ${selected.contextMode}/${selected.contextChars} chars`,
           width,
         ).map((line) => theme.muted(line)),
       );
@@ -2438,16 +2452,16 @@ export class PanelController {
         lines.push(
           theme.bold("Budget"),
           ...wrapTextWithAnsi(
-            `  run ${formatAgentTokens(Math.max(0, budget.maxRunTokens - budget.runTokensUsed))} tokens left ⋅ tree ${formatAgentTokens(Math.max(0, budget.maxTreeTokens - budget.treeTokensUsed))} / $${Math.max(0, budget.maxTreeCostUsd - budget.treeCostUsd).toFixed(3)} left`,
+            `  run ${formatAgentTokens(Math.max(0, budget.maxRunTokens - budget.runTokensUsed))} tokens left · tree ${formatAgentTokens(Math.max(0, budget.maxTreeTokens - budget.treeTokensUsed))} / $${Math.max(0, budget.maxTreeCostUsd - budget.treeCostUsd).toFixed(3)} left`,
             width,
           ),
           ...wrapTextWithAnsi(
-            `  usage in ${formatAgentTokens(usage.input)} ⋅ out ${formatAgentTokens(usage.output)} ⋅ cache ${formatAgentTokens(usage.cacheRead + usage.cacheWrite)} ⋅ ${usage.turns} turns`,
+            `  usage in ${formatAgentTokens(usage.input)} · out ${formatAgentTokens(usage.output)} · cache ${formatAgentTokens(usage.cacheRead + usage.cacheWrite)} · ${usage.turns} turns`,
             width,
           ).map((line) => theme.muted(line)),
           theme.bold("Timeline"),
           ...selected.timeline.flatMap((event) =>
-            wrapTextWithAnsi(`  ${event.at.slice(11, 19)} ${event.kind} ⋅ ${event.summary}`, width),
+            wrapTextWithAnsi(`  ${event.at.slice(11, 19)} ${event.kind} · ${event.summary}`, width),
           ),
         );
         lines.push(theme.bold("Run output preview"));
@@ -2461,23 +2475,23 @@ export class PanelController {
     const authority = this.agentSnapshot.authority;
     lines.push(
       ...wrapTextWithAnsi(
-        `Authority ⋅ required ${authority.pendingRequired.join(",") || "none"} ⋅ override turn ${authority.turnOverrides.join(",") || "none"} ⋅ session ${authority.sessionOverrides.join(",") || "none"}`,
+        `Authority · required ${authority.pendingRequired.join(",") || "none"} · override turn ${authority.turnOverrides.join(",") || "none"} · session ${authority.sessionOverrides.join(",") || "none"}`,
         width,
       ).map((line) => theme.muted(line)),
     );
     for (const teammate of this.agentSnapshot.teammates) {
       const model = teammate.currentModel ?? teammate.preferredModel ?? "inherit";
-      lines.push(padLine(`  ⋄ ${teammate.id} ⋅ ${teammate.role} ⋅ ${teammate.routing}`, width));
+      lines.push(padLine(`  ◇ ${teammate.id} · ${teammate.role} · ${teammate.routing}`, width));
       lines.push(
         ...wrapTextWithAnsi(
-          `    current ${model} ⋅ preferred ${teammate.preferredModel ?? "inherit"} ⋅ effort ${teammate.effort ?? "inherit"}`,
+          `    current ${model} · preferred ${teammate.preferredModel ?? "inherit"} · effort ${teammate.effort ?? "inherit"}`,
           width,
         ).map((line) => theme.muted(line)),
       );
       if (teammate.fallback) {
         lines.push(
           ...wrapTextWithAnsi(
-            `    fallback ${teammate.fallback.from} -> ${teammate.currentModel ?? model} ⋅ ${teammate.fallback.reason}`,
+            `    fallback ${teammate.fallback.from} -> ${teammate.currentModel ?? model} · ${teammate.fallback.reason}`,
             width,
           ).map((line) => theme.warning(line)),
         );
@@ -2489,12 +2503,12 @@ export class PanelController {
     }
     runs.forEach((run, index) => {
       const symbol =
-        run.status === "success" ? theme.success("✓") : run.status === "error" ? theme.error("x") : theme.focus("◉");
-      const branch = `${"  ".repeat(Math.max(0, run.depth - 1))}${run.depth > 1 ? "❘‒ " : ""}`;
+        run.status === "success" ? theme.success("✓") : run.status === "error" ? theme.error("×") : theme.focus("●");
+      const branch = `${"  ".repeat(Math.max(0, run.depth - 1))}${run.depth > 1 ? "└─ " : ""}`;
       const current = index === this.state.selected ? "› " : "  ";
       lines.push(
         ...wrapTextWithAnsi(
-          `${current}${branch}${symbol} ${run.role} ⋅ ${run.model.split("/").at(-1)} ⋅ ${run.status} ⋅ ${run.task}`,
+          `${current}${branch}${symbol} ${run.role} · ${run.model.split("/").at(-1)} · ${run.status} · ${run.task}`,
           width,
         ),
       );
@@ -2594,7 +2608,7 @@ export class PanelController {
       ? [
           alignRight(
             theme.blue(theme.bold(snapshot.title)),
-            theme.muted(`r${snapshot.revision} ⋅ ${complete}/${this.planItems.length}`),
+            theme.muted(`r${snapshot.revision} · ${complete}/${this.planItems.length}`),
             width,
           ),
           padLine(`${theme.warning(theme.bold("目标"))}  ${snapshot.goal}`, width),
@@ -2607,8 +2621,8 @@ export class PanelController {
           : item.status === "blocked"
             ? theme.error("✕")
             : item.status === "in_progress"
-              ? theme.focus("◉")
-              : theme.muted("◦");
+              ? theme.focus("●")
+              : theme.muted("○");
       const label = item.focused ? theme.focus(theme.bold(item.label)) : item.label;
       const prefix = planTreePrefix(items, index, theme);
       lines.push(selectedLine(`${prefix}${symbol} ${label}`, focused && index === this.state.selected, width, theme));
@@ -2649,16 +2663,16 @@ export class PanelController {
     const lines = [
       alignRight(
         theme.bold(theme.focus(humanizePlanId(delivery.id))),
-        theme.muted(`${DELIVERY_STATUS_LABELS[delivery.status] ?? delivery.status} ⋅ 修订 ${delivery.revision}`),
+        theme.muted(`${DELIVERY_STATUS_LABELS[delivery.status] ?? delivery.status} · 修订 ${delivery.revision}`),
         width,
       ),
       theme.muted(
         padLine(
-          `Workflow ⋅ ${DELIVERY_KIND_LABELS[delivery.kind] ?? delivery.kind} ⋅ Workspace Read-only ⋅ 契约 v${identity?.contractVersion ?? "?"} ⋅ ${version}`,
+          `Workflow · ${DELIVERY_KIND_LABELS[delivery.kind] ?? delivery.kind} · Workspace Read-only · 契约 v${identity?.contractVersion ?? "?"} · ${version}`,
           width,
         ),
       ),
-      theme.border(padLine((theme.capabilities.unicode ? "‒" : "-").repeat(width), width)),
+      theme.border(padLine((theme.capabilities.unicode ? "─" : "-").repeat(width), width)),
     ];
     const idWidth = Math.max(...delivery.milestones.map((milestone) => milestone.id.length));
     this.visiblePlanItems().forEach((item, index) => {
@@ -2669,10 +2683,10 @@ export class PanelController {
           : item.status === "blocked"
             ? theme.error("✕")
             : item.status === "in_progress"
-              ? theme.focus("◉")
-              : theme.muted("◦");
+              ? theme.focus("●")
+              : theme.muted("○");
       // 标记已承载 done/in_progress/pending 语义，只有"待锚定"这类附加信息才补文字
-      const statusText = milestone?.status === "pending_stone" ? " ⋅ 待锚定" : "";
+      const statusText = milestone?.status === "pending_stone" ? " · 待锚定" : "";
       const id = (milestone?.id ?? item.id).padEnd(idWidth);
       lines.push(
         selectedLine(
@@ -2695,7 +2709,7 @@ export class PanelController {
         theme.bold("Prompt Profile"),
         snapshot.resolved.disabled
           ? theme.warning("Off")
-          : theme.muted(`${snapshot.resolved.scope}${snapshot.resolved.pinned ? " ⋅ pinned" : ""}`),
+          : theme.muted(`${snapshot.resolved.scope}${snapshot.resolved.pinned ? " · pinned" : ""}`),
         width,
       ),
     ];
@@ -2709,7 +2723,7 @@ export class PanelController {
             : "已评审";
       lines.push(
         selectedLine(
-          `${active ? theme.success("✓ ") : "  "}${profile.name} ⋅ ${profile.sourceType === "factory" ? "Factory" : profile.sourceType} ⋅ ${evaluation}`,
+          `${active ? theme.success("✓ ") : "  "}${profile.name} · ${profile.sourceType === "factory" ? "Factory" : profile.sourceType} · ${evaluation}`,
           index === this.state.selected,
           width,
           theme,
@@ -2717,7 +2731,7 @@ export class PanelController {
       );
     });
     for (const rule of snapshot.rules) {
-      lines.push(padLine(`规则  ${rule.enabled ? "✓" : "◦"} ${rule.label}`, width));
+      lines.push(padLine(`规则  ${rule.enabled ? "✓" : "○"} ${rule.label}`, width));
     }
     const labels: Record<PromptPanelSnapshot["effectiveSegments"][number]["source"], string> = {
       "pi-base": "Pi base",
@@ -2739,21 +2753,21 @@ export class PanelController {
     this.questionPinnedRows = 0;
     const answered = this.questions.filter((question) => question.answer !== undefined).length;
     const skipped = this.questions.filter((question) => question.skipped).length;
-    const status = theme.muted(`已答 ${answered} ⋅ 跳过 ${skipped}`);
+    const status = theme.muted(`已答 ${answered} · 跳过 ${skipped}`);
     if (this.questionReview) {
       const lines = [
-        alignRight(theme.muted("Question ⋅ Review"), status, width),
+        alignRight(theme.muted("Question · Review"), status, width),
         "",
         theme.bold(padLine("最终检查", width)),
         "",
-        theme.border(padLine((theme.capabilities.unicode ? "‒" : "-").repeat(width), width)),
+        theme.border(padLine((theme.capabilities.unicode ? "─" : "-").repeat(width), width)),
         "",
       ];
       for (const question of this.questions) {
         const answer = question.skipped
           ? "已跳过"
           : Array.isArray(question.answer)
-            ? question.answer.join(" ⟶ ")
+            ? question.answer.join(" → ")
             : question.answer || "未回答";
         lines.push(padLine(theme.bold(question.title), width));
         lines.push(theme.text(padLine(`  ${answer}`, width)));
@@ -2773,7 +2787,7 @@ export class PanelController {
       inset(theme.bold(question.title)),
       ...wrapTextWithAnsi(question.prompt, contentWidth).map(inset),
       "",
-      inset(theme.border((theme.capabilities.unicode ? "‒" : "-").repeat(contentWidth))),
+      inset(theme.border((theme.capabilities.unicode ? "─" : "-").repeat(contentWidth))),
       "",
     ];
     if (this.questionDirectAnswer || question.kind === "freeText") {
@@ -2782,7 +2796,7 @@ export class PanelController {
       lines.push(theme.muted(inset("你的回答")));
       lines.push("");
       lines.push(inset(`${theme.focus("›")} ${input}`));
-      lines.push(inset(theme.border((theme.capabilities.unicode ? "‒" : "-").repeat(contentWidth))));
+      lines.push(inset(theme.border((theme.capabilities.unicode ? "─" : "-").repeat(contentWidth))));
       return lines;
     }
     this.questionInput.focused = false;
@@ -2801,12 +2815,12 @@ export class PanelController {
           : question.kind === "ranking"
             ? option.id === "other"
               ? theme.capabilities.unicode
-                ? "⋅"
+                ? "·"
                 : "+"
               : `${index + 1}.`
             : selected
               ? theme.capabilities.unicode
-                ? "(◉)"
+                ? "(●)"
                 : "(*)"
               : "( )";
       return { option, selected, label: `${symbol} ${option.label}` };
@@ -2895,9 +2909,9 @@ function planTreePrefix(items: PlanItem[], index: number, theme: VspiTheme): str
   for (let depth = 0; depth < item.depth - 1; depth += 1) {
     let ancestorIndex = index - 1;
     while (ancestorIndex >= 0 && (items[ancestorIndex]?.depth ?? -1) > depth) ancestorIndex -= 1;
-    prefix += ancestorIndex >= 0 && hasLaterPlanSibling(items, ancestorIndex) ? "❘  " : "   ";
+    prefix += ancestorIndex >= 0 && hasLaterPlanSibling(items, ancestorIndex) ? "│  " : "   ";
   }
-  return theme.muted(`${prefix}${hasLaterPlanSibling(items, index) ? "❘‒ " : "❘‒ "}`);
+  return theme.muted(`${prefix}${hasLaterPlanSibling(items, index) ? "├─ " : "╰─ "}`);
 }
 
 function modelKey(model: { provider?: string; id: string } | undefined): string {

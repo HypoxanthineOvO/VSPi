@@ -9,8 +9,7 @@ function normalizeHeadings(source: string): string {
 }
 
 function listSymbol(depth: number): string {
-  // ▪◦⋅ 均为 neutral 宽度；• 是 Ambiguous，中文宽渲染终端会画成 2 列导致列表错位。
-  return ["▪", "◦", "⋅"][depth % 3] ?? "▪";
+  return ["•", "◦", "▪"][depth % 3] ?? "•";
 }
 
 function replaceListMarker(line: string, theme: VspiTheme): string {
@@ -21,30 +20,14 @@ function replaceListMarker(line: string, theme: VspiTheme): string {
   const task = match[2];
   const depth = Math.floor(indent.length / 4);
   const sourceMarker = task === undefined ? "- " : `- [${task}] `;
-  const replacementMarker = task === undefined ? `${listSymbol(depth)} ` : `${task === " " ? "▫" : "✓"} `;
+  const replacementMarker = task === undefined ? `${listSymbol(depth)} ` : `${task === " " ? "○" : "✓"} `;
   const source = `${indent}${theme.markdown.listBullet(sourceMarker)}`;
   const replacement = `${indent}${theme.markdown.listBullet(replacementMarker)}`;
   return line.replace(source, replacement);
 }
 
-// 上游 marked 表格边框是 EAW Ambiguous 字符，中文宽渲染终端会画成 2 列导致
-// 表格错位；替换成 neutral 宽度等价物后再交给 wrap/pad 计算宽度。
-const TABLE_BORDER_MAP: Record<string, string> = {
-  "┌": "+",
-  "┬": "+",
-  "┐": "+",
-  "├": "+",
-  "┼": "+",
-  "┤": "+",
-  "└": "+",
-  "┴": "+",
-  "┘": "+",
-  "─": "‒",
-  "│": "❘",
-};
-
 function styleTableBorders(line: string, theme: VspiTheme): string {
-  return line.replace(/[┌┬┐├┼┤└┴┘─│]/g, (border) => theme.border(TABLE_BORDER_MAP[border] ?? border));
+  return line.replace(/[┌┬┐├┼┤└┴┘─│]+/g, (border) => theme.border(border));
 }
 
 function codeLabel(fence: string): string {
@@ -53,13 +36,13 @@ function codeLabel(fence: string): string {
 }
 
 function codeHeader(label: string, width: number, theme: VspiTheme): string {
-  const prefix = theme.capabilities.colorLevel === 0 ? `${theme.capabilities.unicode ? "❘" : "|"} ` : "  ";
+  const prefix = theme.capabilities.colorLevel === 0 ? `${theme.capabilities.unicode ? "│" : "|"} ` : "  ";
   return fillBackground(theme.markdown.codeBlockBorder(`${prefix}${label}`), width, theme.codeBlock);
 }
 
 function codeBody(line: string, width: number, theme: VspiTheme): string {
   if (theme.capabilities.colorLevel > 0) return fillBackground(line, width, theme.codeBlock);
-  const border = theme.capabilities.unicode ? "❘" : "|";
+  const border = theme.capabilities.unicode ? "│" : "|";
   return fillBackground(`${border} ${line.replace(/^ {0,2}/, "")}`, width, theme.codeBlock);
 }
 
@@ -103,6 +86,31 @@ function transformMermaidBlocks(
       return `${art.plain.map(mermaidCodeSpan).join("  \n")}\n`;
     })
     .join("");
+}
+
+export function createVspiMarkdownTransformer(options: {
+  wrapCode?: boolean;
+  mermaidRendering?: "off" | "final" | "streaming";
+  unicode?: boolean;
+}): (
+  source: string,
+  context: { messageType: "user" | "assistant" | "assistant-thinking"; isStreaming: boolean; availableWidth: number },
+) => string {
+  return (source, context) => {
+    const transformed = transformMermaidBlocks(source, {
+      mode:
+        options.unicode === false || context.messageType === "assistant-thinking"
+          ? "off"
+          : (options.mermaidRendering ?? "final"),
+      streaming: context.isStreaming,
+      thinking: context.messageType === "assistant-thinking",
+      availableWidth: context.availableWidth,
+    });
+    const codeWidth = Math.max(1, context.availableWidth - 4);
+    return normalizeHeadings(
+      options.wrapCode ? wrapFencedCode(transformed, codeWidth) : truncateFencedCode(transformed, codeWidth),
+    );
+  };
 }
 
 export class VspiMarkdown implements Component {
@@ -233,7 +241,7 @@ function truncateFencedCode(source: string, width: number): string {
         insideFence = !insideFence;
         return line;
       }
-      return insideFence ? truncateToWidth(line, width, "...") : line;
+      return insideFence ? truncateToWidth(line, width, "…") : line;
     })
     .join("\n");
 }

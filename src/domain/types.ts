@@ -196,5 +196,4 @@ export interface AppSettings {
   thinkingTranslationEndpoint: string;
   wrapCode: boolean;
   collapseTools: boolean;
-  bridgeEnabled: boolean;
 }

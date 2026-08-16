@@ -160,7 +160,7 @@ export class FixtureBackend implements ChatBackend {
         label: "Offline Fixture",
         protocol: "Local deterministic",
         status: "已配置" as const,
-        detail: "显式离线模式 ⋅ 无网络 ⋅ 无 credential",
+        detail: "显式离线模式 · 无网络 · 无 credential",
       },
     ];
   }

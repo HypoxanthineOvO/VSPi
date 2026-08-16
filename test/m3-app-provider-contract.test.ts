@@ -63,7 +63,7 @@ describe("M3 App Provider action boundary", () => {
     });
     const app = new VspiApp(fakeTui(), plainTheme(), backend, {
       cwd: "/workspace/m3-provider-app",
-      settings: { ...DEFAULT_SETTINGS, bridgeEnabled: false },
+      settings: { ...DEFAULT_SETTINGS },
       attachments: fakeAttachments(),
       renderOnce: true,
       providerConfigFactory: () => ({
@@ -192,7 +192,7 @@ describe("M3 App Provider action boundary", () => {
     const save = vi.fn(async () => "/tmp/project-runtime-defaults.json");
     const app = new VspiApp(fakeTui(), plainTheme(), backend, {
       cwd: "/workspace/m3-default-app",
-      settings: { ...DEFAULT_SETTINGS, scope: "project", bridgeEnabled: false },
+      settings: { ...DEFAULT_SETTINGS, scope: "project" },
       attachments: fakeAttachments(),
       renderOnce: true,
       runtimeDefaultsFactory: () => ({ load, save }),
@@ -290,7 +290,7 @@ describe("M3 App Provider action boundary", () => {
     });
     const app = new VspiApp(fakeTui(), plainTheme(), backend, {
       cwd: "/workspace/m3-duplicate-model-id",
-      settings: { ...DEFAULT_SETTINGS, scope: "project", bridgeEnabled: false },
+      settings: { ...DEFAULT_SETTINGS, scope: "project" },
       attachments: fakeAttachments(),
       renderOnce: true,
       runtimeDefaultsFactory: () => ({

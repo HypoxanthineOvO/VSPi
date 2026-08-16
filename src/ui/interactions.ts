@@ -169,7 +169,7 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.up, Key.down],
     handler: "moveSelection",
     enabled: hasItems,
-    hint: "▴▾ 选择",
+    hint: "↑↓ 选择",
   }),
   keyAction({
     id: "panel.plan.fold",
@@ -179,7 +179,7 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.left, Key.right, Key.enter],
     handler: "togglePlanItem",
     enabled: hasItems,
-    hint: "◂ 收起  ⟶ 展开  Enter 操作",
+    hint: "← 收起  → 展开  Enter 操作",
   }),
   keyAction({
     id: "panel.plan.focus",
@@ -198,7 +198,7 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.up, Key.down],
     handler: "moveSelection",
     enabled: hasItems,
-    hint: "▴▾ 选择",
+    hint: "↑↓ 选择",
   }),
   keyAction({
     id: "panel.commands.complete",
@@ -236,7 +236,7 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.up, Key.down],
     handler: "moveSelection",
     enabled: hasItems,
-    hint: "▴▾ 选择",
+    hint: "↑↓ 选择",
   }),
   keyAction({
     id: "panel.sessions.open",
@@ -275,7 +275,7 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.up, Key.down],
     handler: "moveSelection",
     enabled: hasItems,
-    hint: "▴▾ 选择",
+    hint: "↑↓ 选择",
   }),
   keyAction({
     id: "panel.external-import.source",
@@ -332,7 +332,7 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.up, Key.down],
     handler: "moveSelection",
     enabled: (state) => state.skillAdding !== true && state.skillViewing !== true && state.hasItems === true,
-    hint: "▴▾ 选择",
+    hint: "↑↓ 选择",
   }),
   keyAction({
     id: "panel.skills.tab",
@@ -362,7 +362,7 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.left, Key.right],
     handler: "switchSkillScope",
     enabled: (state) => state.skillAdding === true,
-    hint: "◂⟶ 范围",
+    hint: "←→ 范围",
   }),
   keyAction({
     id: "panel.skills.toggle",
@@ -448,7 +448,7 @@ const actions: InteractionDefinition[] = [
       keys: ["Up", "Down"],
       keyValues: [Key.up, Key.down],
       handler: "moveSelection",
-      hint: "▴▾ 选择",
+      hint: "↑↓ 选择",
     }),
   ),
   keyAction({
@@ -486,7 +486,7 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.left, Key.right],
     handler: "showModelDetail",
     enabled: (state) => state.narrowModel === true,
-    hint: "◂⟶ 详情",
+    hint: "←→ 详情",
   }),
   keyAction({
     id: "panel.models.select",
@@ -522,7 +522,7 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.up, Key.down],
     handler: "moveSelection",
     enabled: (state) => state.providerEditing !== true,
-    hint: "▴▾ 选择",
+    hint: "↑↓ 选择",
   }),
   keyAction({
     id: "panel.providers.activate",
@@ -542,7 +542,7 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.up],
     handler: "moveSelection",
     enabled: (state) => state.providerEditing === true && state.providerField !== 0,
-    hint: "▴ 上一项",
+    hint: "↑ 上一项",
   }),
   keyAction({
     id: "panel.providers.edit-down",
@@ -552,7 +552,7 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.down],
     handler: "moveSelection",
     enabled: (state) => state.providerEditing === true && state.providerField !== 2,
-    hint: "▾ 下一项",
+    hint: "↓ 下一项",
   }),
   inputAction({
     id: "panel.providers.edit-text",
@@ -583,7 +583,7 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.left, Key.right],
     handler: "editProviderProtocol",
     enabled: (state) => state.providerEditing === true && state.providerField === 2,
-    hint: "◂⟶ 切换协议",
+    hint: "←→ 切换协议",
   }),
   keyAction({
     id: "panel.providers.save",
@@ -664,10 +664,10 @@ const actions: InteractionDefinition[] = [
     handler: "answerQuestion",
     matcher: (value) => editingInput(value) || matchesAnyKey(value, QUESTION_KEYS),
     hint: (state) => {
-      if (state.questionMode === "review") return "Enter 提交  Esc 返回  ▴▾/PgUp/PgDn 滚动";
-      if (state.questionMode === "freeText") return "Enter 确认  ◂⟶ 移动光标";
-      if (state.questionMode === "ranking") return "▴▾ 选择  Ctrl/Alt+▴▾ 重排  Enter 确认  ◂⟶ 切题  Shift+S 跳过";
-      return "▴▾ 选择  Space 多选  Tab 直接回答  Enter 确认  ◂⟶ 切题  Shift+S 跳过";
+      if (state.questionMode === "review") return "Enter 提交  Esc 返回  ↑↓/PgUp/PgDn 滚动";
+      if (state.questionMode === "freeText") return "Enter 确认  ←→ 移动光标";
+      if (state.questionMode === "ranking") return "↑↓ 选择  Ctrl/Alt+↑↓ 重排  Enter 确认  ←→ 切题  Shift+S 跳过";
+      return "↑↓ 选择  Space 多选  Tab 直接回答  Enter 确认  ←→ 切题  Shift+S 跳过";
     },
   }),
   ...(
@@ -865,7 +865,7 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.up, Key.down, Key.pageUp, Key.pageDown],
     handler: "moveInspect",
     enabled: hasItems,
-    hint: "▴▾/PgUp/PgDn 浏览",
+    hint: "↑↓/PgUp/PgDn 浏览",
   }),
   keyAction({
     id: "inspect.toggle",
@@ -875,7 +875,7 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.left, Key.right, Key.enter],
     handler: "toggleInspectItem",
     enabled: (state) => state.hasItems === true && state.expandable !== false,
-    hint: (state) => (state.inspectDepth === "tool" ? "Enter/⟶ 展开  ◂ 收回/返回" : "Enter/⟶ 进入/展开  ◂ 收回"),
+    hint: (state) => (state.inspectDepth === "tool" ? "Enter/→ 展开  ← 收回/返回" : "Enter/→ 进入/展开  ← 收回"),
   }),
 ];
 

@@ -71,6 +71,218 @@ function fakeSession(provider = "test", name = "Vision Model", options: FakeSess
 }
 
 describe("pi backend adapter", () => {
+  it("projects configured OpenCode Go catalog models into the picker", async () => {
+    const fake = fakeSession("opencode-go", "OpenCode Go Model");
+    const models = [
+      {
+        id: "future-catalog-model",
+        name: "Future Catalog Model",
+        provider: "opencode-go",
+        input: ["text"],
+        contextWindow: 128_000,
+      },
+    ];
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-pi-opencode-go-")),
+      sessionFactory: async () => ({ session: fake.session }),
+      modelRuntime: {
+        getAvailable: vi.fn(async () => models),
+        getProviders: () => [{ id: "opencode-go", name: "OpenCode Go", getModels: () => models }],
+        listCredentials: vi.fn(async () => [{ providerId: "opencode-go", type: "api_key" as const }]),
+      },
+    } as never);
+
+    await backend.start({
+      onMessage: vi.fn(),
+      onMessageUpdate: vi.fn(),
+      onBusy: vi.fn(),
+      onUsage: vi.fn(),
+      onNotice: vi.fn(),
+    });
+
+    await expect(backend.getModelOptions()).resolves.toEqual([
+      expect.objectContaining({ id: "future-catalog-model", provider: "opencode-go" }),
+    ]);
+    await backend.dispose();
+  });
+
+  it("coalesces concurrent availability reads and refreshes after auth mutations", async () => {
+    const fake = fakeSession("openai", "Catalog Model");
+    const models = [
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "openai",
+        input: ["text"],
+        contextWindow: 128_000,
+      },
+    ];
+    let resolveFirst!: (value: typeof models) => void;
+    const firstAvailability = new Promise<typeof models>((resolve) => {
+      resolveFirst = resolve;
+    });
+    let availabilityCalls = 0;
+    const getAvailable = vi.fn((providerId?: string) => {
+      if (providerId) return Promise.resolve(models);
+      availabilityCalls += 1;
+      return availabilityCalls === 1 ? firstAvailability : Promise.resolve(models);
+    });
+    const runtime = {
+      getAvailable,
+      getProviders: () => [
+        {
+          id: "openai",
+          name: "OpenAI",
+          getModels: () => models,
+        },
+      ],
+      listCredentials: vi.fn(async () => []),
+      login: vi.fn(async () => ({ type: "api_key" as const })),
+      logout: vi.fn(async () => {}),
+    };
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-pi-catalog-coalesce-")),
+      sessionFactory: async () => ({ session: fake.session }),
+      modelRuntime: runtime,
+    } as never);
+
+    await backend.start({
+      onMessage: vi.fn(),
+      onMessageUpdate: vi.fn(),
+      onBusy: vi.fn(),
+      onUsage: vi.fn(),
+      onNotice: vi.fn(),
+    });
+
+    const modelOptions = backend.getModelOptions();
+    const providerOptions = backend.getProviderOptions();
+    expect(getAvailable).toHaveBeenCalledOnce();
+    resolveFirst(models);
+    await Promise.all([modelOptions, providerOptions]);
+    expect(getAvailable).toHaveBeenCalledOnce();
+
+    await backend.loginProvider("openai", "api_key", {
+      prompt: vi.fn(async () => "key"),
+      notify: vi.fn(),
+    });
+    expect(getAvailable).toHaveBeenCalledTimes(2);
+    expect(getAvailable).toHaveBeenLastCalledWith("openai");
+    await backend.logoutProvider("openai");
+    expect(getAvailable).toHaveBeenCalledTimes(3);
+    expect(getAvailable).toHaveBeenLastCalledWith("openai");
+
+    const callsAfterAuth = getAvailable.mock.calls.length;
+    await Promise.all([backend.getModelOptions(), backend.getProviderOptions()]);
+    expect(getAvailable).toHaveBeenCalledTimes(callsAfterAuth + 1);
+    expect(getAvailable).toHaveBeenLastCalledWith();
+    await backend.dispose();
+  });
+
+  it("performs one network catalog refresh and reuses its availability snapshot", async () => {
+    const fake = fakeSession("openai", "Catalog Model");
+    const models = [
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "openai",
+        input: ["text"],
+        contextWindow: 128_000,
+      },
+    ];
+    const getAvailable = vi.fn(async () => models);
+    const refresh = vi.fn(async () => ({ aborted: false, errors: new Map() }));
+    const runtime = {
+      getAvailable,
+      getAvailableSnapshot: vi.fn(() => models),
+      refresh,
+      getProviders: () => [{ id: "openai", name: "OpenAI", getModels: () => models }],
+      listCredentials: vi.fn(async () => []),
+    };
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-pi-catalog-network-")),
+      sessionFactory: async () => ({ session: fake.session }),
+      modelRuntime: runtime,
+    } as never);
+
+    await backend.start({
+      onMessage: vi.fn(),
+      onMessageUpdate: vi.fn(),
+      onBusy: vi.fn(),
+      onUsage: vi.fn(),
+      onNotice: vi.fn(),
+    });
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledWith({ allowNetwork: true, force: true, signal: expect.any(AbortSignal) });
+    await expect(backend.getModelOptions()).resolves.toEqual([
+      expect.objectContaining({ id: "gpt-5.4", provider: "openai" }),
+    ]);
+    await backend.getProviderOptions();
+    expect(getAvailable).not.toHaveBeenCalled();
+    await backend.dispose();
+  });
+
+  it("falls back to a local catalog refresh when remote refresh fails or times out", async () => {
+    const makeBackend = async (mode: "failure" | "timeout") => {
+      const fake = fakeSession("openai", "Catalog Model");
+      const models = [
+        {
+          id: "gpt-5.4",
+          name: "GPT-5.4",
+          provider: "openai",
+          input: ["text"],
+          contextWindow: 128_000,
+        },
+      ];
+      let localReady = false;
+      const getAvailableSnapshot = vi.fn(() => (localReady ? models : []));
+      const refresh = vi.fn(({ allowNetwork, signal }: { allowNetwork?: boolean; signal?: AbortSignal }) => {
+        if (allowNetwork) {
+          if (mode === "failure") return Promise.reject(new Error("catalog unavailable"));
+          return new Promise<{ aborted: boolean; errors: ReadonlyMap<string, Error> }>((_resolve, reject) => {
+            signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+        }
+        localReady = true;
+        return Promise.resolve({ aborted: false, errors: new Map() });
+      });
+      const runtime = {
+        getAvailable: vi.fn(async () => models),
+        getAvailableSnapshot,
+        refresh,
+        getProviders: () => [{ id: "openai", name: "OpenAI", getModels: () => models }],
+        listCredentials: vi.fn(async () => []),
+      };
+      const backend = new PiBackend({
+        cwd: await mkdtemp(join(tmpdir(), `vspi-pi-catalog-${mode}-`)),
+        sessionFactory: async () => ({ session: fake.session }),
+        modelRuntime: runtime,
+        modelCatalogRefreshTimeoutMs: 10,
+      } as never);
+      return { backend, refresh };
+    };
+
+    for (const mode of ["failure", "timeout"] as const) {
+      const { backend, refresh } = await makeBackend(mode);
+      await expect(
+        backend.start({
+          onMessage: vi.fn(),
+          onMessageUpdate: vi.fn(),
+          onBusy: vi.fn(),
+          onUsage: vi.fn(),
+          onNotice: vi.fn(),
+        }),
+      ).resolves.toBeUndefined();
+      expect(refresh).toHaveBeenCalledTimes(2);
+      expect(refresh.mock.calls[0]?.[0]).toMatchObject({ allowNetwork: true });
+      expect(refresh.mock.calls[1]?.[0]).toMatchObject({ allowNetwork: false });
+      await expect(backend.getModelOptions()).resolves.toEqual([
+        expect.objectContaining({ id: "gpt-5.4", provider: "openai" }),
+      ]);
+      await backend.dispose();
+    }
+  });
+
   it("projects Pi authentication methods and delegates login/logout without handling secrets", async () => {
     const fake = fakeSession("kimi-coding", "Kimi K3");
     const models = [

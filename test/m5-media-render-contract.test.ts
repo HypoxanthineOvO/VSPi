@@ -113,7 +113,7 @@ function expectWidthSafe(lines: string[], width: number): void {
 
 describe("M5 media preflight", () => {
   it("blocks a non-Vision send without consuming text or attachments", async () => {
-    const { app, send } = await createApp({ ...DEFAULT_SETTINGS, bridgeEnabled: false }, false);
+    const { app, send } = await createApp({ ...DEFAULT_SETTINGS }, false);
     const testable = app as unknown as TestableApp;
     app.composer.setText("请检查这张登录页截图");
     app.composer.addAttachment(ATTACHMENT);
@@ -171,7 +171,7 @@ describe("M5 Markdown and streaming rendering", () => {
     expect(
       plain(wrapped)
         .join("")
-        .replaceAll(/[❘|\s]/g, ""),
+        .replaceAll(/[❘│|\s]/g, ""),
     ).toContain(token.replaceAll(/\s/g, ""));
   });
 
@@ -275,10 +275,7 @@ describe("M5 thinking visibility and persistence", () => {
   });
 
   it("keeps a hidden thinking record while Inspect retains stable ids and per-entry expansion", async () => {
-    const { app } = await createApp(
-      { ...DEFAULT_SETTINGS, bridgeEnabled: false, thinkingDisplay: "hidden", wrapCode: true },
-      true,
-    );
+    const { app } = await createApp({ ...DEFAULT_SETTINGS, thinkingDisplay: "hidden", wrapCode: true }, true);
     const testable = app as unknown as TestableApp;
     testable.messages.push(
       {
@@ -303,7 +300,7 @@ describe("M5 thinking visibility and persistence", () => {
     );
 
     const hidden = plain(app.render(80)).join("\n");
-    expect(hidden).toContain("⋄ 思考 ⋅ 已隐藏");
+    expect(hidden).toContain("◇ 思考 · 已隐藏");
     expect(hidden).not.toContain("PRIVATE_THINKING_DETAIL");
 
     app.handleInput("\t");
@@ -347,7 +344,7 @@ describe("M5 thinking visibility and persistence", () => {
   });
 
   it("applies a changed thinking mode to existing and future messages immediately", async () => {
-    const { app } = await createApp({ ...DEFAULT_SETTINGS, bridgeEnabled: false, thinkingDisplay: "expanded" }, true);
+    const { app } = await createApp({ ...DEFAULT_SETTINGS, thinkingDisplay: "expanded" }, true);
     const testable = app as unknown as TestableApp;
     const thinking: TranscriptMessage = {
       id: "existing-thinking",

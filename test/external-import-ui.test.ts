@@ -33,7 +33,7 @@ describe("external history import UI", () => {
     } as unknown as ChatBackend;
     const app = new VspiApp(fakeTui(), plainTheme(), backend, {
       cwd: "/workspace",
-      settings: { ...DEFAULT_SETTINGS, bridgeEnabled: false },
+      settings: { ...DEFAULT_SETTINGS },
       attachments: fakeAttachments(),
       renderOnce: true,
       onExit: vi.fn(),

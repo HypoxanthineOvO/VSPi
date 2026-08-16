@@ -29,6 +29,7 @@ const KNOWN_BUILTIN_PROVIDER_IDS = new Set([
   "amazon-bedrock",
   "ant-ling",
   "azure-openai-responses",
+  "baseten",
   "cerebras",
   "cloudflare-ai-gateway",
   "cloudflare-workers-ai",
@@ -43,12 +44,15 @@ const KNOWN_BUILTIN_PROVIDER_IDS = new Set([
   "opencode",
   "opencode-go",
   "openrouter",
+  "qwen-token-plan-individual",
   "radius",
   "together",
   "vercel-ai-gateway",
   "xai",
   ...CURATED_PROVIDER_IDS,
 ]);
+
+const FULL_CATALOG_PROVIDER_IDS = new Set(["opencode-go"]);
 
 function searchable(model: CatalogModel): string {
   return `${model.id} ${model.name}`.toLowerCase();
@@ -74,7 +78,7 @@ function matchesCuratedFamily(model: CatalogModel): boolean {
   if (model.provider.startsWith("xiaomi")) return /mimo[- ]v?2[.-]5(?:\D|$)/i.test(value);
   if (model.provider === "deepseek") return /deepseek[- ]v4(?:\D|$)/i.test(value);
   if (model.provider === "zai" || model.provider === "zai-coding-cn") {
-    return /glm[- ]5[.-](?:1|2)(?:\D|$)/i.test(value);
+    return /glm[- ]5[.-](?:1|2|3)(?:\D|$)/i.test(value);
   }
   if (model.provider.startsWith("qwen-token-plan")) {
     return /qwen[- ]?(?:3[.-]8[- ]max[- ]preview|3[.-]7[- ](?:max|plus))(?:\D|$)/i.test(value);
@@ -85,6 +89,7 @@ function matchesCuratedFamily(model: CatalogModel): boolean {
 
 /** VSPi's intentionally small model picker. Runtime auth/catalogs remain untouched. */
 export function isVisibleRuntimeModel(model: CatalogModel): boolean {
+  if (FULL_CATALOG_PROVIDER_IDS.has(model.provider)) return true;
   if (CURATED_PROVIDER_IDS.has(model.provider)) return matchesCuratedFamily(model);
   return !KNOWN_BUILTIN_PROVIDER_IDS.has(model.provider);
 }

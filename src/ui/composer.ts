@@ -12,7 +12,7 @@ import { emphasizeVisibleRange, padLine, stripAnsi, truncateToWidth, visibleWidt
 import { matchesInteraction } from "./interactions.js";
 import type { VspiTheme } from "./theme.js";
 
-interface EditorStateAccess {
+interface MutableEditorStateAccess {
   state: {
     lines: string[];
     cursorLine: number;
@@ -27,9 +27,7 @@ export interface ComposerActivity {
   reducedMotion: boolean;
 }
 
-// 所有帧都必须是 neutral 宽度字符：East Asian Ambiguous 字符（○●x）在
-// 「ambiguous 按宽渲染」的中文终端里实际占 2 列，会导致输入框行溢出与光标错位。
-const BALL_FRAMES = ["◦", "◌", "◉", "⬤", "◉", "◌"] as const;
+const BALL_FRAMES = ["○", "◉", "●", "⬤", "●", "◉"] as const;
 const BRAILLE_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"] as const;
 
 export type AttachmentCursorState = "left" | "selected" | "right";
@@ -110,7 +108,7 @@ export class Composer implements Component, Focusable {
     if (index < 0 || !current) return;
     const previousMarker = this.marker(current);
     const nextMarker = this.marker(attachment);
-    const access = this.editor as unknown as EditorStateAccess;
+    const access = this.editor as unknown as MutableEditorStateAccess;
     access.state.lines = access.state.lines.map((line) => line.replace(previousMarker, nextMarker));
     if (access.state.cursorLine < access.state.lines.length) {
       access.state.cursorCol = Math.min(
@@ -126,7 +124,7 @@ export class Composer implements Component, Focusable {
   removeSelectedAttachment(): Attachment | undefined {
     const attachment = this.attachments.find((item) => item.id === this.selectedAttachmentId);
     if (!attachment) return undefined;
-    const access = this.editor as unknown as EditorStateAccess;
+    const access = this.editor as unknown as MutableEditorStateAccess;
     access.state.lines = access.state.lines.map((line) =>
       line.replace(this.marker(attachment), "").replace(/ {2,}/g, " "),
     );
@@ -164,14 +162,14 @@ export class Composer implements Component, Focusable {
   }
 
   attachmentCursorState(attachment: Attachment): AttachmentCursorState | undefined {
-    const access = this.editor as unknown as EditorStateAccess;
-    const line = access.state.lines[access.state.cursorLine] ?? "";
+    const cursor = this.editor.getCursor();
+    const line = this.editor.getLines()[cursor.line] ?? "";
     const start = line.indexOf(this.marker(attachment));
     if (start < 0) return undefined;
     const end = start + this.marker(attachment).length;
     if (this.selectedAttachmentId === attachment.id) return "selected";
-    if (access.state.cursorCol === start) return "left";
-    if (access.state.cursorCol === end) return "right";
+    if (cursor.col === start) return "left";
+    if (cursor.col === end) return "right";
     return undefined;
   }
 
@@ -183,7 +181,9 @@ export class Composer implements Component, Focusable {
   render(width: number, activity?: ComposerActivity): string[] {
     const safeWidth = Math.max(4, width);
     const innerWidth = safeWidth - 2;
-    const access = this.editor as unknown as EditorStateAccess;
+    const access = this.editor as unknown as MutableEditorStateAccess;
+    const editorLines = this.editor.getLines();
+    const editorCursor = this.editor.getCursor();
     const selected = this.selectedAttachment();
     const originalCursorCol = access.state.cursorCol;
     if (selected) {
@@ -195,8 +195,9 @@ export class Composer implements Component, Focusable {
     const raw = this.editor.render(innerWidth);
     access.state.cursorCol = originalCursorCol;
     let body = raw.slice(1, -1);
+    const renderedCursorIndex = body.findIndex((line) => line.includes(CURSOR_MARKER));
     if (this.editor.getText() === "" && body[0]) {
-      body[0] = `${body[0]}${this.theme.muted(" 输入消息...")}`;
+      body[0] = `${body[0]}${this.theme.muted(" 输入消息…")}`;
     }
     body = body.map((line) => this.styleAttachmentMarkers(line));
     body = this.styleSlashCommand(body);
@@ -204,14 +205,14 @@ export class Composer implements Component, Focusable {
     let hiddenAbove = 0;
     let hiddenBelow = 0;
     if (body.length > 10) {
-      // CURSOR_MARKER 是权威定位；高亮改写行内 ANSI 后可能找不到 marker，
-      // 此时退回用 editor 逻辑行 + 折行估算定位，避免 10 行窗口以错行居中。
-      let cursorIndex = body.findIndex((line) => line.includes(CURSOR_MARKER) || line.includes("\u001b[7m"));
+      // Capture the upstream cursor marker before attachment/slash styling can
+      // rewrite ANSI. Public Editor state is only a fallback for unfocused renders.
+      let cursorIndex = renderedCursorIndex;
       if (cursorIndex < 0) {
         const textWidth = Math.max(1, innerWidth - 2);
         let rows = 0;
-        for (const [lineIndex, line] of access.state.lines.entries()) {
-          if (lineIndex === access.state.cursorLine) break;
+        for (const [lineIndex, line] of editorLines.entries()) {
+          if (lineIndex === editorCursor.line) break;
           rows += Math.max(1, Math.ceil(visibleWidth(line) / textWidth));
         }
         cursorIndex = rows;
@@ -222,13 +223,15 @@ export class Composer implements Component, Focusable {
       body = body.slice(start, start + 10);
     }
 
-    const chars = { tl: "+", tr: "+", bl: "+", br: "+", h: "-", v: "|" };
-    const hiddenLabel = hiddenAbove > 0 ? `▴ ${hiddenAbove}` : "";
+    const chars = this.theme.capabilities.unicode
+      ? { tl: "╭", tr: "╮", bl: "╰", br: "╯", h: "─", v: "│" }
+      : { tl: "+", tr: "+", bl: "+", br: "+", h: "-", v: "|" };
+    const hiddenLabel = hiddenAbove > 0 ? `↑ ${hiddenAbove}` : "";
     const activityLabel = activity ? this.workingLabel(activity) : "";
     const labelParts = [activityLabel, hiddenLabel].filter(Boolean).join("  ");
     const topLabel = labelParts ? ` ${labelParts} ` : "";
-    const clippedTopLabel = truncateToWidth(topLabel, innerWidth, "...");
-    const bottomLabel = hiddenBelow > 0 ? ` ▾ ${hiddenBelow} ` : "";
+    const clippedTopLabel = truncateToWidth(topLabel, innerWidth, "…");
+    const bottomLabel = hiddenBelow > 0 ? ` ↓ ${hiddenBelow} ` : "";
     const top = `${chars.tl}${clippedTopLabel}${chars.h.repeat(Math.max(0, innerWidth - visibleWidth(clippedTopLabel)))}${chars.tr}`;
     const bottom = `${chars.bl}${chars.h.repeat(Math.max(0, innerWidth - visibleWidth(bottomLabel)))}${bottomLabel}${chars.br}`;
     return [
@@ -250,7 +253,7 @@ export class Composer implements Component, Focusable {
         : (BALL_FRAMES[activity.frame % BALL_FRAMES.length] ?? BALL_FRAMES[0])
       : "*";
     const ball =
-      ballValue === "◦" || ballValue === "◌"
+      ballValue === "○"
         ? this.theme.muted(ballValue)
         : ballValue === "◉"
           ? this.theme.blue(ballValue)
@@ -279,7 +282,7 @@ export class Composer implements Component, Focusable {
   }
 
   private marker(attachment: Attachment): string {
-    return `〔${attachment.alias} ⋅ ${attachment.width}x${attachment.height} ⋅ ${attachment.mimeType.split("/")[1]?.toUpperCase()}〕`;
+    return `〔${attachment.alias} · ${attachment.width}×${attachment.height} · ${attachment.mimeType.split("/")[1]?.toUpperCase()}〕`;
   }
 
   private styleAttachmentMarkers(line: string): string {
@@ -306,7 +309,7 @@ export class Composer implements Component, Focusable {
   private handleAttachmentInput(data: string): boolean {
     const selected = this.selectedAttachment();
     if (selected) {
-      const access = this.editor as unknown as EditorStateAccess;
+      const access = this.editor as unknown as MutableEditorStateAccess;
       const line = access.state.lines[access.state.cursorLine] ?? "";
       const start = line.indexOf(this.marker(selected));
       const end = start + this.marker(selected).length;
@@ -333,15 +336,15 @@ export class Composer implements Component, Focusable {
       return true;
     }
 
-    const access = this.editor as unknown as EditorStateAccess;
-    const line = access.state.lines[access.state.cursorLine] ?? "";
+    const access = this.editor as unknown as MutableEditorStateAccess;
+    const cursor = this.editor.getCursor();
+    const line = this.editor.getLines()[cursor.line] ?? "";
     for (const attachment of this.attachments) {
       const start = line.indexOf(this.marker(attachment));
       const end = start + this.marker(attachment).length;
       if (
-        (matchesInteraction("composer", "attachment", "moveAttachmentRight", data) &&
-          access.state.cursorCol === start) ||
-        (matchesInteraction("composer", "attachment", "moveAttachmentLeft", data) && access.state.cursorCol === end)
+        (matchesInteraction("composer", "attachment", "moveAttachmentRight", data) && cursor.col === start) ||
+        (matchesInteraction("composer", "attachment", "moveAttachmentLeft", data) && cursor.col === end)
       ) {
         this.selectedAttachmentId = attachment.id;
         this.tui.requestRender();

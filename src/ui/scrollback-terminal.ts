@@ -1,5 +1,7 @@
 import { ProcessTerminal, type Terminal, TuiMainScreen } from "@earendil-works/pi-tui";
 import { stripAnsi } from "./ansi.js";
+import { TerminalFrameOptimizer } from "./terminal-frame-optimizer.js";
+import { resolveTuiFrameInterval, TuiFramePacer } from "./tui-frame-pacer.js";
 
 const CLEAR_SCROLLBACK = "\u001b[3J";
 const BEGIN_SYNC = "\u001b[?2026h";
@@ -17,6 +19,12 @@ export interface StaticCommitTerminal extends Terminal {
 
 export function preserveTerminalScrollback(chunk: string): string {
   return chunk.split(CLEAR_SCROLLBACK).join("");
+}
+
+export function adaptInteractiveTerminalOutput(chunk: string, env: NodeJS.ProcessEnv = process.env): string {
+  const preserved = preserveTerminalScrollback(chunk);
+  if (env.VSPI_TUI_SYNC_OUTPUT === "1") return preserved;
+  return preserved.split(BEGIN_SYNC).join("").split(END_SYNC).join("");
 }
 
 export function renderStaticCommit(lines: readonly string[], rows: number): string {
@@ -47,8 +55,10 @@ export function renderSurfaceEpochBreak(lineOffset = 0): string {
 }
 
 export class ScrollbackProcessTerminal extends ProcessTerminal implements StaticCommitTerminal {
+  private readonly frameOptimizer = new TerminalFrameOptimizer();
+
   override write(data: string): void {
-    super.write(preserveTerminalScrollback(data));
+    super.write(adaptInteractiveTerminalOutput(this.frameOptimizer.optimize(data, this.rows, this.columns)));
   }
 
   commitStatic(lines: readonly string[]): void {
@@ -69,9 +79,25 @@ export class ScrollbackProcessTerminal extends ProcessTerminal implements Static
 }
 
 export class ScrollbackTUI extends TuiMainScreen {
+  private framePacer: TuiFramePacer | undefined;
+
   constructor(terminal: Terminal, showHardwareCursor = true, logDirectory?: string) {
     super(terminal, showHardwareCursor, logDirectory);
+    this.framePacer = new TuiFramePacer(resolveTuiFrameInterval());
     this.setClearOnShrink(false);
+  }
+
+  override requestRender(force = false): void {
+    if (!this.framePacer) {
+      super.requestRender(force);
+      return;
+    }
+    this.framePacer.request(force, (nextForce) => super.requestRender(nextForce));
+  }
+
+  override stop(options = {}): void {
+    this.framePacer?.cancel();
+    super.stop(options);
   }
 
   commitStatic(lines: readonly string[]): boolean {
