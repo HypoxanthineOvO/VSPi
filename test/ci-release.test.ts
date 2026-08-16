@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { IncomingHttpHeaders } from "node:http";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -9,6 +9,21 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 const execFileAsync = promisify(execFile);
+
+describe("release metadata", () => {
+  it("keeps package.json and both lockfile root identities aligned", async () => {
+    const manifest = JSON.parse(await readFile(resolve("package.json"), "utf8"));
+    const lockfile = JSON.parse(await readFile(resolve("package-lock.json"), "utf8"));
+    expect({ name: lockfile.name, version: lockfile.version }).toEqual({
+      name: manifest.name,
+      version: manifest.version,
+    });
+    expect({ name: lockfile.packages?.[""]?.name, version: lockfile.packages?.[""]?.version }).toEqual({
+      name: manifest.name,
+      version: manifest.version,
+    });
+  });
+});
 
 describe("CI release publisher", () => {
   it("uploads the package and creates a release from the same artifact metadata", async () => {

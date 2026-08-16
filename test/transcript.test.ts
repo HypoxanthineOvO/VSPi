@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { AssistantMessageComponent } from "@earendil-works/pi-coding-agent";
+import { describe, expect, it, vi } from "vitest";
 import type { Attachment, TranscriptMessage } from "../src/domain/types.js";
 import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
 import {
@@ -124,6 +125,43 @@ describe("transcript rendering", () => {
     expect(cache.stats()).toEqual({ entries: 3, hits: 5, misses: 4 });
   });
 
+  it("updates one persistent official assistant component per immutable streaming patch", () => {
+    const cache = new TranscriptRenderCache();
+    const updateContent = vi.spyOn(AssistantMessageComponent.prototype, "updateContent");
+    const streaming: TranscriptMessage = {
+      id: "official-stream",
+      role: "assistant",
+      kind: "text",
+      text: "first chunk",
+      streaming: true,
+    };
+
+    const first = renderTranscript([streaming], 80, plainTheme(), { cache });
+    renderTranscript([streaming], 80, plainTheme(), { cache });
+    renderTranscript([{ ...streaming, text: "first chunk plus delta" }], 80, plainTheme(), { cache });
+
+    expect(updateContent).toHaveBeenCalledTimes(2);
+    expect(first.join("\n")).not.toContain("\u001b]133;");
+    updateContent.mockRestore();
+  });
+
+  it("keeps Mermaid source on non-Unicode terminals through the official assistant path", () => {
+    const rendered = renderTranscriptMessage(
+      {
+        id: "ascii-mermaid",
+        role: "assistant",
+        kind: "text",
+        text: "```mermaid\ngraph LR\nA --> B\n```",
+      },
+      60,
+      plainTheme({ unicode: false }),
+      { mermaidRendering: "final" },
+    ).map(stripAnsi);
+
+    expect(rendered.join("\n")).toContain("graph LR");
+    expect(rendered.join("\n")).not.toContain("▶");
+  });
+
   it("renders interrupted Session state as a quiet standalone marker", () => {
     const lines = renderTranscriptMessage(
       {
@@ -135,7 +173,7 @@ describe("transcript rendering", () => {
       80,
       plainTheme(),
     );
-    expect(lines).toEqual(["⋄ 上一轮在完成前中断；已恢复落盘内容，未自动重试。"]);
+    expect(lines).toEqual(["◇ 上一轮在完成前中断；已恢复落盘内容，未自动重试。"]);
   });
 
   it("renders a short user message as a full-width three-line dark surface", () => {
@@ -145,7 +183,7 @@ describe("transcript rendering", () => {
       plainTheme({ colorLevel: 3, truecolor: true, unicode: true }),
     );
     expect(lines).toHaveLength(3);
-    expect(stripAnsi(lines[1] ?? "")).toContain("▮  hello");
+    expect(stripAnsi(lines[1] ?? "")).toContain("▌  hello");
     expect(lines.every((line) => visibleWidth(line) === 40)).toBe(true);
     expect(stripAnsi(lines.join("\n"))).not.toMatch(/[╭╮╰╯❘]/);
     const content = cellsForText(lines[1] ?? "", "hello");
@@ -185,7 +223,7 @@ describe("transcript rendering", () => {
     expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
     expect(plain.join(" ")).toContain("first hard line");
     expect(plain.join(" ")).toContain("second hard line");
-    expect(plain.join("").replaceAll(/[▮\s]/g, "")).toContain("〔登录页-修改前⋅1440x900⋅PNG〕");
+    expect(plain.join("").replaceAll(/[▌\s]/g, "")).toContain("〔登录页-修改前·1440×900·PNG〕");
   });
 
   it("keeps the user surface full-width and applies Inspect selection without changing layout", () => {
@@ -204,7 +242,7 @@ describe("transcript rendering", () => {
     const userLines = renderTranscriptMessage(user, 60, plainTheme());
     const transcript = renderTranscript([user, assistant], 60, plainTheme());
     expect(transcript[userLines.length]).toBe("");
-    expect(stripAnsi(transcript.slice(userLines.length + 1).join("\n"))).toContain("▪ Answer");
+    expect(stripAnsi(transcript.slice(userLines.length + 1).join("\n"))).toContain("• Answer");
   });
 
   it("keeps queued deliveries out of the waterfall and Inspect nodes until consumed", () => {
@@ -242,10 +280,10 @@ describe("transcript rendering", () => {
     const rendered = renderTranscript(messages, 80, plainTheme()).map(stripAnsi);
 
     expect(rendered).toHaveLength(4);
-    expect(rendered[0]).toContain("工具调用 ⋅ 3 项 ⋅ 已完成");
-    expect(rendered[1]).toMatch(/^❘‒ ✓ Read\s+file-0\.ts/);
-    expect(rendered[2]).toMatch(/^❘‒ ✓ Bash\s+npm test -- shard-1/);
-    expect(rendered[3]).toMatch(/^❘‒ ✓ Read\s+file-2\.ts/);
+    expect(rendered[0]).toContain("工具调用 · 3 项 · 已完成");
+    expect(rendered[1]).toMatch(/^├─ ✓ Read\s+file-0\.ts/);
+    expect(rendered[2]).toMatch(/^├─ ✓ Bash\s+npm test -- shard-1/);
+    expect(rendered[3]).toMatch(/^└─ ✓ Read\s+file-2\.ts/);
   });
 
   it("builds stable top-level nodes and reveals tool children only after entering the group", () => {
@@ -265,7 +303,7 @@ describe("transcript rendering", () => {
       collapseCompletedTools: true,
       selectedNodeId: "tool-group:turn-1",
     }).map(stripAnsi);
-    expect(selectedGroup.join("\n")).toContain("▮ ⋄ 工具调用 ⋅ 2 项 ⋅ 已完成");
+    expect(selectedGroup.join("\n")).toContain("▌ ◇ 工具调用 · 2 项 · 已完成");
     expect(selectedGroup.join("\n")).not.toContain("file-0.ts");
 
     const selectedTool = renderTranscript(messages, 80, plainTheme(), {
@@ -274,26 +312,26 @@ describe("transcript rendering", () => {
       selectedToolId: "tool-1",
     }).map(stripAnsi);
     expect(selectedTool.join("\n")).toContain("file-0.ts");
-    expect(selectedTool.join("\n")).toContain("▮ ❘‒ ✓ Bash");
+    expect(selectedTool.join("\n")).toContain("▌ └─ ✓ Bash");
   });
 
   it("keeps the live waterfall expanded and collapses to one summary row only after completion", () => {
     const running = [toolMessage(0), toolMessage(1, "running"), toolMessage(2, "queued")];
     const live = renderTranscript(running, 80, plainTheme(), { collapseCompletedTools: true }).map(stripAnsi);
-    expect(live[0]).toContain("工具调用 ⋅ 3 项 ⋅ 执行中");
+    expect(live[0]).toContain("工具调用 · 3 项 · 执行中");
     expect(live).toHaveLength(4);
-    expect(live.at(-1)).toMatch(/^❘‒ ◉ Read\s+file-2\.ts ⋅ 等待中/);
+    expect(live.at(-1)).toMatch(/^└─ ● Read\s+file-2\.ts · 等待中/);
 
     const completed = [toolMessage(0), toolMessage(1), toolMessage(2, "error")];
     const collapsed = renderTranscript(completed, 80, plainTheme(), { collapseCompletedTools: true }).map(stripAnsi);
-    expect(collapsed).toEqual([expect.stringContaining("工具调用 ⋅ 3 项 ⋅ 1 失败")]);
+    expect(collapsed).toEqual([expect.stringContaining("工具调用 · 3 项 · 1 失败")]);
 
     const inspected = renderTranscript(completed, 80, plainTheme(), {
       collapseCompletedTools: true,
       inspectedId: "tool-0",
     }).map(stripAnsi);
     expect(inspected).toHaveLength(4);
-    expect(inspected.at(-1)).toMatch(/^❘‒ x Read\s+file-2\.ts ⋅ 失败/);
+    expect(inspected.at(-1)).toMatch(/^└─ × Read\s+file-2\.ts · 失败/);
   });
 
   it("keeps completed tool groups fully expanded when the setting is disabled", () => {
@@ -301,7 +339,7 @@ describe("transcript rendering", () => {
     const rendered = renderTranscript(messages, 80, plainTheme(), { collapseCompletedTools: false }).map(stripAnsi);
     expect(rendered).toHaveLength(10);
     expect(rendered.join("\n")).toContain("shard-5");
-    expect(rendered.at(-1)).toMatch(/^❘‒ ✓ Read\s+file-8\.ts/);
+    expect(rendered.at(-1)).toMatch(/^└─ ✓ Read\s+file-8\.ts/);
   });
 
   it("aligns tool names and action summaries in stable columns", () => {
@@ -355,11 +393,11 @@ describe("transcript rendering", () => {
       thinkingDisplay: "expanded",
     }).map(stripAnsi);
 
-    expect(hidden).toEqual(["⋄ 思考 ⋅ 已隐藏"]);
-    expect(collapsed.join("\n")).toContain("Effort High ⋅ 1.2s ⋅ 已折叠");
-    expect(collapsed.join("\n")).toContain("LATEST_THINKING ⋅ 2 段");
+    expect(hidden).toEqual(["◇ 思考 · 已隐藏"]);
+    expect(collapsed.join("\n")).toContain("Effort High · 1.2s · 已折叠");
+    expect(collapsed.join("\n")).toContain("LATEST_THINKING · 2 段");
     expect(collapsed.join("\n")).not.toContain("EARLIER_THINKING");
-    expect(expanded.join("\n")).toContain("Effort High ⋅ 1.2s ⋅ 已展开");
+    expect(expanded.join("\n")).toContain("Effort High · 1.2s · 已展开");
     expect(expanded.join("\n")).toContain("EARLIER_THINKING");
     expect(expanded.join("\n")).toContain("LATEST_THINKING");
   });
@@ -386,6 +424,26 @@ describe("transcript rendering", () => {
     expect(cellsForText(rendered, "bold").every((cell) => cell.modifiers.has(1))).toBe(true);
   });
 
+  it("caps a giant thinking block at render time while keeping the full message intact", () => {
+    const giant = `${"A".repeat(50_000)}\n${"B".repeat(200_000)}`;
+    const message: TranscriptMessage = {
+      id: "thinking-giant",
+      role: "assistant",
+      kind: "thinking",
+      effort: "high",
+      text: giant,
+      collapsed: false,
+      streaming: true,
+    };
+    const lines = renderTranscriptMessage(message, 80, plainTheme(), { thinkingDisplay: "expanded" });
+    const plain = stripAnsi(lines.join("\n"));
+    expect(plain).toContain("仅显示末尾 200,000 字符");
+    expect(plain).toContain("B".repeat(50));
+    expect(plain).not.toContain("A".repeat(100));
+    expect(plain.length).toBeLessThan(210_000);
+    expect(message.text).toBe(giant);
+  });
+
   it("shows a transient status for hidden streaming thinking without exposing its body", () => {
     const streaming: TranscriptMessage = {
       id: "thinking-live",
@@ -397,7 +455,7 @@ describe("transcript rendering", () => {
       streaming: true,
     };
     const rendered = renderTranscript([streaming], 80, plainTheme(), { thinkingDisplay: "hidden" }).map(stripAnsi);
-    expect(rendered).toEqual(["⋄ 思考中 ⋅ Effort Xhigh"]);
+    expect(rendered).toEqual(["◇ 思考中 · Effort Xhigh"]);
     expect(rendered.join("\n")).not.toContain("LIVE_PRIVATE_BODY");
   });
 
@@ -411,7 +469,7 @@ describe("transcript rendering", () => {
     };
     const lines = renderTranscriptMessage(message, 40, plainTheme());
     expect(lines.every((line) => visibleWidth(line) <= 40)).toBe(true);
-    expect(stripAnsi(lines.at(-1) ?? "")).toMatch(/❙$/);
+    expect(stripAnsi(lines.at(-1) ?? "")).toMatch(/▋$/);
   });
 
   it("renders Subagent context, lane, model, and fallback status within narrow widths", () => {
@@ -440,7 +498,7 @@ describe("transcript rendering", () => {
     expect(full).toContain("preferred kimi/k2");
     expect(full).toContain("lane main");
     expect(full).toContain("fallback quota_exhausted");
-    expect(full).toContain("Budget ⋅ run 117K left ⋅ tree 495K / $19.600 left");
+    expect(full).toContain("Budget · run 117K left · tree 495K / $19.600 left");
     for (const width of [40, 80, 120]) {
       expect(renderTranscriptMessage(message, width, plainTheme()).every((line) => visibleWidth(line) <= width)).toBe(
         true,
@@ -449,44 +507,40 @@ describe("transcript rendering", () => {
   });
 });
 
-describe("neutral-width UI chrome", () => {
-  // 中文宽渲染终端把 East Asian Ambiguous 字符画成 2 列，导致行溢出与光标
-  // 错位；所有 UI chrome 必须由 neutral/narrow 字符构成。
-  it("keeps rendered transcript chrome free of East Asian Ambiguous glyphs", async () => {
-    const { eastAsianWidthType } = await import("get-east-asian-width");
+describe("UI chrome glyph policy", () => {
+  it("uses the accepted 0.6.2 Unicode chrome when the terminal supports it", () => {
+    const messages: TranscriptMessage[] = [userMessage("hello"), toolMessage(0), toolMessage(1)];
+    const plain = renderTranscript(messages, 80, plainTheme(), { collapseCompletedTools: false })
+      .map(stripAnsi)
+      .join("\n");
+    expect(plain).toContain("▌");
+    expect(plain).toContain("◇ 工具调用");
+    expect(plain).toMatch(/├─/);
+  });
+
+  it("falls back to ASCII frames and tree connectors when Unicode is unavailable", () => {
     const messages: TranscriptMessage[] = [
       userMessage("hello"),
-      { id: "think", role: "assistant", kind: "thinking", text: "thinking body", effort: "medium", collapsed: true },
       toolMessage(0),
       toolMessage(1),
+      {
+        id: "sub",
+        role: "assistant",
+        kind: "subagent",
+        model: "m",
+        task: "t",
+        status: "success",
+        effort: "medium",
+      } as TranscriptMessage,
     ];
-    const lines = [
-      ...renderTranscript(messages, 80, plainTheme(), { collapseCompletedTools: true }),
-      ...renderTranscriptMessage(
-        {
-          id: "sub",
-          role: "assistant",
-          kind: "subagent",
-          model: "m",
-          task: "t",
-          status: "success",
-          effort: "medium",
-        } as TranscriptMessage,
-        80,
-        plainTheme(),
-      ),
-    ];
-    const offenders: string[] = [];
-    for (const line of lines) {
-      for (const character of stripAnsi(line)) {
-        const codePoint = character.codePointAt(0) ?? 0;
-        if (codePoint >= 0x80 && eastAsianWidthType(codePoint) === "ambiguous") {
-          offenders.push(character);
-          break;
-        }
-      }
-    }
-    expect(offenders).toEqual([]);
+    const plain = renderTranscript(messages, 80, plainTheme({ unicode: false }), {
+      collapseCompletedTools: true,
+    })
+      .map(stripAnsi)
+      .join("\n");
+    expect(plain).toContain("+");
+    expect(plain).not.toMatch(/[╭╮╰╯│─]/);
+    expect(plain).toMatch(/[-|]/);
   });
 });
 
@@ -540,5 +594,64 @@ describe("regular tail window and row-estimate cache", () => {
     // in than the budget allows.
     expect(tightWindow.nodes).toHaveLength(1);
     expect(tightWindow.nodes[0]?.messageIndexes).toHaveLength(1);
+  });
+
+  it("invalidates row estimates when streaming text grows", () => {
+    const cache = new TranscriptRenderCache();
+    const previous: TranscriptMessage = {
+      id: "previous",
+      role: "assistant",
+      kind: "text",
+      text: "previous answer",
+    };
+    const streaming: TranscriptMessage = {
+      id: "streaming",
+      role: "assistant",
+      kind: "text",
+      text: "short",
+      streaming: true,
+    };
+    const options = { width: 20, maxRows: 5, maxBlocks: 2, maxCharacters: 1_000_000, cache };
+
+    expect(selectTranscriptWindow([previous, streaming], options).messages).toHaveLength(2);
+    const grown = { ...streaming, text: "growing stream ".repeat(20) };
+    expect(selectTranscriptWindow([previous, grown], options).messages.map((message) => message.id)).toEqual([
+      "streaming",
+    ]);
+  });
+
+  it("invalidates row estimates when thinking visibility changes", () => {
+    const cache = new TranscriptRenderCache();
+    const messages: TranscriptMessage[] = [
+      { id: "older", role: "assistant", kind: "text", text: "older" },
+      {
+        id: "thinking-mode",
+        role: "assistant",
+        kind: "thinking",
+        effort: "high",
+        text: "thinking line\n".repeat(30),
+        collapsed: false,
+      },
+    ];
+    const base = { width: 40, maxRows: 5, maxBlocks: 2, maxCharacters: 1_000_000, cache };
+
+    expect(selectTranscriptWindow(messages, { ...base, thinkingDisplay: "hidden" }).messages).toHaveLength(2);
+    expect(
+      selectTranscriptWindow(messages, { ...base, thinkingDisplay: "expanded" }).messages.map(({ id }) => id),
+    ).toEqual(["thinking-mode"]);
+  });
+
+  it("invalidates row estimates when completed tools expand globally", () => {
+    const cache = new TranscriptRenderCache();
+    const messages: TranscriptMessage[] = [
+      { ...toolMessage(0), output: "tool output\n".repeat(30), expanded: false },
+      { id: "latest", role: "assistant", kind: "text", text: "latest" },
+    ];
+    const base = { width: 40, maxRows: 4, maxBlocks: 2, maxCharacters: 1_000_000, cache };
+
+    expect(selectTranscriptWindow(messages, { ...base, collapseCompletedTools: true }).messages).toHaveLength(2);
+    expect(
+      selectTranscriptWindow(messages, { ...base, collapseCompletedTools: false }).messages.map(({ id }) => id),
+    ).toEqual(["latest"]);
   });
 });

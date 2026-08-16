@@ -39,7 +39,7 @@ describe("M1 state-aware interaction hints", () => {
       expect(panel.handleInput(input)).toBeUndefined();
     }
     expect(panelText(panel)).toBe(before);
-    expect(hintText(panel)).not.toMatch(/▴▾|◂⟶|选择|折叠|展开|Enter/);
+    expect(hintText(panel)).not.toMatch(/↑↓|←→|选择|折叠|展开|Enter/);
   });
 
   it("does not advertise open or Fork actions while Sessions is empty", () => {
@@ -51,7 +51,7 @@ describe("M1 state-aware interaction hints", () => {
     expect(panel.handleInput("\r")).toBeUndefined();
     expect(panel.handleInput("F")).toBeUndefined();
     expect(panelText(panel)).toBe(before);
-    expect(hintText(panel)).not.toMatch(/▴▾|选择|Enter|打开|Shift\+F|创建分支|Fork/i);
+    expect(hintText(panel)).not.toMatch(/↑↓|选择|Enter|打开|Shift\+F|创建分支|Fork/i);
   });
 
   it("restores open and Fork hints when Sessions contains an actionable row", () => {

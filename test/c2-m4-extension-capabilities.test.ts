@@ -183,7 +183,7 @@ describe("C2 M4 extension capability boundaries", () => {
     const send = vi.spyOn(backend, "send");
     const app = new VspiApp(fakeTui(), plainTheme(), backend, {
       cwd: "/workspace/c2-m4-tools",
-      settings: { ...DEFAULT_SETTINGS, bridgeEnabled: false },
+      settings: { ...DEFAULT_SETTINGS },
       attachments: fakeAttachments(),
       renderOnce: true,
       onExit: vi.fn(),

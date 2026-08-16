@@ -20,7 +20,7 @@ describe("Skill application flow", () => {
     const backend = createBackend({ installSkill, send });
     const app = new VspiApp(fakeTui(), plainTheme(), backend, {
       cwd: "/workspace",
-      settings: { ...DEFAULT_SETTINGS, bridgeEnabled: false },
+      settings: { ...DEFAULT_SETTINGS },
       attachments: fakeAttachments(),
       renderOnce: true,
       onExit: vi.fn(),

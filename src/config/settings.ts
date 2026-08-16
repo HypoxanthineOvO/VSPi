@@ -62,7 +62,6 @@ function normalizeSettings(input: unknown, fallback: AppSettings): AppSettings {
         : fallback.thinkingTranslationEndpoint,
     wrapCode: typeof value.wrapCode === "boolean" ? value.wrapCode : fallback.wrapCode,
     collapseTools: typeof value.collapseTools === "boolean" ? value.collapseTools : fallback.collapseTools,
-    bridgeEnabled: typeof value.bridgeEnabled === "boolean" ? value.bridgeEnabled : fallback.bridgeEnabled,
   };
 }
 

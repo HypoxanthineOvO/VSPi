@@ -10,15 +10,20 @@ export interface StartupStatus {
   recovery?: boolean;
 }
 
-// 纯 ASCII 绘制：block-art（█╗╝═）在 Unicode EAW 里是 Ambiguous，中文宽渲染
-// 终端会把它们画成 2 列，Logo 直接错位。
-const LOGO = ["__   __ ___ ___ ___", "\\ \\ / /| __|| __|", " \\ V / | _| | _|", "  \\_/  |___||___|"] as const;
+const LOGO = [
+  "██╗   ██╗███████╗██████╗ ██╗",
+  "██║   ██║██╔════╝██╔══██╗██║",
+  "██║   ██║███████╗██████╔╝██║",
+  "╚██╗ ██╔╝╚════██║██╔═══╝ ██║",
+  " ╚████╔╝ ███████║██║     ██║",
+  "  ╚═══╝  ╚══════╝╚═╝     ╚═╝",
+] as const;
 
 export function renderSplash(width: number, theme: VspiTheme, progress = 1, status?: StartupStatus): string[] {
   const compact = width < 58 || !theme.capabilities.unicode;
   const inner = Math.max(1, width - 2);
   const body: string[] = [];
-  body.push(theme.focus(" * VSPi"));
+  body.push(theme.focus(` ${theme.capabilities.unicode ? "◈" : "*"} VSPi`));
   body.push("");
   if (compact) {
     body.push(theme.bold(theme.focus("   VSPi")));
@@ -28,10 +33,10 @@ export function renderSplash(width: number, theme: VspiTheme, progress = 1, stat
 
   if (status) {
     body.push("");
-    if (status.recovery) body.push(theme.warning(" Recovery ⋅ 恢复模式 ⋅ global-only"));
+    if (status.recovery) body.push(theme.warning(" Recovery · 恢复模式 · global-only"));
     body.push(`${theme.muted(" Model  ")}${theme.text(status.model)}`);
     body.push(`${theme.muted(" Backend ")}${theme.focus(status.backend)}`);
-    const policy = `${theme.muted(" Policy ")}${theme.focus(status.policy)}${theme.muted(" ⋅ ")}${theme.blue(status.boundary)}`;
+    const policy = `${theme.muted(" Policy ")}${theme.focus(status.policy)}${theme.muted(" · ")}${theme.blue(status.boundary)}`;
     const version = theme.blue(`v${status.version}`);
     if (visibleWidth(policy) + visibleWidth(version) + 1 <= inner) {
       body.push(alignRight(policy, version, inner));
@@ -43,8 +48,8 @@ export function renderSplash(width: number, theme: VspiTheme, progress = 1, stat
     body.push("");
     const available = Math.max(8, inner - 4);
     const filled = Math.max(1, Math.floor(available * progress));
-    const full = "#";
-    const empty = "-";
+    const full = theme.capabilities.unicode ? "━" : "#";
+    const empty = theme.capabilities.unicode ? "─" : "-";
     body.push(theme.muted(` ${full.repeat(filled)}${empty.repeat(available - filled)}`));
   }
   return frame(
@@ -66,7 +71,8 @@ export interface StartupSequenceOptions {
 }
 
 export function renderStartupPlaceholder(width: number, theme: VspiTheme): string {
-  return padLine(theme.focus(" * VSPi"), Math.max(1, width));
+  const symbol = theme.capabilities.unicode ? "◈" : "*";
+  return padLine(theme.focus(` ${symbol} VSPi`), Math.max(1, width));
 }
 
 function withAutowrapDisabled(content: string): string {

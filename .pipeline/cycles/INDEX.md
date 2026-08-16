@@ -7,14 +7,15 @@ status: active
 
 ## Active Cycles
 
-| Cycle | 目的 | 状态 | 当前项 | 下一步 |
-| --- | --- | --- | --- | --- |
-| [C12-release-train](C12-release-train/PROGRESS.md) | VSPi v0.6.x GitLab Release 与 Windows 安装交付 | waiting-review | R8 | Windows 0.6.2 最终验收 |
+无。
 
 ## Closed Cycles
 
 | Cycle | 名称 | 状态 | 关联 Delivery | 版本 |
 | --- | --- | --- | --- | --- |
+| [C14-streaming-render-regression](C14-streaming-render-regression/SUMMARY.md) | Streaming 渲染体感回归 | closed（用户接受基本可用） | - | v1.0.0 |
+| [C13-pi-editor-latency-repair](C13-pi-editor-latency-repair/SUMMARY.md) | Pi Editor 与模型目录性能修订 | closed（用户接受） | - | v0.6.4 candidate |
+| [C12-release-train](C12-release-train/SUMMARY.md) | VSPi v0.6.x Release Train | closed（0.6.3 未接受） | - | v0.6.0-v0.6.3 |
 | [C01-tui-v1](C01-tui-v1/SUMMARY.md) | VSPi TUI v1 主线 | closed | vspi-tui-v1 | v0.1.0 |
 | [C02-v0-1-0-usability](C02-v0-1-0-usability/SUMMARY.md) | VSPi v0.1.0 本地日用版本 | closed | vspi-v0-1-0-usability | v0.1.0 |
 | [C03-v0-2-0-workflow-integration](C03-v0-2-0-workflow-integration/SUMMARY.md) | VSPi v0.2.0 Workflow 集成 | closed | vspi-v0-2-0-workflow-integration | v0.2.0 |

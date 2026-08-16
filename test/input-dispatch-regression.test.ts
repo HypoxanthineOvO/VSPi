@@ -141,7 +141,7 @@ async function createApp(
 ): Promise<VspiApp> {
   const app = new VspiApp(fakeTui(), plainTheme(), backend, {
     cwd: "/workspace/input-dispatch",
-    settings: { ...DEFAULT_SETTINGS, bridgeEnabled: false },
+    settings: { ...DEFAULT_SETTINGS },
     attachments,
     renderOnce: true,
     onExit: vi.fn(),
@@ -612,11 +612,11 @@ describe("busy submission guard", () => {
       ref.events?.onBusy(true);
       expect(testable.workingFrame).toBe(0);
       const firstFrame = app.render(120).map(stripAnsi).join("\n");
-      expect(firstFrame).toContain("◦ Working 00:00  ⣾⣻⡿");
+      expect(firstFrame).toContain("○ Working 00:00  ⣾⣻⡿");
       expect(firstFrame).not.toMatch(/▮ Working|插入 2|后续 1|队列 3/);
       vi.advanceTimersByTime(240);
       expect(testable.workingFrame).toBe(1);
-      expect(app.render(120).map(stripAnsi).join("\n")).toContain("◌ Working 00:00  ⣽⢿⣟");
+      expect(app.render(120).map(stripAnsi).join("\n")).toContain("◉ Working 00:00  ⣽⢿⣟");
     } finally {
       await app.dispose();
       vi.useRealTimers();
@@ -744,15 +744,15 @@ describe("Plan router question", () => {
     const testable = app as unknown as TestableApp;
     try {
       const initial = app.render(80).map(stripAnsi).join("\n");
-      expect(initial).not.toMatch(/\+ Plan\b/);
+      expect(initial).not.toMatch(/╭ Plan\b/);
       expect(initial).not.toContain("Shift+Tab 下一个区域");
 
       await app.runStartupCommand("/plan");
       const explicit = app.render(80).map(stripAnsi).join("\n");
-      expect(explicit).toMatch(/\+ Plan\b/);
+      expect(explicit).toMatch(/╭ Plan\b/);
 
       app.handleInput("\u001b");
-      expect(app.render(80).map(stripAnsi).join("\n")).not.toMatch(/\+ Plan\b/);
+      expect(app.render(80).map(stripAnsi).join("\n")).not.toMatch(/╭ Plan\b/);
 
       testable.panels.setPlanSnapshot(PLAN);
       expect(app.render(80).map(stripAnsi).join("\n")).toContain(PLAN.title);
@@ -1084,8 +1084,10 @@ describe("interactive command completion", () => {
 });
 
 describe("busy model switching", () => {
-  it("applies the selected model to the next call and closes the selector while generation remains active", async () => {
+  it("applies the selected model, continues to Effort, and closes only after Effort confirmation", async () => {
     const ref: { events?: ChatBackendEvents } = {};
+    const getEffortOptions = vi.fn(async () => ["low", "medium", "high"] as Array<"low" | "medium" | "high">);
+    const setEffort = vi.fn(async () => {});
     const selectModel = vi.fn(async () => ({
       modelId: MODEL.id,
       vision: false,
@@ -1093,17 +1095,23 @@ describe("busy model switching", () => {
       profileModelId: MODEL.id,
       effort: "high" as const,
     }));
-    const app = await createApp(backendWith(ref, { selectModel }));
+    const app = await createApp(backendWith(ref, { getEffortOptions, selectModel, setEffort }));
     const testable = app as unknown as TestableApp;
     try {
       ref.events?.onBusy(true);
       testable.panels.open("models");
       await testable.applyPanelEvent({ type: "model", model: MODEL });
       expect(selectModel).toHaveBeenCalledWith("openai", MODEL.id);
-      expect(testable.panels.kind).toBe("plan");
+      expect(getEffortOptions).toHaveBeenCalledOnce();
+      expect(testable.panels.kind).toBe("effort");
+      expect(app.render(80).map(stripAnsi).join("\n")).toMatch(/Low[\s\S]*Medium[\s\S]*High/);
       expect(testable.pendingModelLabel).toBe("Test Model");
       expect(testable.notice).toMatchObject({ tone: "success", text: expect.stringContaining("下一次模型调用") });
       expect(app.render(80).map(stripAnsi).join("\n")).toContain("Next Test Model");
+
+      await testable.applyPanelEvent({ type: "effort", effort: "high" });
+      expect(setEffort).toHaveBeenCalledWith("high");
+      expect(testable.panels.kind).toBe("plan");
 
       ref.events?.onBusy(false);
       expect(testable.pendingModelLabel).toBeUndefined();
@@ -1126,6 +1134,34 @@ describe("busy model switching", () => {
       expect(testable.panels.kind).toBe("models");
       expect(testable.notice).toMatchObject({ tone: "error", text: expect.stringContaining("model failure sentinel") });
       ref.events?.onBusy(false);
+    } finally {
+      await app.dispose();
+    }
+  });
+
+  it("keeps the successful model switch and falls back to catalog Effort levels when runtime Effort lookup fails", async () => {
+    const ref: { events?: ChatBackendEvents } = {};
+    const app = await createApp(
+      backendWith(ref, {
+        getEffortOptions: vi.fn(async () => {
+          throw new Error("effort lookup failure sentinel");
+        }),
+        selectModel: vi.fn(async () => ({
+          modelId: MODEL.id,
+          vision: false,
+          contextWindow: 128_000,
+          profileModelId: MODEL.id,
+          effort: "medium" as const,
+        })),
+      }),
+    );
+    const testable = app as unknown as TestableApp;
+    try {
+      testable.panels.open("models");
+      await testable.applyPanelEvent({ type: "model", model: MODEL });
+      expect(testable.panels.kind).toBe("effort");
+      expect(app.render(80).map(stripAnsi).join("\n")).toMatch(/Low[\s\S]*Medium[\s\S]*High/);
+      expect(testable.notice?.tone).not.toBe("error");
     } finally {
       await app.dispose();
     }
@@ -1286,8 +1322,8 @@ describe("Plan focus and hints", () => {
       const focusedHint = app
         .render(80)
         .map(stripAnsi)
-        .find((line) => line.includes("Shift+Tab") || line.includes("▴▾"));
-      expect(focusedHint).toContain("▴▾ 选择");
+        .find((line) => line.includes("Shift+Tab") || line.includes("↑↓"));
+      expect(focusedHint).toContain("↑↓ 选择");
       expect(focusedHint).toContain("Enter 操作");
 
       app.handleInput("\x1b[Z");
@@ -1296,9 +1332,9 @@ describe("Plan focus and hints", () => {
       const unfocusedHint = app
         .render(80)
         .map(stripAnsi)
-        .find((line) => line.includes("Shift+Tab") || line.includes("▴▾"));
+        .find((line) => line.includes("Shift+Tab") || line.includes("↑↓"));
       expect(unfocusedHint).toContain("Shift+Tab");
-      expect(unfocusedHint).not.toContain("▴▾");
+      expect(unfocusedHint).not.toContain("↑↓");
       expect(unfocusedHint).not.toContain("Enter 操作");
     } finally {
       await app.dispose();

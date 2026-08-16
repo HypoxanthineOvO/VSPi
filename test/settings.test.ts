@@ -70,7 +70,6 @@ describe("settings persistence", () => {
         reducedMotion: false,
         showThinking: true,
         wrapCode: false,
-        bridgeEnabled: true,
       })}\n`,
     );
     await expect(loadSettings(root, home)).resolves.toMatchObject({

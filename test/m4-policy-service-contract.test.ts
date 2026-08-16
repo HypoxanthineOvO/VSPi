@@ -15,7 +15,7 @@ describe("M1 Host approval policy", () => {
   it("orders Safe < Standard < YOLO < Auto and keeps every level on Host", () => {
     expect(POLICY_LEVELS).toEqual(["Safe", "Standard", "YOLO", "Auto"]);
     expect(resolveEffectivePolicy()).toMatchObject({
-      policy: "Standard",
+      policy: "Auto",
       boundary: "Host",
       sandboxed: false,
       recovery: false,
@@ -135,6 +135,7 @@ describe("M1 Host approval policy", () => {
   it("switches approval level in memory without probing bwrap", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "vspi-policy-switch-"));
     const service = createExecutionPolicyService({ workspace });
+    expect(service.snapshot().policy).toBe("Auto");
     await expect(service.switchPolicy("Safe")).resolves.toMatchObject({ policy: "Safe", boundary: "Host" });
     await expect(service.switchPolicy("Auto")).resolves.toMatchObject({ policy: "Auto", boundary: "Host" });
   });

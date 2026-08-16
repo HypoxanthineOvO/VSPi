@@ -49,7 +49,7 @@ Plan 背景       #182529
 ❘                                                                              ❘
 ❘ Model  OpenAI / GPT-5.4                                                      ❘
 ❘ Backend Pi                                                                   ❘
-❘ Policy Standard ⋅ Host                                                 v0.6.0❘
+❘ Policy Auto ⋅ Host                                                     v1.0.0❘
 +‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒+
 ```
 
@@ -133,7 +133,7 @@ contextual hint 只宣告当前真实可用的操作。普通面板 hint 位于 
 
 Model 以外层 60 列为 breakpoint：小于 60 列是窄屏列表/详情布局，hint 显示 `◂⟶ 详情`，Right 进入详情、Left 返回；外层 60 列及以上是宽屏双栏，左侧列表、右侧详情，hint 不宣告无效的左右切换。
 
-v0.6 的生产命令清单是：
+v1 的生产命令清单是：
 
 ```text
 /new       /sessions   /import     /skills     /compact    /model       /providers   /login
@@ -143,7 +143,7 @@ v0.6 的生产命令清单是：
 
 手动 `/compact` 提供 Pi Native、Execution Continuity、Research Decisions 与 Custom 四种 profile。
 未绑定 Local Plan 默认 Pi Native，绑定 Plan 默认 Execution Continuity；`/compact --list` 可检查当前选择范围。
-v0.6.0 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
+v1.0.0 的自动 threshold/overflow 压缩仍由 Pi Native 处理，统一自动 profile 留待后续版本。
 成功的 threshold 自动压缩若发生在当前 generation 内，每次完成后都必须注入隐藏 continuation 并继续同一用户任务；Pi 已声明 `willRetry` 的 overflow 不重复注入，手动压缩、失败和取消也不续跑。Plan 更新或把最后一项标为 done 只同步状态，不得替代实际修复与验证；最新用户指令揭示遗漏时必须重开或新增工作项。
 
 `/plan`、`/prompt`、`/tools` 与 `/policy` 均由 Action Registry 接入真实生产工作区。无 Workflow 时 Plan 使用 workspace-scoped Local Plan；没有活动计划时常驻 frame 与 hint 都不渲染，Shift+Tab 跳过空 Plan，显式 `/plan` 可临时打开入口。显式启用 Workflow 后才只读投影 Workflow Delivery。Prompt 提供 Factory/Fork、分层规则、导入导出与 Effective Prompt；Tools 只读展示当前能力、路由与失败边界。
@@ -168,7 +168,7 @@ composer 正文空态为一行，随内容增长，最多显示 10 行；之后�
 〔登录页-修改前〕  重命名 ⋅ 预览 ⋅ 移除 ⋅ 保存到项目
 ```
 
-删除附件同时删除缓存文件和 manifest 条目；保存到项目只由显式用户动作触发。附件缓存按真实 Pi session id 隔离；manifest 恢复和 `readBase64`/Pi image payload 的每次读取都使用非跟随 symlink 的文件句柄，并复验 session containment、普通文件、inode、实际大小、MIME magic 和图片尺寸。Pi 在这些检查完成前不会调用 `session.prompt`。项目保存逐级验证 project、`.vspi` 与 `attachments` 是未变化的真实目录，拒绝 symlink，并使用同目录 `O_EXCL|O_NOFOLLOW` 临时文件和原子 rename。Session reset 会切换并恢复对应 manifest 的 composer 节点，epoch 校验阻止较慢的旧恢复覆盖新会话。AttachmentService 的 store 操作和 switch 使用同一队列；switch 请求同步推进 generation，使旧 paste/Bridge delivery 在 callback 前回滚。retention cleanup 只删除超过期限且不在 retain list 中的 session 目录。
+删除附件同时删除缓存文件和 manifest 条目；保存到项目只由显式用户动作触发。附件缓存按真实 Pi session id 隔离；manifest 恢复和 `readBase64`/Pi image payload 的每次读取都使用非跟随 symlink 的文件句柄，并复验 session containment、普通文件、inode、实际大小、MIME magic 和图片尺寸。Pi 在这些检查完成前不会调用 `session.prompt`。项目保存逐级验证 project、`.vspi` 与 `attachments` 是未变化的真实目录，拒绝 symlink，并使用同目录 `O_EXCL|O_NOFOLLOW` 临时文件和原子 rename。Session reset 会切换并恢复对应 manifest 的 composer 节点，epoch 校验阻止较慢的旧恢复覆盖新会话。AttachmentService 的 store 操作和 switch 使用同一队列；switch 请求同步推进 generation，使旧 paste delivery 在 callback 前回滚。retention cleanup 只删除超过期限且不在 retain list 中的 session 目录。
 
 ## Markdown
 
@@ -217,7 +217,7 @@ Provider catalog 的优先级是 built-in < Pi global < trusted project。默认
 
 ### M1 Host Approval Policy
 
-等级与顺序固定为 `Safe < Standard < YOLO < Auto`；默认 Standard，project policy 只能降低 CLI/global 上限。四档都标记 `Host`，区别只在工具执行前是否需要人工批准。
+等级与顺序固定为 `Safe < Standard < YOLO < Auto`；默认 Auto，project policy 只能降低 CLI/global 上限。四档都标记 `Host`，区别只在工具执行前是否需要人工批准。
 
 - Safe：`read/ls/find/grep` 与明确只读 Bash 免询问，其他操作询问。
 - Standard：工作区编辑、写入、构建和测试等日常开发免询问；网络、SSH、Git 写入、越界和高风险操作询问。

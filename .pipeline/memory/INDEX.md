@@ -12,6 +12,8 @@ Derived view. Individual Markdown Records remain authoritative.
 | decision-34f87a27e2b000355b93e85eb14e7ebb | inactive (superseded) | decision | cycle:vspi-v0-2-0-workflow-integration | cycle.vspi-v0-2-0-workflow-integration.plan | decision-bc7ae00b98900dfb50c99a9db522e013 |
 | decision-3ce0c2c33314cdab7fe0fae3c65c8c85 | inactive (superseded) | decision | cycle:vspi-terminal-mock-recovery | cycle.vspi-terminal-mock-recovery.plan | decision-582c15109d07e694113c2598b6a52e39 |
 | decision-4edd76964860226bed2eb7f9fc886c69 | active | decision | cycle:vspi-terminal-mock-recovery | cycle.vspi-terminal-mock-recovery.plan | decision-a9f8f997782c21e59dcbdc7ffde3b766 |
+| decision-4c3d1d5060bcb486272c3a364c04e9bc | active | decision | project:VSPi | decision.vspi.remove-ssh-attachment-bridge | - |
+| decision-4cd5b45c0b5c9c6c0d9650af4d9d9d2d | active | decision | project:VSPi | decision.vspi.default-execution-policy-auto | decision-8d34bd77ce05ef6f025ea3e659aa23fb |
 | decision-5544eee780e9a4987839354c1032859f | inactive (superseded) | decision | cycle:vspi-terminal-mock-recovery | cycle.vspi-terminal-mock-recovery.plan | decision-164d0064bbace264f3e295835e1093d6 |
 | decision-57219f2f7d5c683600d21c16d9f6534a | active | decision | goal:vspi-live-run-control | goal.vspi-live-run-control.plan | decision-f0677f2e7c84f47ee410ea2a34954434 |
 | decision-582c15109d07e694113c2598b6a52e39 | inactive (superseded) | decision | cycle:vspi-terminal-mock-recovery | cycle.vspi-terminal-mock-recovery.plan | decision-5544eee780e9a4987839354c1032859f |
@@ -21,8 +23,10 @@ Derived view. Individual Markdown Records remain authoritative.
 | decision-6e1c2b538e3e79851203f5e376f97975 | inactive (superseded) | decision | goal:vspi-persistent-goal-runner | goal.vspi-persistent-goal-runner.plan | decision-e51df954eb0778a9ff307959e81c94f6 |
 | decision-742e18820d6fb2c8634af1a38a93c583 | active | decision | project:VSPi | decision.vspi.release-history-authority | - |
 | decision-76faed9d5251e6a4aa4a5ae9a4daefa5 | inactive (superseded) | decision | cycle:vspi-subagent-teams | cycle.vspi-subagent-teams.plan | - |
+| decision-81a6564e96e47279146405db944d2efc | active | decision | project:VSPi | decision.vspi.pi-editor-performance-patch-0.84.2 | - |
 | decision-8d34bd77ce05ef6f025ea3e659aa23fb | active | decision | cycle:vspi-v0-1-0-usability | cycle.vspi-v0-1-0-usability.plan | decision-97e22cda868fbfc2ddf1a7779beedcc6 |
 | decision-8eda07b9c2d337c7b503bf07c7fa9c5b | active | decision | cycle:vspi-tui-v1 | cycle.vspi-tui-v1.plan | decision-d0627add08c0c097bda321efacca7984 |
+| decision-8e76f7f9fb0bab3fb05c5b5397627688 | active | decision | project:VSPi | decision.vspi.aimoniker-gemini-provider | - |
 | decision-9444032afd7437985166c6395ac0657d | active | decision | cycle:vspi-v0-2-0-workflow-integration | cycle.vspi-v0-2-0-workflow-integration.plan | decision-34f87a27e2b000355b93e85eb14e7ebb |
 | decision-97e22cda868fbfc2ddf1a7779beedcc6 | inactive (superseded) | decision | cycle:vspi-v0-1-0-usability | cycle.vspi-v0-1-0-usability.plan | decision-b37683552d11450914284f2e7321d46e |
 | decision-99c581d354bfa95e19d3f16da15f5c48 | inactive (superseded) | decision | cycle:vspi-v0-2-0-workflow-integration | cycle.vspi-v0-2-0-workflow-integration.plan | decision-ee559d9b1df2d45707b52c80e60f876b |
@@ -38,6 +42,7 @@ Derived view. Individual Markdown Records remain authoritative.
 | decision-b8ef01334883f6d99f724008fc6f9287 | inactive (superseded) | decision | cycle:vspi-v0-2-0-workflow-integration | cycle.vspi-v0-2-0-workflow-integration.plan | decision-b8914dccf4f709762381abeb08e0d370 |
 | decision-baffd8ff43460fad6d6158f1ad3f6d3b | inactive (superseded) | decision | goal:vspi-persistent-goal-runner | goal.vspi-persistent-goal-runner.plan | - |
 | decision-bc7ae00b98900dfb50c99a9db522e013 | inactive (superseded) | decision | cycle:vspi-v0-2-0-workflow-integration | cycle.vspi-v0-2-0-workflow-integration.plan | decision-b8ef01334883f6d99f724008fc6f9287 |
+| decision-d3511bed687432352beedd210ee1a3bec | active | decision | project:VSPi | decision.vspi.c13-release-0.6.4-local-acceptance | - |
 | decision-c333e5efe46be866faf28757c94176ad | inactive (superseded) | decision | goal:vspi-live-run-control | goal.vspi-live-run-control.plan | decision-af0dffd0b340a15784ba86a694c13b28 |
 | decision-d0627add08c0c097bda321efacca7984 | inactive (superseded) | decision | cycle:vspi-tui-v1 | cycle.vspi-tui-v1.plan | decision-1c7d01437a8796a9be84642ce6d6f421 |
 | decision-d3cdb7ff76556bda0c4812e50be39d24 | inactive (superseded) | decision | cycle:vspi-terminal-mock-recovery | cycle.vspi-terminal-mock-recovery.plan | decision-3ce0c2c33314cdab7fe0fae3c65c8c85 |
@@ -115,12 +120,16 @@ Derived view. Individual Markdown Records remain authoritative.
 | feedback-e9962731ff5317cc8437036c350ae060 | active | feedback | cycle:vspi-v0-2-0-workflow-integration | cycle.vspi-v0-2-0-workflow-integration.feedback.d7cb7cdd55fe1163 | - |
 | feedback-f96f2c8291940282abab00cb1b68795c | active | feedback | cycle:vspi-v0-2-0-workflow-integration | cycle.vspi-v0-2-0-workflow-integration.feedback.5564cba94a948ca7 | - |
 | preference-0438503a532908adfa03c80973def280 | active | preference | project:VSPi | preference.vspi.release-channel | - |
+| preference-43221dda2fae2a29a42d6bab24ac5bb0 | active | preference | project:VSPi | preference.vspi.prefer-upstream-render-architecture | preference-9ba9d29db33d84a5d75897791339c595 |
+| preference-9ba9d29db33d84a5d75897791339c595 | inactive (superseded) | preference | project:VSPi | preference.vspi.prefer-upstream-tui-components | preference-43221dda2fae2a29a42d6bab24ac5bb0 |
+| preference-9d7551d0c21f03b57550e48ad0c68f0e | active | preference | project:VSPi | preference.vspi.preserve-unicode-visual-language | - |
 | preference-afdb1404971fcf8baed40924374a0d1e | active | preference | project:VSPi | preference.vspi.ui-native-mock-first | - |
 | requirement-062a4899aad721f16efe298ef24365a3 | active | requirement | project:VSPi | requirement.vspi.question-interaction-depth | requirement-af8bfc3a57f131729a2179756a1200d3 |
 | requirement-0bbf3ac27c8ab46c4a1aff9c489bede6 | inactive (superseded) | requirement | project:VSPi | requirement.vspi.question-interaction-depth | - |
 | requirement-101351de724bb1025bd13fda2f4dba70 | active | requirement | project:VSPi | requirement.vspi.interactive-panel-density | requirement-d350a326aebf15cee022d4ca8d85482e |
 | requirement-20a9cf868d16c64e5b00e67052ba3e6e | active | requirement | project:VSPi | requirement.vspi.effective-model-context | - |
 | requirement-34bdc2f91c02121e80d098696e6b19dd | active | requirement | project:VSPi | requirement.vspi.update-command | - |
+| requirement-38d146f1717828e09fea3e80b01ec2c4 | active | requirement | project:VSPi | requirement.vspi.v1-release-after-streaming-regression | - |
 | requirement-358c59892ea47160bd195305ea3ecf13 | inactive (superseded) | requirement | project:VSPi | requirement.vspi.interactive-panel-density | - |
 | requirement-41375d415c1c7b031bdc0aa1f8bddb81 | active | requirement | project:VSPi | requirement.vspi.test-validation-discipline | - |
 | requirement-425d1183157473cee73d160be5970a70 | inactive (superseded) | requirement | project:VSPi | requirement.vspi.question-interaction-depth | requirement-0bbf3ac27c8ab46c4a1aff9c489bede6 |
@@ -134,10 +143,12 @@ Derived view. Individual Markdown Records remain authoritative.
 | requirement-aba0169a5c698bb5539131b2d634d5a4 | inactive (superseded) | requirement | project:VSPi | requirement.vspi.interactive-panel-density | requirement-b5632341374b9eda4562c59c56e1e5e9 |
 | requirement-af8bfc3a57f131729a2179756a1200d3 | inactive (superseded) | requirement | project:VSPi | requirement.vspi.question-interaction-depth | requirement-425d1183157473cee73d160be5970a70 |
 | requirement-b07059defab206566f6dbf4f140fbf22 | active | requirement | project:VSPi | requirement.vspi.model-picker-generation-price-order | - |
+| requirement-bac47013a185807f6b4da063abced643 | active | requirement | project:VSPi | requirement.vspi.adaptive-panel-height | - |
+| requirement-c0e63e92c693598b5be6a4347b80ed8e | active | requirement | project:VSPi | requirement.vspi.general-tui-frame-pacing | - |
 | requirement-b5632341374b9eda4562c59c56e1e5e9 | inactive (superseded) | requirement | project:VSPi | requirement.vspi.interactive-panel-density | requirement-4ec7c0718ad2d8da33763e040c25d2b6 |
 | requirement-d350a326aebf15cee022d4ca8d85482e | inactive (superseded) | requirement | project:VSPi | requirement.vspi.interactive-panel-density | requirement-d964d07c3a6671ab7b3702649d3734f6 |
 | requirement-d964d07c3a6671ab7b3702649d3734f6 | inactive (superseded) | requirement | project:VSPi | requirement.vspi.interactive-panel-density | requirement-aba0169a5c698bb5539131b2d634d5a4 |
 | requirement-e96cd7513b17e77d74d85e1f8df66229 | active | requirement | project:VSPi | requirement.vspi.policy-switch-runtime-authority | - |
 | requirement-e9d688a0505fffb6626c54cc08f0d3ef | active | requirement | project:VSPi | requirement.vspi.external-session-import | - |
 
-Records: 135
+Records: 146

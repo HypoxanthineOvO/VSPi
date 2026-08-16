@@ -14,7 +14,7 @@ function expectTruthfulStatus(lines: string[], status: StartupStatus): void {
   const text = renderedText(lines);
   expect(text).toContain(status.model);
   expect(text).toContain(`Backend ${status.backend}`);
-  expect(text).toContain(`Policy ${status.policy} ⋅ ${status.boundary}`);
+  expect(text).toContain(`Policy ${status.policy} · ${status.boundary}`);
   expect(text).not.toMatch(/\bMode\b|\bAuto\b/);
   for (const legacy of LEGACY_COPY) expect(text).not.toContain(legacy);
 }
@@ -101,7 +101,6 @@ describe("startup cover", () => {
         startupSurface = surface;
       },
     });
-
     expect(writes).toHaveLength(2);
     expect((writes[0] ?? "").split("\n")).toHaveLength(1);
     expect(visibleWidth(stripAnsi(writes[0] ?? ""))).toBe(80);

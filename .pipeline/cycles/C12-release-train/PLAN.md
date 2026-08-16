@@ -2,8 +2,8 @@
 kind: plan
 cycle: C12-release-train
 mode: goal
-status: waiting-review
-updated: 2026-08-11T19:50:38+08:00
+status: closed
+updated: 2026-08-15T17:41:14+08:00
 progress: PROGRESS.md
 execution: EXECUTION.md
 ---
@@ -41,5 +41,4 @@ execution: EXECUTION.md
 | `R6` | Release 安装复验 | latest Release URL 安装成功，形成 Windows 安装指令 | 临时 prefix 安装、`vspi --version`、release smoke |
 | `R7` | Windows 0.6.1 corrective release | 修复 Windows named-pipe lease，发布 0.6.1 并完成 Windows 安装复验 | 平台路径单测、全量门禁、tag pipeline、Release 资产安装 |
 | `R8` | Windows TUI corrective revision | 移除与 fullscreen TUI 冲突的旧会话刷新机制，修复 Auto permission 切换，并按代际与价格稳定排序模型 | 定向回归、fullscreen/PTY、全量门禁、Windows 安装验收 |
-
 ID 在本 Cycle 内保持稳定；本 Goal 没有中间人工审阅点。

@@ -2,9 +2,10 @@ import { Key } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/domain/fixtures.js";
 import type { Question } from "../src/domain/types.js";
-import { stripAnsi } from "../src/ui/ansi.js";
+import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
 import { PanelController } from "../src/ui/panels.js";
-import { plainTheme } from "./helpers.js";
+import { createTheme } from "../src/ui/theme.js";
+import { capabilities, cellsForText, plainTheme, sgrCells } from "./helpers.js";
 
 const SINGLE_QUESTION: Question = {
   id: "layout",
@@ -252,8 +253,8 @@ describe("M5 dynamic Question panel", () => {
     openQuestions(panel, [SINGLE_QUESTION, FREE_TEXT_QUESTION]);
     const choiceHint = stripAnsi(panel.renderHint(80, plainTheme()));
 
-    expect(choiceHint).toContain("◂⟶ 切题");
-    expect(choiceHint).toContain("▴▾ 选择");
+    expect(choiceHint).toContain("←→ 切题");
+    expect(choiceHint).toContain("↑↓ 选择");
     expect(choiceHint).toContain("Tab 直接回答");
     expect(choiceHint).toContain("Shift+S 跳过");
     expect(choiceHint).not.toContain("Space 多选");
@@ -261,10 +262,10 @@ describe("M5 dynamic Question panel", () => {
     panel.handleInput(Key.right);
     const freeTextHint = stripAnsi(panel.renderHint(80, plainTheme()));
     expect(freeTextHint).toContain("Enter 确认");
-    expect(freeTextHint).toContain("◂⟶ 移动光标");
-    expect(freeTextHint).not.toContain("◂⟶ 切题");
+    expect(freeTextHint).toContain("←→ 移动光标");
+    expect(freeTextHint).not.toContain("←→ 切题");
     expect(freeTextHint).not.toContain("Shift+S");
-    expect(freeTextHint).not.toMatch(/▴▾ 选择|Tab 直接回答|Space/);
+    expect(freeTextHint).not.toMatch(/↑↓ 选择|Tab 直接回答|Space/);
 
     const multi = new PanelController(DEFAULT_SETTINGS);
     openQuestions(multi, [MULTI_QUESTION]);
@@ -273,7 +274,7 @@ describe("M5 dynamic Question panel", () => {
     const ranking = new PanelController(DEFAULT_SETTINGS);
     openQuestions(ranking, [RANKING_QUESTION]);
     const rankingHint = stripAnsi(ranking.renderHint(80, plainTheme()));
-    expect(rankingHint).toMatch(/Ctrl\/(?:Alt|Option)\+▴▾ 重排/);
+    expect(rankingHint).toMatch(/Ctrl\/(?:Alt|Option)\+↑↓ 重排/);
     expect(rankingHint).toContain("Tab 直接回答");
     expect(rankingHint).toContain("Shift+S 跳过");
 
@@ -285,12 +286,36 @@ describe("M5 dynamic Question panel", () => {
     expect(reviewHint).not.toMatch(/选择|直接回答|跳过|重排|Space/);
   });
 
+  it("emphasizes Review submit without dimming the whole footer", () => {
+    const themes = [
+      createTheme(capabilities({ colorLevel: 3, truecolor: true, unicode: true })),
+      createTheme(capabilities({ colorLevel: 3, truecolor: true, unicode: false }), "Terminal"),
+    ];
+
+    for (const theme of themes) {
+      const panel = new PanelController(DEFAULT_SETTINGS);
+      openQuestions(panel, [FREE_TEXT_QUESTION]);
+      panel.handleInput(Key.enter);
+
+      const lines = panel.render(40, 10, theme, DEFAULT_USAGE);
+      expect(lines.every((line) => visibleWidth(line) === 40)).toBe(true);
+      const footer = lines.at(-1) ?? "";
+      const submitCells = cellsForText(footer, "Enter 提交");
+      expect(submitCells).toHaveLength(Array.from("Enter 提交").length);
+      expect(submitCells.some((cell) => cell.modifiers.has(1))).toBe(true);
+      const secondaryCells = cellsForText(footer, "Esc 返回");
+      expect(secondaryCells).toHaveLength(Array.from("Esc 返回").length);
+      expect(secondaryCells.some((cell) => cell.modifiers.has(1))).toBe(false);
+      expect(sgrCells(footer).length).toBeGreaterThan(submitCells.length);
+    }
+  });
+
   it("keeps the aligned layout when every option fits and never truncates text", () => {
     const panel = new PanelController(DEFAULT_SETTINGS);
     openQuestions(panel, [SINGLE_QUESTION]);
     const rendered = panelText(panel);
     expect(rendered).toContain("紧凑");
-    expect(rendered).not.toContain("...");
+    expect(rendered).not.toContain("…");
     expect(panel.hintRenderedInline()).toBe(true);
   });
 
@@ -313,12 +338,12 @@ describe("M5 dynamic Question panel", () => {
 
     const raw = panel.render(80, 18, plainTheme(), DEFAULT_USAGE);
     const rendered = raw.map(stripAnsi).join("\n");
-    expect(rendered).not.toContain("...");
+    expect(rendered).not.toContain("…");
     for (const fragment of ["需要完整换行展示而不是被截断", "这段描述也必须完整保留"]) {
       expect(rendered).toContain(fragment);
     }
     expect(rendered).not.toContain("┃");
-    expect(rendered).toContain("› (◉)");
+    expect(rendered).toContain("› (●)");
     expect(rendered).not.toMatch(/[┌┐└┘]/u);
   });
 

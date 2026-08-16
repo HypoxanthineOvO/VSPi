@@ -796,7 +796,7 @@ export class PiAgentManager {
         if (latest) {
           run.outputPreview = redactAuditText(latest, 4_000);
           this.publish(run);
-          update(`${run.kind} ${run.id.slice(0, 8)} ⋅ ${model}\n${run.outputPreview}`);
+          update(`${run.kind} ${run.id.slice(0, 8)} · ${model}\n${run.outputPreview}`);
         }
       }
     });
@@ -963,7 +963,7 @@ export class PiAgentManager {
         ? candidate
         : undefined;
     if (!model) return { ...(parentSelector ? { model: parentSelector } : {}), reason: "inherited parent model" };
-    return { model, reason: `${pool?.source ?? "automatic"} ${parent.provider} pool ⋅ ${role}` };
+    return { model, reason: `${pool?.source ?? "automatic"} ${parent.provider} pool · ${role}` };
   }
 
   private modelAvailable(selector: string): boolean {

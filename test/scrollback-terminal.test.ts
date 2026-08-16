@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  adaptInteractiveTerminalOutput,
   preserveTerminalScrollback,
   renderStaticAppend,
   renderStaticCommit,
@@ -58,6 +59,12 @@ describe("scrollback-preserving terminal", () => {
 
   it("leaves ordinary output unchanged", () => {
     expect(preserveTerminalScrollback("line\r\nnext")).toBe("line\r\nnext");
+  });
+
+  it("avoids per-frame synchronized flushes unless explicitly restored", () => {
+    const frame = "\u001b[?2026h\u001b[12;1H\u001b[2Kframe\u001b[?2026l";
+    expect(adaptInteractiveTerminalOutput(frame, {})).toBe("\u001b[12;1H\u001b[2Kframe");
+    expect(adaptInteractiveTerminalOutput(frame, { VSPI_TUI_SYNC_OUTPUT: "1" })).toBe(frame);
   });
 
   it("pushes a static block beyond the viewport before returning to a clean home position", () => {

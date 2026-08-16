@@ -32,5 +32,4 @@ export const DEFAULT_SETTINGS: AppSettings = {
   thinkingTranslationEndpoint: "",
   wrapCode: false,
   collapseTools: true,
-  bridgeEnabled: true,
 };

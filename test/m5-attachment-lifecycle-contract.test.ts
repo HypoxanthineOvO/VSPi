@@ -2,35 +2,14 @@ import { mkdir, mkdtemp, readFile, rename, stat, symlink, utimes, writeFile } fr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AttachmentBridge } from "../src/attachments/bridge.js";
 import * as clipboardModule from "../src/attachments/clipboard.js";
 import { AttachmentService } from "../src/attachments/service.js";
 import * as storeModule from "../src/attachments/store.js";
-import type { Attachment } from "../src/domain/types.js";
-import { capabilities, PNG_1X1, plainTheme } from "./helpers.js";
-
-const activeBridges: AttachmentBridge[] = [];
+import { PNG_1X1, plainTheme } from "./helpers.js";
 
 afterEach(async () => {
-  await Promise.all(activeBridges.splice(0).map((bridge) => bridge.stop()));
   vi.restoreAllMocks();
 });
-
-async function bridgeFixture(options: {
-  maxBytes?: number;
-  onAttachment?: (attachment: Attachment) => void | Promise<void>;
-}) {
-  const home = await mkdtemp(join(tmpdir(), "vspi-m5-bridge-"));
-  const store = new storeModule.AttachmentStore("bridge-session", { home });
-  await store.initialize();
-  const token = "m5-test-token-with-at-least-192-bits";
-  const bridge = new AttachmentBridge(store, { port: 0, token, ...options });
-  activeBridges.push(bridge);
-  await bridge.start();
-  const base = `http://127.0.0.1:${bridge.port}`;
-  const headers = { origin: base, "content-type": "image/png", "x-vspi-token": token };
-  return { base, bridge, headers, store };
-}
 
 describe("M5 attachment session lifecycle", () => {
   it("restores a valid manifest and keeps attachments owned by their session", async () => {
@@ -52,8 +31,8 @@ describe("M5 attachment session lifecycle", () => {
 
   it("switches AttachmentService ownership and restores the target session manifest", async () => {
     const home = await mkdtemp(join(tmpdir(), "vspi-m5-attachment-switch-"));
-    const service = new AttachmentService("session-one", capabilities(), plainTheme(), { home });
-    await service.start({ onAttachment: vi.fn(), onNotice: vi.fn() }, false);
+    const service = new AttachmentService("session-one", plainTheme(), { home });
+    await service.start({ onAttachment: vi.fn(), onNotice: vi.fn() });
     const first = await service.store.add(PNG_1X1, "image/png", "会话一");
     const contract = service as unknown as { switchSession?: (sessionId: string) => Promise<void> };
 
@@ -194,8 +173,8 @@ describe("M5 attachment session lifecycle", () => {
   it("fences a slow old-session paste when a session switch starts", async () => {
     const home = await mkdtemp(join(tmpdir(), "vspi-m5-attachment-race-"));
     const onAttachment = vi.fn();
-    const service = new AttachmentService("old-session", capabilities(), plainTheme(), { home });
-    await service.start({ onAttachment, onNotice: vi.fn() }, false);
+    const service = new AttachmentService("old-session", plainTheme(), { home });
+    await service.start({ onAttachment, onNotice: vi.fn() });
     const oldStore = service.store;
     const originalAdd = oldStore.add.bind(oldStore);
     let releaseAdd: (() => void) | undefined;
@@ -224,56 +203,6 @@ describe("M5 attachment session lifecycle", () => {
     expect(onAttachment, "a stale attachment must not be projected into the new Session UI").not.toHaveBeenCalled();
     expect(pasteResult.status === "rejected" || pasteResult.value === undefined).toBe(true);
     await service.dispose();
-  });
-});
-
-describe("M5 bridge validation and callback lifecycle", () => {
-  it("rejects MIME and size failures without firing the callback", async () => {
-    const onAttachment = vi.fn();
-    const fixture = await bridgeFixture({ maxBytes: PNG_1X1.length - 1, onAttachment });
-    const unsupported = await fetch(`${fixture.base}/attachment`, {
-      method: "POST",
-      headers: { ...fixture.headers, "content-type": "text/plain" },
-      body: "not an image",
-    });
-    const oversized = await fetch(`${fixture.base}/attachment`, {
-      method: "POST",
-      headers: fixture.headers,
-      body: PNG_1X1,
-    });
-
-    expect(unsupported.status).toBe(415);
-    expect(oversized.status).toBe(400);
-    expect(await oversized.json()).toMatchObject({ error: expect.stringMatching(/large|超过/i) });
-    expect(onAttachment).not.toHaveBeenCalled();
-    expect(fixture.store.list()).toEqual([]);
-  });
-
-  it("fires one callback after a valid store write and rolls back when the callback rejects", async () => {
-    const acceptedCallback = vi.fn(async () => {});
-    const accepted = await bridgeFixture({ onAttachment: acceptedCallback });
-    const response = await fetch(`${accepted.base}/attachment`, {
-      method: "POST",
-      headers: accepted.headers,
-      body: PNG_1X1,
-    });
-    expect(response.status).toBe(201);
-    expect(acceptedCallback).toHaveBeenCalledOnce();
-    expect(accepted.store.list()).toHaveLength(1);
-
-    const rejectedCallback = vi.fn(async () => {
-      throw new Error("PRIVATE_CALLBACK_FAILURE");
-    });
-    const rejected = await bridgeFixture({ onAttachment: rejectedCallback });
-    const rejectedResponse = await fetch(`${rejected.base}/attachment`, {
-      method: "POST",
-      headers: rejected.headers,
-      body: PNG_1X1,
-    });
-    expect(rejectedResponse.status).toBe(400);
-    expect(await rejectedResponse.text()).not.toContain("PRIVATE_CALLBACK_FAILURE");
-    expect(rejectedCallback).toHaveBeenCalledOnce();
-    expect(rejected.store.list(), "failed delivery must not leave an orphaned attachment").toEqual([]);
   });
 });
 

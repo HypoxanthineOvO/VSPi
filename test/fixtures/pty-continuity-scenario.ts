@@ -251,7 +251,7 @@ const shutdown = async () => {
 };
 const app = new VspiApp(tui, theme, backend, {
   cwd,
-  settings: { ...DEFAULT_SETTINGS, reducedMotion: true, bridgeEnabled: false },
+  settings: { ...DEFAULT_SETTINGS, reducedMotion: true },
   attachments,
   planBackend,
   onExit: () => void shutdown(),

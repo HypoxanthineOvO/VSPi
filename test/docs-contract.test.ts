@@ -399,7 +399,7 @@ describe("delivered TUI documentation contract", () => {
     expect(splash).toMatch(/Model\s+\S+/);
     expect(splash).toMatch(/Backend\s+(?:Pi|Fixture)/);
     expect(splash).toMatch(/Policy\s+\S+\s+⋅\s+(?:Sandboxed|Host)/);
-    expect(splash).not.toMatch(/\bMode\b|\bAuto\b/);
+    expect(splash).not.toMatch(/\bMode\b/);
     expect(splash).toMatch(/v\d+\.\d+\.\d+/);
 
     const main = blocks.find((block) => block.includes("+ Plan "));
@@ -473,7 +473,7 @@ describe("delivered TUI documentation contract", () => {
 
   it("retains the attachment and Markdown boundaries", () => {
     expect(readme).toContain("〔登录页-修改前 ⋅ 1440x900 ⋅ PNG〕");
-    expect(readme).toMatch(/Attachment Bridge[\s\S]{0,500}(?:loopback|127\.0\.0\.1)/i);
+    expect(readme).not.toMatch(/Attachment Bridge|npm run bridge|bridgeEnabled/i);
     expect(docs).toContain("H1/H2");
     for (const bullet of ["▪", "◦", "▪"]) expect(docs).toContain(bullet);
     expect(docs).toMatch(/行内代码[\s\S]{0,200}fenced code[\s\S]{0,200}引用/i);

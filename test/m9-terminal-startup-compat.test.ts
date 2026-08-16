@@ -98,7 +98,7 @@ describe("M9 terminal render matrix", () => {
         expect(plain[1]).toMatch(/^\//);
         expect(plain[1]).not.toMatch(/\bPath\b|Backend/);
         if (width >= 80) {
-          expect(plain[1]).toContain("Policy Standard ⋅ Sandboxed");
+          expect(plain[1]).toContain("Policy Standard · Sandboxed");
           expect(plain[1]?.indexOf("Policy")).toBeLessThan(plain[1]?.indexOf("Token") ?? -1);
           expect(plain[1]?.indexOf("Token")).toBeLessThan(plain[1]?.indexOf("Cost") ?? -1);
         }
@@ -122,7 +122,7 @@ describe("M9 terminal render matrix", () => {
       120,
       plainTheme(),
     ).map(stripAnsi);
-    expect(plain.join("\n")).toContain(`Policy ${policy} ⋅ ${boundary}`);
+    expect(plain.join("\n")).toContain(`Policy ${policy} · ${boundary}`);
   });
 
   it("makes Recovery visible while forcing Standard Host", () => {
@@ -157,7 +157,7 @@ describe("M9 terminal render matrix", () => {
       .map(stripAnsi)
       .join("\n");
     expect(rendered).toContain("Recovery");
-    expect(rendered).toContain("Policy Standard ⋅ Host");
+    expect(rendered).toContain("Policy Standard · Host");
     expect(rendered).not.toContain("YOLO");
   });
 });

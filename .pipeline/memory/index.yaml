@@ -43,6 +43,11 @@ active_by_dedupe_key:
   cycle.vspi-v0-2-0-workflow-integration.feedback.e7ded37362b1722e: feedback-2888bdf80dca47139286cc5d09dc1b78
   cycle.vspi-v0-2-0-workflow-integration.plan: decision-9444032afd7437985166c6395ac0657d
   decision.vspi.external-session-import-detail: decision-a82b0e062b7ad9ffef82d6ce5e3b7d43
+  decision.vspi.default-execution-policy-auto: decision-4cd5b45c0b5c9c6c0d9650af4d9d9d2d
+  decision.vspi.remove-ssh-attachment-bridge: decision-4c3d1d5060bcb486272c3a364c04e9bc
+  decision.vspi.pi-editor-performance-patch-0.84.2: decision-81a6564e96e47279146405db944d2efc
+  decision.vspi.c13-release-0.6.4-local-acceptance: decision-d3511bed687432352beedd210ee1a3bec
+  decision.vspi.aimoniker-gemini-provider: decision-8e76f7f9fb0bab3fb05c5b5397627688
   decision.vspi.mcp-tool-exposure: decision-dadcdf82568a01d80eeccfe8ee8432db
   decision.vspi.post-0.2.5-feature-order: decision-62c857d1de35f40189c98a9a9a542bc5
   decision.vspi.pty-debug-playbook: decision-fef54ead775588f8899dba4b09dd65fd
@@ -74,19 +79,24 @@ active_by_dedupe_key:
   goal.vspi-persistent-goal-runner.feedback.a9ceb930e26d7f23: feedback-0f27a2032f6ccd79b08d65781aa01d9f
   goal.vspi-persistent-goal-runner.plan: decision-ab205a44cb46e78bc6766831ffaa98c3
   goal.vspi-subagent-teams-goal.plan: decision-deccd6104c4cd9fb7b03c6a041a48556
+  preference.vspi.prefer-upstream-render-architecture: preference-43221dda2fae2a29a42d6bab24ac5bb0
+  preference.vspi.preserve-unicode-visual-language: preference-9d7551d0c21f03b57550e48ad0c68f0e
   preference.vspi.release-channel: preference-0438503a532908adfa03c80973def280
   preference.vspi.ui-native-mock-first: preference-afdb1404971fcf8baed40924374a0d1e
   project_intent: requirement-7aa27ad8d6ea8ff47370425b826abd54
   requirement.vspi.effective-model-context: requirement-20a9cf868d16c64e5b00e67052ba3e6e
   requirement.vspi.external-session-import: requirement-e9d688a0505fffb6626c54cc08f0d3ef
+  requirement.vspi.general-tui-frame-pacing: requirement-c0e63e92c693598b5be6a4347b80ed8e
   requirement.vspi.interactive-panel-density: requirement-101351de724bb1025bd13fda2f4dba70
   requirement.vspi.model-picker-generation-price-order: requirement-b07059defab206566f6dbf4f140fbf22
+  requirement.vspi.adaptive-panel-height: requirement-bac47013a185807f6b4da063abced643
   requirement.vspi.model-picker-recent: requirement-80e6d448ecc68c4229ce7209ac7fbbad
   requirement.vspi.policy-switch-runtime-authority: requirement-e96cd7513b17e77d74d85e1f8df66229
   requirement.vspi.question-interaction-depth: requirement-062a4899aad721f16efe298ef24365a3
   requirement.vspi.skill-mcp-management: requirement-8fa3774fbc6fce3c20d507c1a0b55e90
   requirement.vspi.test-validation-discipline: requirement-41375d415c1c7b031bdc0aa1f8bddb81
   requirement.vspi.update-command: requirement-34bdc2f91c02121e80d098696e6b19dd
+  requirement.vspi.v1-release-after-streaming-regression: requirement-38d146f1717828e09fea3e80b01ec2c4
 authority_role: derived
 records:
   - active: false
@@ -2136,6 +2146,42 @@ records:
         type: session
     supersedes: []
     updated_at: 2026-08-09T09:01:27.083Z
+  - active: false
+    confidence: confirmed
+    created_at: 2026-08-15T09:44:00.000Z
+    dedupe_key: preference.vspi.prefer-upstream-tui-components
+    id: preference-9ba9d29db33d84a5d75897791339c595
+    kind: preference
+    path: .pipeline/memory/records/project-33aa1007aa14/preference/preference-9ba9d29db33d84a5d75897791339c595.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 9ba9d29db33d84a5d75897791339c595b136546ee810baefbd73eaa1d6ddc586
+    source_refs:
+      - locator: 2026-08-15-c13-official-pi-editor-discussion
+        ref: current-chat
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-08-15T09:44:00.000Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-08-15T09:18:00.000Z
+    dedupe_key: preference.vspi.preserve-unicode-visual-language
+    id: preference-9d7551d0c21f03b57550e48ad0c68f0e
+    kind: preference
+    path: .pipeline/memory/records/project-33aa1007aa14/preference/preference-9d7551d0c21f03b57550e48ad0c68f0e.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 9d7551d0c21f03b57550e48ad0c68f0e49a43602d00378a9fa24e9160d576bca
+    source_refs:
+      - locator: 2026-08-15-c12-r9-windows-ui-feedback
+        ref: current-chat
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-08-15T09:18:00.000Z
   - active: true
     confidence: confirmed
     created_at: 2026-07-26T12:00:03.939Z
@@ -2569,4 +2615,169 @@ records:
         type: session
     supersedes: []
     updated_at: 2026-07-26T14:48:52.631Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-08-15T11:55:00.000Z
+    dedupe_key: decision.vspi.pi-editor-performance-patch-0.84.2
+    id: decision-81a6564e96e47279146405db944d2efc
+    kind: decision
+    path: .pipeline/memory/records/project-33aa1007aa14/decision/decision-81a6564e96e47279146405db944d2efc.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 81a6564e96e47279146405db944d2efcdc7f34fd3327d675a5280e24f41c4868
+    source_refs:
+      - locator: 2026-08-15-c13-m2-m3-implementation
+        ref: current-chat
+        type: session
+    supersedes: []
+    updated_at: 2026-08-15T11:55:00.000Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-08-15T12:30:00.000Z
+    dedupe_key: decision.vspi.c13-release-0.6.4-local-acceptance
+    id: decision-d3511bed687432352beedd210ee1a3bec
+    kind: decision
+    path: .pipeline/memory/records/project-33aa1007aa14/decision/decision-d3511bed687432352beedd210ee1a3bec.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: d3511bed687432352beedd210ee1a3bec9d17d4d829892ee1129070203626189
+    source_refs:
+      - locator: 2026-08-15-c13-version-and-acceptance-correction
+        ref: current-chat
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-08-15T12:30:00.000Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-08-15T16:10:00.000Z
+    dedupe_key: decision.vspi.aimoniker-gemini-provider
+    id: decision-8e76f7f9fb0bab3fb05c5b5397627688
+    kind: decision
+    path: .pipeline/memory/records/project-33aa1007aa14/decision/decision-8e76f7f9fb0bab3fb05c5b5397627688.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs:
+      - /home/heyx/APIs/llm/gemini.yaml
+    semantic_hash: 8e76f7f9fb0bab3fb05c5b539762768881558f7747f23e527d2bb02225f629e6
+    source_refs:
+      - locator: 2026-08-16-c13-aimoniker-gemini-config
+        ref: current-chat
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-08-15T16:10:00.000Z
+  - active: true
+    confidence: confirmed
+    created_at: 2026-08-16T17:25:34+08:00
+    dedupe_key: decision.vspi.default-execution-policy-auto
+    id: decision-4cd5b45c0b5c9c6c0d9650af4d9d9d2d
+    kind: decision
+    path: .pipeline/memory/records/project-33aa1007aa14/decision/decision-4cd5b45c0b5c9c6c0d9650af4d9d9d2d.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 4cd5b45c0b5c9c6c0d9650af4d9d9d2d125aef6d3fea32b4b8313ac66320c22a
+    source_refs:
+      - locator: 2026-08-16-c13-corrective-authorization
+        ref: current-chat
+        type: user_feedback
+    supersedes:
+      - decision-8d34bd77ce05ef6f025ea3e659aa23fb
+    updated_at: 2026-08-16T17:25:34+08:00
+  - active: true
+    confidence: confirmed
+    created_at: 2026-08-16T17:25:34+08:00
+    dedupe_key: decision.vspi.remove-ssh-attachment-bridge
+    id: decision-4c3d1d5060bcb486272c3a364c04e9bc
+    kind: decision
+    path: .pipeline/memory/records/project-33aa1007aa14/decision/decision-4c3d1d5060bcb486272c3a364c04e9bc.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 4c3d1d5060bcb486272c3a364c04e9bc58f6887f365774cf6a3e69911eb447da
+    source_refs:
+      - locator: 2026-08-16-c13-corrective-authorization
+        ref: current-chat
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-08-16T17:25:34+08:00
+  - active: true
+    confidence: confirmed
+    created_at: 2026-08-16T18:11:45+08:00
+    dedupe_key: requirement.vspi.adaptive-panel-height
+    id: requirement-bac47013a185807f6b4da063abced643
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-bac47013a185807f6b4da063abced643.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: bac47013a185807f6b4da063abced643bd8b686b39ac87cfe0cd86dce9e8aeae
+    source_refs:
+      - locator: 2026-08-16-c13-adaptive-panel-height-feedback
+        ref: current-chat
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-08-16T18:11:45+08:00
+  - active: true
+    confidence: confirmed
+    created_at: 2026-08-16T19:15:36+08:00
+    dedupe_key: requirement.vspi.v1-release-after-streaming-regression
+    id: requirement-38d146f1717828e09fea3e80b01ec2c4
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-38d146f1717828e09fea3e80b01ec2c4.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 38d146f1717828e09fea3e80b01ec2c4dd66d6842e18bb4b309b8d310ad97b6e
+    source_refs:
+      - locator: 2026-08-16-c14-v1-release-reminder
+        ref: current-chat
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-08-16T19:15:36+08:00
+  - active: true
+    confidence: confirmed
+    created_at: 2026-08-16T20:29:54+08:00
+    dedupe_key: requirement.vspi.general-tui-frame-pacing
+    id: requirement-c0e63e92c693598b5be6a4347b80ed8e
+    kind: requirement
+    path: .pipeline/memory/records/project-33aa1007aa14/requirement/requirement-c0e63e92c693598b5be6a4347b80ed8e.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: c0e63e92c693598b5be6a4347b80ed8e1de1cb292cbf06f11673d6df27668d8c
+    source_refs:
+      - locator: 2026-08-16-c14-general-frame-pacing
+        ref: current-chat
+        type: user_feedback
+    supersedes: []
+    updated_at: 2026-08-16T20:29:54+08:00
+  - active: true
+    confidence: confirmed
+    created_at: 2026-08-16T18:35:25+08:00
+    dedupe_key: preference.vspi.prefer-upstream-render-architecture
+    id: preference-43221dda2fae2a29a42d6bab24ac5bb0
+    kind: preference
+    path: .pipeline/memory/records/project-33aa1007aa14/preference/preference-43221dda2fae2a29a42d6bab24ac5bb0.md
+    scope:
+      ref: VSPi
+      type: project
+    secret_refs: []
+    semantic_hash: 43221dda2fae2a29a42d6bab24ac5bb041904a51cda026065fefb637db1edfaf
+    source_refs:
+      - locator: 2026-08-16-c14-official-render-direction
+        ref: current-chat
+        type: user_feedback
+    supersedes:
+      - preference-9ba9d29db33d84a5d75897791339c595
+    updated_at: 2026-08-16T18:35:25+08:00
 schema_version: '1'

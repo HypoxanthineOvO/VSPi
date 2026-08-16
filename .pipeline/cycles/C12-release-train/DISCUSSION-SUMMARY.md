@@ -1,7 +1,7 @@
 ---
 kind: discussion-summary
 cycle: C12-release-train
-updated: 2026-08-11T19:50:38+08:00
+updated: 2026-08-15T17:41:14+08:00
 ---
 
 # VSPi v0.6.0 Release Train 讨论摘要
@@ -24,7 +24,7 @@ updated: 2026-08-11T19:50:38+08:00
 
 ## 未决问题
 
-- 无产品或发布未决问题；等待用户在 Windows 安装运行 0.6.2 后最终接受或报告真实错误。
+- C12 内无继续执行项；0.6.3 的 Composer、模型目录和 Windows 验收问题转入 C13。
 
 ## R7 Windows 启动失败
 
@@ -44,3 +44,12 @@ updated: 2026-08-11T19:50:38+08:00
 - 发布决定：0.6.2 只包含 R8 三项修订、测试、文档、版本与语义记录；工作区现有 Provider request compatibility 改动不进入该发布。
 - 发布结果：R8-only commit `18a9284`；main pipeline `#368` 与 tag pipeline `#369` 全绿；annotated tag/Release `v0.6.2` 已创建。
 - 公开复验：匿名 pinned/latest 资产字节一致，SHA-256 `a3400a01e34a4c76051cce68625a832afdf297675a0269ca79cbc9ff3fd606ad`；clean install 与 Fixture smoke 均为 0.6.2，tarball 不含 Provider compatibility 实现。
+
+## 0.6.3 Windows 验收拒绝与 C13 交接
+
+- 用户拒绝 0.6.3 的 Windows 实机结果：输入框被窄宽字符替换后视觉明显退化，开屏动画消失，更新到最新模型列表后交互严重卡顿。
+- 调查确认 0.6.3 将 composer 的圆角 Unicode 边框全局替换为 ASCII `+--+`，并将六行 block-art splash 替换为四行 ASCII Logo；这不是修复光标宽度问题所必需的最小改动。
+- 当前 Pi runtime 仍固定为 0.84.1，而 npm 最新稳定版为 0.84.2；模型面板在每帧渲染中多次重新过滤与排序完整模型列表。
+- 用户确认 0.6.2 的开屏表现满意，并要求尽量复用 Pi 官方绘图与输入组件；原始性能问题是输入后向左移动光标会卡死。
+- 用户选择新建 C13，不继续扩张 C12；Composer 所有权先通过官方/包裹版原型和性能证据讨论，不直接实现。
+- 项目级视觉要求继续适用：终端宽度兼容修复不得通过无差别 ASCII 降级破坏已批准的 Unicode 组件和品牌动画。

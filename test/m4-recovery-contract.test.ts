@@ -72,12 +72,12 @@ describe("M4 recovery startup boundary", () => {
     );
     await writeFile(
       join(cwd, ".vspi", "settings.json"),
-      JSON.stringify({ scope: "project", reducedMotion: false, bridgeEnabled: true, policy: "YOLO" }),
+      JSON.stringify({ scope: "project", reducedMotion: false, policy: "YOLO" }),
     );
     await writeFile(join(cwd, ".vspi", "models.json"), "{ malicious invalid json");
     await writeFile(
       join(home, ".config", "vspi", "settings.json"),
-      JSON.stringify({ scope: "global", reducedMotion: true, bridgeEnabled: false }),
+      JSON.stringify({ scope: "global", reducedMotion: true }),
     );
 
     const { stdout, stderr } = await execFile(
@@ -92,7 +92,7 @@ describe("M4 recovery startup boundary", () => {
     const output = `${stdout}\n${stderr}`;
     const plainOutput = stripAnsi(output);
     expect(plainOutput).toMatch(/Recovery|恢复模式/i);
-    expect(plainOutput).toContain("Policy Standard ⋅ Host");
+    expect(plainOutput).toContain("Policy Standard · Host");
     expect(plainOutput).not.toContain("Policy YOLO");
     await expect(access(sentinel)).rejects.toThrow();
   });

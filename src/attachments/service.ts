@@ -1,8 +1,6 @@
 import { Image } from "@earendil-works/pi-tui";
 import type { Attachment } from "../domain/types.js";
-import type { TerminalCapabilities } from "../ui/capabilities.js";
 import type { VspiTheme } from "../ui/theme.js";
-import { AttachmentBridge } from "./bridge.js";
 import { readClipboardImage } from "./clipboard.js";
 import { AttachmentStore, type AttachmentStoreOptions } from "./store.js";
 
@@ -18,9 +16,7 @@ export interface AttachmentSessionOwnership {
 
 export class AttachmentService {
   store: AttachmentStore;
-  private bridge: AttachmentBridge | undefined;
   private events: AttachmentServiceEvents | undefined;
-  private bridgeEnabled = false;
   private readonly storeOptions: AttachmentStoreOptions;
   private started = false;
   private operation: Promise<void> = Promise.resolve();
@@ -32,7 +28,6 @@ export class AttachmentService {
 
   constructor(
     sessionId: string,
-    private readonly capabilities: TerminalCapabilities,
     private readonly theme: VspiTheme,
     options: { home?: string; maxBytes?: number } = {},
   ) {
@@ -40,36 +35,29 @@ export class AttachmentService {
     this.store = new AttachmentStore(sessionId, this.storeOptions);
   }
 
-  async start(events: AttachmentServiceEvents, bridgeEnabled: boolean): Promise<void> {
+  async start(events: AttachmentServiceEvents): Promise<void> {
     this.events = events;
-    this.bridgeEnabled = bridgeEnabled;
     this.started = true;
     const store = this.store;
     const ownership = this.ownership();
     await this.enqueue(async () => {
       await store.initialize();
       if (!this.isCurrent(store, ownership)) return;
-      if (this.capabilities.ssh && bridgeEnabled) await this.startBridge();
     });
   }
 
   async switchSession(sessionId: string): Promise<void> {
     const next = new AttachmentStore(sessionId, this.storeOptions);
     const generation = ++this.generation;
-    const stopping = this.bridge?.stop();
-    this.bridge = undefined;
     await this.enqueue(async () => {
-      await stopping;
       if (generation !== this.generation) return;
       if (sessionId === this.store.sessionId) {
         await this.store.initialize();
-        if (this.started && this.capabilities.ssh && this.bridgeEnabled && this.events) await this.startBridge();
         return;
       }
       await next.initialize();
       if (generation !== this.generation) return;
       this.store = next;
-      if (this.started && this.capabilities.ssh && this.bridgeEnabled && this.events) await this.startBridge();
     });
   }
 
@@ -78,10 +66,7 @@ export class AttachmentService {
     const store = this.store;
     const image = await readClipboardImage();
     if (!image) {
-      this.events?.onNotice(
-        this.capabilities.ssh ? "远程终端请使用 Attachment Bridge" : "剪贴板中没有可读取的图片",
-        "warning",
-      );
+      this.events?.onNotice("剪贴板中没有可读取的图片", "warning");
       return undefined;
     }
     return this.enqueue(async () => {
@@ -162,69 +147,8 @@ export class AttachmentService {
   async dispose(): Promise<void> {
     this.started = false;
     this.generation += 1;
-    const stopping = this.bridge?.stop();
-    this.bridge = undefined;
     await this.enqueue(async () => {
-      await stopping;
       this.events = undefined;
-    });
-  }
-
-  private async startBridge(): Promise<void> {
-    const events = this.events;
-    if (!events) return;
-    const store = this.store;
-    const ownership = this.ownership();
-    const bridge = this.createBridge(store, ownership);
-    this.bridge = bridge;
-    try {
-      await bridge.start();
-      if (!this.isCurrent(store, ownership)) {
-        await bridge.stop();
-        if (this.bridge === bridge) this.bridge = undefined;
-        return;
-      }
-      events.onNotice(`SSH Bridge ${bridge.url}`, "info");
-    } catch (error) {
-      if (!this.isCurrent(store, ownership)) {
-        this.bridge = undefined;
-        return;
-      }
-      if ((error as NodeJS.ErrnoException).code === "EADDRINUSE") {
-        const fallback = this.createBridge(store, ownership, 0);
-        this.bridge = fallback;
-        try {
-          await fallback.start();
-          if (!this.isCurrent(store, ownership)) {
-            await fallback.stop();
-            if (this.bridge === fallback) this.bridge = undefined;
-            return;
-          }
-          events.onNotice(`默认端口占用，SSH Bridge ${fallback.url}`, "warning");
-          return;
-        } catch {
-          // Fall through to the generic, non-sensitive error below.
-        }
-      }
-      this.bridge = undefined;
-      events.onNotice("SSH Bridge 启动失败", "error");
-    }
-  }
-
-  private createBridge(store: AttachmentStore, ownership: AttachmentSessionOwnership, port?: number): AttachmentBridge {
-    return new AttachmentBridge(store, {
-      ...(port === undefined ? {} : { port }),
-      onAttachment: async (attachment) => {
-        if (!this.isCurrent(store, ownership)) {
-          await store.remove(attachment.id);
-          throw staleAttachmentError();
-        }
-        await this.events?.onAttachment(attachment, ownership);
-        if (!this.isCurrent(store, ownership)) {
-          await store.remove(attachment.id);
-          throw staleAttachmentError();
-        }
-      },
     });
   }
 

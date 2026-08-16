@@ -145,3 +145,13 @@ updated: 2026-08-11T19:50:38+08:00
 - **计划影响：** R8 completed；C12 回到 waiting-review，等待 Windows 最终验收。
 - **遇到的问题：** staged tree 与工作树测试数分别为 833/836，差异正好是被排除的 3 个 Provider compatibility tests；发布 tarball 的 dist/README 复验确认未包含该兼容层。
 - **下一步：** 用户在 Windows 安装 latest 资产，验证版本、会话恢复、Auto permission 与模型顺序后接受或反馈。
+
+## 2026-08-15 - 0.6.3 最终结果拒绝并交接 C13
+
+- **计划项：** C12 最终验收。
+- **目的：** 记录 0.6.3 Windows 实机反馈，并决定是否继续扩张 Release Train。
+- **结果：** 用户拒绝 0.6.3 的 ASCII UI、开屏退化与模型列表卡顿；确认 0.6.2 开屏表现为接受基线，原始输入问题是输入后向左移动光标卡死；选择关闭 C12 并新建 C13 讨论 Pi 官方 Editor 所有权。
+- **证据：** `v0.6.2..HEAD` 包含 71 files / 1052 insertions / 524 deletions；当前 Composer 在 Pi 官方 Editor 之外仍切除官方边框、扫描 cursor marker 并重绘四边框；npm stable Pi packages 为 0.84.2。
+- **计划影响：** R1-R8 保持 completed；不在 C12 新增 R9，未解决问题通过 `builds_on` 选择性交给 C13。
+- **遇到的问题：** 0.6.3 同时包含必要的 history/render/provider 修复与不必要的视觉替换，不能整体回退；Composer 最终所有权仍需原型比较。
+- **下一步：** 聚焦 C13，先展示官方 Editor 与 0.6.2 包裹版的真实终端产物和性能证据。

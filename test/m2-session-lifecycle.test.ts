@@ -88,7 +88,7 @@ function sessionBackend(switchMessageCount = 1) {
 async function createApp(backend: ChatBackend, tui = fakeTui()): Promise<VspiApp> {
   const app = new VspiApp(tui, plainTheme(), backend, {
     cwd: "/workspace/m2-lifecycle",
-    settings: { ...DEFAULT_SETTINGS, bridgeEnabled: false },
+    settings: { ...DEFAULT_SETTINGS },
     attachments: fakeAttachments(),
     renderOnce: true,
     onExit: vi.fn(),
@@ -144,7 +144,7 @@ describe("M2 session identity isolation", () => {
     const surface = sessions.join("\n");
     expect(sessions).toHaveLength(24);
     // Sessions surface is vertically centered: title stays below the top padding.
-    const titleRow = sessions.findIndex((line) => line.startsWith("+ Sessions"));
+    const titleRow = sessions.findIndex((line) => line.startsWith("╭ Sessions"));
     expect(titleRow).toBeGreaterThan(0);
     expect(surface).toContain("Sessions");
     expect(surface).toContain("2 个会话");
@@ -159,7 +159,7 @@ describe("M2 session identity isolation", () => {
     await flush();
     const restored = app.render(80).map(stripAnsi).join("\n");
     expect(restored).toContain("OLD_SESSION_SENTINEL");
-    expect(restored).toMatch(/\+-+\+[\s\S]*\+-+\+/u);
+    expect(restored).toMatch(/╭[─-]+╮[\s\S]*╰[─-]+╯/u);
     await app.dispose();
   });
 
@@ -174,7 +174,7 @@ describe("M2 session identity isolation", () => {
     app.setStartupSurface(["SPLASH-LINE-A", "SPLASH-LINE-B"]);
 
     const surface = app.render(80).map(stripAnsi);
-    const titleRow = surface.findIndex((line) => line.startsWith("+ Sessions"));
+    const titleRow = surface.findIndex((line) => line.startsWith("╭ Sessions"));
     expect(titleRow).toBeGreaterThan(0);
     expect(surface.join("\n")).not.toContain("SPLASH-LINE");
     await app.dispose();
@@ -202,9 +202,9 @@ describe("M2 session identity isolation", () => {
       const rendered = app.render(80).map(stripAnsi);
 
       expect(rendered).toHaveLength(expectedRows);
-      expect(rendered[0]).toMatch(/^\+ Sessions/u);
+      expect(rendered[0]).toMatch(/^╭ Sessions/u);
       expect(rendered.slice(-2).join("\n")).toContain("Context");
-      expect(rendered.at(-1)).toContain("Policy Standard");
+      expect(rendered.at(-1)).toContain("Policy Auto");
       expect(rendered.join("\n")).toContain("会话 0");
       await app.dispose();
     },
@@ -324,7 +324,7 @@ describe("M2 session identity isolation", () => {
     tui.beginSurfaceEpoch = vi.fn();
     const app = new VspiApp(tui, plainTheme(), backend, {
       cwd: "/workspace/hydration",
-      settings: { ...DEFAULT_SETTINGS, bridgeEnabled: false },
+      settings: { ...DEFAULT_SETTINGS },
       attachments,
       renderOnce: true,
       onExit: vi.fn(),

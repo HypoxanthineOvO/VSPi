@@ -119,7 +119,7 @@ function mutationQuestion(action: Exclude<ManageValue["action"], "install">, ski
   return {
     id: `skill-${action}`,
     title,
-    prompt: `${skill.name}\n${skill.sourceLabel} ⋅ ${skill.scope}${packageRemoval}`,
+    prompt: `${skill.name}\n${skill.sourceLabel} · ${skill.scope}${packageRemoval}`,
     kind: "singleChoice",
     options: [
       { id: "confirm", label, description },
@@ -164,7 +164,7 @@ function required(value: string | undefined, message: string): string {
 
 function displaySource(source: string): string {
   if (source.length <= 180) return source;
-  return `${source.slice(0, 88)}...${source.slice(-88)}`;
+  return `${source.slice(0, 88)}…${source.slice(-88)}`;
 }
 
 function succeeded(details: Record<string, unknown>) {

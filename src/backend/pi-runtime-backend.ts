@@ -150,6 +150,8 @@ export interface PiRuntimeBackendOptions {
   externalSessions?: Pick<ExternalSessionCatalog, "list" | "preview">;
   skillManager?: SkillManager;
   modelRuntime?: ModelRuntimeView;
+  /** Bound the one best-effort remote model catalog refresh at startup. */
+  modelCatalogRefreshTimeoutMs?: number;
   planBackend?: LocalPlanBackend;
   goalBackend?: GoalBackend;
   workflowPlan?: Pick<WorkflowAdapter, "snapshot">;
@@ -177,6 +179,7 @@ interface RuntimeModel {
 
 interface ModelRuntimeView {
   getAvailable(providerId?: string): Promise<readonly RuntimeModel[]>;
+  getAvailableSnapshot?(): readonly RuntimeModel[];
   getModel?(providerId: string, modelId: string): RuntimeModel | undefined;
   getProviders?(): ReadonlyArray<{
     id: string;
@@ -318,6 +321,9 @@ export class PiRuntimeBackend implements ChatBackend {
   private readonly leaseAbortController = new AbortController();
   private readonly externalSessions: Pick<ExternalSessionCatalog, "list" | "preview">;
   private skillManager: SkillManager | undefined;
+  private availableModelsRefresh: Promise<readonly RuntimeModel[]> | undefined;
+  private availableModelsSnapshot: readonly RuntimeModel[] | undefined;
+  private modelCatalogRefreshStarted = false;
   private agentManager: PiAgentManager | undefined;
   private readonly agentMessageIds = new Set<string>();
   private readonly startupPolicy: PolicyLevel;
@@ -448,6 +454,7 @@ export class PiRuntimeBackend implements ChatBackend {
       this.projectedModel = undefined;
       this.trackRuntimeInvalidation(this.runtime);
       await this.bindCurrentSession(this.options.continueRecent ? "resume" : "startup");
+      await this.refreshModelCatalogOnce();
       this.leaseLifecycleReady = true;
       this.events?.onSessionWait?.(false);
       this.events?.onSessionReady?.();
@@ -672,7 +679,7 @@ export class PiRuntimeBackend implements ChatBackend {
   }
 
   async getModelOptions(): Promise<RuntimeModelOption[]> {
-    const models = await this.requireModelRuntime().getAvailable();
+    const models = await this.getAvailableModels();
     return models.filter(isVisibleRuntimeModel).map((model) => ({
       id: model.id,
       provider: model.provider,
@@ -691,7 +698,7 @@ export class PiRuntimeBackend implements ChatBackend {
   async getProviderOptions(): Promise<ProviderOption[]> {
     const runtime = this.requireModelRuntime();
     const [available, credentials] = await Promise.all([
-      runtime.getAvailable(),
+      this.getAvailableModels(),
       runtime.listCredentials?.() ?? Promise.resolve([]),
     ]);
     const stored = new Map(credentials.map((credential) => [credential.providerId, credential.type]));
@@ -731,6 +738,7 @@ export class PiRuntimeBackend implements ChatBackend {
   ): Promise<void> {
     const runtime = this.requireModelRuntime();
     if (!runtime.login) throw new Error("当前 Pi runtime 不支持交互式登录");
+    this.invalidateAvailableModels();
     await loginProviderWithoutModelNetwork(runtime, providerId, type, interaction);
     await runtime.getAvailable(providerId);
   }
@@ -738,6 +746,7 @@ export class PiRuntimeBackend implements ChatBackend {
   async logoutProvider(providerId: string): Promise<void> {
     const runtime = this.requireModelRuntime();
     if (!runtime.logout) throw new Error("当前 Pi runtime 不支持移除凭据");
+    this.invalidateAvailableModels();
     await runtime.logout(providerId);
     await runtime.getAvailable(providerId);
   }
@@ -1148,6 +1157,8 @@ export class PiRuntimeBackend implements ChatBackend {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    this.availableModelsRefresh = undefined;
+    this.availableModelsSnapshot = undefined;
     this.leaseLifecycleReady = false;
     this.leaseAbortController.abort();
     this.events?.onSessionInvalidating?.();
@@ -2479,12 +2490,120 @@ export class PiRuntimeBackend implements ChatBackend {
     return runtime;
   }
 
+  /** Share one availability pass among concurrently opened model/provider panels. */
+  private getAvailableModels(): Promise<readonly RuntimeModel[]> {
+    if (this.availableModelsSnapshot) return Promise.resolve(this.availableModelsSnapshot);
+    if (this.availableModelsRefresh) return this.availableModelsRefresh;
+    const refresh = this.requireModelRuntime().getAvailable();
+    const shared = refresh.finally(() => {
+      if (this.availableModelsRefresh === shared) this.availableModelsRefresh = undefined;
+    });
+    this.availableModelsRefresh = shared;
+    return shared;
+  }
+
+  private invalidateAvailableModels(): void {
+    this.availableModelsSnapshot = undefined;
+    this.availableModelsRefresh = undefined;
+  }
+
+  private primeAvailableModels(runtime: ModelRuntimeView): void {
+    const snapshot = runtime.getAvailableSnapshot?.();
+    if (snapshot) this.availableModelsSnapshot = snapshot as readonly RuntimeModel[];
+  }
+
+  private async refreshModelCatalogOnce(): Promise<void> {
+    if (this.modelCatalogRefreshStarted) return;
+    this.modelCatalogRefreshStarted = true;
+    const runtime =
+      this.options.modelRuntime ?? (this.session?.modelRuntime as unknown as ModelRuntimeView | undefined);
+    if (!runtime?.refresh) return;
+
+    const timeoutMs = resolveModelCatalogRefreshTimeout(this.options.modelCatalogRefreshTimeoutMs);
+    const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, this.leaseAbortController.signal]);
+    const refresh = Promise.resolve().then(() => runtime.refresh?.({ allowNetwork: true, force: true, signal }));
+    void refresh.catch(() => undefined);
+    try {
+      const result = await raceCatalogRefresh(refresh, signal, timeoutMs, controller);
+      if (result?.aborted || signal.aborted) {
+        await this.refreshLocalModelCatalog(runtime);
+      } else {
+        this.primeAvailableModels(runtime);
+      }
+    } catch {
+      await this.refreshLocalModelCatalog(runtime);
+    }
+  }
+
+  private async refreshLocalModelCatalog(runtime: ModelRuntimeView): Promise<void> {
+    if (!runtime.refresh || this.leaseAbortController.signal.aborted) return;
+    const refresh = Promise.resolve().then(() =>
+      runtime.refresh?.({ allowNetwork: false, signal: this.leaseAbortController.signal }),
+    );
+    void refresh.catch(() => undefined);
+    try {
+      await refresh;
+      this.primeAvailableModels(runtime);
+    } catch {
+      // The Pi models-store snapshot remains the final fallback if local refresh fails.
+      this.primeAvailableModels(runtime);
+    }
+  }
+
   private requireSession(): AgentSession {
     if (this.unusableError) throw this.unusableError;
     const session = this.session;
     if (!session) throw new Error("Pi session 尚未启动");
     return session;
   }
+}
+
+const DEFAULT_MODEL_CATALOG_REFRESH_TIMEOUT_MS = 1_000;
+
+function resolveModelCatalogRefreshTimeout(value: number | undefined): number {
+  return value !== undefined && Number.isFinite(value) && value > 0
+    ? Math.max(1, Math.floor(value))
+    : DEFAULT_MODEL_CATALOG_REFRESH_TIMEOUT_MS;
+}
+
+function raceCatalogRefresh<T>(
+  operation: Promise<T>,
+  signal: AbortSignal,
+  timeoutMs: number,
+  controller: AbortController,
+): Promise<T> {
+  if (signal.aborted) {
+    void operation.catch(() => undefined);
+    return Promise.reject(signal.reason instanceof Error ? signal.reason : new Error("模型目录刷新已取消"));
+  }
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timeoutError = new Error(`模型目录远程刷新超时（${Math.ceil(timeoutMs / 1_000)} 秒）`);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      signal.removeEventListener("abort", onAbort);
+      if (timeout) clearTimeout(timeout);
+    };
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback();
+    };
+    const onAbort = () => {
+      finish(() => reject(signal.reason instanceof Error ? signal.reason : new Error("模型目录刷新已取消")));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      finish(() => reject(timeoutError));
+    }, timeoutMs);
+    void operation.then(
+      (value) => finish(() => resolve(value)),
+      (error: unknown) => finish(() => reject(error)),
+    );
+  });
 }
 
 function formatEvidenceToken(value: number | null): string {

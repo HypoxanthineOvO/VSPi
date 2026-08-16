@@ -104,16 +104,16 @@ export function resolveEffectivePolicy(
   input: { globalPolicy?: PolicyLevel; cliPolicy?: PolicyLevel; projectPolicy?: PolicyLevel; recovery?: boolean } = {},
 ): PolicySnapshot {
   if (input.recovery) return snapshotFor("Standard", true, new Set());
-  const requested = input.cliPolicy ?? input.globalPolicy ?? "Standard";
+  const requested = input.cliPolicy ?? input.globalPolicy ?? "Auto";
   const requestedIndex = POLICY_LEVELS.indexOf(requested);
   const projectIndex = input.projectPolicy ? POLICY_LEVELS.indexOf(input.projectPolicy) : requestedIndex;
-  const effective = POLICY_LEVELS[Math.min(requestedIndex, projectIndex)] ?? "Standard";
+  const effective = POLICY_LEVELS[Math.min(requestedIndex, projectIndex)] ?? "Auto";
   return snapshotFor(effective, false, new Set());
 }
 
 export function createExecutionPolicyService(options: ExecutionPolicyServiceOptions): ExecutionPolicyService {
   const workspace = resolve(options.workspace);
-  let policy: PolicyLevel = options.recovery ? "Standard" : (options.policy ?? "Standard");
+  let policy: PolicyLevel = options.recovery ? "Standard" : (options.policy ?? "Auto");
   const recovery = options.recovery ?? false;
   const sessionAllowlist = new Set<ApprovalCategory>();
   const entries: AuditEntry[] = [];
@@ -173,7 +173,7 @@ export function createExecutionPolicyService(options: ExecutionPolicyServiceOpti
 
   async function switchPolicy(next: PolicyLevel): Promise<PolicySnapshot> {
     if (!POLICY_LEVELS.includes(next)) throw new Error(`未知 Policy：${next}`);
-    if (recovery && next !== "Standard") throw new Error("Recovery 强制 Standard ⋅ Host，拒绝切换 Policy");
+    if (recovery && next !== "Standard") throw new Error("Recovery 强制 Standard · Host，拒绝切换 Policy");
     policy = next;
     return snapshotFor(policy, recovery, sessionAllowlist);
   }

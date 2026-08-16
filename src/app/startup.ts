@@ -25,18 +25,30 @@ export async function shutdownInteractiveSession(options: {
   disposeApp: () => Promise<void>;
   tui: Pick<TUI, "stop">;
   drainInput: () => Promise<void>;
+  disposeTimeoutMs?: number;
 }): Promise<void> {
   const errors: unknown[] = [];
-  try {
-    await options.disposeApp();
-  } catch (error) {
-    errors.push(error);
-  }
+  // Stop the TUI first so raw mode and alternate-screen state are restored even
+  // when backend dispose hangs or rejects. The 0.6.x freeze left the terminal in
+  // raw mode because `await disposeApp()` blocked before `tui.stop()` ran.
   try {
     options.tui.stop();
   } catch (error) {
     errors.push(error);
   }
+  const disposeTimeoutMs = options.disposeTimeoutMs ?? 10_000;
+  let disposeTimer: NodeJS.Timeout | undefined;
+  const dispose = Promise.resolve()
+    .then(options.disposeApp)
+    .catch((error) => {
+      errors.push(error);
+    });
+  const disposeTimeout = new Promise<void>((resolve) => {
+    disposeTimer = setTimeout(resolve, disposeTimeoutMs);
+    disposeTimer.unref?.();
+  });
+  await Promise.race([dispose, disposeTimeout]);
+  if (disposeTimer) clearTimeout(disposeTimer);
   try {
     await options.drainInput();
   } catch (error) {

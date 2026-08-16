@@ -1,14 +1,14 @@
 {
   "name": "vspi",
-  "version": "0.6.3",
+  "version": "1.0.0",
   "description": "A Chinese terminal UI for Pi coding agents with optional read-only Hypo-Workflow integration.",
-  "homepage": "https://gitlab.vsplab.cn/heyx/vspi",
+  "homepage": "https://github.com/HypoxanthineOvO/VSPi",
   "repository": {
     "type": "git",
-    "url": "git+https://gitlab.vsplab.cn/heyx/vspi.git"
+    "url": "git+https://github.com/HypoxanthineOvO/VSPi.git"
   },
   "bugs": {
-    "url": "https://gitlab.vsplab.cn/heyx/vspi/-/issues"
+    "url": "https://github.com/HypoxanthineOvO/VSPi/issues"
   },
   "type": "module",
   "bin": {
@@ -17,18 +17,20 @@
   "files": [
     "dist",
     "README.md",
+    "Docs/usage.md",
     "Docs/tui-v1.md",
     "Docs/testing-and-debugging.md",
     "Docs/harness",
-    "scripts/patch-pi-brace-expansion.mjs"
+    "scripts/patch-pi-brace-expansion.mjs",
+    "scripts/patch-pi-editor-performance.mjs"
   ],
   "scripts": {
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
-    "bridge": "tsx src/index.ts bridge",
     "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json && chmod +x dist/index.js",
     "prepack": "npm run build",
-    "postinstall": "node scripts/patch-pi-brace-expansion.mjs",
+    "postinstall": "node scripts/patch-pi-brace-expansion.mjs && node scripts/patch-pi-editor-performance.mjs",
+    "patch:pi-editor": "node scripts/patch-pi-editor-performance.mjs",
     "pretest": "npm run build",
     "check": "tsc --noEmit && biome check src test scripts",
     "check:fix": "biome check --write src test scripts",
@@ -50,8 +52,8 @@
     "tui"
   ],
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.84.1",
-    "@earendil-works/pi-tui": "0.84.1",
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@earendil-works/pi-tui": "0.84.2",
     "brace-expansion": "5.0.9",
     "chalk": "5.6.2",
     "grok-mermaid": "0.2.2",
@@ -70,5 +72,6 @@
   },
   "overrides": {
     "brace-expansion": "5.0.9"
-  }
+  },
+  "license": "Apache-2.0"
 }

@@ -2,17 +2,17 @@
 kind: progress
 cycle: C12-release-train
 plan: PLAN.md
-status: waiting-review
-updated: 2026-08-11T19:50:38+08:00
-current: R8
-next: 用户在 Windows 安装运行 0.6.2 后接受或反馈
+status: closed
+updated: 2026-08-15T17:41:14+08:00
+current: complete
+next: C13-pi-editor-latency-repair
 ---
 
 # VSPi v0.6.0 Release Train 进度
 
 ## 当前状态
 
-0.6.2 R8-only corrective release 已完成并通过公开资产复验，等待用户在 Windows 上最终验收。
+C12 已结束。0.6.0-0.6.2 的发布证据保持有效；0.6.3 Windows 最终验收被拒绝，后续修复转入 C13。
 
 ## 完整计划状态
 
@@ -33,4 +33,4 @@ next: 用户在 Windows 安装运行 0.6.2 后接受或反馈
 
 ## 下一步
 
-用户在 Windows 使用 latest 安装 0.6.2 并接受结果后关闭 C12；若失败则按真实错误返回 R8 修订。
+C13 只选择性继承 0.6.2 已接受 UI 基线、0.6.3 的有效非视觉修复和本轮 Windows 反馈；不继承 C12 任务列表。
