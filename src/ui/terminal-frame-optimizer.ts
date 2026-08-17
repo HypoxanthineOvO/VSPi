@@ -7,6 +7,10 @@ const END_SYNC = "\u001b[?2026l";
 const FULL_REDRAW = "\u001b[2J";
 // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI control sequences are the protocol being parsed.
 const ROW_UPDATE = /\u001b\[(\d+);1H\u001b\[2K/gu;
+// C16 P1-1: a frame that carries no row updates and only repeats the cursor
+// tail is a no-op when the tail already matches the last emitted state.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI control sequences are the protocol being parsed.
+const PURE_TAIL_FRAME = /^\u001b\[\?2026h((?:\u001b\[\d+;\d+H)?\u001b\[\?25[hl])\u001b\[\?2026l$/u;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI control sequences are the protocol being parsed.
 const CURSOR_TAIL = /(?:\u001b\[\d+;\d+H)?\u001b\[\?25[hl]\u001b\[\?2026l$/u;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI control sequences are the protocol being parsed.
@@ -15,6 +19,7 @@ const IMAGE_SEQUENCE = /\u001b(?:_G|Pq)|\u001b\]1337;(?:File|MultipartFile)=/u;
 interface ParsedFrame {
   prefix: string;
   suffix: string;
+  tail: string;
   updates: Map<number, string>;
   fullRedraw: boolean;
   explicitCursor: boolean;
@@ -49,6 +54,8 @@ function parseFrame(data: string, rows: number): ParsedFrame | undefined {
   return {
     prefix: data.slice(0, matches[0]?.index ?? 0),
     suffix: data.slice(tailMatch.index),
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI control sequences are the protocol being parsed.
+    tail: tail.replace(/\u001b\[\?2026l$/u, ""),
     updates,
     fullRedraw: data.includes(FULL_REDRAW),
     explicitCursor: hasExplicitCursor,
@@ -141,6 +148,7 @@ export class TerminalFrameOptimizer {
   private screen: string[] = [];
   private columns = 0;
   private rows = 0;
+  private lastTail: string | undefined;
 
   optimize(data: string, rows: number, columns = 80): string {
     const safeRows = Math.max(1, Math.floor(rows));
@@ -150,21 +158,37 @@ export class TerminalFrameOptimizer {
       this.screen = [];
       this.columns = safeColumns;
       this.rows = safeRows;
+      this.lastTail = undefined;
     }
-    if (!this.altScreen) return data;
+    // C16 P1-1: drop no-op frames that carry no row updates and merely repeat
+    // the already-emitted cursor tail. Applies to both fullscreen and regular
+    // frames because pi-tui always wraps writes in synchronized output here.
+    const pureTail = PURE_TAIL_FRAME.exec(data);
+    if (pureTail) {
+      if (this.lastTail === pureTail[1]) return "";
+      this.lastTail = pureTail[1];
+      return data;
+    }
+    if (!this.altScreen) {
+      this.lastTail = undefined;
+      return data;
+    }
     if (this.columns !== safeColumns || this.rows !== safeRows) {
       this.screen = [];
       this.columns = safeColumns;
       this.rows = safeRows;
+      this.lastTail = undefined;
     }
 
     if (IMAGE_SEQUENCE.test(data)) {
       this.screen = [];
+      this.lastTail = undefined;
       return data;
     }
 
     const frame = parseFrame(data, safeRows);
     if (frame) {
+      this.lastTail = frame.tail;
       const hadScreen = this.screen.length === safeRows;
       if (!hadScreen && !frame.fullRedraw) return data;
       const previous = hadScreen ? this.screen : Array.from({ length: safeRows }, () => "");
@@ -176,6 +200,7 @@ export class TerminalFrameOptimizer {
       }
     } else if (data.includes(FULL_REDRAW) || data.includes("\u001b[2K")) {
       this.screen = [];
+      this.lastTail = undefined;
     }
 
     if (data.includes(EXIT_ALT_SCREEN)) {
@@ -183,7 +208,12 @@ export class TerminalFrameOptimizer {
       this.screen = [];
       this.columns = 0;
       this.rows = 0;
+      this.lastTail = undefined;
     }
     return data;
+  }
+
+  invalidateTail(): void {
+    this.lastTail = undefined;
   }
 }

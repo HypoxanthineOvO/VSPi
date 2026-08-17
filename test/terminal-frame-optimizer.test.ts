@@ -137,4 +137,57 @@ describe("terminal frame optimizer", () => {
     const changed = frame(["B0", ...lines.slice(1)], [0]);
     expect(optimizer.optimize(changed, 10)).toBe(changed);
   });
+
+  it("drops repeated pure cursor frames and re-emits them after state changes", () => {
+    const optimizer = new TerminalFrameOptimizer();
+    optimizer.optimize(ENTER, 10);
+    const content = frame(
+      ["A0", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "dock-a", "dock-b"],
+      undefined,
+      "\u001b[2J",
+      "\u001b[10;5H",
+    );
+    optimizer.optimize(content, 10);
+    const tail = "\u001b[10;5H\u001b[?25h";
+    const emptyFrame = `${BEGIN}${tail}${END}`;
+    expect(optimizer.optimize(emptyFrame, 10)).toBe(emptyFrame);
+    expect(optimizer.optimize(emptyFrame, 10)).toBe("");
+    expect(optimizer.optimize(emptyFrame, 10)).toBe("");
+    // A frame whose tail differs (cursor visibility flip) must pass through.
+    const hiddenTail = `${BEGIN}\u001b[10;5H\u001b[?25l${END}`;
+    expect(optimizer.optimize(hiddenTail, 10)).toBe(hiddenTail);
+    expect(optimizer.optimize(hiddenTail, 10)).toBe("");
+    // After an untracked write (static commit) the next pure tail frame is
+    // forwarded again because the cursor state can no longer be assumed.
+    optimizer.invalidateTail();
+    expect(optimizer.optimize(hiddenTail, 10)).toBe(hiddenTail);
+    // After a full redraw the tracking resets as well.
+    const redraw = ["C0", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "dock-a", "dock-b"];
+    optimizer.optimize(frame(redraw, undefined, "\u001b[2J", "\u001b[10;5H"), 10);
+    expect(optimizer.optimize(`${BEGIN}${tail}${END}`, 10)).toBe(`${BEGIN}${tail}${END}`);
+  });
+
+  it("drops pure cursor frames whose tail matches a preceding row-update frame", () => {
+    const optimizer = new TerminalFrameOptimizer();
+    optimizer.optimize(ENTER, 10);
+    optimizer.optimize(
+      frame(
+        ["A0", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "dock-a", "dock-b"],
+        undefined,
+        "\u001b[2J",
+        "\u001b[10;5H",
+      ),
+      10,
+    );
+    const updated = frame(
+      ["B7", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "dock-a", "dock-b"],
+      [0],
+      "",
+      "\u001b[10;5H",
+    );
+    expect(optimizer.optimize(updated, 10)).toBe(updated);
+    // Same tail as the row-update frame above: the follow-up no-op is dropped.
+    const repeat = `${BEGIN}\u001b[10;5H\u001b[?25l${END}`;
+    expect(optimizer.optimize(repeat, 10)).toBe("");
+  });
 });

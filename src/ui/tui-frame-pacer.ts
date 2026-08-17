@@ -1,7 +1,12 @@
 import { type Terminal, TuiAltScreen, type TuiAltScreenOptions, type TuiStopOptions } from "@earendil-works/pi-tui";
+import { recordFrameRenderMs } from "./scrollback-terminal.js";
 
 export const DEFAULT_TUI_FRAME_INTERVAL_MS = 33;
 export const DEFAULT_TUI_SCROLL_INTERVAL_MS = 100;
+// C16 M4a: while the viewport is being scrolled the fullscreen frame cadence
+// drops so each wheel burst costs fewer (larger) frames near the terminal.
+export const DEFAULT_TUI_SCROLL_FRAME_INTERVAL_MS = 66;
+const SCROLL_FRAME_WINDOW_MS = 500;
 
 export function resolveTuiFrameInterval(env: NodeJS.ProcessEnv = process.env): number {
   const configured = Number(env.VSPI_TUI_FRAME_INTERVAL_MS);
@@ -15,11 +20,21 @@ export function resolveTuiScrollInterval(env: NodeJS.ProcessEnv = process.env): 
   return Math.max(33, Math.min(250, Math.floor(configured)));
 }
 
+export function resolveTuiScrollFrameInterval(env: NodeJS.ProcessEnv = process.env): number {
+  const configured = Number(env.VSPI_TUI_SCROLL_FRAME_INTERVAL_MS);
+  if (!Number.isFinite(configured)) return DEFAULT_TUI_SCROLL_FRAME_INTERVAL_MS;
+  return Math.max(33, Math.min(250, Math.floor(configured)));
+}
+
 export class TuiFramePacer {
   private timer: NodeJS.Timeout | undefined;
   private lastForwardedAt = Number.NEGATIVE_INFINITY;
 
-  constructor(private readonly intervalMs: number) {}
+  constructor(private intervalMs: number) {}
+
+  setIntervalMs(intervalMs: number): void {
+    this.intervalMs = intervalMs;
+  }
 
   request(force: boolean, forward: (force: boolean) => void): void {
     if (force) {
@@ -52,10 +67,13 @@ export class TuiFramePacer {
 
 export class VspiTuiAltScreen extends TuiAltScreen {
   private framePacer: TuiFramePacer | undefined;
+  private readonly scrollFrameIntervalMs: number;
+  private readonly defaultFrameIntervalMs: number;
   private readonly scrollIntervalMs: number;
   private pendingScrollLines = 0;
   private scrollTimer: NodeJS.Timeout | undefined;
   private lastScrollAt = Number.NEGATIVE_INFINITY;
+  private lastViewportTop: number | undefined;
 
   constructor(
     terminal: Terminal,
@@ -64,7 +82,9 @@ export class VspiTuiAltScreen extends TuiAltScreen {
     options: TuiAltScreenOptions = {},
   ) {
     super(terminal, showHardwareCursor, logDirectory, { wheelScrollLines: 3, ...options });
-    this.framePacer = new TuiFramePacer(resolveTuiFrameInterval());
+    this.defaultFrameIntervalMs = resolveTuiFrameInterval();
+    this.scrollFrameIntervalMs = resolveTuiScrollFrameInterval();
+    this.framePacer = new TuiFramePacer(this.defaultFrameIntervalMs);
     this.scrollIntervalMs = resolveTuiScrollInterval();
   }
 
@@ -73,7 +93,26 @@ export class VspiTuiAltScreen extends TuiAltScreen {
       super.requestRender(force);
       return;
     }
+    // Wheel input reaches ScrollView directly (routeWheel), bypassing
+    // scrollBy(); detect viewport movement itself so any scroll source
+    // (wheel, keys, scrollbar drag) opens the slower scroll cadence window.
+    const viewportTop = this.viewportTop;
+    if (this.lastViewportTop !== undefined && this.lastViewportTop !== viewportTop) {
+      this.lastViewportTop = viewportTop;
+      this.lastScrollAt = performance.now();
+    } else if (this.lastViewportTop === undefined) {
+      this.lastViewportTop = viewportTop;
+    }
+    const sinceScroll = performance.now() - this.lastScrollAt;
+    const cadence = sinceScroll < SCROLL_FRAME_WINDOW_MS ? this.scrollFrameIntervalMs : this.defaultFrameIntervalMs;
+    this.framePacer.setIntervalMs(cadence);
     this.framePacer.request(force, (nextForce) => super.requestRender(nextForce));
+  }
+
+  protected override doRender(): void {
+    const started = process.env.VSPI_FRAME_STATS ? performance.now() : 0;
+    super.doRender();
+    if (started) recordFrameRenderMs(performance.now() - started);
   }
 
   override scrollBy(lines: number): void {

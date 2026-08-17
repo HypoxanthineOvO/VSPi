@@ -3,7 +3,7 @@ import { effortLabel } from "../domain/effort.js";
 import type { TranscriptMessage } from "../domain/types.js";
 import { frame, padLine, stripAnsi, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./ansi.js";
 import { type DiffLine, renderDiff } from "./diff.js";
-import { createVspiMarkdownTransformer, renderMarkdown } from "./markdown.js";
+import { createVspiMarkdownTransformer, postprocessMarkdownLines, renderMarkdown } from "./markdown.js";
 import type { VspiTheme } from "./theme.js";
 
 /** Render cap for a single thinking block. Full text stays in the message for
@@ -154,7 +154,7 @@ export class TranscriptRenderCache {
       cached.reference = message;
       cached.component.updateContent(toOfficialAssistantMessage(message.text), message.streaming ?? false);
     }
-    return normalizeOfficialAssistantLines(cached.component.render(width));
+    return postprocessMarkdownLines(normalizeOfficialAssistantLines(cached.component.render(width)), width, theme);
   }
 
   retain(keys: Set<string>, references: TranscriptMessage[]): void {
@@ -626,7 +626,7 @@ function renderOfficialAssistant(
     createVspiMarkdownTransformer({ ...options, unicode: theme.capabilities.unicode }),
   ]);
   component.updateContent(toOfficialAssistantMessage(message.text), message.streaming ?? false);
-  return normalizeOfficialAssistantLines(component.render(width));
+  return postprocessMarkdownLines(normalizeOfficialAssistantLines(component.render(width)), width, theme);
 }
 
 function formatSubagentTokens(value: number): string {

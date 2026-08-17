@@ -8,6 +8,7 @@ Derived view. Individual Markdown Records remain authoritative.
 | decision-0969e78217dfc8ba86c55a0f9b25069a | active | decision | project:project:VSPi | adoption_brief | - |
 | decision-164d0064bbace264f3e295835e1093d6 | inactive (superseded) | decision | cycle:vspi-terminal-mock-recovery | cycle.vspi-terminal-mock-recovery.plan | - |
 | decision-1c7d01437a8796a9be84642ce6d6f421 | inactive (superseded) | decision | cycle:vspi-tui-v1 | cycle.vspi-tui-v1.plan | decision-0893f7eb55067ac1cb0180c59e7259f0 |
+| decision-2f7f3e2d1e880e1615ca1bfe47009e35 | active | decision | project:VSPi | decision.vspi.default-tui-mode-regular | - |
 | decision-347778f17c1ed58fcea811fd2175c413 | inactive (superseded) | decision | goal:vspi-persistent-goal-runner | goal.vspi-persistent-goal-runner.plan | decision-baffd8ff43460fad6d6158f1ad3f6d3b |
 | decision-34f87a27e2b000355b93e85eb14e7ebb | inactive (superseded) | decision | cycle:vspi-v0-2-0-workflow-integration | cycle.vspi-v0-2-0-workflow-integration.plan | decision-bc7ae00b98900dfb50c99a9db522e013 |
 | decision-3ce0c2c33314cdab7fe0fae3c65c8c85 | inactive (superseded) | decision | cycle:vspi-terminal-mock-recovery | cycle.vspi-terminal-mock-recovery.plan | decision-582c15109d07e694113c2598b6a52e39 |
@@ -151,4 +152,4 @@ Derived view. Individual Markdown Records remain authoritative.
 | requirement-e96cd7513b17e77d74d85e1f8df66229 | active | requirement | project:VSPi | requirement.vspi.policy-switch-runtime-authority | - |
 | requirement-e9d688a0505fffb6626c54cc08f0d3ef | active | requirement | project:VSPi | requirement.vspi.external-session-import | - |
 
-Records: 146
+Records: 147

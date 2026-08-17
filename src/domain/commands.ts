@@ -29,6 +29,7 @@ export type ActionHandler =
   | "agents"
   | "usage"
   | "theme"
+  | "tui"
   | "quit";
 
 export interface ActionDefinition extends CommandDefinition {
@@ -236,6 +237,15 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
     description: "选择界面主题",
     group: "VSPi",
     handler: "theme",
+    availability: "enabled",
+  },
+  {
+    id: "tui",
+    aliases: [],
+    label: "/tui",
+    description: "在全屏（应用内滚动）与常规（终端原生滚动）间切换",
+    group: "VSPi",
+    handler: "tui",
     availability: "enabled",
   },
   {

@@ -12,6 +12,48 @@ import type {
   SendResult,
 } from "./types.js";
 
+// C16 M3: deterministic long markdown for streaming-stall profiling.
+function buildLongFixtureResponse(prompt: string, attachmentNote: string): string {
+  const sections: string[] = [
+    "## 长回复压测",
+    "",
+    `针对 ${prompt} 的长文本流式压测；以下内容结构与真实长回复一致，用于渲染性能测量。`,
+    attachmentNote,
+  ];
+  for (let index = 1; index <= 10; index += 1) {
+    sections.push(
+      `### 第 ${index} 节 · 渲染机制`,
+      "",
+      "当组件状态变化时，渲染器需要重新计算布局并生成终端输出。长文本场景下，逐行换行、语法高亮与宽字符测量共同决定了单帧成本。以下代码块模拟真实回复中的典型片段：",
+      "",
+      "```ts",
+      "interface RenderMetrics {",
+      "  frameMs: number;",
+      "  rowUpdates: number;",
+      "  changedRows: number;",
+      "}",
+      "",
+      "function measureFrame(metrics: RenderMetrics): string {",
+      "  const summary = [metrics.frameMs, metrics.rowUpdates, metrics.changedRows].join(' / ');",
+      "  return ['frame', summary, 'completed at', String(Date.now())].join(' ');",
+      "}",
+      "```",
+      "",
+      "要点回顾：",
+      "",
+      "- 帧调度与内容增长解耦，突发 token 不应放大单帧计算量",
+      "- 行级缓存让已完成段落不参与每帧重排",
+      "- 空帧抑制减少终端 renderer 唤醒",
+      "- 原生滚动把历史浏览成本交还给终端",
+      "- 量化对标让每项优化都有可复核的 before/after 数据",
+      "",
+      "> 长回复的体感由最差帧决定，而不是平均帧；尾延迟才是审计的核心指标。",
+      "",
+    );
+  }
+  return sections.join("\n");
+}
+
 export class FixtureBackend implements ChatBackend {
   readonly kind = "fixture" as const;
   readonly modelLabel = "Offline Fixture";
@@ -64,18 +106,21 @@ export class FixtureBackend implements ChatBackend {
       options.attachments.length > 0
         ? `\n\n已接收 ${options.attachments.map((item) => `\`${item.alias}\``).join("、")}。`
         : "";
-    const response = [
-      "## Fixture 回应",
-      "",
-      `当前以 **${options.effort}** effort 处理：${text}`,
-      attachmentNote,
-      "",
-      "- 真实会话适配层可用",
-      "  - Fixture 仅通过显式离线入口启用",
-      "    - 所有交互状态仍可验证",
-      "",
-      "> 这是本地 fixture，不会发送网络请求。",
-    ].join("\n");
+    const response =
+      process.env.VSPI_FIXTURE_LONG_TEXT === "1"
+        ? buildLongFixtureResponse(text, attachmentNote)
+        : [
+            "## Fixture 回应",
+            "",
+            `当前以 **${options.effort}** effort 处理：${text}`,
+            attachmentNote,
+            "",
+            "- 真实会话适配层可用",
+            "  - Fixture 仅通过显式离线入口启用",
+            "    - 所有交互状态仍可验证",
+            "",
+            "> 这是本地 fixture，不会发送网络请求。",
+          ].join("\n");
     const message: TextMessage = { id, role: "assistant", kind: "text", text: "", streaming: true };
     this.events.onMessage(message);
     for (let offset = 0; offset < response.length && generation === this.generation; offset += 12) {

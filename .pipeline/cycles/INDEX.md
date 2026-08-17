@@ -7,13 +7,17 @@ status: active
 
 ## Active Cycles
 
-无。
+| Cycle | 名称 | 状态 | 建立于 |
+| --- | --- | --- | --- |
+| - | - | - | - |
 
 ## Closed Cycles
 
 | Cycle | 名称 | 状态 | 关联 Delivery | 版本 |
 | --- | --- | --- | --- | --- |
-| [C14-streaming-render-regression](C14-streaming-render-regression/SUMMARY.md) | Streaming 渲染体感回归 | closed（用户接受基本可用） | - | v1.0.0 |
+| [C16-render-performance-repair](C16-render-performance-repair/SUMMARY.md) | 渲染性能修复（对标 Codex） | closed（用户接受 regular 为默认；Markdown 回归已修复） | - | - |
+| [C15-render-algorithm-performance-audit](C15-render-algorithm-performance-audit/AUDIT.md) | 渲染算法性能审计 | closed（用户接受审计结论，修复进 C16） | - | - |
+| [C14-streaming-render-regression](C14-streaming-render-regression/SUMMARY.md) | Streaming 渲染体感回归 | closed（用户接受基本可用线） | - | v1.0.0 |
 | [C13-pi-editor-latency-repair](C13-pi-editor-latency-repair/SUMMARY.md) | Pi Editor 与模型目录性能修订 | closed（用户接受） | - | v0.6.4 candidate |
 | [C12-release-train](C12-release-train/SUMMARY.md) | VSPi v0.6.x Release Train | closed（0.6.3 未接受） | - | v0.6.0-v0.6.3 |
 | [C01-tui-v1](C01-tui-v1/SUMMARY.md) | VSPi TUI v1 主线 | closed | vspi-tui-v1 | v0.1.0 |

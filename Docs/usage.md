@@ -39,7 +39,7 @@ VSPi 沿用 Pi 的模型、Provider、凭据和 session 目录，不另建 Secre
 
 启动序列会先立即写出一行 VSPi 初始品牌占位，它不含 Logo、运行状态或模型声明；最终帧等待应用初始化完成。应用只清理一次当前 viewport，并把保留现有六行块字符 Logo 的最终状态帧作为统一 TUI 瀑布的第一个内容块，不播放多段进度动画，也不制造一整屏换行。最终帧使用初始化后解析得到的真实 Model、`package.json` 解析出的包版本、真实 Backend 与执行 Policy。真实 pi 显示 `Backend Pi`，显式离线后端显示 `Backend Fixture`；执行边界统一显示 `Policy … · Host`，Policy 只控制审批强度，Backend 与 Policy 是两项独立元数据。
 
-默认 `fullscreen` 使用 Pi 0.84 的 alternate screen：Transcript 位于独立 `ScrollView`，Panel、queued/activity、Composer 与 Status 组成固定 dock。`PageUp/PageDown`、`Home/End` 和鼠标滚轮只移动 Transcript；滚动条可设为滚动时显示、常驻或隐藏。Settings 可切换到 `regular` 回退；regular 继续把 Splash、Transcript、面板、Composer 与 Status 放在同一物理瀑布中，通过原生 terminal scrollback 保存稳定前缀，并过滤 redraw 中的 `CSI 3J`。切换 renderer 不替换当前 Session、draft 或焦点，退出时恢复原屏。`VSPi_TUI_MODE=fullscreen|regular` 可仅为本次启动覆盖持久设置。Splash 每个进程只出现一次；`/new` 和 alias `/clear` 不重播 Splash。
+默认 `regular` 把 Splash、Transcript、面板、Composer 与 Status 放在同一物理瀑布中，通过原生 terminal scrollback 保存稳定前缀，并过滤 redraw 中的 `CSI 3J`。Settings 可切换到 `fullscreen`；fullscreen 使用 Pi 0.84 的 alternate screen，Transcript 位于独立 `ScrollView`，Panel、queued/activity、Composer 与 Status 组成固定 dock，`PageUp/PageDown`、`Home/End` 和鼠标滚轮只移动 Transcript。切换 renderer 不替换当前 Session、draft 或焦点，退出时恢复原屏。`VSPi_TUI_MODE=fullscreen|regular` 可仅为本次启动覆盖持久设置。Splash 每个进程只出现一次；`/new` 和 alias `/clear` 不重播 Splash。
 
 在 regular 中，内容触底后才通过 linefeed 推入原生 scrollback；不得用顶部 padding 固定 Composer。regular 的 resume 会把恢复的完整历史写入原生 scrollback；stable-commit 前缀校验失败时在固定重试后重建渲染面再提交，不再静默丢弃未提交内容。
 

@@ -2,8 +2,10 @@ import type { Component, Terminal } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_TUI_FRAME_INTERVAL_MS,
+  DEFAULT_TUI_SCROLL_FRAME_INTERVAL_MS,
   DEFAULT_TUI_SCROLL_INTERVAL_MS,
   resolveTuiFrameInterval,
+  resolveTuiScrollFrameInterval,
   resolveTuiScrollInterval,
   TuiFramePacer,
   VspiTuiAltScreen,
@@ -45,6 +47,9 @@ describe("TUI frame pacing", () => {
     expect(resolveTuiScrollInterval({})).toBe(DEFAULT_TUI_SCROLL_INTERVAL_MS);
     expect(resolveTuiScrollInterval({ VSPI_TUI_SCROLL_INTERVAL_MS: "1" })).toBe(33);
     expect(resolveTuiScrollInterval({ VSPI_TUI_SCROLL_INTERVAL_MS: "999" })).toBe(250);
+    expect(resolveTuiScrollFrameInterval({})).toBe(DEFAULT_TUI_SCROLL_FRAME_INTERVAL_MS);
+    expect(resolveTuiScrollFrameInterval({ VSPI_TUI_SCROLL_FRAME_INTERVAL_MS: "1" })).toBe(33);
+    expect(resolveTuiScrollFrameInterval({ VSPI_TUI_SCROLL_FRAME_INTERVAL_MS: "999" })).toBe(250);
   });
 
   it("coalesces ordinary renders while preserving forced renders", async () => {
@@ -134,6 +139,46 @@ describe("TUI frame pacing", () => {
     expect(start - tui.viewportTop).toBe(3);
     await vi.advanceTimersByTimeAsync(DEFAULT_TUI_SCROLL_INTERVAL_MS);
     expect(start - tui.viewportTop).toBe(6);
+    tui.stop();
+  });
+
+  it("drops the frame cadence while the viewport is scrolling and recovers after", async () => {
+    vi.useFakeTimers();
+    const terminal = new PacerTerminal();
+    const tui = new VspiTuiAltScreen(terminal, true);
+    let renders = 0;
+    tui.addChild({
+      render: () => {
+        renders += 1;
+        return Array.from({ length: 100 }, (_, index) => `line ${index}`);
+      },
+      invalidate() {},
+    });
+    tui.start();
+    await vi.advanceTimersByTimeAsync(20);
+
+    // Kick a wheel scroll so lastScrollAt becomes fresh, then burst wheel events.
+    terminal.emit("\u001b[<64;1;1M");
+    await vi.advanceTimersByTimeAsync(DEFAULT_TUI_SCROLL_INTERVAL_MS);
+    const duringScroll = renders;
+    for (let elapsed = 0; elapsed < 200; elapsed += 1) {
+      terminal.emit("\u001b[<64;1;1M");
+      tui.requestRender();
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    // 200ms at the 66ms scroll cadence yields at most ~4 frames (33ms would allow 7).
+    expect(renders - duringScroll).toBeLessThanOrEqual(5);
+    expect(renders - duringScroll).toBeGreaterThanOrEqual(2);
+
+    // After the scroll window expires the normal 33ms cadence resumes.
+    await vi.advanceTimersByTimeAsync(600);
+    const afterScroll = renders;
+    for (let elapsed = 0; elapsed < 100; elapsed += 1) {
+      tui.requestRender();
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    expect(renders - afterScroll).toBeLessThanOrEqual(4);
+    expect(renders - afterScroll).toBeGreaterThanOrEqual(2);
     tui.stop();
   });
 });

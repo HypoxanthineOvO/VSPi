@@ -665,6 +665,26 @@ export class VspiApp implements Component, Focusable {
     await this.executeCommand(command, raw);
   }
 
+  private async toggleTuiMode(): Promise<void> {
+    const nextMode: TuiMode = this.options.settings.tuiMode === "fullscreen" ? "regular" : "fullscreen";
+    try {
+      const settings = { ...this.options.settings, tuiMode: nextMode };
+      await saveSettings(this.options.cwd, settings, undefined, {
+        trustedProject: this.backend.isProjectTrusted?.() ?? false,
+      });
+      this.options.settings = settings;
+      if (!this.switchTuiMode(nextMode)) {
+        throw new Error("当前 overlay 打开中，暂时无法切换 TUI 模式");
+      }
+      this.showNotice(
+        nextMode === "fullscreen" ? "已切换全屏模式（应用内滚动）" : "已切换常规模式（终端原生滚动，长历史更流畅）",
+        "success",
+      );
+    } catch (error) {
+      this.showNotice(error instanceof Error ? error.message : "切换 TUI 模式失败", "error");
+    }
+  }
+
   handleInput(data: string): void {
     this.fullscreenRenderRevision += 1;
     if (this.notice && !this.notice.progress && (this.notice.tone === "warning" || this.notice.tone === "error")) {
@@ -1753,6 +1773,7 @@ export class VspiApp implements Component, Focusable {
       this.panels.setPolicySnapshot(this.executionPolicy.snapshot());
       this.panels.open("policy");
     } else if (action.handler === "theme") this.panels.open("theme");
+    else if (action.handler === "tui") await this.toggleTuiMode();
     if (action.handler !== "plan") this.focusComposer();
     this.requestRender();
   }
