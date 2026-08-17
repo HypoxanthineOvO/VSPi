@@ -51,7 +51,7 @@ updated: 2026-08-17T23:31:21+08:00
 
 ## 未决事项
 
-- 等待用户使用 VSPi 修改 README；完成后复核 README、重跑受影响门禁、重建 tarball 与 SHA256，再执行 commit、`v1.1.0` tag、双 remote push 和双平台 Release。
+- 无。用户完成 README 后明确反馈不应为 README 设置静态测试；README 测试已移除，1.1.0 已完成双平台发布。
 
 ## Discussion Ledger
 

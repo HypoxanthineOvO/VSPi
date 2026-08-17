@@ -150,3 +150,11 @@ updated: 2026-08-17T21:34:43+08:00
 - **测试边界：** 旧测试要求 README 复制完整 TUI 技术规范，与新 README 定位冲突；按用户反馈彻底移除 `test/docs-contract.test.ts` 对 README 的读取和断言。完整布局、Fixture、附件与响应式契约继续由 `Docs/tui-v1.md` 测试保护，package/release 行为由 M9 测试保护。
 - **最终验证：** `npm run check` 通过；文档/package 定向 3 files / 12 tests 通过；当前完整套件 129 files / 952 tests 全部通过。
 - **下一步：** 生成最终 tarball 与 SHA256，提交时排除无关 C06 工作树改动，创建 `v1.1.0` tag 并完成 GitLab/GitHub Release。
+
+## 2026-08-17 - M5 完成与 1.1.0 发布
+
+- **提交与 tag：** 发布提交 `eb0edf7`；annotated tag `v1.1.0` 在 GitLab 与 GitHub 均解析到该提交。
+- **资产：** 两个平台均发布 `vspi-1.1.0.tgz`、`vspi-latest.tgz`、`SHA256SUMS`；两个 latest 下载内容完全一致，SHA-256 为 `17fd11362494dc6ebcd2e9cae404b974e1f3681a3e29680eee2707a4558bf199`。
+- **GitHub CI 修正：** tag workflow 因 package verifier 未允许新增 `THIRD_PARTY_NOTICES.md` 而失败；使用同一 verified assets 手工创建 GitHub Release，并在 `47f48b9` 更新 verifier required/allowed list。原 workflow 命令本机验证 333 个包文件通过，release/package 测试 4/4 通过。
+- **Release：** GitLab `https://gitlab.vsplab.cn/heyx/vspi/-/releases/v1.1.0`；GitHub `https://github.com/HypoxanthineOvO/VSPi/releases/tag/v1.1.0`。
+- **状态：** `M5` completed，C17 closed。无关 C06 工作树改动未纳入任何提交。

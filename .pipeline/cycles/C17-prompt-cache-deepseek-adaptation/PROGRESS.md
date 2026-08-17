@@ -2,17 +2,17 @@
 kind: progress
 cycle: C17-prompt-cache-deepseek-adaptation
 plan: PLAN.md
-status: in-progress
-updated: 2026-08-17T23:31:21+08:00
-current: M5
-next: user_readme_revision
+status: completed
+updated: 2026-08-17T23:51:00+08:00
+current: none
+next: none
 ---
 
 # 前缀缓存与 DeepSeek Harness 适配进度
 
 ## 当前状态
 
-用户已接受 S2 的默认启用方案。M5 已固化 `1.1.0` metadata、默认配置与关闭开关，并通过完整测试、实际 package 安装和 production audit。最终审查发现并修复 Anthropic 多 block、branch-summary epoch 与大输出内存边界；用户使用 VSPi 完成 README 重写后，删除 README 静态测试并保持完整 TUI 技术规范测试。当前最终门禁为 129 files / 952 tests，本机全局 VSPi 已安装修订候选 `1.1.0`，进入 commit/tag/Release。
+C17 已完成并发布为 VSPi 1.1.0。用户接受默认启用方案并使用本机 VSPi 完成 README 重写；README 不再受静态测试约束。最终门禁为 129 files / 952 tests，GitLab/GitHub tag 与 Release 均已发布，两个 latest 下载资产内容一致且 SHA-256 已验证。
 
 ## 计划状态
 
@@ -24,9 +24,8 @@ next: user_readme_revision
 | `M3` | DeepSeek anchored-standard 状态机与 wire surface | `completed` | 固定上游 persona/schema 深比较通过；三类 wire、promotion、resume、model switch、summary 与 compaction 共 25 项 harness/extension 测试通过 |
 | `M4` | DeepSeek 工具执行与真实 A/B | `completed` | persistent bash/editor/Policy、真实 Pi registry、流式输出与进程树 cleanup 已验证；12 files / 74 定向测试通过；V4 Pro/Flash 四组真实 A/B、双工具和 resume 轨迹均正确 |
 | `S2` | DeepSeek Feature 用户审阅 | `completed` | 用户接受 direct/relay V4 Pro/Flash 默认启用 anchored-standard，并保留 `VSPI_DEEPSEEK_HARNESS=0` 关闭开关 |
-| `M5` | 集成门禁与收口 | `in_progress` | README 已由用户使用 VSPi 重写且不受静态测试约束；`1.1.0` metadata、129 files / 952 tests、实际 pack/install/bin smoke 与 production audit 已通过，开始双平台发布 |
+| `M5` | 集成门禁与收口 | `completed` | commit `eb0edf7`、tag `v1.1.0` 与双平台 Release 已发布；3 个资产齐全，latest SHA-256 为 `17fd11362494dc6ebcd2e9cae404b974e1f3681a3e29680eee2707a4558bf199` |
 
 ## 阻塞
 
-- 无技术阻塞。
-- 无发布阻塞；README 修改与复核已完成。
+- 无。
