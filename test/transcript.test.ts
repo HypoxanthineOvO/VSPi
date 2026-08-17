@@ -245,6 +245,41 @@ describe("transcript rendering", () => {
     expect(stripAnsi(transcript.slice(userLines.length + 1).join("\n"))).toContain("• Answer");
   });
 
+  it("applies VSPi Markdown postprocessing to upstream assistant messages", () => {
+    const assistant: TranscriptMessage = {
+      id: "markdown-contract",
+      role: "assistant",
+      kind: "text",
+      text: [
+        "- 一级",
+        "    - 二级",
+        "        - 三级",
+        "",
+        "- [x] 已完成",
+        "- [ ] 待处理",
+        "",
+        "```ts",
+        "const answer = 42;",
+        "```",
+      ].join("\n"),
+    };
+    const theme = plainTheme();
+    const directLines = renderTranscriptMessage(assistant, 60, theme);
+    const cachedLines = renderTranscript([assistant], 60, theme, { cache: new TranscriptRenderCache() });
+    const rendered = directLines.map(stripAnsi).join("\n");
+
+    expect(cachedLines).toEqual(directLines);
+    expect(directLines.every((line) => visibleWidth(line) <= 60)).toBe(true);
+    expect(rendered).toContain("• 一级");
+    expect(rendered).toContain("◦ 二级");
+    expect(rendered).toContain("▪ 三级");
+    expect(rendered).toContain("✓ 已完成");
+    expect(rendered).toContain("○ 待处理");
+    expect(rendered).toContain("TS");
+    expect(rendered).toContain("const answer = 42;");
+    expect(rendered).not.toContain("```");
+  });
+
   it("keeps queued deliveries out of the waterfall and Inspect nodes until consumed", () => {
     const messages: TranscriptMessage[] = [
       { ...userMessage("steer"), id: "steer", delivery: "steer" },

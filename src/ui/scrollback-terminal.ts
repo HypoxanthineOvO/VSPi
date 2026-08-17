@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { ProcessTerminal, type Terminal, TuiMainScreen } from "@earendil-works/pi-tui";
 import { stripAnsi } from "./ansi.js";
 import { TerminalFrameOptimizer } from "./terminal-frame-optimizer.js";
@@ -62,20 +63,44 @@ export class ScrollbackProcessTerminal extends ProcessTerminal implements Static
   }
 
   commitStatic(lines: readonly string[]): void {
+    this.frameOptimizer.invalidateTail();
     super.write(renderStaticCommit(lines, this.rows));
   }
 
   appendStatic(lines: readonly string[]): void {
+    this.frameOptimizer.invalidateTail();
     super.write(renderStaticAppend(lines));
   }
 
   replaceStatic(lines: readonly string[]): void {
+    this.frameOptimizer.invalidateTail();
     super.write(renderStaticReplacement(lines, this.rows));
   }
 
   beginSurfaceEpoch(lineOffset = 0): void {
+    this.frameOptimizer.invalidateTail();
     super.write(renderSurfaceEpochBreak(lineOffset));
   }
+}
+
+// C16 M3: per-frame render latency samples without screen content. Enable
+// with VSPI_FRAME_STATS=<path>; each JSON line is {t, ms} for one doRender.
+const FRAME_STATS_PATH = process.env.VSPI_FRAME_STATS || "";
+let frameStatsBuffer: string[] = [];
+let frameStatsLastFlush = 0;
+
+export function recordFrameRenderMs(ms: number): void {
+  if (!FRAME_STATS_PATH) return;
+  frameStatsBuffer.push(`{"t":${Math.round(performance.now())},"ms":${+ms.toFixed(2)}}`);
+  const now = performance.now();
+  if (now - frameStatsLastFlush < 1000 && frameStatsBuffer.length < 512) return;
+  frameStatsLastFlush = now;
+  try {
+    appendFileSync(FRAME_STATS_PATH, `${frameStatsBuffer.join("\n")}\n`, "utf8");
+  } catch {
+    // diagnostics only; never break rendering on stats failure
+  }
+  frameStatsBuffer = [];
 }
 
 export class ScrollbackTUI extends TuiMainScreen {
@@ -85,6 +110,12 @@ export class ScrollbackTUI extends TuiMainScreen {
     super(terminal, showHardwareCursor, logDirectory);
     this.framePacer = new TuiFramePacer(resolveTuiFrameInterval());
     this.setClearOnShrink(false);
+  }
+
+  protected override doRender(): void {
+    const started = FRAME_STATS_PATH ? performance.now() : 0;
+    super.doRender();
+    if (FRAME_STATS_PATH) recordFrameRenderMs(performance.now() - started);
   }
 
   override requestRender(force = false): void {

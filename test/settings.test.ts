@@ -76,7 +76,7 @@ describe("settings persistence", () => {
       collapseTools: true,
       workingStyle: 3,
       thinkingTranslationEndpoint: "",
-      tuiMode: "fullscreen",
+      tuiMode: "regular",
       fullscreenScrollbar: "auto",
       mermaidRendering: "final",
     });
@@ -103,7 +103,7 @@ describe("settings persistence", () => {
       `${JSON.stringify({ tuiMode: "invalid", fullscreenScrollbar: "wide", mermaidRendering: "sometimes" })}\n`,
     );
     await expect(loadSettings(root, home)).resolves.toMatchObject({
-      tuiMode: "fullscreen",
+      tuiMode: "regular",
       fullscreenScrollbar: "auto",
       mermaidRendering: "final",
     });

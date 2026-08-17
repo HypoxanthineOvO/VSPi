@@ -2,7 +2,7 @@
 
 ## 设计边界
 
-VSPi v1 是工作型终端界面，不使用营销页、装饰卡片或多层模态框。默认 fullscreen 使用应用内 Transcript viewport 与固定 dock；regular 回退保留终端原生 scrollback。应用不改变终端字体，只使用 ANSI 前景色、背景色和文本属性。
+VSPi v1 是工作型终端界面，不使用营销页、装饰卡片或多层模态框。默认 regular 保留终端原生 scrollback；fullscreen 可选使用应用内 Transcript viewport 与固定 dock。应用不改变终端字体，只使用 ANSI 前景色、背景色和文本属性。
 
 最低布局为 `80x24`。低于 80 列仍保持所有行宽安全，但只作为紧急降级，不作为完整验收面。终端能力分为：
 

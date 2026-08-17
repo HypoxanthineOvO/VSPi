@@ -26,6 +26,7 @@ describe("command catalog", () => {
       "/usage",
       "/settings",
       "/theme",
+      "/tui",
       "/quit",
     ]);
     expect(resolveCommand("/resume")?.id).toBe("sessions");

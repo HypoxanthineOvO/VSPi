@@ -51,6 +51,46 @@ function pushBlank(output: string[], width: number): void {
   output.push(padLine("", width));
 }
 
+export function postprocessMarkdownLines(rendered: readonly string[], width: number, theme: VspiTheme): string[] {
+  const output: string[] = [];
+  let insideCode = false;
+  let insideTable = false;
+  let codeClosingBlank = false;
+  for (const sourceLine of rendered) {
+    const line = replaceListMarker(sourceLine, theme);
+    const trimmed = stripAnsi(line).trimStart();
+    const fence = trimmed.startsWith("```");
+    if (fence && !insideCode) {
+      pushBlank(output, width);
+      output.push(codeHeader(codeLabel(trimmed), width, theme));
+      insideCode = true;
+      codeClosingBlank = false;
+      continue;
+    }
+    if (fence) {
+      insideCode = false;
+      pushBlank(output, width);
+      codeClosingBlank = true;
+      continue;
+    }
+    if (insideCode) {
+      output.push(codeBody(line, width, theme));
+      continue;
+    }
+    if (codeClosingBlank && trimmed === "") {
+      codeClosingBlank = false;
+      continue;
+    }
+    codeClosingBlank = false;
+    const plain = stripAnsi(line).trimStart();
+    if (plain.startsWith("┌")) insideTable = true;
+    const styled = insideTable ? styleTableBorders(line.trimEnd(), theme) : line.trimEnd();
+    output.push(...wrapTextWithAnsi(styled, width).map((part) => padLine(part, width)));
+    if (insideTable && plain.startsWith("└")) insideTable = false;
+  }
+  return output;
+}
+
 const markdownParser = new Marked();
 
 function mermaidCodeSpan(line: string): string {
@@ -162,43 +202,7 @@ export class VspiMarkdown implements Component {
       this.tokenizedSource = source;
       this.renderer.setText(source);
     }
-    const rendered = this.renderer.render(width).map((line) => replaceListMarker(line, this.theme));
-    const output: string[] = [];
-    let insideCode = false;
-    let insideTable = false;
-    let codeClosingBlank = false;
-    for (const line of rendered) {
-      const trimmed = stripAnsi(line).trimStart();
-      const fence = trimmed.startsWith("```");
-      if (fence && !insideCode) {
-        pushBlank(output, width);
-        output.push(codeHeader(codeLabel(trimmed), width, this.theme));
-        insideCode = true;
-        codeClosingBlank = false;
-        continue;
-      }
-      if (fence) {
-        insideCode = false;
-        pushBlank(output, width);
-        codeClosingBlank = true;
-        continue;
-      }
-      if (insideCode) {
-        output.push(codeBody(line, width, this.theme));
-        continue;
-      }
-      if (codeClosingBlank && trimmed === "") {
-        codeClosingBlank = false;
-        continue;
-      }
-      codeClosingBlank = false;
-      const plain = stripAnsi(line).trimStart();
-      if (plain.startsWith("┌")) insideTable = true;
-      const styled = insideTable ? styleTableBorders(line.trimEnd(), this.theme) : line.trimEnd();
-      output.push(...wrapTextWithAnsi(styled, width).map((part) => padLine(part, width)));
-      if (insideTable && plain.startsWith("└")) insideTable = false;
-    }
-    return output;
+    return postprocessMarkdownLines(this.renderer.render(width), width, this.theme);
   }
 }
 
