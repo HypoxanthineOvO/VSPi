@@ -2234,12 +2234,32 @@ export class PanelController {
   }
 
   private renderUsage(width: number, usage: UsageSnapshot): string[] {
+    const tokens = (count: number | null) => (count === null ? "unknown" : count.toLocaleString("zh-CN"));
+    const percent = (value: number | null) => (value === null ? "unknown" : `${value}%`);
+    const missCost =
+      usage.cacheMissCostUsd === null ? "unknown" : `约 ¥${(usage.cacheMissCostUsd * usage.fxRate).toFixed(2)}`;
     return [
       alignRight("上下文", formatContextUsage(usage), width),
-      alignRight("输入 Token", usage.inputTokens.toLocaleString("zh-CN"), width),
-      alignRight("输出 Token", usage.outputTokens.toLocaleString("zh-CN"), width),
-      alignRight("原始费用", `$${usage.costUsd.toFixed(4)} USD`, width),
-      alignRight("人民币估算", `约 ¥${(usage.costUsd * usage.fxRate).toFixed(2)}`, width),
+      alignRight("最近 Cache Hit Rate", percent(usage.recentCacheHitPercent), width),
+      alignRight("Session Cache Hit Rate", percent(usage.sessionCacheHitPercent), width),
+      alignRight("Cached", tokens(usage.cacheReadTokens), width),
+      alignRight("Uncached", usage.inputTokens.toLocaleString("zh-CN"), width),
+      alignRight("Cache Write", tokens(usage.cacheWriteTokens), width),
+      alignRight("Output", usage.outputTokens.toLocaleString("zh-CN"), width),
+      alignRight("Cache miss 重复计费", `${tokens(usage.cacheMissTokens)} · ${missCost}`, width),
+      alignRight("catalogEstimateUsd", `$${usage.costUsd.toFixed(4)} USD`, width),
+      alignRight("catalogEstimateCny", `约 ¥${(usage.costUsd * usage.fxRate).toFixed(2)}`, width),
+      alignRight(
+        "officialCny",
+        usage.officialCostCny === null ? "unknown" : `¥${usage.officialCostCny.toFixed(2)}`,
+        width,
+      ),
+      alignRight(
+        "providerBilledCny",
+        usage.providerBilledCny === null ? "unknown" : `¥${usage.providerBilledCny.toFixed(2)}`,
+        width,
+      ),
+      alignRight("汇率", `1 USD = ¥${usage.fxRate.toFixed(2)} · ${usage.asOf}`, width),
     ];
   }
 

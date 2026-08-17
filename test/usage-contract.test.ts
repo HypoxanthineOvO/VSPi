@@ -5,6 +5,7 @@ import type { UsageSnapshot } from "../src/domain/types.js";
 describe("usage snapshot contract", () => {
   it("keeps current context occupancy separate from cumulative billed usage", () => {
     const snapshot: UsageSnapshot = {
+      ...DEFAULT_USAGE,
       contextTokens: 50_176,
       contextWindow: 128_000,
       contextPercent: 39,
@@ -40,6 +41,7 @@ describe("usage snapshot contract", () => {
 
   it("represents post-compaction context occupancy as unknown while preserving the model window", () => {
     const snapshot: UsageSnapshot = {
+      ...DEFAULT_USAGE,
       contextTokens: null,
       contextWindow: 128_000,
       contextPercent: null,

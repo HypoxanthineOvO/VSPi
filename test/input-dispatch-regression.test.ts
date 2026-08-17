@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { VspiApp, type VspiAppOptions } from "../src/app/vspi-app.js";
 import type { AttachmentService } from "../src/attachments/service.js";
 import type { ChatBackend, ChatBackendEvents, SendOptions, SessionHandoffResponse } from "../src/backend/types.js";
-import { DEFAULT_SETTINGS } from "../src/domain/fixtures.js";
+import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/domain/fixtures.js";
 import type { Attachment, ModelOption, Question, SessionOption, TranscriptMessage } from "../src/domain/types.js";
 import type { StoredGoal } from "../src/goals/types.js";
 import type { StoredPlan } from "../src/plans/types.js";
@@ -200,6 +200,7 @@ describe("same-Session foreground handoff", () => {
         supportsVision: false,
         effort: "high",
         usage: {
+          ...DEFAULT_USAGE,
           contextTokens: 100,
           contextWindow: 1000,
           contextPercent: 10,
@@ -948,6 +949,7 @@ describe("session switch race guard", () => {
       ref.events?.onMessage({ id: "late", role: "assistant", kind: "text", text: "LATE_STALE" });
       ref.events?.onBusy(true);
       ref.events?.onUsage({
+        ...DEFAULT_USAGE,
         contextTokens: 1,
         contextWindow: 1,
         contextPercent: 1,

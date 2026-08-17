@@ -20,7 +20,7 @@ const SNAPSHOT: WorkflowSnapshot = {
   },
 };
 
-describe("Workflow plan maintenance hook", () => {
+describe("legacy Workflow plan maintenance hook (not runtime-registered)", () => {
   it("projects the active Delivery and forbids a competing Local Plan authority", () => {
     const guidance = buildWorkflowPlanGuidance(SNAPSHOT);
     expect(guidance).toContain('authority="hypo-workflow"');

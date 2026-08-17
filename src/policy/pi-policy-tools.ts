@@ -12,6 +12,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
+import { createDeepSeekEditorToolDefinition } from "../deepseek/editor-tool.js";
 import type { ExecutionPolicyService, PolicyAction } from "./execution-policy.js";
 
 type PolicyToolOverrides = {
@@ -22,6 +23,7 @@ type PolicyToolOverrides = {
   bash: ReturnType<typeof createBashToolDefinition>;
   edit: ReturnType<typeof createEditToolDefinition>;
   write: ReturnType<typeof createWriteToolDefinition>;
+  str_replace_editor: ReturnType<typeof createDeepSeekEditorToolDefinition>;
 };
 
 export function createPolicyToolOverrides(options: {
@@ -41,6 +43,7 @@ export function createPolicyToolOverrides(options: {
     bash: createBashToolDefinition(workspace, options.bashOperations ? { operations: options.bashOperations } : {}),
     edit: createEditToolDefinition(workspace),
     write: createWriteToolDefinition(workspace),
+    str_replace_editor: createDeepSeekEditorToolDefinition(),
   };
 
   return {
@@ -81,18 +84,36 @@ export function createPolicyToolOverrides(options: {
       category: "file-write",
       operation: "write",
     })),
+    str_replace_editor: guard(
+      native.str_replace_editor,
+      (input) => {
+        const editorInput = input as { command: string; path: string };
+        const readOnly = editorInput.command === "view";
+        return {
+          kind: readOnly ? "file-read" : "file-write",
+          target: resolve(workspace, editorInput.path),
+          category: readOnly ? "file-read" : "file-write",
+          operation: readOnly ? "read" : "edit",
+        };
+      },
+      /*forceWorkspaceBoundary*/ true,
+    ),
   };
 
   function guard<TParams extends TSchema, TDetails, TState>(
     tool: ToolDefinition<TParams, TDetails, TState>,
     actionFor: (input: Static<TParams>) => PolicyAction,
+    forceWorkspaceBoundary = false,
   ): ToolDefinition<TParams, TDetails, TState> {
     return {
       ...tool,
       async execute(toolCallId, input, signal, onUpdate, context) {
         const action = actionFor(input);
         const operation = async () => {
-          if (options.workspaceBoundary && (action.kind === "file-read" || action.kind === "file-write")) {
+          if (
+            (options.workspaceBoundary || forceWorkspaceBoundary) &&
+            (action.kind === "file-read" || action.kind === "file-write")
+          ) {
             await assertWorkspaceTarget(workspace, action.target);
           }
           await options.preflight?.(action);

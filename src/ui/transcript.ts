@@ -477,7 +477,19 @@ export function renderTranscriptMessage(
     const markdown = options.cache
       ? options.cache.renderOfficialAssistant(`message:${message.id}`, message, markdownWidth, theme, options)
       : renderOfficialAssistant(message, markdownWidth, theme, options);
-    lines = markdown.map((line, index) => `${index === 0 ? `${theme.muted("•")} ` : "  "}${line}`);
+    if (message.presentation === "formal") {
+      const marker = theme.capabilities.unicode ? "✦" : "*";
+      const rule = theme.capabilities.unicode ? "─" : "-";
+      lines = [
+        theme.muted(rule.repeat(Math.max(1, width))),
+        ...markdown.map((line, index) => `${index === 0 ? `${theme.focus(marker)} ` : "  "}${line}`),
+      ];
+    } else if (message.presentation === "intermediate") {
+      const marker = theme.capabilities.unicode ? "·" : "-";
+      lines = markdown.map((line, index) => theme.muted(`${index === 0 ? `${marker} ` : "  "}${line}`));
+    } else {
+      lines = markdown.map((line, index) => `${index === 0 ? `${theme.muted("•")} ` : "  "}${line}`);
+    }
     if (message.streaming && lines.length > 0) {
       // 满宽行先把内容截到 width-1，再追加光标，避免后续 padLine 把光标切掉。
       const last = lines[lines.length - 1] ?? "";

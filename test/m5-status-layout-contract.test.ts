@@ -56,12 +56,13 @@ function isAnsiStyled(rendered: string, token: string): boolean {
 }
 
 describe("M5 dynamic status layout", () => {
-  it("uses Model/Effort/Context then an unlabeled cwd/Policy/Token/Cost row at 40/80/120 columns", () => {
+  it("places fixed Speed immediately before Context, prioritizing Speed at 40 columns", () => {
     for (const width of [40, 80, 120]) {
       const { ansi, plain } = render(input(), width);
       expect(plain).toHaveLength(2);
       expect(ansi.every((line) => visibleWidth(line) <= width)).toBe(true);
-      expectOrder(plain[0] ?? "", ["Model", "Effort", "Context"]);
+      expectOrder(plain[0] ?? "", width >= 80 ? ["Model", "Effort", "Speed", "Context"] : ["Model", "Effort", "Speed"]);
+      if (width < 80) expect(plain[0]).not.toContain("Context");
       expect(plain[1]).toMatch(/^\//);
       expect(plain[1]).not.toMatch(/\bPath\b/);
       expectOrder(plain[1] ?? "", ["Token", "Cost"]);
@@ -82,6 +83,7 @@ describe("M5 dynamic status layout", () => {
     expect(ansi).toHaveLength(2);
     expect(ansi.every((line) => visibleWidth(line) === width)).toBe(true);
     expect(identity).toContain("Context 999K / 1000K 100%");
+    expectOrder(identity, ["Speed", "Context"]);
     expect(telemetry).toMatch(/^\//);
     expect(telemetry).not.toMatch(/\bPath\b/);
     expect(telemetry).toContain("Policy Standard · Sandboxed");
@@ -106,8 +108,9 @@ describe("M5 dynamic status layout", () => {
 
     expect(ansi).toHaveLength(2);
     expect(ansi.every((line) => visibleWidth(line) <= 40)).toBe(true);
-    expectOrder(plain[0] ?? "", ["Model", "Effort", "Context"]);
-    expect(plain[0]).toMatch(/Effort\s+High\s+Context/);
+    expectOrder(plain[0] ?? "", ["Model", "Effort", "Speed"]);
+    expect(plain[0]).toMatch(/Effort\s+High\s+Speed/);
+    expect(plain[0]).not.toContain("Context");
     expect(plain[1]).toMatch(/^\//);
     expect(plain[1]).not.toMatch(/\bPath\b/);
     expectOrder(plain[1] ?? "", ["Token", "Cost"]);
@@ -130,7 +133,7 @@ describe("M5 dynamic status layout", () => {
     expect(plain).not.toMatch(/\bPath\b/);
     expect(plain.split("\n")[1]).toMatch(/^\/workspace\/vspi/);
 
-    for (const label of ["Model", "Effort", "Context", "Token", "Cost"]) {
+    for (const label of ["Model", "Effort", "Speed", "Context", "Token", "Cost"]) {
       expect(isAnsiStyled(rendered, label), `${label} label color`).toBe(true);
     }
     for (const value of ["OpenAI / GPT-5.4", "High", "50K / 128K 39%", "/workspace/vspi", "↑0 ↓0", "¥0.00"]) {

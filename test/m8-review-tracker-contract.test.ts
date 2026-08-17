@@ -57,7 +57,7 @@ function handlerFor(factory: ExtensionFactory): Handler {
   return handler;
 }
 
-describe("M8 continuity review tracker", () => {
+describe("M8 review tracker and legacy reminder builder (not runtime-registered)", () => {
   it("requests review after four meaningful turns and reset starts a new window", async () => {
     const { createReviewTracker } = await trackerModule();
     const tracker = createReviewTracker();

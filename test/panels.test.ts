@@ -433,6 +433,36 @@ describe("panel controller", () => {
 
     expect(rendered).toContain("?K / 128K ?%");
     expect(rendered).not.toContain("null%");
+    expect(rendered).toContain("最近 Cache Hit Rate");
+    expect(rendered).toContain("unknown");
+    expect(rendered).not.toContain("0%");
+  });
+
+  it("renders cache accounting and separates catalog estimates from billed cost", () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    panel.open("usage");
+    const rendered = panel
+      .render(80, 20, plainTheme(), {
+        ...DEFAULT_USAGE,
+        inputTokens: 2_000,
+        outputTokens: 500,
+        cacheReadTokens: 8_000,
+        cacheWriteTokens: 1_000,
+        recentCacheHitPercent: 80,
+        sessionCacheHitPercent: 73,
+        cacheMissTokens: 3_000,
+        cacheMissCostUsd: 0.002,
+      })
+      .map(stripAnsi)
+      .join("\n");
+
+    expect(rendered).toContain("Cached");
+    expect(rendered).toContain("8,000");
+    expect(rendered).toContain("Cache miss 重复计费");
+    expect(rendered).toContain("catalogEstimateCny");
+    expect(rendered).toContain("providerBilledCny");
+    expect(rendered).toContain("unknown");
+    expect(rendered).toContain("1 USD = ¥6.80");
   });
 
   it("keeps the right-hand value with an ellipsis hint when the Usage panel is too narrow", () => {

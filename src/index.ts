@@ -9,6 +9,7 @@ import { shutdownInteractiveSession, startUiAfterSplash } from "./app/startup.js
 import { VspiApp } from "./app/vspi-app.js";
 import { AttachmentService } from "./attachments/service.js";
 import { AdaptiveBackend, type BackendMode } from "./backend/adaptive-backend.js";
+import { deepSeekHarnessEnabled } from "./config/deepseek-harness.js";
 import { createRuntimeDefaultsService } from "./config/runtime-defaults.js";
 import { loadSettings } from "./config/settings.js";
 import type { TranscriptMessage } from "./domain/types.js";
@@ -92,6 +93,7 @@ async function renderOnce(): Promise<void> {
     { resolve: async (identity) => promptProfileService.resolve(identity) },
     {
       continueRecent: startupSessionMode().continueRecent,
+      deepSeekHarness: deepSeekHarnessEnabled(),
       ...(security.workflowAdapter ? { workflowPlan: workflowAdapter } : {}),
     },
     goalBackend,
@@ -186,6 +188,7 @@ async function interactive(): Promise<void> {
     { resolve: async (identity) => promptProfileService.resolve(identity) },
     {
       continueRecent: sessionMode.continueRecent,
+      deepSeekHarness: deepSeekHarnessEnabled(),
       ...(security.workflowAdapter ? { workflowPlan: workflowAdapter } : {}),
     },
     goalBackend,
@@ -361,6 +364,7 @@ function printHelp(): void {
 
 环境变量：
   VSPi_BACKEND=pi|fixture  选择后端（fixture 等价 VSPi_FIXTURE=1，完全离线）
+  VSPI_DEEPSEEK_HARNESS=0  关闭默认启用的 DeepSeek V4 anchored-standard
   VSPI_WORKFLOW_*          --workflow 所需的完整 bundle identity（详见 README）
   Provider 凭据可用 vspi login 配置，或通过环境变量注入
 `);
@@ -407,6 +411,7 @@ async function runOnce(prompt: string): Promise<void> {
     { resolve: async (identity) => promptProfileService.resolve(identity) },
     {
       continueRecent: false,
+      deepSeekHarness: deepSeekHarnessEnabled(),
       ...(security.workflowAdapter ? { workflowPlan: workflowAdapter } : {}),
     },
     goalBackend,

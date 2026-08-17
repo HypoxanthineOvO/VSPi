@@ -44,6 +44,41 @@ function toolMessage(
 }
 
 describe("transcript rendering", () => {
+  it("renders intermediate and formal assistant output without changing Markdown content", () => {
+    const intermediate: TranscriptMessage = {
+      id: "intermediate",
+      role: "assistant",
+      kind: "text",
+      text: "**检查中**",
+      presentation: "intermediate",
+    };
+    const formal: TranscriptMessage = {
+      id: "formal",
+      role: "assistant",
+      kind: "text",
+      text: "**完成**",
+      presentation: "formal",
+    };
+
+    const rendered = [
+      ...renderTranscriptMessage(intermediate, 40, plainTheme()),
+      ...renderTranscriptMessage(formal, 40, plainTheme()),
+    ].map(stripAnsi);
+    expect(rendered[0]).toMatch(/^· 检查中/);
+    expect(rendered[1]).toBe("─".repeat(40));
+    expect(rendered[2]).toMatch(/^✦ 完成/);
+    expect(rendered.join("\n")).not.toContain("Final result");
+  });
+
+  it("uses ASCII fallback markers for assistant presentation chrome", () => {
+    const rendered = renderTranscriptMessage(
+      { id: "formal-ascii", role: "assistant", kind: "text", text: "done", presentation: "formal" },
+      20,
+      plainTheme({ unicode: false }),
+    ).map(stripAnsi);
+
+    expect(rendered.map((line) => line.trimEnd())).toEqual(["-".repeat(20), "* done"]);
+  });
   it("selects a bounded suffix without splitting tool groups and keeps original message indexes", () => {
     const messages: TranscriptMessage[] = [
       ...Array.from({ length: 90 }, (_, index) => ({

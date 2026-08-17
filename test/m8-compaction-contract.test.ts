@@ -54,11 +54,11 @@ async function harness(compactImpl?: (instructions?: string) => Promise<unknown>
   const abortCompaction = vi.fn();
   const abort = vi.fn(async () => {});
   const followUp = vi.fn(async () => {});
-  let contextTokens = 0;
+  let contextTokens: number | null = 0;
   const getContextUsage = vi.fn(() => ({
     tokens: contextTokens,
     contextWindow: 32_000,
-    percent: Math.round((contextTokens / 32_000) * 100),
+    percent: contextTokens === null ? null : Math.round((contextTokens / 32_000) * 100),
   }));
   const managers: SessionManager[] = [];
   const planBackend = createLocalPlanBackend({ rootDir: join(cwd, "compatibility-plans") });
@@ -125,7 +125,7 @@ async function harness(compactImpl?: (instructions?: string) => Promise<unknown>
     planBackend,
     events,
     managers,
-    setContextTokens: (tokens: number) => {
+    setContextTokens: (tokens: number | null) => {
       contextTokens = tokens;
     },
     emit: (event: AgentSessionEvent) => listener?.(event),
@@ -235,17 +235,29 @@ describe("M8 compaction profiles", () => {
   it("refreshes usage when Pi-native auto compaction succeeds", async () => {
     const h = await harness();
     try {
+      h.setContextTokens(null);
       vi.mocked(h.events.onUsage).mockClear();
       h.emit({
         type: "compaction_end",
         reason: "threshold",
         aborted: false,
         willRetry: false,
-        result: {},
+        result: { estimatedTokensAfter: 12_000 },
       } as AgentSessionEvent);
       expect(h.events.onUsage).toHaveBeenCalledOnce();
       expect(h.events.onUsage).toHaveBeenLastCalledWith(
-        expect.objectContaining({ contextTokens: 0, contextWindow: 32_000 }),
+        expect.objectContaining({
+          contextTokens: 12_000,
+          contextWindow: 32_000,
+          contextPercent: 38,
+          contextEstimated: true,
+        }),
+      );
+
+      h.setContextTokens(8_000);
+      h.emit({ type: "agent_end" } as AgentSessionEvent);
+      expect(h.events.onUsage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ contextTokens: 8_000, contextPercent: 25, contextEstimated: false }),
       );
     } finally {
       await h.backend.dispose();

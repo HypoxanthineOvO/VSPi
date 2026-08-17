@@ -72,10 +72,11 @@ export function formatContextTokens(input: number | null): string {
 }
 
 export function formatContextUsage(
-  usage: Pick<UsageSnapshot, "contextTokens" | "contextWindow" | "contextPercent">,
+  usage: Pick<UsageSnapshot, "contextTokens" | "contextWindow" | "contextPercent" | "contextEstimated">,
 ): string {
   const percent = isFiniteNumber(usage.contextPercent) ? `${usage.contextPercent}%` : "?%";
-  return `${formatContextTokens(usage.contextTokens)} / ${formatContextTokens(usage.contextWindow)} ${percent}`;
+  const estimate = usage.contextEstimated && usage.contextTokens !== null ? "~" : "";
+  return `${estimate}${formatContextTokens(usage.contextTokens)} / ${formatContextTokens(usage.contextWindow)} ${percent}`;
 }
 
 function fitColumn(text: string, width: number): string {
@@ -144,11 +145,27 @@ function contextField(input: StatusLineInput, theme: VspiTheme, compact = false)
   return `${label("Context", "focus", theme)}${value(formatted, theme)}`;
 }
 
+function formatSpeed(value: number | null): string {
+  if (!isFiniteNumber(value) || value < 0) return "—";
+  if (value < 10) return fixedWithoutCarry(value, 1);
+  if (value < 1_000) return fixedWithoutCarry(value, 0);
+  return formatTokens(value);
+}
+
+function speedField(input: StatusLineInput, theme: VspiTheme, compact = false): string {
+  const now = formatSpeed(input.usage.throughputNow);
+  const average = formatSpeed(input.usage.throughputAverage);
+  const cacheHit = isFiniteNumber(input.usage.recentCacheHitPercent) ? input.usage.recentCacheHitPercent : "—";
+  const formatted = compact ? `${now}/${average} CH${cacheHit}` : `${now}/${average}t/s CH${cacheHit}%`;
+  return `${label("Speed", "blue", theme)}${value(formatted, theme)}`;
+}
+
 function pathField(input: StatusLineInput, width: number, statusWidth: number, theme: VspiTheme): string {
+  const mode = statusWidth < 120 && input.mode ? `${theme.muted(" · ")}${theme.blue(input.mode)}` : "";
   const policy =
     statusWidth >= 80 && input.policy && input.boundary
-      ? `${theme.muted(" · Policy ")}${theme.focus(input.policy)}${theme.muted(" · ")}${theme.blue(input.boundary)}${theme.muted(" ")}`
-      : theme.muted(" ");
+      ? `${mode}${theme.muted(" · Policy ")}${theme.focus(input.policy)}${theme.muted(" · ")}${theme.blue(input.boundary)}${theme.muted(" ")}`
+      : `${mode}${theme.muted(" ")}`;
   return variableField("", input.cwd, policy, width, theme);
 }
 
@@ -179,41 +196,47 @@ function boundedTrackWidth(content: string, minimum: number, representativeMaxim
 
 function tracks(
   width: number,
+  speed: string,
   context: string,
   cost: string,
 ): {
+  speed: number;
   context: number;
   token: number;
   cost: number;
 } {
-  if (width >= 60) {
+  if (width >= 80) {
+    const speedWidth = boundedTrackWidth(speed, width >= 120 ? 22 : 17, width >= 120 ? 22 : 17);
     const contextWidth = boundedTrackWidth(context, 24, 25);
     const costWidth = boundedTrackWidth(cost, 10, 13);
     const contextStart = width - contextWidth;
     const costStart = width - costWidth;
     return {
+      speed: contextStart - speedWidth,
       context: contextStart,
       token: costStart - 18,
       cost: costStart,
     };
   }
-  return { context: 25, token: 20, cost: 32 };
+  if (width >= 60) return { speed: Math.max(20, width - 22), context: width, token: width - 28, cost: width - 10 };
+  return { speed: 25, context: width, token: 20, cost: 32 };
 }
 
 export function renderStatusLines(input: StatusLineInput, width: number, theme: VspiTheme): string[] {
   const compact = width < 60;
+  const speed = speedField(input, theme, width < 120);
   const context = contextField(input, theme, compact);
   const token = tokenField(input, theme, compact);
   // compact 布局的 Cost 锚点固定为 32（见 tracks），可用宽度随终端实际列数变化。
   const cost = costField(input, theme, compact ? Math.max(0, width - 32) : undefined);
-  const columns = tracks(width, context, cost);
-  const identity = composeColumns(
-    [
-      { start: 0, value: modelEffortField(input, columns.context, theme, compact) },
-      { start: columns.context, value: context },
-    ],
-    width,
-  );
+  const columns = tracks(width, speed, context, cost);
+  const identityCompact = width < 120;
+  const identityFields = [
+    { start: 0, value: modelEffortField(input, columns.speed, theme, identityCompact) },
+    { start: columns.speed, value: speed },
+    ...(columns.context < width ? [{ start: columns.context, value: context }] : []),
+  ];
+  const identity = composeColumns(identityFields, width);
   const telemetry = composeColumns(
     [
       { start: 0, value: pathField(input, columns.token, width, theme) },

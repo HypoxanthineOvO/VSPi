@@ -4,7 +4,7 @@ import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
 import { renderStatusLines } from "../src/ui/status.js";
 import { plainTheme } from "./helpers.js";
 
-const LABELS = ["Model", "Effort", "Context", "Token", "Cost"] as const;
+const LABELS = ["Model", "Effort", "Speed", "Context", "Token", "Cost"] as const;
 const LONG_CWD = "/home/heyx/workspaces/a-very-long-project-directory/with/deeply/nested/source-packages/vspi";
 
 function input() {
@@ -61,7 +61,8 @@ describe("status rendering", () => {
     const rendered = lines.map(stripAnsi).join("\n");
 
     expectExactWidths(lines, 40);
-    for (const label of LABELS) expect(rendered).toContain(label);
+    for (const label of LABELS.filter((label) => label !== "Context")) expect(rendered).toContain(label);
+    expect(rendered).not.toContain("Context");
     expect(stripAnsi(lines[1] ?? "")).toMatch(/^\//);
     expect(rendered).not.toMatch(/\bPath\b/);
   });
@@ -75,7 +76,7 @@ describe("status rendering", () => {
       );
       const rendered = lines.map(stripAnsi).join("\n");
       expectExactWidths(lines, width);
-      if (width < 60) expect(rendered).toContain("W◐3");
+      if (width < 120) expect(rendered).toContain("W◐3");
       else {
         expect(rendered).toContain("Working ◐");
         expect(rendered).toContain("插入 2");

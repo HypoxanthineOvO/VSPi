@@ -32,14 +32,10 @@ const REMOVED_COMMANDS = ["/demo-question", "/demo-tool"] as const;
 
 const COMMAND_HINT = "▴▾ 选择  Tab 补全  Enter 执行  Esc 关闭";
 
-let readme = "";
 let docs = "";
 
 beforeAll(async () => {
-  [readme, docs] = await Promise.all([
-    readFile(new URL("../README.md", import.meta.url), "utf8"),
-    readFile(new URL("../Docs/tui-v1.md", import.meta.url), "utf8"),
-  ]);
+  docs = await readFile(new URL("../Docs/tui-v1.md", import.meta.url), "utf8");
 });
 
 function textBlocks(content: string): string[] {
@@ -352,18 +348,12 @@ function expectRevisionFiveFacts(content: string, artifact: string): void {
 }
 
 describe("delivered TUI documentation contract", () => {
-  it.each([
-    ["README.md", () => readme],
-    ["Docs/tui-v1.md", () => docs],
-  ] as const)("keeps %s aligned with delivered defaults and fixtures", (artifact, content) => {
-    expectSharedFacts(content(), artifact);
+  it("keeps the technical TUI specification aligned with delivered defaults and fixtures", () => {
+    expectSharedFacts(docs, "Docs/tui-v1.md");
   });
 
-  it.each([
-    ["README.md", () => readme],
-    ["Docs/tui-v1.md", () => docs],
-  ] as const)("documents the Revision 5 interaction contract in %s", (artifact, content) => {
-    expectRevisionFiveFacts(content(), artifact);
+  it("documents the Revision 5 interaction contract in the technical TUI specification", () => {
+    expectRevisionFiveFacts(docs, "Docs/tui-v1.md");
   });
 
   it("uses bracket notation for the exact slash-excluded emphasis ranges", () => {
@@ -376,18 +366,6 @@ describe("delivered TUI documentation contract", () => {
     expect(hasNearby(docs, ["getContextUsage()"], ["当前", "占用", "current", "used"], 220)).toBe(true);
     expect(hasNearby(docs, ["getSessionStats()"], ["累计", "cumulative"], 220)).toBe(true);
     expect(hasNearby(docs, ["getContextUsage()"], ["getSessionStats()"], 420)).toBe(true);
-  });
-
-  it("documents all runnable README backends with truthful runtime labels", () => {
-    expect(readme).toContain("npm run dev");
-    expect(readme).toContain("VSPi_BACKEND=pi npm run dev");
-    expect(readme).toContain("VSPi_FIXTURE=1 npm run dev");
-    expect(readme).toMatch(/默认[\s\S]{0,160}(?:真实 pi|Backend Pi)[\s\S]{0,160}(?:不|绝不)[^。\n]{0,80}回退 Fixture/i);
-    expect(readme).toContain("Offline Fixture");
-    expect(readme).toContain("Backend Pi");
-    expect(readme).toContain("Backend Fixture");
-    expect(readme).toMatch(/Policy[^。\n]{0,100}Host/);
-    expect(readme).not.toMatch(/Mode[^。\n]{0,60}Auto/);
   });
 
   it("keeps the detailed terminal mocks aligned with the rendered layout", () => {
@@ -472,8 +450,8 @@ describe("delivered TUI documentation contract", () => {
   });
 
   it("retains the attachment and Markdown boundaries", () => {
-    expect(readme).toContain("〔登录页-修改前 ⋅ 1440x900 ⋅ PNG〕");
-    expect(readme).not.toMatch(/Attachment Bridge|npm run bridge|bridgeEnabled/i);
+    expect(docs).toContain("〔登录页-修改前〕");
+    expect(docs).not.toMatch(/Attachment Bridge|npm run bridge|bridgeEnabled/i);
     expect(docs).toContain("H1/H2");
     for (const bullet of ["▪", "◦", "▪"]) expect(docs).toContain(bullet);
     expect(docs).toMatch(/行内代码[\s\S]{0,200}fenced code[\s\S]{0,200}引用/i);

@@ -66,7 +66,7 @@ function event(systemPrompt = "Pi base prompt"): BeforeAgentStartEvent {
   };
 }
 
-describe("M8 bounded Local Plan capsule", () => {
+describe("M8 legacy Local Plan capsule builder (not runtime-registered)", () => {
   it("projects only execution continuity facts and immutable provenance within about 2K tokens", async () => {
     const { buildPlanCapsule } = await capsuleModule();
     const capsule = buildPlanCapsule(PLAN);
