@@ -88,6 +88,20 @@ describe("Context status presentation", () => {
 
     expect(plain.join("\n")).toContain("Context 50K / 128K 73%");
   });
+
+  it("marks a compaction estimate until authoritative context usage returns", () => {
+    const estimated = render(
+      statusInput({ usage: { ...ACTIVE_USAGE, contextTokens: 42_000, contextPercent: 33, contextEstimated: true } }),
+      120,
+    ).plain.join("\n");
+    const authoritative = render(
+      statusInput({ usage: { ...ACTIVE_USAGE, contextTokens: 42_000, contextPercent: 33 } }),
+      120,
+    ).plain.join("\n");
+
+    expect(estimated).toContain("Context ~42K / 128K 33%");
+    expect(authoritative).toContain("Context 42K / 128K 33%");
+  });
 });
 
 describe("responsive status anchoring", () => {
@@ -99,6 +113,7 @@ describe("responsive status anchoring", () => {
     expect(visibleColumn(identity, "Model")).toBe(0);
     expect(visibleColumn(identity, "Effort")).toBe(visibleWidth("Model OpenAI / GPT-5.4  "));
     expectFixedModelEffortGap(identity);
+    expect(visibleColumn(identity, "Speed")).toBe(39);
     expect(visibleColumn(identity, "Context")).toBe(56);
     expect(telemetry).toMatch(/^\/workspace\/vspi/);
     expect(telemetry).not.toMatch(/\bPath\b/);
@@ -149,6 +164,7 @@ describe("responsive status anchoring", () => {
           expect(plain[0]?.slice(0, plain[0].indexOf("Effort")), `${name}: long Model truncation`).toMatch(/… {2}$/);
         }
         expect(visibleColumn(plain[0] ?? "", "Context"), `${name}: Context`).toBe(56);
+        expect(visibleColumn(plain[0] ?? "", "Speed"), `${name}: Speed`).toBe(39);
         expect(plain[1], `${name}: unlabeled cwd`).toMatch(/^\//);
         expect(plain[1], `${name}: no Path label`).not.toMatch(/\bPath\b/);
         expect(visibleColumn(plain[1] ?? "", "Token"), `${name}: Token`).toBe(52);
@@ -278,9 +294,30 @@ describe("responsive status anchoring", () => {
     expect(plain[0]?.trimEnd()).toMatch(/Context\s+50K \/ 128K 39%$/);
     expect(plain[1]).toMatch(/^\/workspace\/vspi/);
     expect(plain[1]).not.toMatch(/\bPath\b/);
-    expect(plain[1]?.trimEnd()).toMatch(/Cost\s+¥2\.97$/);
+    expect(plain[1]?.trimEnd()).toMatch(/Cost\s+¥2\.82$/);
     expect(plain[0]?.indexOf("Effort")).toBeLessThan(plain[0]?.indexOf("Context") ?? -1);
     expect(plain[1]?.indexOf("Token")).toBeLessThan(plain[1]?.indexOf("Cost") ?? -1);
+  });
+
+  it("shows recent cache hit in the fixed Speed track without moving Context", () => {
+    const reported =
+      render(
+        statusInput({
+          usage: { ...ACTIVE_USAGE, throughputNow: 12, throughputAverage: 42, recentCacheHitPercent: 77 },
+        }),
+        80,
+      ).plain[0] ?? "";
+    const unknown =
+      render(
+        statusInput({
+          usage: { ...ACTIVE_USAGE, throughputNow: null, throughputAverage: 42, recentCacheHitPercent: null },
+        }),
+        80,
+      ).plain[0] ?? "";
+
+    expect(reported).toContain("Speed 12/42 CH77");
+    expect(unknown).toContain("Speed —/42 CH—");
+    expect(visibleColumn(reported, "Context")).toBe(visibleColumn(unknown, "Context"));
   });
 
   it("truncates long path and model values without moving either right group", () => {
@@ -310,8 +347,9 @@ describe("responsive status anchoring", () => {
     expect(plain).toHaveLength(2);
     expect(visibleColumn(plain[0] ?? "", "Model")).toBe(0);
     expect(plain[0]?.indexOf("Model")).toBeLessThan(plain[0]?.indexOf("Effort") ?? -1);
-    expect(plain[0]?.indexOf("Effort")).toBeLessThan(plain[0]?.indexOf("Context") ?? -1);
-    expect(visibleColumn(plain[0] ?? "", "Context")).toBe(25);
+    expect(plain[0]?.indexOf("Effort")).toBeLessThan(plain[0]?.indexOf("Speed") ?? -1);
+    expect(visibleColumn(plain[0] ?? "", "Speed")).toBe(25);
+    expect(plain[0]).not.toContain("Context");
     expect(plain[1]).toMatch(/^\//);
     expect(plain[1]).not.toMatch(/\bPath\b/);
     expect(visibleColumn(plain[1] ?? "", "Token")).toBe(20);
@@ -324,7 +362,8 @@ describe("responsive status anchoring", () => {
     expect(plain).toHaveLength(2);
     expect(plain[0]).toMatch(/^Model\s/);
     expect(plain[0]?.indexOf("Model")).toBeLessThan(plain[0]?.indexOf("Effort") ?? -1);
-    expect(plain[0]?.indexOf("Effort")).toBeLessThan(plain[0]?.indexOf("Context") ?? -1);
+    expect(plain[0]?.indexOf("Effort")).toBeLessThan(plain[0]?.indexOf("Speed") ?? -1);
+    expect(plain[0]?.indexOf("Speed")).toBeLessThan(plain[0]?.indexOf("Context") ?? -1);
     expect(plain[1]).toMatch(/^\/workspace\/vspi/);
     expect(plain[1]).not.toMatch(/\bPath\b/);
     expect(plain[1]?.indexOf("Token")).toBeLessThan(plain[1]?.indexOf("Cost") ?? -1);

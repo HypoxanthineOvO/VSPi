@@ -221,7 +221,11 @@ describe("responsive layout", () => {
         .filter((line) => /^Model\s/.test(line) || line.startsWith("/workspace/"));
       const status = statusLines.join("\n");
       expect(statusLines).toHaveLength(2);
-      for (const label of ["Model", "Effort", "Context", "Token", "Cost"]) {
+      const labels =
+        width >= 80
+          ? ["Model", "Effort", "Speed", "Context", "Token", "Cost"]
+          : ["Model", "Effort", "Speed", "Token", "Cost"];
+      for (const label of labels) {
         expect(status).toContain(label);
       }
       expect(status).not.toMatch(/\bPath\b/);

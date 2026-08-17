@@ -212,7 +212,7 @@ describe("M1 two-line status contract", () => {
       expect(rendered).toContain("Sandboxed");
       expect(rendered).toContain("Context 50K / 128K 39%");
       expect(rendered).toContain("Token ↑42k ↓8.1k");
-      expect(rendered).toContain("Cost ¥2.97");
+      expect(rendered).toContain("Cost ¥2.82");
     }
   });
 });

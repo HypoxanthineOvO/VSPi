@@ -37,7 +37,11 @@ export class AdaptiveBackend implements ChatBackend {
     promptProfiles?: {
       resolve(identity: ModelIdentity): Promise<Pick<ResolvedPromptProfile, "profileId" | "overlay">>;
     },
-    startup?: { continueRecent?: boolean; workflowPlan?: Pick<WorkflowAdapter, "snapshot"> },
+    startup?: {
+      continueRecent?: boolean;
+      workflowPlan?: Pick<WorkflowAdapter, "snapshot">;
+      deepSeekHarness?: boolean;
+    },
     goalBackend?: GoalBackend,
   ) {
     this.active =
@@ -48,6 +52,7 @@ export class AdaptiveBackend implements ChatBackend {
             continueRecent: startup?.continueRecent ?? false,
             trustedProject,
             recovery,
+            deepSeekHarness: startup?.deepSeekHarness ?? true,
             ...(planBackend ? { planBackend } : {}),
             ...(goalBackend ? { goalBackend } : {}),
             ...(startup?.workflowPlan ? { workflowPlan: startup.workflowPlan } : {}),

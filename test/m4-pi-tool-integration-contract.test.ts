@@ -29,7 +29,16 @@ describe("M1 Pi-native policy tool integration", () => {
     const workspace = await mkdtemp(join(tmpdir(), "vspi-native-tool-schema-"));
     const policy = createExecutionPolicyService({ workspace, policy: "Auto" });
     const tools = createPolicyToolOverrides({ workspace, executionPolicy: policy });
-    expect(Object.keys(tools).sort()).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
+    expect(Object.keys(tools).sort()).toEqual([
+      "bash",
+      "edit",
+      "find",
+      "grep",
+      "ls",
+      "read",
+      "str_replace_editor",
+      "write",
+    ]);
     const native = {
       read: createReadTool(workspace),
       ls: createLsTool(workspace),

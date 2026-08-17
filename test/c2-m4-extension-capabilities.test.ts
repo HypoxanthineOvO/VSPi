@@ -138,6 +138,7 @@ describe("C2 M4 extension capability boundaries", () => {
       "question",
       "skill_list",
       "skill_manage",
+      "str_replace_editor",
     ]);
     expect(tools).not.toEqual(expect.arrayContaining(["browser", "mcp", "pty", "ssh", "git"]));
   });

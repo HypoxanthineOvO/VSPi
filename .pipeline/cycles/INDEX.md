@@ -9,7 +9,7 @@ status: active
 
 | Cycle | 名称 | 状态 | 建立于 |
 | --- | --- | --- | --- |
-| - | - | - | - |
+| [C17-prompt-cache-deepseek-adaptation](C17-prompt-cache-deepseek-adaptation/PLAN.md) | 前缀缓存与 DeepSeek Harness 适配 | active（M2） | 2026-08-17 |
 
 ## Closed Cycles
 

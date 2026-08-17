@@ -286,3 +286,17 @@ pi 返回的模型价格和 usage 以 USD 为基础。VSPi 内部换算人民币
 VSPi 自有 UI chrome（状态行、面板边框、Markdown 装饰、splash 与附件标记）按已接受的 Unicode 视觉语言绘制：圆角 Composer 边框、block-art splash 与既有语义字形；不支持 Unicode 的终端通过 capability 分支回退到等价窄字符/ASCII。两类路径分别用宽度断言回归，避免在把 ambiguous 按宽渲染的中文终端上出现行溢出与光标错位。
 
 Pi Editor 的长文本性能由 `postinstall` 的版本守卫补丁处理：`scripts/patch-pi-editor-performance.mjs` 只匹配 `@earendil-works/pi-tui` 0.84.2 的确切源码结构，为 grapheme 分段与折行缓存 editor-local 派生数据，并把水平光标移动从全量 visual-line map 改为缓存分段；源码摘要不匹配时 fail closed，升级 upstream 后可删除。交互式会话在 launcher 进程消失时通过 parent-death watchdog 关闭并恢复终端（可用 `VSPi_NO_PARENT_WATCHDOG=1` 关闭）。
+## DeepSeek V4 anchored-standard
+
+VSPi 默认对 direct/relay DeepSeek V4 Pro 与 V4 Flash 启用 anchored-standard：
+每个 cache epoch 的首个普通请求使用固定 persona 与 `bash`、
+`str_replace_editor` 双工具，首次 assistant/tool signal 后恢复完整 VSPi/Pi
+prompt 与工具；compaction 或模型切换开启新 epoch。其他模型不受影响。
+
+需要使用普通 VSPi request surface 时，在启动进程前设置：
+
+```bash
+VSPI_DEEPSEEK_HARNESS=0 vspi
+```
+
+`false` 和 `off` 与 `0` 等价。

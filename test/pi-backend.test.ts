@@ -21,9 +21,10 @@ interface FakeSessionOptions {
   sessionStats?: () => SessionStats;
   compact?: () => Promise<unknown>;
   thinkingLevels?: EffortLevel[];
+  messages?: unknown[];
 }
 
-function sessionStats(input = 0, output = 0, cost = 0): SessionStats {
+function sessionStats(input = 0, output = 0, cost = 0, cacheRead = 0, cacheWrite = 0): SessionStats {
   return {
     sessionFile: undefined,
     sessionId: "session-id",
@@ -32,7 +33,7 @@ function sessionStats(input = 0, output = 0, cost = 0): SessionStats {
     toolCalls: 0,
     toolResults: 0,
     totalMessages: input + output > 0 ? 1 : 0,
-    tokens: { input, output, cacheRead: 0, cacheWrite: 0, total: input + output },
+    tokens: { input, output, cacheRead, cacheWrite, total: input + output + cacheRead + cacheWrite },
     cost,
   };
 }
@@ -48,7 +49,7 @@ function fakeSession(provider = "test", name = "Vision Model", options: FakeSess
       input: ["text", "image"],
       contextWindow: options.contextWindow ?? 100_000,
     },
-    messages: [],
+    messages: options.messages ?? [],
     sessionId: "session-id",
     thinkingLevel: "medium",
     isStreaming: false,
@@ -63,6 +64,7 @@ function fakeSession(provider = "test", name = "Vision Model", options: FakeSess
     prompt,
     abort: vi.fn(async () => {}),
     compact: vi.fn(options.compact ?? (async () => ({}))),
+    bindExtensions: vi.fn(async () => {}),
     getContextUsage: vi.fn(options.contextUsage ?? (() => ({ tokens: 0, contextWindow: 100_000, percent: 0 }))),
     getSessionStats: vi.fn(options.sessionStats ?? (() => sessionStats())),
     dispose: vi.fn(),
@@ -99,6 +101,7 @@ describe("pi backend adapter", () => {
       onUsage: vi.fn(),
       onNotice: vi.fn(),
     });
+    expect(fake.session.bindExtensions).toHaveBeenCalledWith(expect.objectContaining({ mode: "tui" }));
 
     await expect(backend.getModelOptions()).resolves.toEqual([
       expect.objectContaining({ id: "future-catalog-model", provider: "opencode-go" }),
@@ -431,6 +434,81 @@ describe("pi backend adapter", () => {
     await backend.dispose();
   });
 
+  it("distinguishes unreported cache metrics from a reported zero-hit request", async () => {
+    const usage = (input: number, cacheRead: number, cacheWrite: number, inputCost: number, readCost: number) => ({
+      input,
+      output: 100,
+      cacheRead,
+      cacheWrite,
+      totalTokens: input + cacheRead + cacheWrite + 100,
+      cost: {
+        input: inputCost,
+        output: 0.001,
+        cacheRead: readCost,
+        cacheWrite: 0,
+        total: inputCost + readCost + 0.001,
+      },
+    });
+    const messages = [
+      {
+        role: "assistant",
+        provider: "test",
+        model: "vision-model",
+        content: [{ type: "text", text: "one" }],
+        usage: usage(1_000, 8_000, 1_000, 0.001, 0.0016),
+        stopReason: "stop",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "test",
+        model: "vision-model",
+        content: [{ type: "text", text: "two" }],
+        usage: usage(9_000, 0, 0, 0.009, 0),
+        stopReason: "stop",
+        timestamp: 2,
+      },
+    ];
+    const fake = fakeSession("test", "Cache Model", {
+      messages,
+      sessionStats: () => sessionStats(10_000, 200, 0.0126, 8_000, 1_000),
+    });
+    const snapshots: UsageSnapshot[] = [];
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-pi-cache-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+    await backend.start({
+      onMessage: vi.fn(),
+      onMessageUpdate: vi.fn(),
+      onBusy: vi.fn(),
+      onUsage: (snapshot) => snapshots.push(snapshot),
+      onNotice: vi.fn(),
+    });
+
+    expect(snapshots.at(-1)).toMatchObject({
+      cacheReadTokens: 8_000,
+      cacheWriteTokens: 1_000,
+      recentCacheHitPercent: 0,
+      sessionCacheHitPercent: 42,
+      cacheMissTokens: 9_000,
+    });
+    expect(snapshots.at(-1)?.cacheMissCostUsd).toBeNull();
+
+    messages.push({
+      role: "assistant",
+      provider: "uncached-provider",
+      model: "other-model",
+      content: [{ type: "text", text: "three" }],
+      usage: usage(9_000, 0, 0, 0.009, 0),
+      stopReason: "stop",
+      timestamp: 3,
+    });
+    fake.emit({ type: "agent_end" } as AgentSessionEvent);
+    expect(snapshots.at(-1)).toMatchObject({ recentCacheHitPercent: null, sessionCacheHitPercent: 42 });
+    await backend.dispose();
+  });
+
   it("publishes unknown current context after compaction without zeroing cumulative usage", async () => {
     let context: ContextUsage = { tokens: 50_176, contextWindow: 128_000, percent: 39.2 };
     const fake = fakeSession("openai", "Compaction Model", {
@@ -486,6 +564,55 @@ describe("pi backend adapter", () => {
     });
 
     expect(usage.at(-1)).toMatchObject({ contextTokens: 0, contextWindow: 0, contextPercent: 0 });
+    await backend.dispose();
+  });
+
+  it("clears a compaction estimate before publishing a newly selected model window", async () => {
+    let contextWindow = 128_000;
+    const fake = fakeSession("deepseek", "Old Model", {
+      contextUsage: () => ({ tokens: null, contextWindow, percent: null }),
+    });
+    const selected = {
+      id: "new-model",
+      name: "New Model",
+      provider: "openai",
+      input: ["text"],
+      contextWindow: 272_000,
+    };
+    Object.assign(fake.session, {
+      setModel: vi.fn(async (model: typeof selected) => {
+        contextWindow = model.contextWindow;
+        Object.assign(fake.session, { model });
+      }),
+    });
+    const snapshots: UsageSnapshot[] = [];
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-pi-model-context-")),
+      sessionFactory: async () => ({ session: fake.session }),
+      modelRuntime: { getAvailable: vi.fn(async () => [selected]) },
+    } as never);
+    await backend.start({
+      onMessage: vi.fn(),
+      onMessageUpdate: vi.fn(),
+      onBusy: vi.fn(),
+      onUsage: (snapshot) => snapshots.push(snapshot),
+      onNotice: vi.fn(),
+    });
+    fake.emit({
+      type: "compaction_end",
+      reason: "threshold",
+      aborted: false,
+      willRetry: false,
+      result: { estimatedTokensAfter: 12_000 },
+    } as AgentSessionEvent);
+    expect(snapshots.at(-1)).toMatchObject({ contextTokens: 12_000, contextEstimated: true });
+
+    await backend.selectModel("openai", "new-model");
+    expect(snapshots.at(-1)).toMatchObject({
+      contextTokens: null,
+      contextWindow: 272_000,
+      contextEstimated: false,
+    });
     await backend.dispose();
   });
 
@@ -678,6 +805,66 @@ describe("pi backend adapter", () => {
       assistantMessageEvent: { type: "thinking_end", contentIndex: 0, content: "分析完成", partial },
     } as AgentSessionEvent);
     expect(messages.at(-1)).toMatchObject({ kind: "thinking", text: "分析完成", streaming: false });
+    await backend.dispose();
+  });
+
+  it("classifies tool-use text as intermediate and ordinary stop text as formal", async () => {
+    const fake = fakeSession();
+    const messages: TranscriptMessage[] = [];
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-pi-presentation-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+    await backend.start({
+      onMessage: (message) => messages.push(message),
+      onMessageUpdate: (id, patch) => {
+        const index = messages.findIndex((message) => message.id === id);
+        const current = messages[index];
+        if (current) messages[index] = { ...current, ...patch } as TranscriptMessage;
+      },
+      onBusy: vi.fn(),
+      onUsage: vi.fn(),
+      onNotice: vi.fn(),
+    });
+    const emitResponse = (text: string, stopReason: "toolUse" | "stop" | "error") => {
+      const message = {
+        role: "assistant" as const,
+        provider: "test",
+        model: "vision-model",
+        content: [{ type: "text" as const, text }],
+        usage: {
+          input: 10,
+          output: 4,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 14,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason,
+        timestamp: Date.now(),
+      };
+      fake.emit({
+        type: "message_update",
+        message,
+        assistantMessageEvent: { type: "text_start", contentIndex: 0, partial: message },
+      } as AgentSessionEvent);
+      fake.emit({
+        type: "message_update",
+        message,
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text, partial: message },
+      } as AgentSessionEvent);
+      fake.emit({ type: "message_end", message } as AgentSessionEvent);
+    };
+
+    fake.emit({ type: "agent_start" } as AgentSessionEvent);
+    emitResponse("checking", "toolUse");
+    emitResponse("done", "stop");
+    emitResponse("failed", "error");
+    expect(messages.filter((message) => message.kind === "text")).toMatchObject([
+      { text: "checking", presentation: "intermediate", streaming: false },
+      { text: "done", presentation: "formal", streaming: false },
+      { text: "failed", presentation: undefined, streaming: false },
+    ]);
     await backend.dispose();
   });
 

@@ -94,7 +94,12 @@ describe("M9 terminal render matrix", () => {
         expect(lines.every((line) => visibleWidth(line) === width)).toBe(true);
         expect(plain.every((line) => !hasForbiddenControl(line))).toBe(true);
         expect(plain[0]?.indexOf("Model")).toBeLessThan(plain[0]?.indexOf("Effort") ?? -1);
-        expect(plain[0]?.indexOf("Effort")).toBeLessThan(plain[0]?.indexOf("Context") ?? -1);
+        expect(plain[0]?.indexOf("Effort")).toBeLessThan(plain[0]?.indexOf("Speed") ?? -1);
+        if (width >= 80) {
+          expect(plain[0]?.indexOf("Speed")).toBeLessThan(plain[0]?.indexOf("Context") ?? -1);
+        } else {
+          expect(plain[0]).not.toContain("Context");
+        }
         expect(plain[1]).toMatch(/^\//);
         expect(plain[1]).not.toMatch(/\bPath\b|Backend/);
         if (width >= 80) {

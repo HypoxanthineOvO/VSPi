@@ -5,9 +5,20 @@ export interface UsageSnapshot {
   contextTokens: number | null;
   contextWindow: number;
   contextPercent: number | null;
+  contextEstimated: boolean;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  recentCacheHitPercent: number | null;
+  sessionCacheHitPercent: number | null;
+  cacheMissTokens: number | null;
+  cacheMissCostUsd: number | null;
+  throughputNow: number | null;
+  throughputAverage: number | null;
   costUsd: number;
+  officialCostCny: number | null;
+  providerBilledCny: number | null;
   currency: "CNY";
   source: string;
   asOf: string;
@@ -34,6 +45,7 @@ export interface TextMessage {
   streaming?: boolean;
   attachments?: Attachment[];
   delivery?: "steer" | "followUp" | "cancelled";
+  presentation?: "intermediate" | "formal";
 }
 
 export interface ThinkingMessage {

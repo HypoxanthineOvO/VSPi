@@ -18,10 +18,10 @@ import { PiAgentManager } from "../agents/manager.js";
 import type { AgentRole, AgentSnapshot, AgentStatusEvent } from "../agents/types.js";
 import { readVerifiedAttachmentBytes } from "../attachments/store.js";
 import { type CompactOptions, resolveCompactionProfile } from "../continuity/compaction-profiles.js";
-import { createGoalCapsuleExtension } from "../continuity/goal-capsule.js";
-import { createPlanCapsuleExtension } from "../continuity/plan-capsule.js";
-import { createReviewReminderExtension, createReviewTracker } from "../continuity/review-tracker.js";
-import { createWorkflowPlanExtension } from "../continuity/workflow-plan.js";
+import { createReviewTracker } from "../continuity/review-tracker.js";
+import { createContinuityStatusTool } from "../continuity/status-tool.js";
+import { createDeepSeekHarnessExtension, type DeepSeekToolBridge } from "../deepseek/extension.js";
+import { DeepSeekPersistentBashOperations } from "../deepseek/persistent-bash.js";
 import { FX } from "../domain/defaults.js";
 import { modelEffortLevels, normalizeEffortLevel } from "../domain/effort.js";
 import { formatProviderName } from "../domain/providers.js";
@@ -91,6 +91,7 @@ import { PiSkillManager } from "../skills/service.js";
 import { createSkillToolDefinitions } from "../skills/tools.js";
 import type { SkillManager, SkillScope } from "../skills/types.js";
 import type { WorkflowAdapter } from "../workflow/types.js";
+import { OutputSpeedTracker } from "./output-speed.js";
 import type {
   CancelResult,
   ChatBackend,
@@ -109,6 +110,7 @@ import type {
   SessionHandoffResponse,
   SessionResetReason,
 } from "./types.js";
+import { calculateCacheTelemetry, calculateOfficialCostCny } from "./usage-telemetry.js";
 
 type SessionFactoryResult = { session: AgentSession; modelFallbackMessage?: string };
 
@@ -158,6 +160,7 @@ export interface PiRuntimeBackendOptions {
   promptProfiles?: {
     resolve(identity: ModelIdentity): Promise<Pick<ResolvedPromptProfile, "profileId" | "overlay">>;
   };
+  deepSeekHarness?: boolean;
 }
 
 interface RuntimeModel {
@@ -298,6 +301,11 @@ export class PiRuntimeBackend implements ChatBackend {
   private compactionMutationBlocked = false;
   private agentRunning = false;
   private queueState = { steering: 0, followUp: 0 };
+  private readonly outputSpeed = new OutputSpeedTracker();
+  private speedExpiryTimer: NodeJS.Timeout | undefined;
+  private lastUsageSnapshot: UsageSnapshot | undefined;
+  private latestAssistantMessage: object | undefined;
+  private estimatedContextTokens: number | undefined;
   private sessionLease: SessionLease | undefined;
   private handoffRequested = false;
   private handoffFinalizing = false;
@@ -566,6 +574,8 @@ export class PiRuntimeBackend implements ChatBackend {
     const queuedMessages = [...queued.steering, ...queued.followUp].map(stripAttachmentManifest);
     this.queueState = { steering: 0, followUp: 0 };
     this.agentRunning = false;
+    this.clearSpeedExpiry();
+    this.outputSpeed.finish(0);
     await this.pauseExecutingGoal("generation_cancelled");
     if (this.compacting) {
       if (this.activeGeneration !== undefined) {
@@ -585,6 +595,7 @@ export class PiRuntimeBackend implements ChatBackend {
       this.events?.onMessageUpdate(id, { status: "cancelled" } as Partial<ToolMessage>);
     }
     this.runningToolIds.clear();
+    this.publishSpeed();
     this.publishActivity();
     try {
       await this.agentManager?.cancelAll();
@@ -806,6 +817,7 @@ export class PiRuntimeBackend implements ChatBackend {
       }
       throw error;
     }
+    this.estimatedContextTokens = undefined;
     this.publishUsage();
     this.events?.onNotice(`已切换到 ${formatProviderName(selected.provider)} / ${selected.name}`, "success");
     return {
@@ -1157,6 +1169,7 @@ export class PiRuntimeBackend implements ChatBackend {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    this.clearSpeedExpiry();
     this.availableModelsRefresh = undefined;
     this.availableModelsSnapshot = undefined;
     this.leaseLifecycleReady = false;
@@ -1199,87 +1212,43 @@ export class PiRuntimeBackend implements ChatBackend {
             },
           })
         : undefined;
-      const planCapsuleExtension = this.options.planBackend
-        ? createPlanCapsuleExtension({
-            readBinding: async () => this.getPlanBinding(),
-            readPlan: (planId) => this.options.planBackend?.read(planId) ?? Promise.resolve(undefined),
-            onCapsule: (capsule) => {
-              const withoutPlan = this.effectivePromptSegments.filter((segment) => segment.source !== "plan");
-              this.effectivePromptSegments = [...withoutPlan, { source: "plan", content: capsule }];
-              this.events?.onEffectivePrompt?.(structuredClone(this.effectivePromptSegments));
-            },
-          })
-        : undefined;
-      const goalCapsuleExtension =
-        this.options.goalBackend && this.options.planBackend
-          ? createGoalCapsuleExtension({
-              readBinding: async () => this.getGoalBinding(),
-              readGoal: (goalId) => this.options.goalBackend?.read(goalId) ?? Promise.resolve(undefined),
-              readPlan: (planId) => this.options.planBackend?.read(planId) ?? Promise.resolve(undefined),
-            })
-          : undefined;
-      const workflowPlanExtension = this.options.workflowPlan
-        ? createWorkflowPlanExtension({
-            snapshot: () => this.options.workflowPlan?.snapshot() ?? Promise.reject(new Error("Workflow unavailable")),
-            onCapsule: (capsule, snapshot) => {
-              const withoutPlan = this.effectivePromptSegments.filter((segment) => segment.source !== "plan");
-              this.effectivePromptSegments = [...withoutPlan, { source: "plan", content: capsule }];
-              this.events?.onEffectivePrompt?.(structuredClone(this.effectivePromptSegments));
-              this.events?.onWorkflowSnapshot?.(structuredClone(snapshot));
-            },
-          })
-        : undefined;
-      const reviewReminderExtension =
-        this.options.planBackend || this.options.workflowPlan
-          ? createReviewReminderExtension({
-              tracker: this.reviewTracker,
-              authority: this.options.workflowPlan ? "workflow" : "local",
-              ...(!this.options.workflowPlan && this.options.planBackend
-                ? { resolveCheckpoint: () => this.resolvePlanReconciliationCheckpoint() }
-                : {}),
-            })
-          : undefined;
       const externalImportCompatibilityExtension = createExternalImportCompatibilityExtension();
       const providerRequestCompatibilityExtension = createProviderRequestCompatibilityExtension();
+      const deepSeekHarnessEnabled = this.options.deepSeekHarness === true && this.options.recovery !== true;
+      const persistentBash = deepSeekHarnessEnabled ? new DeepSeekPersistentBashOperations() : undefined;
+      const deepSeekToolBridge: DeepSeekToolBridge = {};
+      const deepSeekHarnessExtension = deepSeekHarnessEnabled
+        ? createDeepSeekHarnessExtension({
+            toolBridge: deepSeekToolBridge,
+            resetBash: () => persistentBash?.reset(),
+          })
+        : undefined;
       const services = await createAgentSessionServices({
         cwd,
         agentDir,
         settingsManager,
         ...(this.options.modelRuntime ? { modelRuntime: this.options.modelRuntime as never } : {}),
-        ...(this.options.recovery ||
-        externalImportCompatibilityExtension ||
-        promptProfileExtension ||
-        planCapsuleExtension ||
-        workflowPlanExtension ||
-        goalCapsuleExtension ||
-        reviewReminderExtension
-          ? {
-              resourceLoaderOptions: {
-                ...(this.options.recovery
-                  ? {
-                      noExtensions: true,
-                      noSkills: true,
-                      noPromptTemplates: true,
-                      noThemes: true,
-                      noContextFiles: true,
-                    }
-                  : {}),
-                ...(!this.options.recovery
-                  ? {
-                      extensionFactories: [
-                        externalImportCompatibilityExtension,
-                        providerRequestCompatibilityExtension,
-                        promptProfileExtension,
-                        planCapsuleExtension,
-                        workflowPlanExtension,
-                        goalCapsuleExtension,
-                        reviewReminderExtension,
-                      ].filter((factory) => factory !== undefined),
-                    }
-                  : {}),
-              },
-            }
-          : {}),
+        resourceLoaderOptions: {
+          ...(this.options.recovery
+            ? {
+                noExtensions: true,
+                noSkills: true,
+                noPromptTemplates: true,
+                noThemes: true,
+                noContextFiles: true,
+              }
+            : {}),
+          ...(!this.options.recovery
+            ? {
+                extensionFactories: [
+                  externalImportCompatibilityExtension,
+                  providerRequestCompatibilityExtension,
+                  promptProfileExtension,
+                  deepSeekHarnessExtension,
+                ].filter((factory) => factory !== undefined),
+              }
+            : {}),
+        },
       });
       this.skillManager = new PiSkillManager({
         cwd,
@@ -1315,15 +1284,26 @@ export class PiRuntimeBackend implements ChatBackend {
         executionPolicy: this.options.executionPolicy,
         onStatus: (event) => this.publishAgentStatus(event),
       });
-      const policyTools = Object.values(
-        createPolicyToolOverrides({
-          workspace: cwd,
-          executionPolicy: this.options.executionPolicy,
-          preflight: (action) => nextAgentManager.assertMainAction(action),
-          executionBoundary: (action, operation, signal) =>
-            nextAgentManager.withToolBoundary(action, operation, signal),
-        }),
-      );
+      const policyToolOptions = {
+        workspace: cwd,
+        executionPolicy: this.options.executionPolicy,
+        preflight: (action: Parameters<typeof nextAgentManager.assertMainAction>[0]) =>
+          nextAgentManager.assertMainAction(action),
+        executionBoundary: <T>(
+          action: Parameters<typeof nextAgentManager.withToolBoundary<T>>[0],
+          operation: () => Promise<T>,
+          signal?: AbortSignal,
+        ) => nextAgentManager.withToolBoundary(action, operation, signal),
+      };
+      const policyToolOverrides = createPolicyToolOverrides(policyToolOptions);
+      if (persistentBash) {
+        deepSeekToolBridge.standardBash = policyToolOverrides.bash;
+        deepSeekToolBridge.bootstrapBash = createPolicyToolOverrides({
+          ...policyToolOptions,
+          bashOperations: persistentBash,
+        }).bash;
+      }
+      const policyTools = Object.values(policyToolOverrides);
       const question = createQuestionToolDefinition({
         request: (questions, signal) => {
           const request = this.events?.onQuestion;
@@ -1369,10 +1349,29 @@ export class PiRuntimeBackend implements ChatBackend {
             },
           })
         : [];
+      const continuityStatusTool = createContinuityStatusTool({
+        readPlanBinding: () => this.getPlanBinding(),
+        readPlan: (planId) => this.options.planBackend?.read(planId) ?? Promise.resolve(undefined),
+        readGoalBinding: () => this.getGoalBinding(),
+        readGoal: (goalId) => this.options.goalBackend?.read(goalId) ?? Promise.resolve(undefined),
+        readWorkflow: () => this.options.workflowPlan?.snapshot() ?? Promise.resolve(undefined),
+        readReview: () => this.reviewTracker.snapshot(),
+        resolveCheckpoint: () => this.resolvePlanReconciliationCheckpoint(),
+      });
       this.replacementModelIdentity = undefined;
       this.replacementThinking = undefined;
       const rootAgentTools = ["read", "ls", "find", "grep", "bash", "edit", "write"];
       const subagentTool = nextAgentManager.createTool(rootAgentTools, true);
+      const activeToolNames = [
+        ...rootAgentTools,
+        "question",
+        "skill_list",
+        "skill_manage",
+        ...planTools.map((tool) => tool.name),
+        ...goalTools.map((tool) => tool.name),
+        continuityStatusTool.name,
+        ...(!this.options.recovery ? ["subagent"] : []),
+      ];
       let created: Awaited<ReturnType<typeof createAgentSessionFromServices>>;
       try {
         created = await createAgentSessionFromServices({
@@ -1386,6 +1385,7 @@ export class PiRuntimeBackend implements ChatBackend {
             ...(this.events?.onQuestion ? [question, ...skillTools] : []),
             ...planTools,
             ...goalTools,
+            continuityStatusTool,
             ...(!this.options.recovery ? [subagentTool] : []),
           ] as unknown as ToolDefinition[],
           tools: [
@@ -1401,10 +1401,14 @@ export class PiRuntimeBackend implements ChatBackend {
             "skill_manage",
             ...planTools.map((tool) => tool.name),
             ...goalTools.map((tool) => tool.name),
+            continuityStatusTool.name,
             ...(!this.options.recovery ? ["subagent"] : []),
+            "str_replace_editor",
           ],
         });
+        created.session.setActiveToolsByName(activeToolNames);
       } catch (error) {
+        await persistentBash?.reset();
         await nextAgentManager.dispose();
         throw error;
       }
@@ -1730,6 +1734,11 @@ export class PiRuntimeBackend implements ChatBackend {
     this.suppressGenerationEvents = false;
     this.agentRunning = false;
     this.queueState = { steering: 0, followUp: 0 };
+    this.clearSpeedExpiry();
+    this.outputSpeed.reset();
+    this.lastUsageSnapshot = undefined;
+    this.latestAssistantMessage = undefined;
+    this.estimatedContextTokens = undefined;
     this.turn = 0;
     this.reviewTracker.reset();
     this.taskEpoch = 0;
@@ -1747,6 +1756,15 @@ export class PiRuntimeBackend implements ChatBackend {
       ? "Standard"
       : (readManagerExecutionPolicy(session.sessionManager) ?? this.startupPolicy);
     await this.options.executionPolicy.switchPolicy(restoredPolicy);
+    await session.bindExtensions?.({
+      mode: "tui",
+      abortHandler: () => {
+        void session.abort();
+      },
+      onError: (error) => {
+        this.events?.onNotice(`Extension ${error.event} failed: ${error.error}`, "warning");
+      },
+    });
     if (reason === "resume") this.reviewTracker.noteResume();
     const binding = ++this.binding;
     this.unsubscribe = session.subscribe((event) => {
@@ -2052,6 +2070,8 @@ export class PiRuntimeBackend implements ChatBackend {
       return;
     }
     if (message.role === "assistant") {
+      const presentation =
+        message.stopReason === "stop" ? "formal" : message.stopReason === "toolUse" ? "intermediate" : undefined;
       content.forEach((block, contentIndex) => {
         if (block.type === "text") {
           this.events?.onMessage({
@@ -2060,6 +2080,7 @@ export class PiRuntimeBackend implements ChatBackend {
             kind: "text",
             text: stringField(block, "text"),
             streaming: false,
+            ...(presentation ? { presentation } : {}),
           });
         } else if (block.type === "thinking") {
           this.events?.onMessage({
@@ -2263,6 +2284,10 @@ export class PiRuntimeBackend implements ChatBackend {
       const succeeded = !event.aborted && !event.errorMessage && event.result !== undefined;
       if (succeeded) {
         this.reviewTracker.noteCompaction();
+        const estimate = event.result?.estimatedTokensAfter;
+        if (typeof estimate === "number" && Number.isFinite(estimate) && estimate >= 0) {
+          this.estimatedContextTokens = estimate;
+        }
         this.publishUsage();
       }
       const after = this.readCompactionUsage();
@@ -2296,7 +2321,22 @@ export class PiRuntimeBackend implements ChatBackend {
     }
     if (event.type === "message_end" && event.message.role === "assistant") {
       if (this.hydratedMessages.has(event.message)) return;
-      for (const id of this.contentIds.values()) this.events.onMessageUpdate(id, { streaming: false });
+      const presentation =
+        event.message.stopReason === "stop"
+          ? "formal"
+          : event.message.stopReason === "toolUse"
+            ? "intermediate"
+            : undefined;
+      for (const [key, id] of this.contentIds) {
+        this.events.onMessageUpdate(
+          id,
+          key.startsWith("text-") ? { streaming: false, presentation } : { streaming: false },
+        );
+      }
+      this.contentIds.clear();
+      this.latestAssistantMessage = event.message;
+      this.clearSpeedExpiry();
+      this.outputSpeed.finish(event.message.usage?.output ?? 0);
       if (assistantClaimsCompletion(event.message)) {
         this.reviewTracker.noteCompletionClaim();
         this.recordPlanReconciliationCheckpointIfNeeded();
@@ -2345,11 +2385,21 @@ export class PiRuntimeBackend implements ChatBackend {
     if (event.type === "text_start") {
       const id = `pi-text-${this.binding}-${this.turn}-${++this.contentSequence}`;
       this.contentIds.set(`text-${event.contentIndex}`, id);
-      this.events.onMessage({ id, role: "assistant", kind: "text", text: "", streaming: true });
+      this.events.onMessage({
+        id,
+        role: "assistant",
+        kind: "text",
+        text: "",
+        streaming: true,
+        presentation: "intermediate",
+      });
     } else if (event.type === "text_delta") {
+      this.outputSpeed.recordDelta(event.delta);
       const id = this.contentIds.get(`text-${event.contentIndex}`);
       const block = event.partial.content[event.contentIndex];
       if (id && block?.type === "text") this.events.onMessageUpdate(id, { text: block.text, streaming: true });
+      this.publishSpeed();
+      this.scheduleSpeedExpiry();
     } else if (event.type === "thinking_start") {
       const id = `pi-thinking-${this.binding}-${this.turn}-${++this.contentSequence}`;
       this.contentIds.set(`thinking-${event.contentIndex}`, id);
@@ -2363,11 +2413,14 @@ export class PiRuntimeBackend implements ChatBackend {
         streaming: true,
       });
     } else if (event.type === "thinking_delta") {
+      this.outputSpeed.recordDelta(event.delta);
       const id = this.contentIds.get(`thinking-${event.contentIndex}`);
       const block = event.partial.content[event.contentIndex];
       if (id && block?.type === "thinking") {
         this.events.onMessageUpdate(id, { text: block.thinking } as Partial<ThinkingMessage>);
       }
+      this.publishSpeed();
+      this.scheduleSpeedExpiry();
     } else if (event.type === "thinking_end") {
       const id = this.contentIds.get(`thinking-${event.contentIndex}`);
       if (id) this.events.onMessageUpdate(id, { text: event.content, streaming: false } as Partial<ThinkingMessage>);
@@ -2385,7 +2438,7 @@ export class PiRuntimeBackend implements ChatBackend {
     ).settingsManager;
     const reserve = settings?.getCompactionReserveTokens?.();
     return {
-      tokens: context?.tokens ?? null,
+      tokens: context?.tokens ?? this.estimatedContextTokens ?? null,
       contextWindow: context?.contextWindow ?? session.model?.contextWindow ?? 0,
       reserveTokens: typeof reserve === "number" && Number.isFinite(reserve) ? reserve : null,
     };
@@ -2397,21 +2450,79 @@ export class PiRuntimeBackend implements ChatBackend {
     const context = session.getContextUsage();
     const stats = session.getSessionStats();
     const contextWindow = context?.contextWindow ?? session.model?.contextWindow ?? 0;
-    const contextTokens = contextWindow === 0 ? 0 : (context?.tokens ?? null);
+    if (context?.tokens !== null && context?.tokens !== undefined) this.estimatedContextTokens = undefined;
+    const contextEstimated = context?.tokens == null && this.estimatedContextTokens !== undefined;
+    const contextTokens: number | null =
+      contextWindow === 0 ? 0 : (context?.tokens ?? (contextEstimated ? (this.estimatedContextTokens ?? null) : null));
     const contextPercent =
       contextWindow === 0 ? 0 : contextTokens === null ? null : Math.round((contextTokens / contextWindow) * 100);
-    this.events.onUsage({
+    const runtime = this.options.modelRuntime ?? (session.modelRuntime as unknown as ModelRuntimeView | undefined);
+    const cache = calculateCacheTelemetry({
+      session,
+      latest: this.latestAssistantMessage,
+      totals: {
+        input: stats.tokens.input,
+        cacheRead: stats.tokens.cacheRead,
+        cacheWrite: stats.tokens.cacheWrite,
+      },
+      catalogCacheReadRate: (provider, model) => runtime?.getModel?.(provider, model)?.cost?.cacheRead,
+    });
+    const speed = this.outputSpeed.snapshot();
+    const snapshot: UsageSnapshot = {
       contextTokens,
       contextWindow,
       contextPercent,
+      contextEstimated,
       inputTokens: stats.tokens.input,
       outputTokens: stats.tokens.output,
+      cacheReadTokens: cache.reported ? stats.tokens.cacheRead : null,
+      cacheWriteTokens: cache.reported ? stats.tokens.cacheWrite : null,
+      recentCacheHitPercent: cache.recentHitPercent,
+      sessionCacheHitPercent: cache.sessionHitPercent,
+      cacheMissTokens: cache.missedTokens,
+      cacheMissCostUsd: cache.missedCostUsd,
+      throughputNow: speed.now,
+      throughputAverage: speed.average,
       costUsd: stats.cost,
+      officialCostCny: calculateOfficialCostCny(session, this.latestAssistantMessage),
+      providerBilledCny: null,
       currency: "CNY",
       source: FX.source,
       asOf: FX.asOf,
       fxRate: FX.fxRate,
-    });
+    };
+    this.lastUsageSnapshot = snapshot;
+    this.events.onUsage(snapshot);
+  }
+
+  private publishSpeed(): void {
+    if (!this.events) return;
+    if (!this.lastUsageSnapshot) {
+      this.publishUsage();
+      return;
+    }
+    const speed = this.outputSpeed.snapshot();
+    const snapshot = {
+      ...this.lastUsageSnapshot,
+      throughputNow: speed.now,
+      throughputAverage: speed.average,
+    };
+    this.lastUsageSnapshot = snapshot;
+    this.events.onUsage(snapshot);
+  }
+
+  private scheduleSpeedExpiry(): void {
+    this.clearSpeedExpiry();
+    this.speedExpiryTimer = setTimeout(() => {
+      this.speedExpiryTimer = undefined;
+      this.publishSpeed();
+    }, 2_001);
+    this.speedExpiryTimer.unref();
+  }
+
+  private clearSpeedExpiry(): void {
+    if (this.speedExpiryTimer) clearTimeout(this.speedExpiryTimer);
+    this.speedExpiryTimer = undefined;
   }
 
   private recordPlanReconciliationCheckpointIfNeeded(): void {
@@ -2854,14 +2965,29 @@ function isUsageSnapshot(value: unknown): value is UsageSnapshot {
     (value.contextTokens === null || typeof value.contextTokens === "number") &&
     typeof value.contextWindow === "number" &&
     (value.contextPercent === null || typeof value.contextPercent === "number") &&
+    typeof value.contextEstimated === "boolean" &&
     typeof value.inputTokens === "number" &&
     typeof value.outputTokens === "number" &&
+    nullableNumber(value.cacheReadTokens) &&
+    nullableNumber(value.cacheWriteTokens) &&
+    nullableNumber(value.recentCacheHitPercent) &&
+    nullableNumber(value.sessionCacheHitPercent) &&
+    nullableNumber(value.cacheMissTokens) &&
+    nullableNumber(value.cacheMissCostUsd) &&
+    nullableNumber(value.throughputNow) &&
+    nullableNumber(value.throughputAverage) &&
     typeof value.costUsd === "number" &&
+    nullableNumber(value.officialCostCny) &&
+    nullableNumber(value.providerBilledCny) &&
     value.currency === "CNY" &&
     typeof value.source === "string" &&
     typeof value.asOf === "string" &&
     typeof value.fxRate === "number"
   );
+}
+
+function nullableNumber(value: unknown): value is number | null {
+  return value === null || (typeof value === "number" && Number.isFinite(value));
 }
 
 function isQueueState(value: unknown): value is ChatQueueState {
