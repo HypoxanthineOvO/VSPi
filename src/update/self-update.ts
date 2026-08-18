@@ -31,6 +31,7 @@ export interface PackageInstallerInvocation {
 export interface PackageInstallerOptions {
   environment?: NodeJS.ProcessEnv;
   entryPath?: string;
+  platform?: NodeJS.Platform;
   execute?: (invocation: PackageInstallerInvocation, environment: NodeJS.ProcessEnv) => Promise<void>;
 }
 
@@ -104,18 +105,27 @@ export function resolvePackageInstaller(
   tarballPath: string,
   entryPath = process.argv[1],
   environment: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
 ): PackageInstallerInvocation {
   const voltaHome = environment.VOLTA_HOME;
   if (entryPath && voltaHome && pathIsWithin(entryPath, join(voltaHome, "tools", "image", "packages", "vspi"))) {
     return {
-      command: join(voltaHome, "bin", process.platform === "win32" ? "volta.exe" : "volta"),
+      command: join(voltaHome, "bin", platform === "win32" ? "volta.exe" : "volta"),
       args: ["install", `vspi@${resolve(tarballPath)}`],
       manager: "volta",
     };
   }
+  const npmArgs = ["install", "--global", "--no-audit", "--no-fund", resolve(tarballPath)];
+  if (platform === "win32") {
+    return {
+      command: environment.ComSpec ?? environment.COMSPEC ?? "cmd.exe",
+      args: ["/d", "/s", "/c", "npm.cmd", ...npmArgs],
+      manager: "npm",
+    };
+  }
   return {
-    command: process.platform === "win32" ? "npm.cmd" : "npm",
-    args: ["install", "--global", "--no-audit", "--no-fund", resolve(tarballPath)],
+    command: "npm",
+    args: npmArgs,
     manager: "npm",
   };
 }
@@ -174,7 +184,7 @@ export async function installVspiPackage(
   const environment = options.environment ?? process.env;
   const entryPath = options.entryPath ?? process.argv[1];
   if (!entryPath) throw new Error("无法识别当前 VSPi 安装位置");
-  const invocation = resolvePackageInstaller(tarballPath, entryPath, environment);
+  const invocation = resolvePackageInstaller(tarballPath, entryPath, environment, options.platform);
   await (options.execute ?? executeInstaller)(invocation, environment);
   const installedVersion = await entryPackageVersion(entryPath);
   if (installedVersion !== expectedVersion) {
