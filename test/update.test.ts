@@ -111,6 +111,29 @@ describe("VSPi self-update", () => {
     expect(invocation.args).toEqual(["install", "--global", "--no-audit", "--no-fund", "/tmp/vspi-0.3.2.tgz"]);
   });
 
+  it("runs npm.cmd through ComSpec on Windows instead of spawning the script directly", () => {
+    expect(
+      resolvePackageInstaller(
+        "/tmp/vspi-1.1.1.tgz",
+        "C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\vspi\\dist\\index.js",
+        { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+        "win32",
+      ),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "npm.cmd", "install", "--global", "--no-audit", "--no-fund", "/tmp/vspi-1.1.1.tgz"],
+      manager: "npm",
+    });
+  });
+
+  it("falls back to cmd.exe when Windows does not expose ComSpec", () => {
+    expect(resolvePackageInstaller("/tmp/vspi-1.1.1.tgz", "C:\\vspi\\dist\\index.js", {}, "win32")).toEqual({
+      command: "cmd.exe",
+      args: ["/d", "/s", "/c", "npm.cmd", "install", "--global", "--no-audit", "--no-fund", "/tmp/vspi-1.1.1.tgz"],
+      manager: "npm",
+    });
+  });
+
   it("does not report success when the current installation remains on the old version", async () => {
     const directory = await mkdtemp(join(tmpdir(), "vspi-update-entry-"));
     try {

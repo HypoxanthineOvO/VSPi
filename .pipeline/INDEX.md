@@ -8,7 +8,7 @@ status: active
 
 ## 当前工作
 
-- [Cycle 索引](cycles/INDEX.md)：当前无 active Cycle；C17 前缀缓存与 DeepSeek Harness 适配已完成并发布 v1.1.0；C16 渲染性能修复已由用户接受 regular 默认模式并关闭；C15 渲染算法性能审计报告见 cycles/C15-render-algorithm-performance-audit/AUDIT.md。
+- [Cycle 索引](cycles/INDEX.md)：C18 修复 Windows 自更新器直接 spawn `npm.cmd` 的 `EINVAL`，目标发布 v1.1.1；C17 前缀缓存与 DeepSeek Harness 适配已完成并发布 v1.1.0。
 - [Experiment 索引](experiments/INDEX.md)：无高置信 Experiment 记录。
 - [Memory 记录](memory/records/)：146 条合法 decision/feedback/requirement/preference Record，按 scope 分组；C07 corrective decision supersede 旧 revision 0 记录；v0.6.0-v0.6.2 release outcome、Windows named-pipe lease、R8 TUI 行为要求、Unicode 视觉保留、Pi 官方 render architecture 优先偏好、Pi Editor 0.84.2 性能补丁、v0.6.4 本机验收、默认 Auto Policy、移除 SSH Attachment Bridge、AIMoniker Gemini Provider、自适应面板高度、通用TUI限帧与 C14 后进入 v1.0.0 发布流程要求已记录。
 - Legacy 保留：`.pipeline/manifest.yaml` 与 `.pipeline/runtime/objects/delivery/`（8 个 Delivery 对象）继续作为旧兼容入口；C05 Delivery 仅修正 evidence path，状态、revision 与 digest 未改变。

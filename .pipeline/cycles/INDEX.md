@@ -9,7 +9,7 @@ status: active
 
 | Cycle | 名称 | 状态 | 建立于 |
 | --- | --- | --- | --- |
-| - | - | - | - |
+| [C18-windows-self-update-spawn](C18-windows-self-update-spawn/PLAN.md) | Windows 自更新安装器修复 | active（M1） | 2026-08-18 |
 
 ## Closed Cycles
 
