@@ -2,9 +2,9 @@
 kind: plan
 cycle: C18-windows-self-update-spawn
 mode: goal
-status: in-progress
+status: completed
 builds_on: C17-prompt-cache-deepseek-adaptation
-updated: 2026-08-18T00:00:00+08:00
+updated: 2026-08-18T14:04:00+08:00
 progress: PROGRESS.md
 execution: EXECUTION.md
 ---

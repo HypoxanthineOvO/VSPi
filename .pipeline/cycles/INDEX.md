@@ -9,12 +9,13 @@ status: active
 
 | Cycle | 名称 | 状态 | 建立于 |
 | --- | --- | --- | --- |
-| [C18-windows-self-update-spawn](C18-windows-self-update-spawn/PLAN.md) | Windows 自更新安装器修复 | active（M1） | 2026-08-18 |
+| - | - | - | - |
 
 ## Closed Cycles
 
 | Cycle | 名称 | 状态 | 关联 Delivery | 版本 |
 | --- | --- | --- | --- | --- |
+| [C18-windows-self-update-spawn](C18-windows-self-update-spawn/SUMMARY.md) | Windows 自更新安装器修复 | closed（补丁发布完成，等待 Windows 实机复核） | - | v1.1.1 |
 | [C17-prompt-cache-deepseek-adaptation](C17-prompt-cache-deepseek-adaptation/SUMMARY.md) | 前缀缓存与 DeepSeek Harness 适配 | closed（S1/S2 接受，双平台发布完成） | - | v1.1.0 |
 | [C16-render-performance-repair](C16-render-performance-repair/SUMMARY.md) | 渲染性能修复（对标 Codex） | closed（用户接受 regular 为默认；Markdown 回归已修复） | - | - |
 | [C15-render-algorithm-performance-audit](C15-render-algorithm-performance-audit/AUDIT.md) | 渲染算法性能审计 | closed（用户接受审计结论，修复进 C16） | - | - |
