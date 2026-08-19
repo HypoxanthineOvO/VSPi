@@ -39,9 +39,9 @@ if (packedPackage.bin?.vspi !== "dist/index.js") fail("packed CLI entry point is
 if (Object.hasOwn(packedPackage.scripts ?? {}, "prepare")) fail("packed package must not define prepare");
 if (
   packedPackage.scripts?.postinstall !==
-  "node scripts/patch-pi-brace-expansion.mjs && node scripts/patch-pi-editor-performance.mjs"
+  "node scripts/patch-pi-brace-expansion.mjs && node scripts/patch-pi-editor-performance.mjs && node scripts/trim-pi-docs.mjs"
 ) {
-  fail("packed postinstall does not apply the guarded Pi dependency patches");
+  fail("packed postinstall does not apply the guarded Pi dependency patches and doc trim");
 }
 
 const files = new Map((packed.files ?? []).map((file) => [file.path, file]));
@@ -55,13 +55,14 @@ for (const required of [
   "dist/index.d.ts",
   "scripts/patch-pi-brace-expansion.mjs",
   "scripts/patch-pi-editor-performance.mjs",
+  "scripts/trim-pi-docs.mjs",
 ]) {
   if (!files.has(required)) fail(`required file is missing: ${required}`);
 }
 if ((files.get("dist/index.js")?.mode & 0o111) === 0) fail("dist/index.js is not executable");
 
 const allowed =
-  /^(?:package\.json|README\.md|LICENSE$|THIRD_PARTY_NOTICES\.md$|dist\/|Docs\/(?:usage|tui-v1|testing-and-debugging)\.md$|Docs\/harness\/|scripts\/(?:patch-pi-brace-expansion|patch-pi-editor-performance)\.mjs$)/;
+  /^(?:package\.json|README\.md|LICENSE$|THIRD_PARTY_NOTICES\.md$|dist\/|Docs\/(?:usage|tui-v1|testing-and-debugging)\.md$|Docs\/harness\/|scripts\/(?:patch-pi-brace-expansion|patch-pi-editor-performance|trim-pi-docs)\.mjs$)/;
 for (const path of files.keys()) {
   if (!allowed.test(path)) fail(`unexpected file in package: ${path}`);
   if (/^(?:src|test|node_modules|\.git)(?:\/|$)/.test(path)) fail(`private source leaked: ${path}`);
