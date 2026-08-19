@@ -113,7 +113,7 @@ describe("responsive status anchoring", () => {
     expect(visibleColumn(identity, "Model")).toBe(0);
     expect(visibleColumn(identity, "Effort")).toBe(visibleWidth("Model OpenAI / GPT-5.4  "));
     expectFixedModelEffortGap(identity);
-    expect(visibleColumn(identity, "Speed")).toBe(39);
+    expect(visibleColumn(identity, "Speed")).toBe(44);
     expect(visibleColumn(identity, "Context")).toBe(56);
     expect(telemetry).toMatch(/^\/workspace\/vspi/);
     expect(telemetry).not.toMatch(/\bPath\b/);
@@ -164,7 +164,7 @@ describe("responsive status anchoring", () => {
           expect(plain[0]?.slice(0, plain[0].indexOf("Effort")), `${name}: long Model truncation`).toMatch(/… {2}$/);
         }
         expect(visibleColumn(plain[0] ?? "", "Context"), `${name}: Context`).toBe(56);
-        expect(visibleColumn(plain[0] ?? "", "Speed"), `${name}: Speed`).toBe(39);
+        expect(visibleColumn(plain[0] ?? "", "Speed"), `${name}: Speed`).toBe(44);
         expect(plain[1], `${name}: unlabeled cwd`).toMatch(/^\//);
         expect(plain[1], `${name}: no Path label`).not.toMatch(/\bPath\b/);
         expect(visibleColumn(plain[1] ?? "", "Token"), `${name}: Token`).toBe(52);
@@ -194,7 +194,7 @@ describe("responsive status anchoring", () => {
       expect(visibleColumn(plain[0] ?? "", "Context")).toBe(96);
       expect(plain[1]).toMatch(/^\//);
       expect(plain[1]).not.toMatch(/\bPath\b/);
-      expect(visibleColumn(plain[1] ?? "", "Token")).toBe(92);
+      expect(visibleColumn(plain[1] ?? "", "Token")).toBe(80);
       expect(visibleColumn(plain[1] ?? "", "Cost")).toBe(110);
       expect(plain[0]).toContain("Context 50K / 128K 39%");
     }
@@ -203,7 +203,7 @@ describe("responsive status anchoring", () => {
   it("bounds extreme and non-finite telemetry inside the fixed 80/120-column slots", () => {
     const tracks = {
       80: { context: 56, token: 52, cost: 70, end: 80 },
-      120: { context: 96, token: 92, cost: 110, end: 120 },
+      120: { context: 96, token: 80, cost: 110, end: 120 },
     } as const;
     const finiteUsage: UsageSnapshot = {
       ...ACTIVE_USAGE,
@@ -280,7 +280,7 @@ describe("responsive status anchoring", () => {
       expect(visibleColumn(identity, "Context")).toBe(96);
       expect(telemetry).toMatch(/^\/workspace\/vspi/);
       expect(telemetry).not.toMatch(/\bPath\b/);
-      expect(visibleColumn(telemetry, "Token")).toBe(92);
+      expect(visibleColumn(telemetry, "Token")).toBe(80);
       expect(visibleColumn(telemetry, "Cost")).toBe(110);
       expect(identity).not.toMatch(/\bMode\b|\bAuto\b/);
     }
@@ -299,25 +299,27 @@ describe("responsive status anchoring", () => {
     expect(plain[1]?.indexOf("Token")).toBeLessThan(plain[1]?.indexOf("Cost") ?? -1);
   });
 
-  it("shows recent cache hit in the fixed Speed track without moving Context", () => {
-    const reported =
-      render(
-        statusInput({
-          usage: { ...ACTIVE_USAGE, throughputNow: 12, throughputAverage: 42, recentCacheHitPercent: 77 },
-        }),
-        80,
-      ).plain[0] ?? "";
-    const unknown =
-      render(
-        statusInput({
-          usage: { ...ACTIVE_USAGE, throughputNow: null, throughputAverage: 42, recentCacheHitPercent: null },
-        }),
-        80,
-      ).plain[0] ?? "";
+  it("shows average-only Speed while recent cache hit moves onto the Token line", () => {
+    const usage = { ...ACTIVE_USAGE, throughputNow: 12, throughputAverage: 42, recentCacheHitPercent: 77 };
+    const unknownUsage = { ...ACTIVE_USAGE, throughputNow: null, throughputAverage: 42, recentCacheHitPercent: null };
+    const wide = render(statusInput({ usage }), 120);
+    const wideUnknown = render(statusInput({ usage: unknownUsage }), 120);
+    const narrow = render(statusInput({ usage }), 80);
 
-    expect(reported).toContain("Speed 12/42 CH77");
-    expect(unknown).toContain("Speed —/42 CH—");
-    expect(visibleColumn(reported, "Context")).toBe(visibleColumn(unknown, "Context"));
+    // C19 P0-6：Speed 只剩平均吞吐，瞬时值与 CH 缩写不再出现。
+    for (const identity of [wide.plain[0] ?? "", wideUnknown.plain[0] ?? "", narrow.plain[0] ?? ""]) {
+      expect(identity).toContain("Speed 42");
+      expect(identity).not.toContain("12/42");
+      expect(identity).not.toContain("CH");
+    }
+    // Cache Hit Rate（最近请求口径）并入 Token 行；未知时显示 "—"。
+    expect(wide.plain[1] ?? "").toContain("Token ↑42k ↓8.1k Hit Rate: 77%");
+    expect(wideUnknown.plain[1] ?? "").toContain("Hit Rate: —");
+    // 80 列不展示 Hit Rate，保住 cwd 与既有锚点。
+    expect(narrow.plain[1] ?? "").toContain("Token ↑42k ↓8.1k");
+    expect(narrow.plain[1] ?? "").not.toContain("Hit Rate");
+    expect(narrow.plain[1]).toMatch(/^\/workspace\/vspi/);
+    expect(visibleColumn(wide.plain[0] ?? "", "Context")).toBe(visibleColumn(wideUnknown.plain[0] ?? "", "Context"));
   });
 
   it("truncates long path and model values without moving either right group", () => {

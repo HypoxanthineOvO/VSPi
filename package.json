@@ -1,6 +1,6 @@
 {
   "name": "vspi",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "A Chinese terminal UI for Pi coding agents with optional read-only Hypo-Workflow integration.",
   "homepage": "https://github.com/HypoxanthineOvO/VSPi",
   "repository": {
@@ -23,14 +23,15 @@
     "Docs/testing-and-debugging.md",
     "Docs/harness",
     "scripts/patch-pi-brace-expansion.mjs",
-    "scripts/patch-pi-editor-performance.mjs"
+    "scripts/patch-pi-editor-performance.mjs",
+    "scripts/trim-pi-docs.mjs"
   ],
   "scripts": {
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json && chmod +x dist/index.js",
     "prepack": "npm run build",
-    "postinstall": "node scripts/patch-pi-brace-expansion.mjs && node scripts/patch-pi-editor-performance.mjs",
+    "postinstall": "node scripts/patch-pi-brace-expansion.mjs && node scripts/patch-pi-editor-performance.mjs && node scripts/trim-pi-docs.mjs",
     "patch:pi-editor": "node scripts/patch-pi-editor-performance.mjs",
     "pretest": "npm run build",
     "check": "tsc --noEmit && biome check src test scripts",

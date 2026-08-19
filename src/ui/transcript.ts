@@ -563,24 +563,37 @@ export function renderTranscriptMessage(
     const context = message.contextMode ? ` · ${message.contextMode}` : "";
     const agentRole = message.agentRole ? ` · ${message.agentRole}` : "";
     const metadata = `${symbol} ${identity}${agentRole} · ${theme.blue(message.model)}${preferred} · ${effortLabel(message.effort)}${context}${lane}${fallback}`;
+    // C19 P0-5：运行中的进度行——当前工具、轮次、最近活动、耗时。
+    const running = message.status === "running" || message.status === "queued";
+    const progress = running
+      ? [
+          "Progress",
+          `  ${message.currentTool ? `tool ${message.currentTool}` : "thinking"} · turn ${(message.usageTurns ?? 0) + 1}${message.lastActivityAt ? ` · 活动于 ${message.lastActivityAt.slice(11, 19)}` : ""}${message.elapsedSeconds !== undefined ? ` · 已运行 ${formatSubagentDuration(message.elapsedSeconds)}` : ""}`,
+        ]
+      : message.elapsedSeconds !== undefined
+        ? ["Progress", `  用时 ${formatSubagentDuration(message.elapsedSeconds)} · ${message.status}`]
+        : undefined;
+    const usageLine =
+      message.runTokensUsed !== undefined && message.runTokensMax !== undefined
+        ? `  run ${formatSubagentTokens(message.runTokensUsed)} / ${formatSubagentTokens(message.runTokensMax)}${message.warnRunTokens ? " ⚠ 超警戒线" : ""}${message.treeTokensUsed !== undefined && message.treeTokensMax !== undefined ? ` · tree ${formatSubagentTokens(message.treeTokensUsed)} / ${formatSubagentTokens(message.treeTokensMax)}${message.warnTreeTokens ? " ⚠ 超警戒线" : ""}` : ""}`
+        : undefined;
     const bodyWidth = Math.max(1, width - 2);
     const body = [
       padLine(metadata, bodyWidth),
       ...wrapTextWithAnsi(message.task, bodyWidth).slice(0, 2),
-      ...(message.runTokensLeft !== undefined && message.treeTokensLeft !== undefined
+      ...(progress
+        ? [theme.focus(progress[0] as string), theme.focus(truncateToWidth(progress[1] as string, bodyWidth, "…"))]
+        : []),
+      ...(usageLine
         ? [
-            theme.muted(
-              truncateToWidth(
-                `Budget · run ${formatSubagentTokens(message.runTokensLeft)} left · tree ${formatSubagentTokens(message.treeTokensLeft)} / $${(message.treeCostUsdLeft ?? 0).toFixed(3)} left`,
-                bodyWidth,
-                "…",
-              ),
-            ),
+            message.warnRunTokens || message.warnTreeTokens
+              ? theme.warning(truncateToWidth(usageLine, bodyWidth, "…"))
+              : theme.muted(truncateToWidth(usageLine, bodyWidth, "…")),
           ]
         : []),
       ...(message.outputPreview
         ? [theme.muted(truncateToWidth(message.outputPreview, bodyWidth, "…"))]
-        : message.status === "running"
+        : running
           ? [theme.muted("Working...")]
           : []),
     ];
@@ -645,6 +658,13 @@ function formatSubagentTokens(value: number): string {
   if (value < 1_000) return String(Math.max(0, Math.round(value)));
   if (value < 10_000) return `${(value / 1_000).toFixed(1)}K`;
   return `${Math.round(value / 1_000)}K`;
+}
+
+/** C19 P0-5：秒数格式化为人类可读时长。 */
+function formatSubagentDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m${String(seconds % 60).padStart(2, "0")}s`;
 }
 
 function collapsedThinkingPreview(text: string, width: number): string | undefined {

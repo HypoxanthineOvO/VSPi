@@ -136,7 +136,14 @@ describe("M5 dynamic status layout", () => {
     for (const label of ["Model", "Effort", "Speed", "Context", "Token", "Cost"]) {
       expect(isAnsiStyled(rendered, label), `${label} label color`).toBe(true);
     }
-    for (const value of ["OpenAI / GPT-5.4", "High", "50K / 128K 39%", "/workspace/vspi", "↑0 ↓0", "¥0.00"]) {
+    for (const value of [
+      "OpenAI / GPT-5.4",
+      "High",
+      "50K / 128K 39%",
+      "/workspace/vspi",
+      "↑0 ↓0 Hit Rate: —",
+      "¥0.00",
+    ]) {
       expect(isAnsiStyled(rendered, value), `${value} value color`).toBe(true);
     }
   });

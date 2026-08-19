@@ -94,9 +94,19 @@ export interface SubAgentMessage {
   depth?: number;
   fallbackReason?: string;
   usageTokens?: number;
-  runTokensLeft?: number;
-  treeTokensLeft?: number;
-  treeCostUsdLeft?: number;
+  /** C19 P0-2/P0-5：预算改为已用量 + 警戒线；进度补 current tool/turn/最近活动/耗时。 */
+  runTokensUsed?: number;
+  runTokensMax?: number;
+  warnRunTokens?: boolean;
+  treeTokensUsed?: number;
+  treeTokensMax?: number;
+  warnTreeTokens?: boolean;
+  currentTool?: string;
+  lastActivityAt?: string;
+  elapsedSeconds?: number;
+  usageTurns?: number;
+  usageInputTokens?: number;
+  usageOutputTokens?: number;
 }
 
 export interface SessionMarkerMessage {

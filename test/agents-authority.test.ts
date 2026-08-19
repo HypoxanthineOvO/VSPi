@@ -86,41 +86,32 @@ async function configuredManager(
 
 describe("Teammate authority and lane continuity", () => {
   it("parses only explicit typed required-routing override scopes", () => {
-    expect(parseAgentsCommand("/agents override frontend")).toEqual({
-      kind: "override",
-      id: "frontend",
-      scope: "turn",
+    // C19 P0-3：Teammate Ban——override/model/reset 子命令暂时拒绝，配置数据保留。
+    expect(() => parseAgentsCommand("/agents override frontend")).toThrow("Teammate 暂不可用");
+    expect(() => parseAgentsCommand("/agents model frontend openai/gpt-4")).toThrow("Teammate 暂不可用");
+    expect(() => parseAgentsCommand("/agents reset frontend")).toThrow("Teammate 暂不可用");
+    expect(parseAgentsCommand("/agents")).toEqual({ kind: "show" });
+    expect(parseAgentsCommand("/agents pool openai analyst openai/gpt-5")).toEqual({
+      kind: "pool",
+      provider: "openai",
+      role: "analyst",
+      model: "openai/gpt-5",
     });
-    expect(parseAgentsCommand("/agents override all session")).toEqual({
-      kind: "override",
-      id: "all",
-      scope: "session",
-    });
-    expect(() => parseAgentsCommand("/agents override frontend forever")).toThrow("用法");
+    expect(() => parseAgentsCommand("/agents pool openai boss openai/gpt-5")).toThrow("用法");
   });
 
   it("requires typed actions for persistent mutation and required-routing override", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-authority-"));
     const manager = await configuredManager(cwd, [{ id: "frontend", routing: "required", match: ["frontend"] }]);
     manager.beginRootTask("Override required routing and reset the frontend teammate");
-    expect(() => manager.assertMainAction({ kind: "file-write", target: join(cwd, "src.ts") })).toThrow(
-      "Required teammate",
-    );
+    // C19 P0-3：Teammate Ban 后 routing 不再生效；主代理操作只受持久配置路径保护。
+    expect(() => manager.assertMainAction({ kind: "file-write", target: join(cwd, "src.ts") })).not.toThrow();
     expect(() => manager.assertMainAction({ kind: "file-write", target: join(cwd, ".vspi", "agents.json") })).toThrow(
       "typed /agents action",
     );
-
-    manager.overrideRequiredTeammate("frontend", "turn");
-    expect(() => manager.assertMainAction({ kind: "file-write", target: join(cwd, "src.ts") })).not.toThrow();
+    expect(manager.snapshot().teammates).toEqual([]);
+    expect(() => manager.overrideRequiredTeammate("frontend", "turn")).toThrow("temporarily disabled");
     manager.assertRootTaskComplete();
-    expect(manager.snapshot().authority.turnOverrides).toEqual([]);
-    manager.beginRootTask("frontend follow-up");
-    expect(() => manager.assertRootTaskComplete()).toThrow("frontend");
-
-    manager.overrideRequiredTeammate("all", "session");
-    manager.assertRootTaskComplete();
-    manager.beginRootTask("frontend later task");
-    expect(() => manager.assertRootTaskComplete()).not.toThrow();
     await manager.dispose();
   });
 
@@ -133,12 +124,8 @@ describe("Teammate authority and lane continuity", () => {
       { id: "manual-owner", routing: "manual", match: ["topic"] },
     ]);
     manager.beginRootTask("Handle this topic");
-    const capability = manager.capabilityContext() ?? "";
-    expect(capability).toContain("preferred=preferred-owner");
-    expect(capability).toContain("consult=consult-owner");
-    expect(capability).not.toContain("manual=manual-owner");
-    expect(() => manager.assertRootTaskComplete()).toThrow("required-owner");
-    manager.overrideRequiredTeammate("required-owner", "turn");
+    // C19 P0-3：Teammate Ban——不再注入任何 teammate capability 或 required 门槛。
+    expect(manager.capabilityContext()).toBeUndefined();
     expect(() => manager.assertRootTaskComplete()).not.toThrow();
     await manager.dispose();
   });
@@ -150,10 +137,13 @@ describe("Teammate authority and lane continuity", () => {
       { id: "two", routing: "required", match: ["shared"] },
     ]);
     manager.beginRootTask("shared work");
-    await manager
-      .createTool(["read"], true)
-      .execute("one", { task: "Do one part", teammate: "one" }, undefined, undefined, context(cwd) as never);
-    expect(() => manager.assertRootTaskComplete()).toThrow("two");
+    // C19 P0-3：Teammate 调用被拒；required 门禁也不再生效。
+    await expect(
+      manager
+        .createTool(["read"], true)
+        .execute("one", { task: "Do one part", teammate: "one" }, undefined, undefined, context(cwd) as never),
+    ).rejects.toThrow("temporarily disabled");
+    expect(() => manager.assertRootTaskComplete()).not.toThrow();
     await manager.dispose();
   });
 
@@ -163,6 +153,7 @@ describe("Teammate authority and lane continuity", () => {
     const manager = await configuredManager(cwd, [{ id: "frontend", routing: "manual", match: [] }], {
       sessionFactory,
     });
+    // C19 P0-3：Ban 先于 identity 校验触发。
     await expect(
       manager
         .createTool(["read"], true)
@@ -173,7 +164,7 @@ describe("Teammate authority and lane continuity", () => {
           undefined,
           context(cwd) as never,
         ),
-    ).rejects.toThrow("system_prompt is fixed");
+    ).rejects.toThrow("temporarily disabled");
     expect(sessionFactory).not.toHaveBeenCalled();
     await manager.dispose();
   });
@@ -194,53 +185,19 @@ describe("Teammate authority and lane continuity", () => {
           undefined,
           context(cwd) as never,
         ),
-    ).rejects.toThrow("configured ceiling");
+    ).rejects.toThrow("temporarily disabled");
     expect(sessionFactory).not.toHaveBeenCalled();
     await manager.dispose();
   });
 
   it("fails closed when another manager owns a Teammate lane for prompt, reset, or model switch", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-lane-owner-"));
-    let releasePrompt!: () => void;
-    let markStarted!: () => void;
-    const started = new Promise<void>((resolvePromise) => {
-      markStarted = resolvePromise;
-    });
-    const blocked = new Promise<void>((resolvePromise) => {
-      releasePrompt = resolvePromise;
-    });
-    const first = await configuredManager(cwd, [{ id: "frontend", routing: "manual", match: [] }], {
-      sessionFactory: async () =>
-        session(async () => {
-          markStarted();
-          await blocked;
-          return "first done";
-        }),
-    });
-    const second = await configuredManager(cwd, [{ id: "frontend", routing: "manual", match: [] }]);
-    const active = first
-      .createTool(["read"], true)
-      .execute("active", { task: "Hold lane", teammate: "frontend" }, undefined, undefined, context(cwd) as never);
-    await started;
-
-    await expect(
-      second
-        .createTool(["read"], true)
-        .execute("contender", { task: "Same lane", teammate: "frontend" }, undefined, undefined, context(cwd) as never),
-    ).rejects.toThrow("lease is already held");
-    await expect(second.resetTeammateLane("frontend")).rejects.toThrow("lease is already held");
-    await expect(second.switchTeammateModel("frontend", "openai/gpt-4")).rejects.toThrow("lease is already held");
-    expect(second.snapshot().teammates[0]?.lanes).toEqual([
-      expect.objectContaining({ lane: "default", state: "blocked", owner: expect.stringContaining(":") }),
-    ]);
-
-    releasePrompt();
-    await active;
-    await second.resetTeammateLane("frontend");
-    expect(second.snapshot().teammates[0]?.lanes).toEqual([
-      expect.objectContaining({ lane: "default", state: "idle" }),
-    ]);
-    await Promise.all([first.dispose(), second.dispose()]);
+    // C19 P0-3：Teammate Ban 后 lane/model/reset 入口直接拒绝，不再触达 lease 层。
+    const manager = await configuredManager(cwd, [{ id: "frontend", routing: "manual", match: [] }]);
+    await expect(manager.resetTeammateLane("frontend")).rejects.toThrow("temporarily disabled");
+    await expect(manager.switchTeammateModel("frontend", "openai/gpt-4")).rejects.toThrow("temporarily disabled");
+    expect(manager.snapshot().teammates).toEqual([]);
+    await manager.dispose();
   });
 
   it("refreshes Teammate identity and model after acquiring a lane owned by a stale manager", async () => {
@@ -253,17 +210,20 @@ describe("Teammate authority and lane continuity", () => {
         return session(async () => "fresh result");
       },
     });
-    await first.switchTeammateModel("frontend", "openai/gpt-4");
-    await stale
-      .createTool(["read"], true)
-      .execute(
-        "fresh-lane",
-        { task: "Use current identity", teammate: "frontend" },
-        undefined,
-        undefined,
-        context(cwd) as never,
-      );
-    expect(opened).toEqual([{ model: "openai/gpt-4", systemPrompt: "Identity: frontend" }]);
+    // C19 P0-3：模型切换与 lane 复用均被 Ban 拦截。
+    await expect(first.switchTeammateModel("frontend", "openai/gpt-4")).rejects.toThrow("temporarily disabled");
+    await expect(
+      stale
+        .createTool(["read"], true)
+        .execute(
+          "fresh-lane",
+          { task: "Use current identity", teammate: "frontend" },
+          undefined,
+          undefined,
+          context(cwd) as never,
+        ),
+    ).rejects.toThrow("temporarily disabled");
+    expect(opened).toEqual([]);
     await Promise.all([first.dispose(), stale.dispose()]);
   });
 });

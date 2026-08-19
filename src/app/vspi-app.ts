@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   type Component,
@@ -122,6 +123,7 @@ export interface VspiAppOptions {
   workflowAdapter?: WorkflowAdapter;
   promptProfiles?: PromptProfileUi;
   selfUpdate?: (currentVersion: string) => Promise<SelfUpdateResult>;
+  reloadLauncher?: () => Promise<void>;
   thinkingTranslator?: ThinkingTranslator;
   openOnStart?: "sessions" | "providers";
   onForegroundRelinquish?: () => void;
@@ -1640,6 +1642,36 @@ export class VspiApp implements Component, Focusable {
         );
       } catch (error) {
         this.showNotice(`更新失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+      }
+      return;
+    }
+    if (action.handler === "reload") {
+      if (this.runActive) {
+        this.showNotice("会话运行中，无法 /reload；请先等待完成或 ESC 中断", "warning");
+        return;
+      }
+      const launch =
+        this.options.reloadLauncher ??
+        (() =>
+          new Promise<void>((resolve, reject) => {
+            // detached + 同 tty：新进程接管前端，本进程随后经 lease handoff 退出。
+            const child = spawn(process.execPath, [process.argv[1] ?? "vspi", "continue"], {
+              stdio: ["inherit", "inherit", "inherit"],
+              detached: false,
+            });
+            child.once("spawn", () => {
+              child.unref();
+              resolve();
+            });
+            child.once("error", reject);
+          }));
+      try {
+        await launch();
+        // 新进程接管 lease 后本进程会走 onTakeover 退出；兜底：3 秒仍未移交则直接退出。
+        const fallback = setTimeout(() => this.options.onExit(), 3_000);
+        fallback.unref?.();
+      } catch (error) {
+        this.showNotice(`/reload 失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
       }
       return;
     }
@@ -3662,18 +3694,9 @@ export function parseAgentsCommand(
   | { kind: "pool"; provider: string; role: AgentRole; model: string } {
   const parts = raw.trim().split(/\s+/);
   if (parts.length <= 1) return { kind: "show" };
-  if (parts[1] === "model" && parts.length === 4) {
-    return { kind: "model", id: parts[2] as string, model: parts[3] as string };
-  }
-  if (parts[1] === "reset" && (parts.length === 3 || parts.length === 4)) {
-    return { kind: "reset", id: parts[2] as string, ...(parts[3] ? { lane: parts[3] } : {}) };
-  }
-  if (
-    parts[1] === "override" &&
-    (parts.length === 3 || parts.length === 4) &&
-    (parts[3] === undefined || parts[3] === "turn" || parts[3] === "session")
-  ) {
-    return { kind: "override", id: parts[2] as string, scope: (parts[3] as "turn" | "session") ?? "turn" };
+  // C19 P0-3：Teammate Ban——model/reset/override 子命令暂不可用，配置数据保留。
+  if (parts[1] === "model" || parts[1] === "reset" || parts[1] === "override") {
+    throw new Error("Teammate 暂不可用（后续版本回归）；/agents pool 仍可配置 Agent Pool");
   }
   if (
     parts[1] === "pool" &&
@@ -3682,9 +3705,7 @@ export function parseAgentsCommand(
   ) {
     return { kind: "pool", provider: parts[2] as string, role: parts[3] as AgentRole, model: parts[4] as string };
   }
-  throw new Error(
-    "用法：/agents、/agents pool <provider> <orchestrator|researcher|analyst|worker> <provider/model>、/agents model <teammate> <provider/model>、/agents reset <teammate> [lane]、/agents override <teammate|all> [turn|session]",
-  );
+  throw new Error("用法：/agents、/agents pool <provider> <orchestrator|researcher|analyst|worker> <provider/model>");
 }
 
 type GoalCommand =

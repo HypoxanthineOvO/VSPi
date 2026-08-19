@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 export const DEFAULT_AGENT_MAX_DEPTH = 3;
 export const DEFAULT_AGENT_MAX_PER_TREE = 12;
 export const DEFAULT_AGENT_MAX_CONCURRENCY = 16;
-export const DEFAULT_AGENT_MAX_CHILDREN = 3;
 
 interface TreeState {
   created: number;
@@ -12,7 +11,6 @@ interface TreeState {
   consumedTokens: number;
   consumedCostUsd: number;
   fingerprints: Set<string>;
-  children: Map<string, number>;
 }
 
 export interface AgentTreeContext {
@@ -68,17 +66,17 @@ export class AgentTreeScheduler {
     readonly maxTreeTokens = 500_000,
     readonly maxTreeCostUsd = 20,
   ) {
-    if (!Number.isSafeInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 16) {
-      throw new Error("Agent maxConcurrency must be an integer between 1 and 16");
+    if (!Number.isSafeInteger(maxConcurrency) || maxConcurrency < 1) {
+      throw new Error("Agent maxConcurrency must be a positive integer");
     }
     if (!Number.isSafeInteger(maxDepth) || maxDepth < 1 || maxDepth > 5)
       throw new Error("Agent maxDepth must be an integer between 1 and 5");
-    if (!Number.isSafeInteger(maxAgentsPerTree) || maxAgentsPerTree < 1 || maxAgentsPerTree > 128)
-      throw new Error("Agent maxAgentsPerTree must be an integer between 1 and 128");
     if (!Number.isSafeInteger(maxTreeTokens) || maxTreeTokens < 1_000)
       throw new Error("Agent maxTreeTokens must be an integer of at least 1000");
     if (!Number.isFinite(maxTreeCostUsd) || maxTreeCostUsd <= 0)
       throw new Error("Agent maxTreeCostUsd must be positive");
+    // C19 P0-2：并发数只控制同时在跑的 generation 数（配置仍约束 semaphore），
+    // 不再作为拒绝 spawn 的理由——超过并发的请求排队等待而不是失败。
     this.semaphore = new Semaphore(maxConcurrency);
   }
 
@@ -91,7 +89,6 @@ export class AgentTreeScheduler {
       consumedTokens: 0,
       consumedCostUsd: 0,
       fingerprints: new Set(),
-      children: new Map(),
     });
     return { treeId, depth: 0 };
   }
@@ -99,21 +96,12 @@ export class AgentTreeScheduler {
   child(parent: AgentTreeContext, runId: string, fingerprint?: string): AgentTreeContext {
     const tree = this.requireTree(parent.treeId);
     if (tree.cancelled) throw abortError("Agent tree was cancelled");
-    this.assertBudget(parent.treeId);
+    // C19 P0-2：预算与 per-parent child/tree size 不再构成拒绝条件，仅保留深度限制；
+    // 深度超限只禁止继续 spawn，不影响已有 agent 运行（默认 3，可配置）。
     const depth = parent.depth + 1;
     if (depth > this.maxDepth) throw new Error(`Agent depth limit exceeded (${this.maxDepth})`);
-    const parentKey = parent.runId ?? "root";
-    const childCount = (tree.children.get(parentKey) ?? 0) + 1;
-    if (childCount > DEFAULT_AGENT_MAX_CHILDREN) {
-      throw new Error(`Agent child limit exceeded (${DEFAULT_AGENT_MAX_CHILDREN})`);
-    }
     if (fingerprint && tree.fingerprints.has(fingerprint)) throw new Error("Duplicate agent task in the same tree");
     tree.created += 1;
-    if (tree.created > this.maxAgentsPerTree) {
-      tree.created -= 1;
-      throw new Error(`Agent tree size limit exceeded (${this.maxAgentsPerTree})`);
-    }
-    tree.children.set(parentKey, childCount);
     if (fingerprint) tree.fingerprints.add(fingerprint);
     return {
       treeId: parent.treeId,
@@ -145,12 +133,6 @@ export class AgentTreeScheduler {
     const tree = this.requireTree(treeId);
     tree.consumedTokens += Math.max(0, Math.round(tokens));
     tree.consumedCostUsd += Math.max(0, costUsd);
-  }
-
-  assertBudget(treeId: string): void {
-    const tree = this.requireTree(treeId);
-    if (tree.consumedTokens >= this.maxTreeTokens) throw new Error("Agent tree token budget exhausted");
-    if (tree.consumedCostUsd >= this.maxTreeCostUsd) throw new Error("Agent tree cost budget exhausted");
   }
 
   budget(treeId: string): { tokens: number; costUsd: number } {

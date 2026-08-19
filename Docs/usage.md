@@ -115,7 +115,7 @@ Model、Provider、Sessions、Settings、Usage、Theme 和 Question 共用底部
 
 ### 自更新
 
-`/update` 与 CLI 的 `vspi update` 使用同一条自更新链路：从 VSPi 公共 GitLab Release 查询最新稳定 SemVer，要求固定项目、tag、tarball 名称与下载地址完全一致，下载后按 Release 中的 SHA-256 校验。自更新会识别当前命令由 Volta 还是 npm 管理，更新同一安装位置并复验当前包版本；不会再把另一份全局安装成功误报为当前命令已更新。已经是最新版时不会重复安装；更新成功后重启 VSPi 生效。
+`/update` 与 CLI 的 `vspi update` 使用同一条自更新链路：从 VSPi 公共 GitLab Release 查询最新稳定 SemVer，要求固定项目、tag、tarball 名称与下载地址完全一致，下载后按 Release 中的 SHA-256 校验。自更新会识别当前命令由 Volta 还是 npm 管理，更新同一安装位置并复验当前包版本；不会再把另一份全局安装成功误报为当前命令已更新。已经是最新版时不会重复安装；更新成功后可用 `/reload` 平滑重启生效。`/reload` 在会话空闲时启动新进程续接当前会话（复用同服务器前台迁移机制），用于更新后生效或修改 VSPi 本体配置后加载；运行中会被拒绝。CLI 侧 `vspi -c` / `vspi --continue` 等价 `vspi continue`，`vspi -r` / `vspi --resume` 等价 `vspi resume`。
 
 ### 同服务器前台迁移
 

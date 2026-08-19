@@ -116,6 +116,11 @@ export interface PiAgentManagerOptions {
 }
 
 export class PiAgentManager {
+  /**
+   * C19 P0-3：Teammate 功能整体 Ban。配置解析与历史数据保留（agents.json 可加载），
+   * 但 runtime 不再注册 teammate 路由、工具参数与 UI 投影；后续讨论再决定迁移或删除。
+   */
+  static readonly teammatesEnabled = false;
   private config: AgentProjectConfig;
   private readonly scheduler: AgentTreeScheduler;
   private readonly active = new Map<string, AgentRunSnapshot>();
@@ -132,7 +137,6 @@ export class PiAgentManager {
   private activeTurnOverrides = new Set<string>();
   private nextTurnOverrides = new Set<string>();
   private sessionOverrides = new Set<string>();
-  private explicitAgentRequired = false;
   private diagnostic: string | undefined;
   private disposed = false;
 
@@ -173,6 +177,8 @@ export class PiAgentManager {
   }
 
   createTool(parentTools: string[], allowTeammates: boolean, inherited?: AgentTreeContext): ToolDefinition {
+    // C19 P0-3：Teammate Ban——即使 allowTeammates（root 调用）也不暴露 teammate 参数。
+    const teammatesUsable = PiAgentManager.teammatesEnabled && allowTeammates && this.config.teammates.length > 0;
     const teammateSummary = this.config.teammates
       .map(
         (item) =>
@@ -200,12 +206,7 @@ export class PiAgentManager {
       },
       { additionalProperties: false },
     );
-    const teammateCallsEnabled = allowTeammates && this.config.teammates.length > 0;
-    const parameters = allowTeammates
-      ? teammateCallsEnabled
-        ? teammateParameters
-        : taskParameters
-      : BaseTaskAgentParameters;
+    const parameters = teammatesUsable ? teammateParameters : taskParameters;
     return {
       name: "subagent",
       label: "Subagent",
@@ -213,13 +214,12 @@ export class PiAgentManager {
         "Run one isolated Task Agent or a configured project Teammate and return its result.",
         "Task Agents receive only task/context fields unless inherit_parent_context is true.",
         "Model and effort inherit from the caller when omitted; fallback_models are used only for positively identified quota exhaustion.",
-        teammateCallsEnabled
+        teammatesUsable
           ? `Configured teammates: ${teammateSummary}. A teammate call requires teammate and may set lane.`
-          : allowTeammates
-            ? "No project Teammates are configured; omit teammate and lane."
-            : "Choose role instead of a concrete model; the child inherits its provider's configured model pool.",
+          : "Choose role instead of a concrete model; the child inherits its provider's configured model pool.",
         "Run parallel tasks by issuing multiple subagent tool calls in one response.",
-        `Limits: depth ${this.scheduler.maxDepth}, ${this.scheduler.maxAgentsPerTree} agents per tree, ${this.config.maxConcurrency} concurrent generations.`,
+        `Nested agents may spawn children up to depth ${this.scheduler.maxDepth}.`,
+        "Token, cost and duration figures are telemetry only; they never block or discard results.",
       ].join(" "),
       promptSnippet:
         "Delegated agents are available with isolated context, explicit model/effort/tool selection, and project Teammate lanes where configured.",
@@ -231,6 +231,9 @@ export class PiAgentManager {
         const task = raw as AgentTaskValue;
         if (!allowTeammates && task.teammate) {
           throw new Error("Child agents cannot invoke persistent Teammates");
+        }
+        if (allowTeammates && task.teammate && !PiAgentManager.teammatesEnabled) {
+          throw new Error("Teammates are temporarily disabled; use task agents instead");
         }
         const root = inherited ?? this.rootContext ?? this.scheduler.root();
         const ownsTree = inherited === undefined && this.rootContext === undefined;
@@ -268,17 +271,14 @@ export class PiAgentManager {
     const normalized = text.toLocaleLowerCase();
     const matches = (item: TeammateDefinition) =>
       item.match.length > 0 && item.match.some((match) => normalized.includes(match.toLocaleLowerCase()));
+    const activeTeammates = PiAgentManager.teammatesEnabled ? this.config.teammates : [];
     const matchedRequired = new Set(
-      this.config.teammates.filter((item) => item.routing === "required" && matches(item)).map((item) => item.id),
+      activeTeammates.filter((item) => item.routing === "required" && matches(item)).map((item) => item.id),
     );
-    const matchedHints = this.config.teammates.filter(
+    const matchedHints = activeTeammates.filter(
       (item): item is TeammateDefinition & { routing: "preferred" | "consult" } =>
         (item.routing === "preferred" || item.routing === "consult") && matches(item),
     );
-    const mentionsAgent = /\bsub[ -]?agent\b|子代理|子智能体|派(?:生|一个)?.{0,8}agent/iu.test(text);
-    const rejectsAgent =
-      /(?:不用|不要|禁止|别用|do not|don't|without).{0,20}(?:sub[ -]?agent|子代理|子智能体|agent)/iu.test(text);
-    const explicitlyRequired = mentionsAgent && !rejectsAgent;
     if (!merge) {
       if (this.rootContext) this.scheduler.finishTree(this.rootContext.treeId);
       this.rootContext = this.scheduler.root();
@@ -287,11 +287,9 @@ export class PiAgentManager {
       this.nextTurnOverrides = new Set();
       this.pendingRequired = matchedRequired;
       this.routingHints = new Map(matchedHints.map((item) => [item.id, item.routing]));
-      this.explicitAgentRequired = explicitlyRequired;
     } else {
       for (const id of matchedRequired) this.pendingRequired.add(id);
       for (const item of matchedHints) this.routingHints.set(item.id, item.routing);
-      this.explicitAgentRequired ||= explicitlyRequired;
     }
     for (const id of [...this.pendingRequired]) {
       if (this.overrideApplies(id)) this.pendingRequired.delete(id);
@@ -299,8 +297,9 @@ export class PiAgentManager {
   }
 
   capabilityContext(): string | undefined {
-    if (this.config.teammates.length === 0 && this.pendingRequired.size === 0 && !this.explicitAgentRequired) return;
-    const lines = this.config.teammates.map((item) => {
+    const activeTeammates = PiAgentManager.teammatesEnabled ? this.config.teammates : [];
+    if (activeTeammates.length === 0 && this.pendingRequired.size === 0) return;
+    const lines = activeTeammates.map((item) => {
       const current = item.currentModel ?? item.preferredModel ?? "inherit";
       const fallback = item.fallback ? `; sticky fallback from ${item.fallback.from}: ${item.fallback.reason}` : "";
       return `- ${item.id}: role=${item.role}; routing=${item.routing}; model=${current}; effort=${item.effort ?? "inherit"}${fallback}`;
@@ -312,7 +311,6 @@ export class PiAgentManager {
       ...(this.pendingRequired.size > 0
         ? [`User policy for this turn requires teammate routing: ${[...this.pendingRequired].join(", ")}.`]
         : []),
-      ...(this.explicitAgentRequired ? ["The user explicitly required subagent use for this turn."] : []),
       ...(this.routingHints.size > 0
         ? [
             `Routing guidance for this turn: ${[...this.routingHints]
@@ -330,31 +328,27 @@ export class PiAgentManager {
     ].join("\n");
   }
 
+  /** Teammate Ban（C19 P0-3）：runtime 不再暴露任何 teammate 表面。 */
+  private assertTeammatesEnabled(): void {
+    if (!PiAgentManager.teammatesEnabled) {
+      throw new Error("Teammates are temporarily disabled; configuration data is preserved");
+    }
+  }
+
   assertMainAction(action: PolicyAction): void {
     if (isPersistentAgentMutation(action, this.options.cwd)) {
       throw new Error("Persistent Teammate changes require a typed /agents action");
     }
-    const mutating = action.kind === "file-write" || (action.kind === "process" && action.operation !== "read");
-    if (!mutating) return;
-    if (this.pendingRequired.size > 0) {
-      throw new Error(`Required teammate has not completed: ${[...this.pendingRequired].join(", ")}`);
-    }
-    if (this.explicitAgentRequired)
-      throw new Error("The user explicitly required a subagent before main-agent mutation");
   }
 
   assertRootTaskComplete(): void {
     if (this.pendingRequired.size > 0) {
       throw new Error(`Required teammate has not completed: ${[...this.pendingRequired].join(", ")}`);
     }
-    if (this.explicitAgentRequired) {
-      throw new Error("The user explicitly required a subagent, but no subagent completed this turn");
-    }
     if (this.rootContext) this.scheduler.finishTree(this.rootContext.treeId);
     this.rootContext = undefined;
     this.activeTurnOverrides.clear();
     this.routingHints.clear();
-    this.explicitAgentRequired = false;
   }
 
   snapshot(): AgentSnapshot {
@@ -374,7 +368,8 @@ export class PiAgentManager {
       pools: structuredClone(this.pools),
       active: [...this.active.values()].map(cloneRun),
       recent: this.recent.map(cloneRun),
-      teammates: this.config.teammates.map((item) => ({
+      // C19 P0-3：Teammate Ban——snapshot 不再暴露 teammate 投影，配置数据仍在磁盘。
+      teammates: (PiAgentManager.teammatesEnabled ? this.config.teammates : []).map((item) => ({
         ...structuredClone(item),
         activeLanes: [...this.lanes.keys()]
           .filter((key) => key.startsWith(`${item.id}:`))
@@ -395,6 +390,7 @@ export class PiAgentManager {
   }
 
   async switchTeammateModel(id: string, model: string): Promise<void> {
+    this.assertTeammatesEnabled();
     await this.resolveModel(model);
     const gate = await this.acquireTeammateGate(id);
     let configGate: Awaited<ReturnType<typeof acquireAgentExclusiveLease>> | undefined;
@@ -424,6 +420,7 @@ export class PiAgentManager {
   }
 
   async resetTeammateLane(id: string, lane = "default"): Promise<void> {
+    this.assertTeammatesEnabled();
     this.requireTeammate(id);
     const safeLane = identifier(lane, "lane");
     const key = `${id}:${safeLane}`;
@@ -485,6 +482,7 @@ export class PiAgentManager {
   }
 
   overrideRequiredTeammate(id: string, scope: "turn" | "session" = "turn"): void {
+    this.assertTeammatesEnabled();
     const target = id === "all" ? "*" : this.requireTeammate(id).id;
     if (scope === "session") this.sessionOverrides.add(target);
     else if (this.rootContext) this.activeTurnOverrides.add(target);
@@ -511,6 +509,9 @@ export class PiAgentManager {
     signal: AbortSignal | undefined,
     update: (message: string) => void,
   ): Promise<RunOutcome> {
+    if (task.teammate && !PiAgentManager.teammatesEnabled) {
+      throw new Error("Teammates are temporarily disabled; use task agents instead");
+    }
     const taskEpoch = this.rootTaskEpoch;
     const runId = randomUUID();
     const fingerprint = compactText(task.task, 2_000).toLocaleLowerCase();
@@ -589,7 +590,6 @@ export class PiAgentManager {
         teammate && lane ? await this.withLane(`${teammate.id}:${lane}`, operation, runSignal) : await operation();
       if (taskEpoch === this.rootTaskEpoch) {
         if (teammate) this.pendingRequired.delete(teammate.id);
-        this.explicitAgentRequired = false;
       }
       this.publish(run);
       return outcome;
@@ -676,7 +676,6 @@ export class PiAgentManager {
       } catch (error) {
         lastError = error;
         if (!isQuotaExhaustion(error) || index >= candidates.length - 1) throw error;
-        this.scheduler.assertBudget(run.treeId);
         const fallback = candidates[index + 1];
         if (!fallback) throw error;
         run.model = fallback;
@@ -795,9 +794,18 @@ export class PiAgentManager {
         latest = assistantText(event.message);
         if (latest) {
           run.outputPreview = redactAuditText(latest, 4_000);
+          run.lastActivityAt = new Date().toISOString();
           this.publish(run);
           update(`${run.kind} ${run.id.slice(0, 8)} · ${model}\n${run.outputPreview}`);
         }
+      } else if (event.type === "tool_execution_start") {
+        run.currentTool = event.toolName;
+        run.lastActivityAt = new Date().toISOString();
+        this.publish(run);
+      } else if (event.type === "tool_execution_end") {
+        delete run.currentTool;
+        run.lastActivityAt = new Date().toISOString();
+        this.publish(run);
       }
     });
     const abort = () => void session.abort();
@@ -812,7 +820,6 @@ export class PiAgentManager {
       await session.prompt(prompt, { expandPromptTemplates: false, source: "interactive" });
       if (timedOut) throw new Error(`Agent run deadline exceeded (${this.config.maxRunSeconds}s)`);
       const usage = addUsage(run.usage, sessionUsage(session.messages));
-      assertRunTokenBudget(usage, this.config.maxRunTokens);
       const failure = assistantFailure(session.messages);
       if (failure) {
         const error = new Error(failure.message);
@@ -822,12 +829,10 @@ export class PiAgentManager {
       const output = finalAssistantText(session.messages);
       run.outputPreview = redactAuditText(output || "(no output)", 4_000);
       return { output: truncateOutput(output || "(no output)"), run: cloneRun(run), usage };
-    } catch (error) {
-      assertRunTokenBudget(addUsage(run.usage, sessionUsage(session.messages)), this.config.maxRunTokens);
-      throw error;
     } finally {
       const attemptUsage = sessionUsage(session.messages);
       run.usage = addUsage(run.usage, attemptUsage);
+      delete run.currentTool;
       this.scheduler.recordUsage(
         run.treeId,
         attemptUsage.input + attemptUsage.output + attemptUsage.cacheRead + attemptUsage.cacheWrite,
@@ -1187,14 +1192,20 @@ export class PiAgentManager {
 
   private runBudget(treeId: string, usage: RunOutcome["usage"]): AgentRunSnapshot["budget"] {
     const tree = this.scheduler.budget(treeId);
+    const runTokensUsed = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+    // 预算口径只产出 UI 警戒线；runtime 不据此拒绝、排队或作废成果（C19 P0-2）。
     return {
-      runTokensUsed: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
+      runTokensUsed,
       maxRunTokens: this.config.maxRunTokens,
       treeTokensUsed: tree.tokens,
       maxTreeTokens: this.config.maxTreeTokens,
       treeCostUsd: tree.costUsd,
       maxTreeCostUsd: this.config.maxTreeCostUsd,
       maxRunSeconds: this.config.maxRunSeconds,
+      warnRunTokens: runTokensUsed > this.config.maxRunTokens,
+      warnTreeTokens: tree.tokens > this.config.maxTreeTokens,
+      warnTreeCost: tree.costUsd > this.config.maxTreeCostUsd,
+      warnElapsed: false,
     };
   }
 
@@ -1388,11 +1399,6 @@ function sessionUsage(messages: readonly unknown[]): RunOutcome["usage"] {
     if (isRecord(message.usage.cost)) usage.cost += numberValue(message.usage.cost.total);
   }
   return usage;
-}
-
-function assertRunTokenBudget(usage: RunOutcome["usage"], maxRunTokens: number): void {
-  const used = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-  if (used > maxRunTokens) throw new Error(`Agent run token budget exceeded (${used}/${maxRunTokens})`);
 }
 
 function isQuotaExhaustion(error: unknown): boolean {

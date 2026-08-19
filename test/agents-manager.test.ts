@@ -278,12 +278,15 @@ describe("PiAgentManager", () => {
       sessionFactory: async () => fakeSession(async () => "unused"),
     });
 
+    // C19 P0-3：Teammate Ban——即使配置里存在 teammate，schema 也不再暴露 teammate/lane 参数。
     const schema = manager.createTool(["read"], true).parameters as {
       properties?: Record<string, unknown>;
     };
-    expect(schema.properties).toHaveProperty("teammate");
-    expect(schema.properties).toHaveProperty("lane");
+    expect(schema.properties).not.toHaveProperty("teammate");
+    expect(schema.properties).not.toHaveProperty("lane");
     expect(schema.properties).not.toHaveProperty("tasks");
+    // 配置本身仍可加载（数据保留）。
+    expect(manager.snapshot().limits.maxDepth).toBe(3);
     await manager.dispose();
   });
 
@@ -537,7 +540,7 @@ describe("PiAgentManager", () => {
     await manager.dispose();
   });
 
-  it("honors an explicit subagent requirement for the whole root turn", async () => {
+  it("no longer gates turns on keyword-detected subagent requirements (C19 P0-1)", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-required-"));
     const manager = await PiAgentManager.create({
       cwd,
@@ -548,15 +551,11 @@ describe("PiAgentManager", () => {
       executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
       sessionFactory: async () => fakeSession(async () => "delegated"),
     });
+    // 讨论或要求 subagent 都不再形成回合末断言；主回答不会被 authority 否决。
     manager.beginRootTask("请使用 subagent 调研这个问题");
-    expect(() => manager.assertRootTaskComplete()).toThrow("explicitly required");
-    manager.beginRootTask("再补充一个输出格式要求", true);
-    expect(() => manager.assertRootTaskComplete()).toThrow("explicitly required");
-    await manager
-      .createTool(["read"], true)
-      .execute("required-call", { task: "Research" }, undefined, undefined, fakeToolContext(cwd) as never);
     expect(() => manager.assertRootTaskComplete()).not.toThrow();
-
+    manager.beginRootTask("再补充一个输出格式要求", true);
+    expect(() => manager.assertRootTaskComplete()).not.toThrow();
     manager.beginRootTask("不要使用 subagent，直接回答");
     expect(() => manager.assertRootTaskComplete()).not.toThrow();
     await manager.dispose();
@@ -755,7 +754,7 @@ describe("PiAgentManager", () => {
     await manager.dispose();
   });
 
-  it("charges failed quota attempts to the tree budget before considering fallback", async () => {
+  it("returns the real quota error without budget overriding it (C19 P0-2)", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-failed-budget-"));
     const config = defaultAgentProjectConfig();
     config.maxRunTokens = 1_000;
@@ -774,6 +773,7 @@ describe("PiAgentManager", () => {
         return stoppedSession("error", "insufficient_quota", 1_000);
       },
     });
+    // 预算不再拦截：超限后仍尝试 fallback，最终上报原始 quota 错误而非预算错误。
     await expect(
       manager
         .createTool(["read"], true)
@@ -784,12 +784,12 @@ describe("PiAgentManager", () => {
           undefined,
           fakeToolContext(cwd) as never,
         ),
-    ).rejects.toThrow("tree token budget exhausted");
-    expect(attempts).toBe(1);
+    ).rejects.toThrow("insufficient_quota");
+    expect(attempts).toBe(2);
     await manager.dispose();
   });
 
-  it("rejects a completed attempt that exceeds the per-run token boundary", async () => {
+  it("keeps a completed attempt's output despite exceeding the per-run token warning line (C19 P0-2)", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-run-budget-"));
     const config = defaultAgentProjectConfig();
     config.maxRunTokens = 1_000;
@@ -803,11 +803,13 @@ describe("PiAgentManager", () => {
       executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
       sessionFactory: async () => fakeSession(async () => "over budget", 1_001),
     });
-    await expect(
-      manager
-        .createTool(["read"], true)
-        .execute("run-budget", { task: "Research budget" }, undefined, undefined, fakeToolContext(cwd) as never),
-    ).rejects.toThrow("run token budget exceeded (1005/1000)");
+    const result = await manager
+      .createTool(["read"], true)
+      .execute("run-budget", { task: "Research budget" }, undefined, undefined, fakeToolContext(cwd) as never);
+    expect((result.content[0] as { type: string; text: string }).text).toBe("over budget");
+    const recent = manager.snapshot().recent[0];
+    expect(recent?.budget.runTokensUsed).toBeGreaterThan(1_000);
+    expect(recent?.budget.warnRunTokens).toBe(true);
     await manager.dispose();
   });
 
@@ -900,7 +902,6 @@ describe("PiAgentManager", () => {
       fallbackModels: ["openai/gpt-5"],
     });
     const path = await saveAgentProjectConfig(cwd, true, config);
-    let attempt = 0;
     const manager = await PiAgentManager.create({
       cwd,
       agentDir: cwd,
@@ -908,39 +909,30 @@ describe("PiAgentManager", () => {
       recovery: false,
       modelRuntime: fakeRuntime(),
       executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
-      sessionFactory: async () =>
-        fakeSession(async () => {
-          attempt += 1;
-          if (attempt === 1) throw new Error("quota exceeded for this billing account");
-          return "frontend result";
-        }),
+      sessionFactory: async () => fakeSession(async () => "unused"),
     });
     const tool = manager.createTool(["read"], true);
     manager.beginRootTask("Implement the frontend change");
-    expect(() =>
-      manager.assertMainAction({ kind: "file-write", target: join(cwd, "src", "app.ts"), operation: "write" }),
-    ).toThrow("Required teammate");
-    expect(() => manager.assertRootTaskComplete()).toThrow("Required teammate");
-    await tool.execute(
-      "call-4",
-      { task: "Implement frontend", teammate: "frontend", lane: "main" },
-      undefined,
-      undefined,
-      fakeToolContext(cwd) as never,
-    );
+    // C19 P0-1/P0-3：required 门禁与 teammate 调用都被移除/拒绝，主代理操作不受影响。
     expect(() =>
       manager.assertMainAction({ kind: "file-write", target: join(cwd, "src", "app.ts"), operation: "write" }),
     ).not.toThrow();
     expect(() => manager.assertRootTaskComplete()).not.toThrow();
-
+    await expect(
+      tool.execute(
+        "call-4",
+        { task: "Implement frontend", teammate: "frontend", lane: "main" },
+        undefined,
+        undefined,
+        fakeToolContext(cwd) as never,
+      ),
+    ).rejects.toThrow("temporarily disabled");
+    await expect(manager.switchTeammateModel("frontend", "kimi/k2")).rejects.toThrow("temporarily disabled");
+    // 配置文件中的 teammate 数据原样保留，不被 runtime 破坏。
     expect(JSON.parse(await readFile(path, "utf8")).teammates[0]).toMatchObject({
-      currentModel: "openai/gpt-5",
-      fallback: { from: "kimi/k2", reason: "quota_exhausted" },
+      id: "frontend",
+      preferredModel: "kimi/k2",
     });
-    await manager.switchTeammateModel("frontend", "kimi/k2");
-    const switched = JSON.parse(await readFile(path, "utf8")).teammates[0];
-    expect(switched.currentModel).toBe("kimi/k2");
-    expect(switched.fallback).toBeUndefined();
     await manager.dispose();
   });
 
@@ -974,6 +966,7 @@ describe("PiAgentManager", () => {
     await unlink(configPath);
     await symlink(outside, configPath);
 
+    // C19 P0-3：Ban 拦截先于任何配置写入；symlink 防护仍由 config 加载层保证。
     await expect(
       manager
         .createTool(["read"], true)
@@ -984,9 +977,8 @@ describe("PiAgentManager", () => {
           undefined,
           fakeToolContext(cwd) as never,
         ),
-    ).rejects.toThrow("symlink");
-    expect(manager.snapshot().teammates[0]).toMatchObject({ preferredModel: "kimi/k2", stickyFallback: false });
-    expect(manager.snapshot().teammates[0]?.currentModel).toBeUndefined();
+    ).rejects.toThrow("temporarily disabled");
+    expect(manager.snapshot().teammates).toEqual([]);
     await manager.dispose();
   });
 });

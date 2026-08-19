@@ -14,6 +14,7 @@ export type ActionHandler =
   | "skills"
   | "compact"
   | "update"
+  | "reload"
   | "plan"
   | "goal"
   | "models"
@@ -102,6 +103,15 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
     description: "检查并安装最新版本",
     group: "VSPi",
     handler: "update",
+    availability: "enabled",
+  },
+  {
+    id: "reload",
+    aliases: [],
+    label: "/reload",
+    description: "平滑重启：续接当前会话并加载最新配置",
+    group: "VSPi",
+    handler: "reload",
     availability: "enabled",
   },
   {
@@ -357,4 +367,17 @@ export function commandCompletion(input: string, commands = COMMANDS): CommandMa
 export function resolveCommand(input: string, commands = COMMANDS): CommandDefinition | undefined {
   const candidates = exactCommandCandidates(input, commands);
   return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+/**
+ * C19 快速修复：面向模型的命令契约。VSPi 与上游 pi CLI 是不同产品，
+ * 模型此前依据捆绑的 pi 文档推荐了不存在的命令；由注册表动态生成清单，
+ * 命令增删时提示词自动跟随，不维护第二份手写列表。
+ */
+export function describeCommandsForPrompt(): string {
+  const lines = ACTION_REGISTRY.map((action) => `- ${action.label}：${action.description}`);
+  return `# VSPi 命令契约
+VSPi 与上游 pi coding agent CLI 是不同产品：上游文档（包括 node_modules 内捆绑的 pi docs）描述的 CLI 参数、命令与扩展热加载行为均不适用于 VSPi，不得据此向用户推荐。VSPi 实际支持的全部 TUI 命令如下；除此之外的 / 命令一律不存在，不要建议用户输入清单外的命令，需要时让用户在命令面板（输入 / 后浏览）自行查看。
+${lines.join("\n")}
+修改 VSPi 本体或其配置文件后，配置不会在当前进程内自动生效；此时建议用户输入 /reload 平滑重启并自动续接当前会话，而不是让用户退出重开或手动拼接启动参数。`;
 }

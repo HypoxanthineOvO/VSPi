@@ -189,7 +189,15 @@ export function classifyBash(command: string): PolicyAction {
 }
 
 function looksReadOnly(command: string): boolean {
-  if (/[>|]\s*(?:tee\b|[^|])/u.test(command) || /(?:^|\s)>>?\s*\S/u.test(command)) return false;
+  // C19 P0-4：只有打开文件写入的重定向才算写入（>file、2>err、&>all、| tee）；
+  // 丢弃式（>/dev/null、2>/dev/null）与纯 fd 复制（2>&1、>&2）无副作用，不降级只读分类。
+  if (/[>|]\s*tee\b/u.test(command)) return false;
+  const rest = command
+    .replace(/\d*>&\s*\d/gu, " ")
+    .replace(/(?:^|\s)\d*>>?\s*(?:\/dev\/null)(?=\s|$)/gu, " ")
+    .replace(/(?:^|\s)&>>?\s*(?:\/dev\/null)(?=\s|$)/gu, " ");
+  if (/(?:^|[^0-9>&|])\s\d*>>?\s*\S/u.test(rest)) return false;
+  if (/(?:^|[^0-9>&|])&>>?\s*\S/u.test(rest)) return false;
   const segments = command
     .split(/(?:&&|\|\||;|\n)/)
     .map((part) => part.trim())

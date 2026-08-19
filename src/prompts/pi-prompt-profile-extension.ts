@@ -1,5 +1,6 @@
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { CONTINUITY_STATUS_GUIDANCE } from "../continuity/status-tool.js";
+import { describeCommandsForPrompt } from "../domain/commands.js";
 import { composeEffectivePrompt, type EffectivePromptSegment } from "./effective-prompt.js";
 import type { ModelIdentity } from "./types.js";
 
@@ -15,7 +16,9 @@ Markdown 标题保持简洁，不使用 emoji 或装饰性编号作为标题前�
 当后续工作确实依赖用户回答时，先用简短正文说明结论、证据、选项影响与风险，再调用 question 工具等待回答；包括单选、多选、排序和自由文本澄清。不得只在普通助手正文中提问后停下等待。
 同一决策点的相关问题应一次提交。能依据现有上下文安全判断时直接继续；用户已授权自主决定或明确要求不要提问时不要调用 question。权限与命令审批始终使用 Approval，不得改用 question。普通正文可以包含不需要用户回答的修辞问句或说明。
 
-${CONTINUITY_STATUS_GUIDANCE}`;
+${CONTINUITY_STATUS_GUIDANCE}
+
+${describeCommandsForPrompt()}`;
 
 export function createPromptProfileExtension(options: {
   resolve(identity: ModelIdentity): Promise<{ profileId?: string; overlay?: string }>;
