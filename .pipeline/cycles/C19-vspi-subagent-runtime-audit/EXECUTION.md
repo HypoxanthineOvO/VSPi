@@ -80,3 +80,12 @@ updated: 2026-08-19T13:05:00+08:00
 - **F3：** `scripts/trim-pi-docs.mjs` 挂 postinstall，移除 pi-coding-agent 的 `docs/`、`examples/`、上游 README 与 pi-tui 的 `docs/`（均描述上游 CLI 行为）；CLI 补 `-c/--continue`、`-r/--resume` 别名（`startupSessionMode` 与入口分发双处归一），help 更新。全新 tarball 安装实测：文档目录不存在、`vspi --version` 正常。
 - **测试：** `test/c19-command-contract.test.ts`（10 tests：契约同步/产品差异声明/引导口径无事故细节/系统提示词嵌入/CLI 别名一帧渲染/help）+ `m1-action-registry-contract` 新增 3 个 `/reload` 用例。
 - **发布：** 按 C18 流程执行 v1.1.2：bump → 回归 → commit → tag → GitLab CI → permalink 验证。
+
+## 2026-08-19 - v1.1.2 发布补齐与关闭
+
+- **首次 CI 失败：** pipeline 388 package job 报 `package-lock root identity differs from package.json`；根因是 `package-lock.json` 版本仍为 1.1.1，且 `verify-package.mjs` 未同步 F3 新增的 `scripts/trim-pi-docs.mjs`（postinstall 期望值、必含文件、允许列表三处均缺）。
+- **补齐提交：** `9213b32` 更新 lockfile 根版本为 1.1.2，并让 verify-package 接受 `trim-pi-docs.mjs` 进入 postinstall 与打包清单。
+- **tag 修正：** `v1.1.2` 从 `6b71bf5` 移至 `9213b32`（annotated tag）；GitLab 受保护 tag 临时解除后强制更新并恢复 `v*` 保护。
+- **CI 与资产：** pipeline 389 package/release 均 success；GitLab Release `v1.1.2` 的 pinned、latest permalink 均返回 302 到有效资产。
+- **全新修剪安装验证：** 从 GitLab Release 下载 tarball 安装到全新临时 prefix：`vspi --version` 为 1.1.2，pi-coding-agent 的 `docs/`、`examples/`、上游 README 均不存在，`VSPi_FIXTURE=1 VSPi_REDUCED_MOTION=1 vspi --render-once` 退出码 0。
+- **后续：** C19 Phase A 与 Phase A+ 关闭；v2 Phase B 留待后续 Cycle 另行发布 v1.2.0。

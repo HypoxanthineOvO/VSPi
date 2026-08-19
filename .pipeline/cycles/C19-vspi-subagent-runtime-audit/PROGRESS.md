@@ -2,10 +2,10 @@
 kind: progress
 cycle: C19-vspi-subagent-runtime-audit
 plan: PLAN.md
-status: active
-updated: 2026-08-19T13:30:00+08:00
-current: M8
-next: v1.1.2-release
+status: completed
+updated: 2026-08-19T14:20:00+08:00
+current: none
+next: none
 ---
 
 # VSPi Subagent Runtime 审计进度
@@ -29,7 +29,7 @@ P0-1~P0-7 与 F1~F3（外部会话命令幻觉快速修复：提示词命令契�
 | `S3` | 人工审阅 | `completed` | 2026-08-19 用户免审，指示 P0 连同 F1-F3 直接发布 v1.1.2 |
 | `M7` | 外部会话事故审查 | `completed` | 李超凡 Windows 会话 JSONL 归因：捆绑 pi docs 误导 + 无命令契约（约六成 Harness）；`/wsl-fix` 为模型自写扩展的期望命令，非凭空幻觉；已通知遗留状态（dist 被 patch、shellPath 改动） |
 | `M8` | F1-F3 快速修复 | `completed` | 命令契约注入系统提示词；`/reload` 平滑重启（lease handoff）；postinstall 去 pi docs/examples/README + CLI `-c`/`-r` 别名；新增 13 个定向测试 |
-| `R1` | v1.1.2 发布 | `in_progress` | 全量回归 → bump 1.1.2 → commit → tag → GitLab CI → permalink 验证 |
+| `R1` | v1.1.2 发布 | `completed` | 全量回归 → bump 1.1.2 → commit → tag → GitLab CI（package/release 均成功）→ permalink 验证；补充修复 package-lock 根版本与 verify-package 的 trim-pi-docs 同步 |
 
 ## 阻塞
 
