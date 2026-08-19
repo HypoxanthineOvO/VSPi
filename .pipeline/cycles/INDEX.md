@@ -9,7 +9,7 @@ status: active
 
 | Cycle | 名称 | 状态 | 建立于 |
 | --- | --- | --- | --- |
-| - | - | - | - |
+| [C19-vspi-subagent-runtime-audit](C19-vspi-subagent-runtime-audit/PLAN.md) | VSPi Subagent Runtime 审计与 v2 Plan | active（M5 完成，S2 实施授权推迟） | 2026-08-18 |
 
 ## Closed Cycles
 

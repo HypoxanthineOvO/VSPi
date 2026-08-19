@@ -153,10 +153,9 @@ function formatSpeed(value: number | null): string {
 }
 
 function speedField(input: StatusLineInput, theme: VspiTheme, compact = false): string {
-  const now = formatSpeed(input.usage.throughputNow);
+  // C19 P0-6：Speed 只显示平均吞吐；瞬时值不再展示。
   const average = formatSpeed(input.usage.throughputAverage);
-  const cacheHit = isFiniteNumber(input.usage.recentCacheHitPercent) ? input.usage.recentCacheHitPercent : "—";
-  const formatted = compact ? `${now}/${average} CH${cacheHit}` : `${now}/${average}t/s CH${cacheHit}%`;
+  const formatted = compact ? average : `${average}t/s`;
   return `${label("Speed", "blue", theme)}${value(formatted, theme)}`;
 }
 
@@ -169,7 +168,7 @@ function pathField(input: StatusLineInput, width: number, statusWidth: number, t
   return variableField("", input.cwd, policy, width, theme);
 }
 
-function tokenField(input: StatusLineInput, theme: VspiTheme, compact = false): string {
+function tokenField(input: StatusLineInput, theme: VspiTheme, compact = false, showHitRate = false): string {
   if (compact) {
     // 40 列允许省略 Token 输出；连输入也放不下时整体省略 Token，不用 "?" 冒充未知值。
     const inputOnly = `↑${formatTokens(input.usage.inputTokens)}`;
@@ -177,7 +176,10 @@ function tokenField(input: StatusLineInput, theme: VspiTheme, compact = false): 
     return "";
   }
   const both = `↑${formatTokens(input.usage.inputTokens)} ↓${formatTokens(input.usage.outputTokens)}`;
-  return `${label("Token", "blue", theme)}${value(both, theme)}`;
+  // C19 P0-6：Cache Hit Rate（最近请求口径）并入 Token 行；仅 ≥120 列展示，避免 80 列挤掉 cwd。
+  if (!showHitRate) return `${label("Token", "blue", theme)}${value(both, theme)}`;
+  const cacheHit = isFiniteNumber(input.usage.recentCacheHitPercent) ? `${input.usage.recentCacheHitPercent}%` : "—";
+  return `${label("Token", "blue", theme)}${value(`${both} Hit Rate: ${cacheHit}`, theme)}`;
 }
 
 function costField(input: StatusLineInput, theme: VspiTheme, compactAvailable?: number): string {
@@ -206,7 +208,8 @@ function tracks(
   cost: number;
 } {
   if (width >= 80) {
-    const speedWidth = boundedTrackWidth(speed, width >= 120 ? 22 : 17, width >= 120 ? 22 : 17);
+    // C19 P0-6：Speed 只剩平均值（列变窄），Token 行并入 Hit Rate（列变宽）。
+    const speedWidth = boundedTrackWidth(speed, width >= 120 ? 16 : 12, width >= 120 ? 16 : 12);
     const contextWidth = boundedTrackWidth(context, 24, 25);
     const costWidth = boundedTrackWidth(cost, 10, 13);
     const contextStart = width - contextWidth;
@@ -214,7 +217,8 @@ function tracks(
     return {
       speed: contextStart - speedWidth,
       context: contextStart,
-      token: costStart - 18,
+      // C19 P0-6：120 列 Token 行并入 Hit Rate 需要更宽的槽位；80 列维持 18 宽以保住 cwd。
+      token: costStart - (width >= 120 ? 30 : 18),
       cost: costStart,
     };
   }
@@ -226,7 +230,7 @@ export function renderStatusLines(input: StatusLineInput, width: number, theme: 
   const compact = width < 60;
   const speed = speedField(input, theme, width < 120);
   const context = contextField(input, theme, compact);
-  const token = tokenField(input, theme, compact);
+  const token = tokenField(input, theme, compact, width >= 120);
   // compact 布局的 Cost 锚点固定为 32（见 tracks），可用宽度随终端实际列数变化。
   const cost = costField(input, theme, compact ? Math.max(0, width - 32) : undefined);
   const columns = tracks(width, speed, context, cost);

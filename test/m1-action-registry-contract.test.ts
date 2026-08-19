@@ -259,4 +259,66 @@ describe("M1 production action contract", () => {
     expect(event).toMatchObject({ type: "providerActions" });
     expect(panel.render(80, 12, plainTheme(), DEFAULT_USAGE).every((line) => stripAnsi(line).length > 0)).toBe(true);
   });
+
+  it("registers /reload as an enabled canonical action", () => {
+    expect(getActionDefinition("reload")).toMatchObject({ availability: "enabled", handler: "reload" });
+    expect(resolveCommand("/reload")?.id).toBe("reload");
+  });
+
+  it("executes /reload through the injected launcher and keeps a takeover fallback", async () => {
+    const reloadLauncher = vi.fn(async () => {});
+    const backend = fakeBackend();
+    const onExit = vi.fn();
+    const app = new VspiApp(fakeTui(), plainTheme(), backend, {
+      cwd: "/workspace/m1-actions",
+      settings: { ...DEFAULT_SETTINGS },
+      attachments: fakeAttachments(),
+      renderOnce: true,
+      reloadLauncher,
+      onExit,
+    });
+    try {
+      await app.start();
+      app.composer.setText("/reload");
+      app.handleInput("\r");
+      await flush();
+
+      expect(reloadLauncher).toHaveBeenCalledOnce();
+      expect(backend.send).not.toHaveBeenCalled();
+      // lease handoff 未发生时 3 秒兜底退出；测试内不应走到兜底。
+      expect(onExit).not.toHaveBeenCalled();
+    } finally {
+      await app.dispose();
+    }
+  });
+
+  it("refuses /reload while a run is active", async () => {
+    const reloadLauncher = vi.fn(async () => {});
+    const backend = fakeBackend();
+    const app = new VspiApp(fakeTui(), plainTheme(), backend, {
+      cwd: "/workspace/m1-actions",
+      settings: { ...DEFAULT_SETTINGS },
+      attachments: fakeAttachments(),
+      renderOnce: true,
+      reloadLauncher,
+      onExit: vi.fn(),
+    });
+    try {
+      await app.start();
+      app.composer.setText("/reload");
+      // 模拟运行中：backend.start 的 onBusy 回调把 runActive 置真。
+      const events = (backend.start as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+        | { onSessionWait?: (waiting: boolean) => void }
+        | undefined;
+      events?.onSessionWait?.(true);
+      app.handleInput("\r");
+      await flush();
+
+      expect(reloadLauncher).not.toHaveBeenCalled();
+      const rendered = app.render(80).map(stripAnsi).join("\n");
+      expect(rendered).toContain("会话运行中，无法 /reload");
+    } finally {
+      await app.dispose();
+    }
+  });
 });

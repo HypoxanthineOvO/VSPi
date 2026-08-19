@@ -11,6 +11,7 @@ describe("command catalog", () => {
       "/skills",
       "/compact",
       "/update",
+      "/reload",
       "/model",
       "/providers",
       "/login",

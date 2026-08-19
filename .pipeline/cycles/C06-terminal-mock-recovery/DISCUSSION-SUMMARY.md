@@ -38,3 +38,17 @@ raw_discussion: .pipeline/memory/records/cycle-45bcc593a933/
 - 用户补充原文：“不止 0.4.0 吧，应该还有好几个版本吧”
 - 已确认发布边界：VSPi 不需要发布到公共 npm registry；Git tag、GitLab Release 与本地分发仍可作为版本交付渠道。
 - 待确认命名：`v0.3.11` 后的多轮能力应拆分为多个版本；具体版本号、能力边界与发布标题尚未由用户定案。
+
+## Discussion Ledger
+
+### 2026-08-16 - Claude / VSPi Config 整理
+
+> 整理：Claude / VSPi 这两个 Agent 的 Config
+>
+> Claude 配置之前那个 API Key，模型是 Fable 5 / Opus 5 / Opus 4.6 / Sonnet 5 / Sonnet 4.6 / Haiku 4.5
+>
+> VSPi 主要是把一些自定义的删掉
+
+### 2026-08-16 - AIMoniker 多凭据确认
+
+> 但是这个名字要改一下...我怀疑他配置错了...话说现在能做到 AIMoniker 有很多个 KEY 分别提供不同的服务吗？如果不能的话，就删掉吧...

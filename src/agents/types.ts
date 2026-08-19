@@ -82,6 +82,10 @@ export interface AgentRunSnapshot {
   startedAt?: string;
   deadlineAt?: string;
   finishedAt?: string;
+  /** 当前正在执行的 tool 名，仅在 run 运行期间由 session 事件刷新。 */
+  currentTool?: string;
+  /** 最近一次活动（输出增量或 tool 事件）的 ISO 时间戳。 */
+  lastActivityAt?: string;
 }
 
 export interface AgentUsageSnapshot {
@@ -101,6 +105,11 @@ export interface AgentRunBudgetSnapshot {
   treeCostUsd: number;
   maxTreeCostUsd: number;
   maxRunSeconds: number;
+  /** 警戒线状态：仅用于 UI 标黄提示，不参与任何 runtime 拒绝或作废决策。 */
+  warnRunTokens: boolean;
+  warnTreeTokens: boolean;
+  warnTreeCost: boolean;
+  warnElapsed: boolean;
 }
 
 export interface AgentTimelineEvent {

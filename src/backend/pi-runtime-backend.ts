@@ -1503,9 +1503,29 @@ export class PiRuntimeBackend implements ChatBackend {
       depth: event.run.depth,
       ...(event.run.fallbackReason ? { fallbackReason: event.run.fallbackReason } : {}),
       usageTokens: event.run.budget.runTokensUsed,
-      runTokensLeft: Math.max(0, event.run.budget.maxRunTokens - event.run.budget.runTokensUsed),
-      treeTokensLeft: Math.max(0, event.run.budget.maxTreeTokens - event.run.budget.treeTokensUsed),
-      treeCostUsdLeft: Math.max(0, event.run.budget.maxTreeCostUsd - event.run.budget.treeCostUsd),
+      runTokensUsed: event.run.budget.runTokensUsed,
+      runTokensMax: event.run.budget.maxRunTokens,
+      warnRunTokens: event.run.budget.warnRunTokens,
+      treeTokensUsed: event.run.budget.treeTokensUsed,
+      treeTokensMax: event.run.budget.maxTreeTokens,
+      warnTreeTokens: event.run.budget.warnTreeTokens,
+      ...(event.run.currentTool ? { currentTool: event.run.currentTool } : {}),
+      ...(event.run.lastActivityAt ? { lastActivityAt: event.run.lastActivityAt } : {}),
+      ...(event.run.startedAt
+        ? {
+            elapsedSeconds: Math.max(
+              0,
+              Math.round(
+                ((event.run.finishedAt ? Date.parse(event.run.finishedAt) : Date.now()) -
+                  Date.parse(event.run.startedAt)) /
+                  1_000,
+              ),
+            ),
+          }
+        : {}),
+      usageTurns: event.run.usage.turns,
+      usageInputTokens: event.run.usage.input,
+      usageOutputTokens: event.run.usage.output,
     };
     if (this.agentMessageIds.has(id)) this.events.onMessageUpdate(id, message);
     else {

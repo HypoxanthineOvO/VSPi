@@ -86,6 +86,10 @@ describe("Agents UI", () => {
             treeCostUsd: 0.4,
             maxTreeCostUsd: 20,
             maxRunSeconds: 900,
+            warnRunTokens: false,
+            warnTreeTokens: false,
+            warnTreeCost: false,
+            warnElapsed: false,
           },
           timeline: [
             { at: "2026-07-31T00:00:00.000Z", kind: "queued", summary: "Run queued" },
@@ -103,28 +107,24 @@ describe("Agents UI", () => {
     });
     panel.open("agents");
     const text = panel.render(100, 14, plainTheme(), DEFAULT_USAGE).map(stripAnsi).join("\n");
-    expect(text).toContain("frontend · Frontend");
-    expect(text).toContain("frontend · Frontend · required");
-    expect(text).toContain("current openai/gpt-5 · preferred kimi/k2 · effort high");
-    expect(text).toContain("fallback kimi/k2 -> openai/gpt-5 · quota_exhausted");
-    expect(text).toContain("main:blocked@build-host:42");
-    expect(text).toContain("required frontend · override turn none · session ops");
-    expect(text).toContain("limits d3 · tree 12 · gen 16 · run 120K/900s · tree 500K/$20");
+    // C19 P0-3：Teammate Ban 后 map 视图不再渲染 teammate 区块与 authority 行。
+    expect(text).not.toContain("frontend · Frontend");
+    expect(text).not.toContain("main:blocked");
+    expect(text).not.toContain("Authority");
+    expect(text).toContain("depth 3");
     expect(text).toContain("analyst · gpt-5 · success · Audit implementation");
     for (const width of [40, 80, 120]) {
       const map = panel.render(width, 40, plainTheme(), DEFAULT_USAGE);
       expect(map.every((line) => visibleWidth(line) <= width)).toBe(true);
       const mapText = map.map(stripAnsi).join("\n");
-      expect(mapText).toContain("current openai/gpt-5");
-      expect(mapText).toContain("preferred");
-      expect(mapText).toContain("kimi/k2");
-      expect(mapText).toContain("$20");
+      expect(mapText).not.toContain("current openai/gpt-5");
     }
     panel.handleInput(Key.enter);
     const timeline = panel.render(100, 20, plainTheme(), DEFAULT_USAGE).map(stripAnsi).join("\n");
     expect(timeline).toContain("Agents · Timeline");
     expect(timeline).toContain("automatic openai pool · analyst · context inherited/1024 chars");
-    expect(timeline).toContain("run 117K tokens left · tree 495K / $19.600 left");
+    expect(timeline).toContain("run 2.6K / 120K");
+    expect(timeline).toContain("tree 5.0K / 500K");
     expect(timeline).toContain("completed · Run completed");
     expect(timeline).toContain("Run output preview");
     expect(timeline).not.toContain("Transcript");
@@ -134,8 +134,7 @@ describe("Agents UI", () => {
       const renderedText = rendered.map(stripAnsi).join("\n");
       expect(renderedText).toContain("Timeline");
       expect(renderedText).toContain("context inherited/1024 chars");
-      expect(renderedText).toContain("run 117K tokens left");
-      expect(renderedText).toContain("$19.600 left");
+      expect(renderedText).toContain("run 2.6K / 120K");
     }
     panel.handleInput(Key.tab);
     const tools = panel.render(100, 14, plainTheme(), DEFAULT_USAGE).map(stripAnsi).join("\n");

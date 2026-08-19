@@ -150,7 +150,7 @@ describe("M1 two-line status contract", () => {
     ] as const;
     const tracks = {
       80: { context: 56, token: 52, cost: 70 },
-      120: { context: 96, token: 92, cost: 110 },
+      120: { context: 96, token: 80, cost: 110 },
     } as const;
 
     for (const width of [80, 120] as const) {

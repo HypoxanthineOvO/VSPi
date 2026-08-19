@@ -559,16 +559,22 @@ describe("transcript rendering", () => {
       depth: 1,
       fallbackReason: "quota_exhausted",
       usageTokens: 2_600,
-      runTokensLeft: 117_400,
-      treeTokensLeft: 495_000,
-      treeCostUsdLeft: 19.6,
+      runTokensUsed: 2_600,
+      runTokensMax: 120_000,
+      warnRunTokens: false,
+      treeTokensUsed: 5_000,
+      treeTokensMax: 500_000,
+      warnTreeTokens: false,
+      elapsedSeconds: 62,
     };
     const full = stripAnsi(renderTranscriptMessage(message, 160, plainTheme()).join("\n"));
     expect(full).toContain("frontend");
     expect(full).toContain("preferred kimi/k2");
     expect(full).toContain("lane main");
     expect(full).toContain("fallback quota_exhausted");
-    expect(full).toContain("Budget · run 117K left · tree 495K / $19.600 left");
+    expect(full).toContain("run 2.6K / 120K");
+    expect(full).toContain("tree 5.0K / 500K");
+    expect(full).toContain("用时 1m02s");
     for (const width of [40, 80, 120]) {
       expect(renderTranscriptMessage(message, width, plainTheme()).every((line) => visibleWidth(line) <= width)).toBe(
         true,

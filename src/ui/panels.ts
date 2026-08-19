@@ -212,6 +212,16 @@ function formatAgentTokens(value: number): string {
   return `${Math.round(value / 1_000)}K`;
 }
 
+/** C19 P0-5：run 从 startedAt 起算的实际耗时；未开始或时间缺失时返回占位。 */
+function agentElapsed(run: AgentRunSnapshot): string {
+  if (!run.startedAt) return "—";
+  const end = run.finishedAt ? Date.parse(run.finishedAt) : Date.now();
+  const seconds = Math.max(0, Math.round((end - Date.parse(run.startedAt)) / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m${String(seconds % 60).padStart(2, "0")}s`;
+}
+
 function panelKey(data: string, key: Parameters<typeof matchesKey>[1]): boolean {
   return data === key || matchesKey(data, key);
 }
@@ -2425,10 +2435,9 @@ export class PanelController {
     const limits = this.agentSnapshot.limits;
     const headers = [
       theme.muted(padLine("Map  Timeline  Tools  Pools", width)),
-      ...wrapTextWithAnsi(
-        `limits d${limits.maxDepth} · tree ${limits.maxAgentsPerTree} · gen ${limits.maxConcurrency} · run ${formatAgentTokens(limits.maxRunTokens)}/${limits.maxRunSeconds}s · tree ${formatAgentTokens(limits.maxTreeTokens)}/$${limits.maxTreeCostUsd}`,
-        width,
-      ).map((line) => theme.muted(line)),
+      ...wrapTextWithAnsi(`depth ${limits.maxDepth} · token/cost/duration 为遥测警戒线，不拦截`, width).map((line) =>
+        theme.muted(line),
+      ),
     ];
     if (this.agentTab === "pools") {
       const lines = [...headers];
@@ -2459,6 +2468,15 @@ export class PanelController {
           `${selected.modelReason} · context ${selected.contextMode}/${selected.contextChars} chars`,
           width,
         ).map((line) => theme.muted(line)),
+        ...(selected.status === "running"
+          ? wrapTextWithAnsi(
+              `current ${selected.currentTool ?? "thinking"} · turn ${selected.usage.turns + 1} · elapsed ${agentElapsed(selected)}`,
+              width,
+            ).map((line) => theme.focus(line))
+          : wrapTextWithAnsi(
+              `elapsed ${agentElapsed(selected)} · finished ${selected.finishedAt?.slice(11, 19) ?? "—"}`,
+              width,
+            ).map((line) => theme.muted(line))),
       );
       if (this.agentTab === "tools") {
         lines.push(
@@ -2469,14 +2487,19 @@ export class PanelController {
         lines.push(theme.bold("Task"), ...wrapTextWithAnsi(selected.task, width));
         const usage = selected.usage;
         const budget = selected.budget;
+        // C19 P0-2/P0-5：预算显示为已用量 + 警戒线标记，不再展示 "tokens left"。
+        const runBudgetLine = `  run ${formatAgentTokens(budget.runTokensUsed)} / ${formatAgentTokens(budget.maxRunTokens)}${budget.warnRunTokens ? " ⚠" : ""}`;
+        const treeBudgetLine = `  tree ${formatAgentTokens(budget.treeTokensUsed)} / ${formatAgentTokens(budget.maxTreeTokens)}${budget.warnTreeTokens ? " ⚠" : ""} · $${budget.treeCostUsd.toFixed(2)} / $${budget.maxTreeCostUsd}${budget.warnTreeCost ? " ⚠" : ""}`;
         lines.push(
-          theme.bold("Budget"),
-          ...wrapTextWithAnsi(
-            `  run ${formatAgentTokens(Math.max(0, budget.maxRunTokens - budget.runTokensUsed))} tokens left · tree ${formatAgentTokens(Math.max(0, budget.maxTreeTokens - budget.treeTokensUsed))} / $${Math.max(0, budget.maxTreeCostUsd - budget.treeCostUsd).toFixed(3)} left`,
-            width,
+          theme.bold("Usage"),
+          ...wrapTextWithAnsi(runBudgetLine, width).map((line) =>
+            budget.warnRunTokens ? theme.warning(line) : theme.muted(line),
+          ),
+          ...wrapTextWithAnsi(treeBudgetLine, width).map((line) =>
+            budget.warnTreeTokens || budget.warnTreeCost ? theme.warning(line) : theme.muted(line),
           ),
           ...wrapTextWithAnsi(
-            `  usage in ${formatAgentTokens(usage.input)} · out ${formatAgentTokens(usage.output)} · cache ${formatAgentTokens(usage.cacheRead + usage.cacheWrite)} · ${usage.turns} turns`,
+            `  in ${formatAgentTokens(usage.input)} · out ${formatAgentTokens(usage.output)} · cache ${formatAgentTokens(usage.cacheRead + usage.cacheWrite)} · ${usage.turns} turns`,
             width,
           ).map((line) => theme.muted(line)),
           theme.bold("Timeline"),
@@ -2492,43 +2515,19 @@ export class PanelController {
     const runs = this.agentRuns();
     const lines = [...headers];
     if (this.agentSnapshot.diagnostic) lines.push(theme.warning(this.agentSnapshot.diagnostic));
-    const authority = this.agentSnapshot.authority;
-    lines.push(
-      ...wrapTextWithAnsi(
-        `Authority · required ${authority.pendingRequired.join(",") || "none"} · override turn ${authority.turnOverrides.join(",") || "none"} · session ${authority.sessionOverrides.join(",") || "none"}`,
-        width,
-      ).map((line) => theme.muted(line)),
-    );
-    for (const teammate of this.agentSnapshot.teammates) {
-      const model = teammate.currentModel ?? teammate.preferredModel ?? "inherit";
-      lines.push(padLine(`  ◇ ${teammate.id} · ${teammate.role} · ${teammate.routing}`, width));
-      lines.push(
-        ...wrapTextWithAnsi(
-          `    current ${model} · preferred ${teammate.preferredModel ?? "inherit"} · effort ${teammate.effort ?? "inherit"}`,
-          width,
-        ).map((line) => theme.muted(line)),
-      );
-      if (teammate.fallback) {
-        lines.push(
-          ...wrapTextWithAnsi(
-            `    fallback ${teammate.fallback.from} -> ${teammate.currentModel ?? model} · ${teammate.fallback.reason}`,
-            width,
-          ).map((line) => theme.warning(line)),
-        );
-      }
-      const lanes = teammate.lanes.length
-        ? teammate.lanes.map((lane) => `${lane.lane}:${lane.state}${lane.owner ? `@${lane.owner}` : ""}`).join(", ")
-        : teammate.activeLanes.map((lane) => `${lane}:idle`).join(", ") || "none";
-      lines.push(...wrapTextWithAnsi(`    lanes ${lanes}`, width).map((line) => theme.muted(line)));
-    }
     runs.forEach((run, index) => {
       const symbol =
         run.status === "success" ? theme.success("✓") : run.status === "error" ? theme.error("×") : theme.focus("●");
       const branch = `${"  ".repeat(Math.max(0, run.depth - 1))}${run.depth > 1 ? "└─ " : ""}`;
       const current = index === this.state.selected ? "› " : "  ";
+      // C19 P0-5：运行中的 run 显示当前工具、轮次与最近活动时间。
+      const activity =
+        run.status === "running" || run.status === "queued"
+          ? ` · ${run.currentTool ? `tool ${run.currentTool}` : "thinking"} · t${run.usage.turns + 1}${run.lastActivityAt ? ` · ${run.lastActivityAt.slice(11, 19)}` : ""}`
+          : "";
       lines.push(
         ...wrapTextWithAnsi(
-          `${current}${branch}${symbol} ${run.role} · ${run.model.split("/").at(-1)} · ${run.status} · ${run.task}`,
+          `${current}${branch}${symbol} ${run.role} · ${run.model.split("/").at(-1)} · ${run.status}${activity} · ${run.task}`,
           width,
         ),
       );

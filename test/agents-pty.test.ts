@@ -32,7 +32,7 @@ describe("real /agents PTY", () => {
       harness.write("/agents\r");
       await harness.waitFor("Agents · Map", 10_000);
       expect(harness.screenText()).toContain("Map  Timeline  Tools  Pools");
-      expect(harness.screenText()).toContain("limits d3");
+      expect(harness.screenText()).toContain("depth 3");
 
       harness.write("\t");
       await harness.waitFor("Agents · Timeline", 5_000);

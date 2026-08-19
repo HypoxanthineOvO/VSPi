@@ -313,16 +313,23 @@ async function startupPolicy(workspace: string): Promise<{
   return { security, executionPolicy, approvalBroker, yoloAcknowledgementBroker, workflowAdapter };
 }
 
-/** 启动会话语义：默认新会话；`vspi continue` 续接最近会话；`vspi resume` 打开会话选择器。 */
+/** 启动会话语义：默认新会话；`vspi continue`（或 `-c`/`--continue`）续接最近会话；`vspi resume`（或 `-r`/`--resume`）打开会话选择器。 */
 function startupSessionMode(): {
   continueRecent: boolean;
   openOnStart?: "sessions" | "providers";
   initialCommand?: string;
 } {
   const argv = process.argv.slice(2);
+  // -c/--continue、-r/--resume 是与常见 CLI 对齐的兼容别名（入口分发同样识别）。
+  const entryAlias =
+    argv[0] === "-c" || argv[0] === "--continue"
+      ? "continue"
+      : argv[0] === "-r" || argv[0] === "--resume"
+        ? "resume"
+        : argv[0];
   return {
-    continueRecent: argv[0] === "continue",
-    ...(argv[0] === "resume" ? { openOnStart: "sessions" as const } : {}),
+    continueRecent: entryAlias === "continue",
+    ...(entryAlias === "resume" ? { openOnStart: "sessions" as const } : {}),
     ...(argv[0] === "config" || argv[0] === "init" ? { openOnStart: "providers" as const } : {}),
     ...(argv[0] === "import"
       ? { initialCommand: ["/import", argv[1]].filter(Boolean).join(" ") }
@@ -345,8 +352,8 @@ function printHelp(): void {
   vspi init [custom]       兼容旧入口；请迁移到 vspi config
   vspi login [provider]    登录订阅账号或保存 API Key
   vspi logout [provider]   移除 Pi 保存的 Provider 凭据
-  vspi continue            续接最近的会话
-  vspi resume              启动后进入会话选择器
+  vspi continue            续接最近的会话（兼容 -c / --continue）
+  vspi resume              启动后进入会话选择器（兼容 -r / --resume）
   vspi import [codex|claude]
                             导入外部 Agent 的历史会话
   vspi skills               管理、安装与导入 Skill
@@ -444,7 +451,14 @@ async function runOnce(prompt: string): Promise<void> {
   }
 }
 
-const entry = process.argv[2];
+const rawEntry = process.argv[2];
+// -c/--continue 与 -r/--resume 归一为对应子命令后再分发。
+const entry =
+  rawEntry === "-c" || rawEntry === "--continue"
+    ? "continue"
+    : rawEntry === "-r" || rawEntry === "--resume"
+      ? "resume"
+      : rawEntry;
 if (entry === "run") await runOnce(process.argv.slice(3).join(" "));
 else if (entry === "update") await selfUpdate();
 else if (entry === "config" || entry === "init" || entry === "login" || entry === "logout") {
