@@ -14,6 +14,7 @@ type TestableApp = {
   applyPanelEvent(event: PanelEvent): Promise<void>;
   messages: TranscriptMessage[];
   notice?: { text: string; tone: "info" | "success" | "warning" | "error" };
+  workspaceFocus: "composer" | "transcript" | "plan";
 };
 
 function fakeTui(setProgress = vi.fn()): TUI {
@@ -92,6 +93,30 @@ async function expectVisibleCaughtError(app: VspiApp, action: () => Promise<void
 }
 
 describe("VspiApp backend error recovery", () => {
+  it("jumps to and expands the latest waterfall error with Ctrl+O", async () => {
+    const app = await createApp(throwingBackend("send"));
+    const testable = app as unknown as TestableApp;
+    const error: TranscriptMessage = {
+      id: "provider-error",
+      role: "assistant",
+      kind: "error",
+      summary: "请求失败",
+      detail: '{\n  "code": "upstream_error"\n}',
+      model: "test-model",
+      expanded: false,
+    };
+    testable.messages.push(error);
+
+    app.handleInput("\x0f");
+    expect(testable.workspaceFocus).toBe("transcript");
+    expect(error).toMatchObject({ expanded: true });
+    expect(app.render(80).map(stripAnsi).join("\n")).toContain('"code": "upstream_error"');
+
+    app.handleInput("\r");
+    expect(error).toMatchObject({ expanded: false });
+    await app.dispose();
+  });
+
   it("restores composer text and every attachment when send fails", async () => {
     const app = await createApp(throwingBackend("send"));
     app.composer.setText("请比较两张截图");

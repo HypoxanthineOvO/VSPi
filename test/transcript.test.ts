@@ -1,5 +1,6 @@
 import { AssistantMessageComponent } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { formatErrorDetails } from "../src/domain/error-details.js";
 import type { Attachment, TranscriptMessage } from "../src/domain/types.js";
 import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
 import {
@@ -44,6 +45,37 @@ function toolMessage(
 }
 
 describe("transcript rendering", () => {
+  it("renders provider errors as compact expandable waterfall nodes", () => {
+    const message: Extract<TranscriptMessage, { kind: "error" }> = {
+      id: "provider-error",
+      role: "assistant",
+      kind: "error",
+      summary: "请求失败",
+      detail: formatErrorDetails('upstream error, data: {"code":"provider_failure","retryable":true}'),
+      model: "deepseek-v3.2",
+      expanded: false,
+    };
+
+    const collapsed = renderTranscriptMessage(message, 64, plainTheme()).map(stripAnsi);
+    expect(collapsed).toEqual(["× 请求失败 · deepseek-v3.2"]);
+    expect(collapsed.join("\n")).not.toContain("provider_failure");
+
+    const expanded = renderTranscriptMessage({ ...message, expanded: true }, 64, plainTheme()).map(stripAnsi);
+    expect(expanded.join("\n")).toContain('"code": "provider_failure"');
+    expect(expanded.join("\n")).toContain('"retryable": true');
+    expect(expanded.every((line) => visibleWidth(line) <= 64)).toBe(true);
+  });
+
+  it("pretty-prints complete or data-suffixed JSON and preserves plain errors", () => {
+    expect(formatErrorDetails('{"error":{"code":"upstream_error"}}')).toBe(
+      ["{", '  "error": {', '    "code": "upstream_error"', "  }", "}"].join("\n"),
+    );
+    expect(formatErrorDetails('context data: unavailable; upstream data: {"code":"failed"}')).toContain(
+      '"code": "failed"',
+    );
+    expect(formatErrorDetails("plain backend failure sentinel")).toBe("plain backend failure sentinel");
+  });
+
   it("renders intermediate and formal assistant output without changing Markdown content", () => {
     const intermediate: TranscriptMessage = {
       id: "intermediate",

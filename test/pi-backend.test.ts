@@ -811,6 +811,7 @@ describe("pi backend adapter", () => {
   it("classifies tool-use text as intermediate and ordinary stop text as formal", async () => {
     const fake = fakeSession();
     const messages: TranscriptMessage[] = [];
+    const onNotice = vi.fn();
     const backend = new PiBackend({
       cwd: await mkdtemp(join(tmpdir(), "vspi-pi-presentation-")),
       sessionFactory: async () => ({ session: fake.session }),
@@ -824,9 +825,13 @@ describe("pi backend adapter", () => {
       },
       onBusy: vi.fn(),
       onUsage: vi.fn(),
-      onNotice: vi.fn(),
+      onNotice,
     });
-    const emitResponse = (text: string, stopReason: "toolUse" | "stop" | "error") => {
+    const emitResponse = (
+      text: string,
+      stopReason: "toolUse" | "stop" | "error" | "aborted",
+      errorMessage?: string,
+    ) => {
       const message = {
         role: "assistant" as const,
         provider: "test",
@@ -841,6 +846,7 @@ describe("pi backend adapter", () => {
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         },
         stopReason,
+        ...(errorMessage ? { errorMessage } : {}),
         timestamp: Date.now(),
       };
       fake.emit({
@@ -859,12 +865,62 @@ describe("pi backend adapter", () => {
     fake.emit({ type: "agent_start" } as AgentSessionEvent);
     emitResponse("checking", "toolUse");
     emitResponse("done", "stop");
-    emitResponse("failed", "error");
+    emitResponse("failed", "error", 'upstream error, data: {"code":"provider_failure"}');
+    emitResponse("cancelled", "aborted", "user cancelled");
     expect(messages.filter((message) => message.kind === "text")).toMatchObject([
       { text: "checking", presentation: "intermediate", streaming: false },
       { text: "done", presentation: "formal", streaming: false },
       { text: "failed", presentation: undefined, streaming: false },
+      { text: "cancelled", presentation: undefined, streaming: false },
     ]);
+    expect(messages.find((message) => message.kind === "error")).toMatchObject({
+      kind: "error",
+      summary: "请求失败",
+      detail: 'upstream error, data:\n{\n  "code": "provider_failure"\n}',
+      model: "vision-model",
+      expanded: false,
+    });
+    expect(onNotice).not.toHaveBeenCalled();
+    await backend.dispose();
+  });
+
+  it("restores provider failures as collapsed waterfall errors", async () => {
+    const fake = fakeSession("test", "Vision Model", {
+      messages: [
+        {
+          role: "assistant",
+          provider: "test",
+          model: "vision-model",
+          content: [],
+          stopReason: "error",
+          errorMessage: 'upstream error, data: {"code":"restored_failure"}',
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    const messages: TranscriptMessage[] = [];
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-pi-restored-error-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+
+    await backend.start({
+      onMessage: (message) => messages.push(message),
+      onMessageUpdate: vi.fn(),
+      onBusy: vi.fn(),
+      onUsage: vi.fn(),
+      onNotice: vi.fn(),
+    });
+
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        kind: "error",
+        summary: "请求失败",
+        detail: 'upstream error, data:\n{\n  "code": "restored_failure"\n}',
+        model: "vision-model",
+        expanded: false,
+      }),
+    );
     await backend.dispose();
   });
 

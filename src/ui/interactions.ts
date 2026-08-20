@@ -10,6 +10,7 @@ export interface InteractionState {
   hasMessages?: boolean;
   composerEmpty?: boolean;
   commandCompletable?: boolean;
+  hasErrorDetails?: boolean;
   selectedAttachment?: boolean;
   cancellable?: boolean;
   retryable?: boolean;
@@ -715,6 +716,15 @@ const actions: InteractionDefinition[] = [
     keys: ["Alt+Enter"],
     keyValues: [Key.alt("enter")],
     handler: "submitFollowUp",
+  }),
+  keyAction({
+    id: "composer.error-details",
+    surface: "composer",
+    context: "main",
+    keys: ["Ctrl+O"],
+    keyValues: [Key.ctrl("o")],
+    handler: "openErrorDetails",
+    enabled: (state) => state.hasErrorDetails === true,
   }),
   keyAction({
     id: "composer.inspect",
