@@ -8,7 +8,7 @@ status: active
 
 ## 当前工作
 
-- [Cycle 索引](cycles/INDEX.md)：当前无 active Cycle；C19 Subagent Runtime 审计的 P0 与命令幻觉快速修复已发布 v1.1.2（v2 Phase B 留待后续 Cycle）；C18 Windows 自更新安装器修复已发布 v1.1.1，等待原 Windows 机器实机复核；C17 前缀缓存与 DeepSeek Harness 适配已发布 v1.1.0。
+- [Cycle 索引](cycles/INDEX.md)：C22 正在发布 VSPi 1.1.3；C21 瀑布流可展开错误节点已实现并通过全量验证，取代 C20 的底部 provider error notice 展示；C19 Subagent Runtime 审计的 P0 与命令幻觉快速修复已发布 v1.1.2（v2 Phase B 留待后续 Cycle）。
 - [Experiment 索引](experiments/INDEX.md)：无高置信 Experiment 记录。
 - [Memory 记录](memory/records/)：146 条合法 decision/feedback/requirement/preference Record，按 scope 分组；C07 corrective decision supersede 旧 revision 0 记录；v0.6.0-v0.6.2 release outcome、Windows named-pipe lease、R8 TUI 行为要求、Unicode 视觉保留、Pi 官方 render architecture 优先偏好、Pi Editor 0.84.2 性能补丁、v0.6.4 本机验收、默认 Auto Policy、移除 SSH Attachment Bridge、AIMoniker Gemini Provider、自适应面板高度、通用TUI限帧与 C14 后进入 v1.0.0 发布流程要求已记录。
 - Legacy 保留：`.pipeline/manifest.yaml` 与 `.pipeline/runtime/objects/delivery/`（8 个 Delivery 对象）继续作为旧兼容入口；C05 Delivery 仅修正 evidence path，状态、revision 与 digest 未改变。

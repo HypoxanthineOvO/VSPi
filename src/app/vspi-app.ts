@@ -723,6 +723,7 @@ export class VspiApp implements Component, Focusable {
       hasMessages: this.messages.length > 0,
       composerEmpty: this.composer.getText() === "",
       commandCompletable: this.commandCompletionAvailable(),
+      hasErrorDetails: this.messages.some((message) => message.kind === "error"),
       selectedAttachment: this.composer.selectedAttachment() !== undefined,
     };
     // Modal panels own their complete keyspace. Composer Tab completion/Inspect navigation
@@ -738,6 +739,10 @@ export class VspiApp implements Component, Focusable {
     }
     if (matchesInteraction("composer", "main", "pasteAttachment", data, composerState)) {
       void this.pasteAttachment();
+      return;
+    }
+    if (matchesInteraction("composer", "main", "openErrorDetails", data, composerState)) {
+      this.openErrorDetails();
       return;
     }
     const selectedAttachment = this.composer.selectedAttachment();
@@ -1450,6 +1455,21 @@ export class VspiApp implements Component, Focusable {
 
   private showNotice(text: string, tone: NoticeTone): void {
     this.setNotice(text, tone, false);
+  }
+
+  private openErrorDetails(): void {
+    const index = this.messages.findLastIndex((message) => message.kind === "error");
+    const message = this.messages[index];
+    if (message?.kind !== "error") return;
+    message.expanded = true;
+    this.workspaceFocus = "transcript";
+    this.panelFocused = false;
+    this.inspectIndex = index;
+    this.inspectNodeId = message.id;
+    this.inspectToolId = undefined;
+    this.inspectDepth = "node";
+    this.transcriptStartNodeId = message.id;
+    this.requestRender();
   }
 
   private showProgress(text: string): void {
@@ -3251,6 +3271,10 @@ export class VspiApp implements Component, Focusable {
         if (matchesKey(data, Key.right)) message.collapsed = false;
         else if (matchesKey(data, Key.left)) message.collapsed = true;
         else if (matchesKey(data, Key.enter)) message.collapsed = !message.collapsed;
+      } else if (message?.kind === "error") {
+        if (matchesKey(data, Key.right)) message.expanded = true;
+        else if (matchesKey(data, Key.left)) message.expanded = false;
+        else if (matchesKey(data, Key.enter)) message.expanded = !message.expanded;
       }
     }
     this.requestRender();
@@ -3333,7 +3357,11 @@ export class VspiApp implements Component, Focusable {
     const selected = this.messages[selectedNode?.messageIndexes[0] ?? -1];
     return {
       hasItems: nodes.length > 0,
-      expandable: this.inspectDepth === "tool" || selectedNode?.kind === "toolGroup" || selected?.kind === "thinking",
+      expandable:
+        this.inspectDepth === "tool" ||
+        selectedNode?.kind === "toolGroup" ||
+        selected?.kind === "thinking" ||
+        selected?.kind === "error",
       inspectDepth: this.inspectDepth,
     };
   }

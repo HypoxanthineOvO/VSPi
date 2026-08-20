@@ -116,7 +116,23 @@ export interface SessionMarkerMessage {
   text: string;
 }
 
-export type TranscriptMessage = TextMessage | ThinkingMessage | ToolMessage | SubAgentMessage | SessionMarkerMessage;
+export interface ErrorMessage {
+  id: string;
+  role: "assistant";
+  kind: "error";
+  summary: string;
+  detail: string;
+  model?: string;
+  expanded: boolean;
+}
+
+export type TranscriptMessage =
+  | TextMessage
+  | ThinkingMessage
+  | ToolMessage
+  | SubAgentMessage
+  | SessionMarkerMessage
+  | ErrorMessage;
 
 export interface ModelPrice {
   inputUsdPerMillion: number;

@@ -9,12 +9,14 @@ status: active
 
 | Cycle | 名称 | 状态 | 建立于 |
 | --- | --- | --- | --- |
-| - | - | - | - |
+| [C22-release-1-1-3](C22-release-1-1-3/PLAN.md) | VSPi 1.1.3 发布 | active（R1 准备中） | 2026-08-20 |
 
 ## Closed Cycles
 
 | Cycle | 名称 | 状态 | 关联 Delivery | 版本 |
 | --- | --- | --- | --- | --- |
+| [C21-inline-error-node](C21-inline-error-node/SUMMARY.md) | 瀑布流可展开错误节点 | closed（实现与全量验证完成） | - | - |
+| [C20-compact-error-details](C20-compact-error-details/SUMMARY.md) | 紧凑错误与详情预览 | closed（实现与定向验证完成） | - | - |
 | [C19-vspi-subagent-runtime-audit](C19-vspi-subagent-runtime-audit/SUMMARY.md) | VSPi Subagent Runtime 审计与 v2 Plan | closed（P0 与命令幻觉修复已发布 v1.1.2，v2 Phase B 留待后续） | - | v1.1.2 |
 | [C18-windows-self-update-spawn](C18-windows-self-update-spawn/SUMMARY.md) | Windows 自更新安装器修复 | closed（补丁发布完成，等待 Windows 实机复核） | - | v1.1.1 |
 | [C17-prompt-cache-deepseek-adaptation](C17-prompt-cache-deepseek-adaptation/SUMMARY.md) | 前缀缓存与 DeepSeek Harness 适配 | closed（S1/S2 接受，双平台发布完成） | - | v1.1.0 |

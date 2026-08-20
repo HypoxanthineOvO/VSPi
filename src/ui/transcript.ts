@@ -371,6 +371,7 @@ function transcriptMessageCharacters(message: TranscriptMessage): number {
   if (message.kind === "text" || message.kind === "session") {
     return message.text.length;
   }
+  if (message.kind === "error") return message.summary.length + message.detail.length + (message.model?.length ?? 0);
   if (message.kind === "tool") return message.name.length + message.summary.length + (message.output?.length ?? 0);
   return message.model.length + message.task.length;
 }
@@ -391,6 +392,7 @@ function estimateTranscriptBlockRows(block: TranscriptMessage[], options: Transc
   const state = block
     .map((message) => {
       if (message.kind === "tool") return message.expanded ? "1" : "0";
+      if (message.kind === "error") return message.expanded ? "1" : "0";
       if (message.kind === "thinking") return message.collapsed ? "c" : message.streaming ? "s" : "e";
       if (message.kind === "text") return message.streaming ? "s" : "e";
       return "";
@@ -429,6 +431,9 @@ function estimateTranscriptBlockRowsUncached(block: TranscriptMessage[], options
     const boundedText =
       displayText.length > MAX_THINKING_RENDER_CHARS ? displayText.slice(-MAX_THINKING_RENDER_CHARS) : displayText;
     return first.collapsed ? 3 : 2 + estimatedWrappedRows(boundedText, width);
+  }
+  if (first.kind === "error") {
+    return first.expanded ? 1 + estimatedWrappedRows(first.detail, width) : 1;
   }
   if (first.kind === "text") return 1 + estimatedWrappedRows(first.text, width);
   return 2;
@@ -544,6 +549,12 @@ export function renderTranscriptMessage(
     return renderToolGroup([message], width, theme, options);
   } else if (message.kind === "session") {
     lines = [theme.muted(`◇ ${message.text}`)];
+  } else if (message.kind === "error") {
+    const metadata = [message.summary, message.model].filter(Boolean).join(" · ");
+    lines = [`${theme.error("×")} ${theme.error(metadata)}`];
+    if (message.expanded) {
+      lines.push(...wrapTextWithAnsi(message.detail, Math.max(1, width - 2)).map((line) => `  ${theme.muted(line)}`));
+    }
   } else {
     const symbol =
       message.status === "success"

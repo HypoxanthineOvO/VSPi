@@ -24,6 +24,7 @@ import { createDeepSeekHarnessExtension, type DeepSeekToolBridge } from "../deep
 import { DeepSeekPersistentBashOperations } from "../deepseek/persistent-bash.js";
 import { FX } from "../domain/defaults.js";
 import { modelEffortLevels, normalizeEffortLevel } from "../domain/effort.js";
+import { formatErrorDetails } from "../domain/error-details.js";
 import { formatProviderName } from "../domain/providers.js";
 import type {
   EffortLevel,
@@ -2128,6 +2129,17 @@ export class PiRuntimeBackend implements ChatBackend {
           });
         }
       });
+      if (message.stopReason === "error") {
+        this.events.onMessage({
+          id: `${prefix}-error`,
+          role: "assistant",
+          kind: "error",
+          summary: "请求失败",
+          detail: formatErrorDetails(stringField(message, "errorMessage") || "模型请求失败"),
+          ...(stringField(message, "model") ? { model: stringField(message, "model") } : {}),
+          expanded: false,
+        });
+      }
       return;
     }
     if (message.role === "toolResult") {
@@ -2357,6 +2369,17 @@ export class PiRuntimeBackend implements ChatBackend {
       this.latestAssistantMessage = event.message;
       this.clearSpeedExpiry();
       this.outputSpeed.finish(event.message.usage?.output ?? 0);
+      if (event.message.stopReason === "error") {
+        this.events.onMessage({
+          id: `pi-error-${this.binding}-${this.turn}`,
+          role: "assistant",
+          kind: "error",
+          summary: "请求失败",
+          detail: formatErrorDetails(event.message.errorMessage?.trim() || "模型请求失败"),
+          model: event.message.model,
+          expanded: false,
+        });
+      }
       if (assistantClaimsCompletion(event.message)) {
         this.reviewTracker.noteCompletionClaim();
         this.recordPlanReconciliationCheckpointIfNeeded();
@@ -2966,6 +2989,14 @@ function isTranscriptMessage(value: unknown): value is TranscriptMessage {
       typeof value.summary === "string" &&
       ["queued", "running", "success", "error", "cancelled"].includes(String(value.status)) &&
       typeof value.expanded === "boolean"
+    );
+  }
+  if (value.kind === "error") {
+    return (
+      typeof value.summary === "string" &&
+      typeof value.detail === "string" &&
+      typeof value.expanded === "boolean" &&
+      (value.model === undefined || typeof value.model === "string")
     );
   }
   if (value.kind === "subagent") {
