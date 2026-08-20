@@ -2,8 +2,8 @@
 kind: plan
 cycle: C22-release-1-1-3
 mode: plan
-status: active
-updated: 2026-08-20T21:16:00+08:00
+status: completed
+updated: 2026-08-20T21:18:58+08:00
 progress: PROGRESS.md
 execution: EXECUTION.md
 builds_on:
@@ -30,5 +30,5 @@ builds_on:
 | --- | --- | --- |
 | `R1` | Release notes 与版本元数据 | completed |
 | `R2` | 发布前验证 | completed |
-| `R3` | Commit、tag 与双远端 push | in_progress |
-| `R4` | 远端发布核验 | pending |
+| `R3` | Commit、tag 与双远端 push | completed |
+| `R4` | 远端发布核验 | completed |
