@@ -526,6 +526,62 @@ describe("transcript rendering", () => {
     expect(cellsForText(rendered, "bold").every((cell) => cell.modifiers.has(1))).toBe(true);
   });
 
+  it("dims Markdown structural colors inside Thinking without leaking theme accents", () => {
+    const rendered = renderTranscript(
+      [
+        {
+          id: "thinking-structure",
+          role: "assistant",
+          kind: "thinking",
+          effort: "high",
+          text: "## HEADING_IN_THINKING\n\n- LIST_ITEM_IN_THINKING\n\n[LINK_IN_THINKING](https://example.com)\n\n```ts\nCODE_IN_THINKING\n```",
+          collapsed: false,
+        },
+      ],
+      90,
+      plainTheme({ colorLevel: 3, truecolor: true }),
+      { thinkingDisplay: "expanded" },
+    ).join("\n");
+
+    // 思考块里的标题/列表符/链接/代码全部退化为 thinking 灰，不再出现 blue/focus 主题色，
+    // 也不再铺亮色代码背景；标题保留粗体层级信号。
+    const gray = "rgb(174,180,186)";
+    for (const token of ["HEADING_IN_THINKING", "LIST_ITEM_IN_THINKING", "LINK_IN_THINKING", "CODE_IN_THINKING"]) {
+      const cells = cellsForText(rendered, token);
+      expect(cells.length, `${token} should render`).toBeGreaterThan(0);
+      expect(
+        cells.every((cell) => cell.foreground === gray),
+        `${token} stays gray`,
+      ).toBe(true);
+      expect(
+        cells.every((cell) => cell.background === undefined),
+        `${token} keeps no code background`,
+      ).toBe(true);
+    }
+    expect(cellsForText(rendered, "HEADING_IN_THINKING").every((cell) => cell.modifiers.has(1))).toBe(true);
+  });
+
+  it("keeps Commentary output at full text color with only a muted marker", () => {
+    const rendered = renderTranscriptMessage(
+      {
+        id: "commentary",
+        role: "assistant",
+        kind: "text",
+        text: "COMMENTARY_BODY with **bold**",
+        presentation: "intermediate",
+      },
+      60,
+      plainTheme({ colorLevel: 3, truecolor: true }),
+    ).join("\n");
+
+    // Commentary 是工具间隙里模型的直接输出：主体不能用 muted 灰，只允许首行标记弱化。
+    const body = cellsForText(rendered, "COMMENTARY_BODY");
+    expect(body.length).toBeGreaterThan(0);
+    expect(body.every((cell) => cell.foreground !== "rgb(146,152,159)")).toBe(true);
+    expect(cellsForText(rendered, "·").every((cell) => cell.foreground === "rgb(146,152,159)")).toBe(true);
+    expect(cellsForText(rendered, "bold").every((cell) => cell.modifiers.has(1))).toBe(true);
+  });
+
   it("caps a giant thinking block at render time while keeping the full message intact", () => {
     const giant = `${"A".repeat(50_000)}\n${"B".repeat(200_000)}`;
     const message: TranscriptMessage = {

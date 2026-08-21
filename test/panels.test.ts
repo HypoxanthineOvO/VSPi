@@ -187,6 +187,42 @@ describe("panel controller", () => {
     expect(text(panel)).not.toContain("18421");
   });
 
+  it("flattens multi-line Session labels onto one physical row with run state", () => {
+    const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
+    panel.setSessions([
+      {
+        id: "multiline",
+        label: "排查一下中转站目前的 GLM 代理报错\n\n开始测试账号：GLM-Pro-贺云翔\n\nAPI returned 404",
+        relativeTime: "刚刚",
+        branchDepth: 0,
+        current: true,
+      },
+      {
+        id: "leased",
+        label: "单行会话",
+        relativeTime: "17 小时前",
+        branchDepth: 0,
+        owner: { hostname: "genesis", pid: 42, heartbeatAt: new Date().toISOString() },
+      },
+    ]);
+    panel.open("sessions");
+
+    const height = panel.sessionsContentHeight(80, plainTheme());
+    const rendered = panel.renderSessionsSurface(80, height, plainTheme());
+    // visibleWidth 把 \n 当 0 宽，行内夹带换行时面板行数与物理行数不一致，会撑破框架与滚动对齐。
+    expect(rendered).toHaveLength(height);
+    expect(rendered.every((line) => !line.includes("\n"))).toBe(true);
+    const plain = rendered.map(stripAnsi);
+    const first = plain.findIndex((line) => line.includes("排查一下中转站"));
+    expect(first).toBeGreaterThan(-1);
+    // 标签压平后仍在同一行内展示，超出部分由右对齐截断省略，不再撑出额外物理行。
+    expect(plain[first]).toContain("GLM 代理报错 开始测试账号");
+    expect(plain[first]).toMatch(/… {0,2}当前│$/);
+    expect(plain[first]).toContain("当前");
+    expect(plain.findIndex((line) => line.includes("单行会话"))).toBe(first + 2);
+    expect(plain.join("\n")).toContain("● 使用中");
+  });
+
   it("returns all five structured approval decisions and layers Escape inside reason input", () => {
     const panel = new PanelController({ ...DEFAULT_SETTINGS, scope: "global" });
     const request = {

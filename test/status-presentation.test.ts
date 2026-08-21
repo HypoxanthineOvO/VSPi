@@ -194,7 +194,7 @@ describe("responsive status anchoring", () => {
       expect(visibleColumn(plain[0] ?? "", "Context")).toBe(96);
       expect(plain[1]).toMatch(/^\//);
       expect(plain[1]).not.toMatch(/\bPath\b/);
-      expect(visibleColumn(plain[1] ?? "", "Token")).toBe(80);
+      expect(visibleColumn(plain[1] ?? "", "Token")).toBe(76);
       expect(visibleColumn(plain[1] ?? "", "Cost")).toBe(110);
       expect(plain[0]).toContain("Context 50K / 128K 39%");
     }
@@ -203,7 +203,7 @@ describe("responsive status anchoring", () => {
   it("bounds extreme and non-finite telemetry inside the fixed 80/120-column slots", () => {
     const tracks = {
       80: { context: 56, token: 52, cost: 70, end: 80 },
-      120: { context: 96, token: 80, cost: 110, end: 120 },
+      120: { context: 96, token: 76, cost: 110, end: 120 },
     } as const;
     const finiteUsage: UsageSnapshot = {
       ...ACTIVE_USAGE,
@@ -280,7 +280,7 @@ describe("responsive status anchoring", () => {
       expect(visibleColumn(identity, "Context")).toBe(96);
       expect(telemetry).toMatch(/^\/workspace\/vspi/);
       expect(telemetry).not.toMatch(/\bPath\b/);
-      expect(visibleColumn(telemetry, "Token")).toBe(80);
+      expect(visibleColumn(telemetry, "Token")).toBe(76);
       expect(visibleColumn(telemetry, "Cost")).toBe(110);
       expect(identity).not.toMatch(/\bMode\b|\bAuto\b/);
     }
@@ -320,6 +320,22 @@ describe("responsive status anchoring", () => {
     expect(narrow.plain[1] ?? "").not.toContain("Hit Rate");
     expect(narrow.plain[1]).toMatch(/^\/workspace\/vspi/);
     expect(visibleColumn(wide.plain[0] ?? "", "Context")).toBe(visibleColumn(wideUnknown.plain[0] ?? "", "Context"));
+  });
+
+  it("keeps the widest Token + Hit Rate value clear of the Cost anchor at 120 columns", () => {
+    const usage = {
+      ...ACTIVE_USAGE,
+      inputTokens: 999_000,
+      outputTokens: 999_000,
+      recentCacheHitPercent: 100,
+    };
+    const { plain } = render(statusInput({ usage }), 120);
+    const telemetry = plain[1] ?? "";
+
+    // 命中率尾数不得被 Cost 锚点截断：Token ↑999k ↓999k Hit Rate: 100% 最长需 32 列。
+    expect(telemetry).toContain("Token ↑999k ↓999k Hit Rate: 100%");
+    expect(telemetry.slice(telemetry.indexOf("Token"), telemetry.indexOf("Cost"))).not.toContain("…");
+    expect(telemetry.trimEnd()).toMatch(/Cost ¥2\.82$/);
   });
 
   it("truncates long path and model values without moving either right group", () => {

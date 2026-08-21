@@ -217,8 +217,9 @@ function tracks(
     return {
       speed: contextStart - speedWidth,
       context: contextStart,
-      // C19 P0-6：120 列 Token 行并入 Hit Rate 需要更宽的槽位；80 列维持 18 宽以保住 cwd。
-      token: costStart - (width >= 120 ? 30 : 18),
+      // 120 列 Token 行并入 Hit Rate 后最长需 32 列（Token ↑999k ↓999k Hit Rate: 100%），
+      // 预留 34 避免命中率尾数被 Cost 锚点截断；80 列维持 18 宽以保住 cwd。
+      token: costStart - (width >= 120 ? 34 : 18),
       cost: costStart,
     };
   }

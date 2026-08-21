@@ -9,7 +9,7 @@ status: active
 
 | Cycle | 名称 | 状态 | 建立于 |
 | --- | --- | --- | --- |
-| - | - | - | - |
+| [C23-release-1-1-4](C23-release-1-1-4/PLAN.md) | VSPi 1.1.4 发布 | active（本地发布完成，核验远端资产） | 2026-08-21 |
 
 ## Closed Cycles
 

@@ -1450,7 +1450,9 @@ export class VspiApp implements Component, Focusable {
           : this.notice.tone === "success"
             ? "完成"
             : "通知";
-    return padLine(`${style(`${icon} ${label}`)} ${this.theme.muted("·")} ${this.notice.text}`, width);
+    // 通知栏是单行表面：夹带 \n 的文本会占据多个物理行并错位后续 diff，渲染前压平。
+    const text = this.notice.text.replace(/\s+/g, " ").trim();
+    return padLine(`${style(`${icon} ${label}`)} ${this.theme.muted("·")} ${text}`, width);
   }
 
   private showNotice(text: string, tone: NoticeTone): void {

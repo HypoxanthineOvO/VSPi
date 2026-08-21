@@ -678,7 +678,7 @@ export class PiRuntimeBackend implements ChatBackend {
         const ownedHere = owner?.token === this.sessionLease?.owner.token;
         return {
           id: session.id,
-          label: session.name || session.firstMessage || "空会话",
+          label: sessionDisplayLabel(session.name || session.firstMessage, "空会话"),
           relativeTime: relativeTime(session.modified),
           branchDepth: session.parentSessionPath ? 1 : 0,
           ...(session.id === this.session?.sessionId ? { current: true } : {}),
@@ -866,7 +866,7 @@ export class PiRuntimeBackend implements ChatBackend {
     }
     await this.adoptLease(acquired?.lease);
     await this.acceptReplacement("resume");
-    this.events?.onNotice(`已切换到 ${selected.name || selected.firstMessage || id}`, "success");
+    this.events?.onNotice(`已切换到 ${sessionDisplayLabel(selected.name || selected.firstMessage, id)}`, "success");
   }
 
   getPlanBinding(): PlanBinding | undefined {
@@ -1019,7 +1019,10 @@ export class PiRuntimeBackend implements ChatBackend {
       if (sourcePlanId && this.getPlanBinding()?.planId !== sourcePlanId) await this.appendPlanBinding(sourcePlanId);
       await this.appendExecutionPolicy(sourcePolicy);
       await this.acceptReplacement("fork");
-      this.events?.onNotice(`已从「${selected.name || selected.firstMessage || id}」的落盘快照创建分支`, "success");
+      this.events?.onNotice(
+        `已从「${sessionDisplayLabel(selected.name || selected.firstMessage, id)}」的落盘快照创建分支`,
+        "success",
+      );
       return;
     }
     const sourceLease = sourceIsCurrent ? undefined : await this.acquireLease(selected.path);
@@ -1046,7 +1049,10 @@ export class PiRuntimeBackend implements ChatBackend {
     if (sourcePlanId && this.getPlanBinding()?.planId !== sourcePlanId) await this.appendPlanBinding(sourcePlanId);
     await this.appendExecutionPolicy(sourcePolicy);
     await this.acceptReplacement("fork");
-    this.events?.onNotice(`已从「${selected.name || selected.firstMessage || id}」创建分支`, "success");
+    this.events?.onNotice(
+      `已从「${sessionDisplayLabel(selected.name || selected.firstMessage, id)}」创建分支`,
+      "success",
+    );
   }
 
   async listExternalSessions(
@@ -2714,6 +2720,16 @@ export class PiRuntimeBackend implements ChatBackend {
 }
 
 const DEFAULT_MODEL_CATALOG_REFRESH_TIMEOUT_MS = 1_000;
+
+// 会话标题来自首条用户消息，可能多行；行内 \n 会破坏 Resume 面板与通知栏的单行布局。
+// 取首条非空行、压平空白并限长，标题仅用于展示，无信息量损失。
+function sessionDisplayLabel(raw: string | undefined, fallback: string): string {
+  const firstLine = (raw ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .find((line) => line.length > 0);
+  return firstLine ? firstLine.slice(0, 120) : fallback;
+}
 
 function resolveModelCatalogRefreshTimeout(value: number | undefined): number {
   return value !== undefined && Number.isFinite(value) && value > 0
