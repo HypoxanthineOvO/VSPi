@@ -491,7 +491,9 @@ export function renderTranscriptMessage(
       ];
     } else if (message.presentation === "intermediate") {
       const marker = theme.capabilities.unicode ? "·" : "-";
-      lines = markdown.map((line, index) => theme.muted(`${index === 0 ? `${marker} ` : "  "}${line}`));
+      // Commentary：工具间隙里模型的直接文字输出，主体保持正常文本与 Markdown 主题色，
+      // 仅用弱化的首行标记与 formal 区分，不再整块置灰。
+      lines = markdown.map((line, index) => `${index === 0 ? `${theme.muted(marker)} ` : "  "}${line}`);
     } else {
       lines = markdown.map((line, index) => `${index === 0 ? `${theme.muted("•")} ` : "  "}${line}`);
     }

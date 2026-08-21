@@ -76,6 +76,8 @@ export interface VspiTheme {
   activitySurface: (text: string) => string;
   noticeSurface: (text: string) => string;
   markdown: MarkdownTheme;
+  /** 思考块专用的暗化 Markdown 主题：结构元素与代码统一灰调，不出现正文主题色。 */
+  thinkingMarkdown: MarkdownTheme;
 }
 
 type Styler = (text: string) => string;
@@ -217,6 +219,26 @@ export function createTheme(capabilities: TerminalCapabilities, mode: AppSetting
     codeBlockIndent: "  ",
   };
 
+  // 思考块里的 Markdown 整体处于灰阶：正文用 thinking 灰，结构元素（标题/链接/
+  // 列表符/代码）也不再使用 blue/focus 主题色，只保留粗体等非彩色层级信号，
+  // 避免“灰正文 + 亮蓝标题”的割裂感。语法高亮统一退化为灰调。
+  const dimmedSyntaxStyles: Record<string, Styler> = {};
+  for (const token of Object.keys(syntaxStyles)) dimmedSyntaxStyles[token] = thinking;
+  dimmedSyntaxStyles.comment = muted;
+  const thinkingMarkdown: MarkdownTheme = {
+    ...markdown,
+    heading: (value: string) => chalk.bold(thinking(value)),
+    link: thinking,
+    linkUrl: thinking,
+    code: thinking,
+    codeBlock: thinking,
+    codeBlockBorder: thinking,
+    quote: thinking,
+    quoteBorder: thinking,
+    listBullet: thinking,
+    highlightCode: (source, language) => syntaxLines(source, language, dimmedSyntaxStyles, thinking),
+  };
+
   return {
     capabilities,
     plain: (value) => value,
@@ -242,5 +264,6 @@ export function createTheme(capabilities: TerminalCapabilities, mode: AppSetting
     activitySurface: (value) => activityBg(text(value)),
     noticeSurface: (value) => noticeBg(text(value)),
     markdown,
+    thinkingMarkdown,
   };
 }

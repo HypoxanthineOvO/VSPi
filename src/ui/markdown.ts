@@ -12,7 +12,7 @@ function listSymbol(depth: number): string {
   return ["•", "◦", "▪"][depth % 3] ?? "•";
 }
 
-function replaceListMarker(line: string, theme: VspiTheme): string {
+function replaceListMarker(line: string, theme: VspiTheme, tone: "default" | "thinking" = "default"): string {
   const plain = stripAnsi(line);
   const match = /^(\s*)- (?:\[([ xX])\] )?/.exec(plain);
   if (!match) return line;
@@ -21,8 +21,9 @@ function replaceListMarker(line: string, theme: VspiTheme): string {
   const depth = Math.floor(indent.length / 4);
   const sourceMarker = task === undefined ? "- " : `- [${task}] `;
   const replacementMarker = task === undefined ? `${listSymbol(depth)} ` : `${task === " " ? "○" : "✓"} `;
-  const source = `${indent}${theme.markdown.listBullet(sourceMarker)}`;
-  const replacement = `${indent}${theme.markdown.listBullet(replacementMarker)}`;
+  const bullet = (tone === "thinking" ? theme.thinkingMarkdown : theme.markdown).listBullet;
+  const source = `${indent}${bullet(sourceMarker)}`;
+  const replacement = `${indent}${bullet(replacementMarker)}`;
   return line.replace(source, replacement);
 }
 
@@ -35,12 +36,16 @@ function codeLabel(fence: string): string {
   return (language || "CODE").toUpperCase();
 }
 
-function codeHeader(label: string, width: number, theme: VspiTheme): string {
+function codeHeader(label: string, width: number, theme: VspiTheme, tone: "default" | "thinking" = "default"): string {
   const prefix = theme.capabilities.colorLevel === 0 ? `${theme.capabilities.unicode ? "│" : "|"} ` : "  ";
-  return fillBackground(theme.markdown.codeBlockBorder(`${prefix}${label}`), width, theme.codeBlock);
+  const header = `${prefix}${label}`;
+  // 思考块内的代码块不再铺亮色背景，仅用灰调标签保持层级可辨。
+  if (tone === "thinking") return padLine(theme.thinking(header), width);
+  return fillBackground(theme.markdown.codeBlockBorder(header), width, theme.codeBlock);
 }
 
-function codeBody(line: string, width: number, theme: VspiTheme): string {
+function codeBody(line: string, width: number, theme: VspiTheme, tone: "default" | "thinking" = "default"): string {
+  if (tone === "thinking") return padLine(theme.thinking(stripAnsi(line)), width);
   if (theme.capabilities.colorLevel > 0) return fillBackground(line, width, theme.codeBlock);
   const border = theme.capabilities.unicode ? "│" : "|";
   return fillBackground(`${border} ${line.replace(/^ {0,2}/, "")}`, width, theme.codeBlock);
@@ -51,18 +56,23 @@ function pushBlank(output: string[], width: number): void {
   output.push(padLine("", width));
 }
 
-export function postprocessMarkdownLines(rendered: readonly string[], width: number, theme: VspiTheme): string[] {
+export function postprocessMarkdownLines(
+  rendered: readonly string[],
+  width: number,
+  theme: VspiTheme,
+  tone: "default" | "thinking" = "default",
+): string[] {
   const output: string[] = [];
   let insideCode = false;
   let insideTable = false;
   let codeClosingBlank = false;
   for (const sourceLine of rendered) {
-    const line = replaceListMarker(sourceLine, theme);
+    const line = replaceListMarker(sourceLine, theme, tone);
     const trimmed = stripAnsi(line).trimStart();
     const fence = trimmed.startsWith("```");
     if (fence && !insideCode) {
       pushBlank(output, width);
-      output.push(codeHeader(codeLabel(trimmed), width, theme));
+      output.push(codeHeader(codeLabel(trimmed), width, theme, tone));
       insideCode = true;
       codeClosingBlank = false;
       continue;
@@ -74,7 +84,7 @@ export function postprocessMarkdownLines(rendered: readonly string[], width: num
       continue;
     }
     if (insideCode) {
-      output.push(codeBody(line, width, theme));
+      output.push(codeBody(line, width, theme, tone));
       continue;
     }
     if (codeClosingBlank && trimmed === "") {
@@ -172,9 +182,13 @@ export class VspiMarkdown implements Component {
   ) {
     this.text = text;
     this.tokenizedSource = normalizeHeadings(text);
-    this.renderer = new Markdown(this.tokenizedSource, paddingX, 0, theme.markdown, {
-      color: options.tone === "thinking" ? theme.thinking : theme.text,
-    });
+    this.renderer = new Markdown(
+      this.tokenizedSource,
+      paddingX,
+      0,
+      options.tone === "thinking" ? theme.thinkingMarkdown : theme.markdown,
+      { color: options.tone === "thinking" ? theme.thinking : theme.text },
+    );
   }
 
   setText(text: string): void {
@@ -202,7 +216,7 @@ export class VspiMarkdown implements Component {
       this.tokenizedSource = source;
       this.renderer.setText(source);
     }
-    return postprocessMarkdownLines(this.renderer.render(width), width, this.theme);
+    return postprocessMarkdownLines(this.renderer.render(width), width, this.theme, this.options.tone);
   }
 }
 

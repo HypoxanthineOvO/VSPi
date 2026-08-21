@@ -275,6 +275,12 @@ function truncateStart(text: string, width: number): string {
   return `…${suffix}`;
 }
 
+// 会话标题来自首条用户消息，可能夹带 \n/\t；pi-tui 把控制字符按 0 宽保留，
+// 行内换行会让一个面板行占多个物理行，破坏框架、滚动与 diff 对齐。渲染前必须压平为单行。
+function singleLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
 function centerText(text: string, width: number): string {
   const clipped = truncateToWidth(text, width, "");
   const spacing = Math.max(0, width - visibleWidth(clipped));
@@ -1935,10 +1941,15 @@ export class PanelController {
     return this.sessions.flatMap((session, index) => {
       const branch = session.branchDepth > 0 ? `${theme.muted("└─")} ` : "";
       const current = session.current ? theme.success("● ") : "";
-      const status = session.owner ? theme.warning("使用中") : session.relativeTime;
+      // 运行状态：owner = 其他 VSPi 进程持有租约（活跃运行）；current = 本进程正在使用的会话。
+      const status = session.owner
+        ? theme.warning("● 使用中")
+        : session.current
+          ? theme.success("当前")
+          : session.relativeTime;
       const selected = index === this.state.selected;
       const marker = selected ? theme.focus("› ") : "  ";
-      const label = `${"  ".repeat(session.branchDepth)}${branch}${current}${session.label}`;
+      const label = `${"  ".repeat(session.branchDepth)}${branch}${current}${singleLine(session.label)}`;
       const line = alignRight(`${marker}${selected ? theme.focus(theme.bold(label)) : label}`, status, width);
       return index < this.sessions.length - 1 ? [line, ""] : [line];
     });

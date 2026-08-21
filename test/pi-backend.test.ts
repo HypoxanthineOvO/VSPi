@@ -956,4 +956,41 @@ describe("pi backend adapter", () => {
     expect(fake.prompt).not.toHaveBeenCalled();
     await backend.dispose();
   });
+
+  it("flattens multi-line first messages into single-line session labels", async () => {
+    const fake = fakeSession();
+    const list = vi.spyOn(SessionManager, "list").mockResolvedValue([
+      {
+        id: "multiline-session",
+        path: "/tmp/multiline-session.jsonl",
+        cwd: "/workspace",
+        firstMessage: "排查一下中转站目前的 GLM 代理报错\n\n开始测试账号：GLM-Pro-贺云翔\n\nAPI returned 404 …",
+        created: new Date(),
+        modified: new Date(),
+        messageCount: 3,
+        allMessagesText: "",
+      },
+    ]);
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-pi-sessions-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+
+    try {
+      await backend.start({
+        onMessage: vi.fn(),
+        onMessageUpdate: vi.fn(),
+        onBusy: vi.fn(),
+        onUsage: vi.fn(),
+        onNotice: vi.fn(),
+      });
+      const sessions = await backend.listSessions();
+
+      expect(sessions[0]?.label).toBe("排查一下中转站目前的 GLM 代理报错");
+      expect(sessions[0]?.label).not.toContain("\n");
+    } finally {
+      await backend.dispose();
+      list.mockRestore();
+    }
+  });
 });
