@@ -9,12 +9,13 @@ status: active
 
 | Cycle | 名称 | 状态 | 建立于 |
 | --- | --- | --- | --- |
-| [C23-release-1-1-4](C23-release-1-1-4/PLAN.md) | VSPi 1.1.4 发布 | active（本地发布完成，核验远端资产） | 2026-08-21 |
+| - | - | - | - |
 
 ## Closed Cycles
 
 | Cycle | 名称 | 状态 | 关联 Delivery | 版本 |
 | --- | --- | --- | --- | --- |
+| [C23-release-1-1-4](C23-release-1-1-4/SUMMARY.md) | VSPi 1.1.4 发布 | closed（双远端发布与资产验证完成） | - | v1.1.4 |
 | [C22-release-1-1-3](C22-release-1-1-3/SUMMARY.md) | VSPi 1.1.3 发布 | closed（双远端发布与资产验证完成） | - | v1.1.3 |
 | [C21-inline-error-node](C21-inline-error-node/SUMMARY.md) | 瀑布流可展开错误节点 | closed（实现与全量验证完成） | - | - |
 | [C20-compact-error-details](C20-compact-error-details/SUMMARY.md) | 紧凑错误与详情预览 | closed（实现与定向验证完成） | - | - |

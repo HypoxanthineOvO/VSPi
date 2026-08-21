@@ -2,12 +2,12 @@
 kind: progress
 cycle: C23-release-1-1-4
 plan: PLAN.md
-status: in_progress
-updated: 2026-08-21T16:30:00+08:00
-current: R4 远端发布核验
-next: 核验 GitLab pipeline 与 GitHub Actions、Release 资产后关闭 Cycle
+status: completed
+updated: 2026-08-21T16:32:30+08:00
+current: none
+next: none
 ---
 
 # VSPi 1.1.4 发布进度
 
-本地发布步骤（notes、bump、验证、commit/tag、双远端 push）已完成；等待远端 pipeline 与 Release 资产核验。
+VSPi 1.1.4 已完成 GitLab/GitHub 双远端发布。Release commit `45fe9d7`，tag `v1.1.4`；GitLab pipeline `#398` 与 GitHub Actions run `32463418339` 均成功。四个 pinned/latest 资产哈希一致且包内版本均为 `1.1.4`。
