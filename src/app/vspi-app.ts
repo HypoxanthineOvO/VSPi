@@ -1214,26 +1214,29 @@ export class VspiApp implements Component, Focusable {
   }
 
   private async submit(raw: string, options?: { skipPlanRoute?: boolean }): Promise<void> {
-    const text = raw.trim();
+    let text = raw.trim();
     if (!text) return;
     const queuedDuringWork = this.activityActive();
     const behavior = this.nextBehavior;
     this.nextBehavior = "prompt";
-    if (text.startsWith("/")) {
+    if (text.startsWith("//")) {
+      // “//” 转义：发送以字面 “/” 开头的普通消息（如命令示例、路径讨论）。
+      text = text.slice(1);
+    } else if (text.startsWith("/")) {
       const command = resolveCommand(text);
-      if (!command) {
-        this.showNotice(`未知命令：${text.split(/\s+/, 1)[0]}`, "error");
+      if (command) {
+        const action = getActionDefinition(command);
+        if (queuedDuringWork && (!action?.handler || !BUSY_SAFE_ACTIONS.has(action.handler))) {
+          this.showNotice("该命令需等待当前任务结束；Model、Effort、Policy 与界面设置可立即调整", "info");
+          return;
+        }
+        this.composer.editor.addToHistory(text);
+        this.composer.setText("");
+        await this.executeCommand(command, text);
         return;
       }
-      const action = getActionDefinition(command);
-      if (queuedDuringWork && (!action?.handler || !BUSY_SAFE_ACTIONS.has(action.handler))) {
-        this.showNotice("该命令需等待当前任务结束；Model、Effort、Policy 与界面设置可立即调整", "info");
-        return;
-      }
-      this.composer.editor.addToHistory(text);
-      this.composer.setText("");
-      await this.executeCommand(command, text);
-      return;
+      // 未匹配任何命令：不再报错拦截，按普通消息发送，避免吞掉以 “/” 开头的路径等内容；
+      // 需要字面发送时可用 “//” 转义。
     }
     const binding = queuedDuringWork ? undefined : this.backend.getPlanBinding?.();
     if (binding && this.options.planBackend && this.planSnapshot?.id !== binding.planId) {

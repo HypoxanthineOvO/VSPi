@@ -84,6 +84,8 @@ Fullscreen Transcript 保留最近最多 80 个内容块和 60K 字符，由 ups
 
 `Tab` 是唯一补全键，只处理无参数的单一 slash token，并且必须只有唯一候选：`/ex ⟶ /exit`，其可见结果只强调 `ex`，斜杠与 `it` 保持普通；`/qui ⟶ /quit` 只强调 `qui`，斜杠与 `t` 保持普通；`/ses ⟶ /sessions`、`/provi ⟶ /providers`、`/cl ⟶ /clear`。存在参数、普通文本或多个 token 候选时不改写。`Tab` 只修改 composer 文本，不会执行命令，也不写入 history；最终执行始终使用 canonical 命令身份。若两个不同 canonical 命令注册了同一个 exact alias，解析和面板 Enter 都会 fail closed，不会静默执行注册顺序中的第一项。composer 中的 slash token 与 Command 候选中的匹配前缀同时使用颜色和粗体、下划线、反显（bold / underline / inverse），因此无色终端仍可辨认，普通文本不受影响。
 
+`Enter` 的分流与 `Tab` 对齐：命令面板只拦截无参数的单一 slash token（含唯一候选补全），带参数的输入（如 `/goal status`、`/compact custom 说明`）一律由 composer 完整提交，参数保留在命令解析中；以 `/` 开头但未匹配任何命令的内容（如路径 `/home/user/project`）不再报“未知命令”，直接作为普通消息发送。需要字面发送以 `/` 开头的文本时，用 `//` 转义：`//goal hello` 会发送 `/goal hello`，且输入过程中不弹命令面板。
+
 Command 工作区在 40 列把每个命令排成身份行与详情/source 行，滚动时两行保持成组；80 列和 120 列使用稳定的“身份 / 描述 / source”三列。三档 Command 与 Status 都按终端可见列宽计算，不使用特殊全角填充。
 
 每个已接入工作区都有 contextual hint。hint 位于面板 frame 外，并直接位于 composer 上方；Command 的完整提示是 `▴▾ 选择  Tab 补全  Enter 执行  Esc 关闭`。Plan、Provider、Sessions、Settings、Usage、Theme、Question 和 Model 按当前真实可用动作生成提示；未来工作区接入前不得宣告无效键位。

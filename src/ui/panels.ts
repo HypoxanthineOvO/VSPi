@@ -716,6 +716,11 @@ export class PanelController {
 
   setCommandQuery(query: string): void {
     this.commandQuery = query;
+    // “//” 是字面消息转义：不弹命令面板，避免视觉干扰。
+    if (query.startsWith("//")) {
+      if (this.kind === "commands") this.close();
+      return;
+    }
     if (query.startsWith("/")) {
       if (this.kind !== "commands") this.open("commands");
       clampSelection(this.state, commandMatches(query).length);
@@ -984,6 +989,11 @@ export class PanelController {
   acceptsInput(data: string): boolean {
     // 唯一候选的 Tab 补全由 composer 层完成；多候选时面板不拦截 Tab（Registry 宣告了 Tab 补全）。
     if (this.kind === "commands" && panelKey(data, Key.tab)) return false;
+    // 带参数（含空白）的输入必须走 composer 完整提交路径：Enter 由 Editor 触发 submit(raw)，
+    // 保留 /goal <request> 等命令的参数语义；命令面板只拦截纯命令 token 的 Enter。
+    if (this.kind === "commands" && panelKey(data, Key.enter) && /\s/.test(this.commandQuery.trim())) {
+      return false;
+    }
     if (
       this.kind === "agents" &&
       [Key.escape, Key.enter, Key.tab, Key.up, Key.down, Key.left, Key.right].some((key) => panelKey(data, key))

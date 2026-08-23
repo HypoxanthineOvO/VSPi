@@ -18,7 +18,7 @@ const ENTER = "\r";
 
 function fakeTui(): TUI {
   return {
-    terminal: { columns: 100, rows: 30 },
+    terminal: { columns: 100, rows: 30, setProgress: vi.fn(), write: vi.fn() },
     requestRender: vi.fn(),
   } as unknown as TUI;
 }
