@@ -53,7 +53,8 @@ vspi config
 ```bash
 vspi                      # 开始新对话
 vspi continue             # 继续最近一次对话
-vspi run "解释这段代码"    # 单次任务，直接输出结果
+vspi exec "解释这段代码"   # 单次任务，直接输出结果（非交互）
+vspi exec resume "继续"   # 非交互续接最近会话
 ```
 
 ## 功能一览

@@ -8,23 +8,15 @@ import { startParentDeathWatchdog } from "./app/parent-watchdog.js";
 import { shutdownInteractiveSession, startUiAfterSplash } from "./app/startup.js";
 import { VspiApp } from "./app/vspi-app.js";
 import { AttachmentService } from "./attachments/service.js";
-import { AdaptiveBackend, type BackendMode } from "./backend/adaptive-backend.js";
+import { AdaptiveBackend } from "./backend/adaptive-backend.js";
+import { resolveBackendMode } from "./backend/mode.js";
+import { runExec } from "./cli/exec.js";
 import { deepSeekHarnessEnabled } from "./config/deepseek-harness.js";
 import { createRuntimeDefaultsService } from "./config/runtime-defaults.js";
 import { loadSettings } from "./config/settings.js";
-import type { TranscriptMessage } from "./domain/types.js";
 import { createStartupGoalBackend } from "./goals/startup.js";
 import { createStartupLocalPlanBackend } from "./plans/startup.js";
-import { createPolicyConfigService } from "./policy/config-service.js";
-import type { ExecutionPolicyService } from "./policy/execution-policy.js";
-import {
-  createInteractiveApprovalBroker,
-  createStartupPolicyRuntime,
-  createYoloAcknowledgementBroker,
-  type InteractiveApprovalBroker,
-  type YoloAcknowledgementBroker,
-} from "./policy/startup-runtime.js";
-import { resolveStartupSecurity, type StartupSecuritySnapshot } from "./policy/startup-security.js";
+import { composeStartupPolicy } from "./policy/startup-compose.js";
 import { createPromptProfileService } from "./prompts/profile-service.js";
 import { BUILTIN_PROVIDERS } from "./providers/builtins.js";
 import { createProviderConfigService } from "./providers/config-service.js";
@@ -35,8 +27,6 @@ import { createTheme } from "./ui/theme.js";
 import { VspiTuiAltScreen } from "./ui/tui-frame-pacer.js";
 import { updateVspi } from "./update/self-update.js";
 import { VSPI_VERSION } from "./version.js";
-import { createStartupWorkflowAdapter } from "./workflow/startup.js";
-import type { WorkflowAdapter } from "./workflow/types.js";
 
 class HeadlessTerminal implements Terminal {
   readonly kittyProtocolActive = false;
@@ -59,7 +49,7 @@ class HeadlessTerminal implements Terminal {
 async function renderOnce(): Promise<void> {
   const workspace = process.cwd();
   const { security, executionPolicy, approvalBroker, yoloAcknowledgementBroker, workflowAdapter } =
-    await startupPolicy(workspace);
+    await composeStartupPolicy(workspace);
   const terminal = new HeadlessTerminal();
   const tui = new TuiMainScreen(terminal);
   const settings = await loadSettings(workspace, undefined, { trustedProject: security.trustedProject });
@@ -141,11 +131,11 @@ async function renderOnce(): Promise<void> {
 
 async function interactive(): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new Error("VSPi interactive mode requires a TTY. Use --render-once for a non-interactive smoke render.");
+    throw new Error("VSPi interactive mode requires a TTY. Use vspi exec for non-interactive runs.");
   }
   const workspace = process.cwd();
   const { security, executionPolicy, approvalBroker, yoloAcknowledgementBroker, workflowAdapter } =
-    await startupPolicy(workspace);
+    await composeStartupPolicy(workspace);
   const terminal = new ScrollbackProcessTerminal();
   const settings = await loadSettings(workspace, undefined, { trustedProject: security.trustedProject });
   const configuredTuiMode =
@@ -270,49 +260,6 @@ async function interactive(): Promise<void> {
   }
 }
 
-function resolveBackendMode(): BackendMode {
-  return process.env.VSPi_FIXTURE === "1" || process.env.VSPi_BACKEND === "fixture" ? "fixture" : "pi";
-}
-
-async function startupPolicy(workspace: string): Promise<{
-  security: StartupSecuritySnapshot;
-  executionPolicy: ExecutionPolicyService;
-  approvalBroker: InteractiveApprovalBroker;
-  yoloAcknowledgementBroker: YoloAcknowledgementBroker;
-  workflowAdapter: WorkflowAdapter;
-}> {
-  const argv = process.argv.slice(2);
-  const preliminary = resolveStartupSecurity({ argv });
-  const configService = createPolicyConfigService({
-    cwd: workspace,
-    home: process.env.HOME ?? homedir(),
-    trustedProject: preliminary.trustedProject,
-    recovery: preliminary.recovery,
-  });
-  const config = await configService.load();
-  const security = resolveStartupSecurity({
-    argv,
-    globalPolicy: config.globalPolicy,
-    ...(config.projectPolicy ? { projectPolicy: config.projectPolicy } : {}),
-  });
-  const yoloAcknowledgementBroker = createYoloAcknowledgementBroker();
-  const approvalBroker = createInteractiveApprovalBroker();
-  const workflowAdapter = await createStartupWorkflowAdapter({
-    enabled: security.workflowAdapter,
-    workspace,
-    disabledReason: security.recovery ? "recovery" : "not-enabled",
-  });
-  const executionPolicy = await createStartupPolicyRuntime({
-    workspace,
-    security,
-    configService: { load: async () => config },
-    approvalBroker: (request, signal) => approvalBroker.request(request, signal),
-    acknowledgeYolo: () => yoloAcknowledgementBroker.consume(),
-    workflowAuthority: (action) => workflowAdapter.authorize(action),
-  });
-  return { security, executionPolicy, approvalBroker, yoloAcknowledgementBroker, workflowAdapter };
-}
-
 /** 启动会话语义：默认新会话；`vspi continue`（或 `-c`/`--continue`）续接最近会话；`vspi resume`（或 `-r`/`--resume`）打开会话选择器。 */
 function startupSessionMode(): {
   continueRecent: boolean;
@@ -357,7 +304,12 @@ function printHelp(): void {
   vspi import [codex|claude]
                             导入外部 Agent 的历史会话
   vspi skills               管理、安装与导入 Skill
-  vspi run "<prompt>"      非交互模式：执行单个 prompt，结果输出到 stdout
+  vspi exec "<prompt>"     非交互执行单个 prompt，结果输出到 stdout
+  vspi exec resume "<prompt>"
+                            续接最近会话非交互执行
+  vspi exec resume <id> "<prompt>"
+                            续接指定会话非交互执行（id 支持唯一前缀）
+  vspi run "<prompt>"      兼容别名：等价 vspi exec "<prompt>"
   vspi update              检查并安装最新稳定版本
 
 选项：
@@ -368,6 +320,8 @@ function printHelp(): void {
   --render-once            渲染一帧后退出（smoke 用）
   -h, --help               显示本帮助
   -v, --version            显示版本号
+
+退出码（exec）：0 成功；1 运行失败；2 用法错误；130 已取消。
 
 环境变量：
   VSPi_BACKEND=pi|fixture  选择后端（fixture 等价 VSPi_FIXTURE=1，完全离线）
@@ -387,70 +341,6 @@ async function selfUpdate(): Promise<void> {
   );
 }
 
-/** 非交互单次执行：发送一个 prompt，把最终的 assistant 文本写到 stdout。 */
-async function runOnce(prompt: string): Promise<void> {
-  if (!prompt.trim()) throw new Error('用法：vspi run "<prompt>"');
-  const workspace = process.cwd();
-  const { security, executionPolicy, workflowAdapter } = await startupPolicy(workspace);
-  const promptProfileService = createPromptProfileService({
-    cwd: workspace,
-    home: process.env.HOME ?? homedir(),
-    trustedProject: security.trustedProject,
-  });
-  await promptProfileService.load();
-  const localPlanBackend = createStartupLocalPlanBackend({
-    workspace,
-    recovery: security.recovery,
-    workflow: security.workflowAdapter,
-  });
-  const goalBackend = createStartupGoalBackend({
-    workspace,
-    recovery: security.recovery,
-    workflow: security.workflowAdapter,
-  });
-  const backend = new AdaptiveBackend(
-    workspace,
-    resolveBackendMode(),
-    security.trustedProject,
-    security.recovery,
-    executionPolicy,
-    localPlanBackend,
-    { resolve: async (identity) => promptProfileService.resolve(identity) },
-    {
-      continueRecent: false,
-      deepSeekHarness: deepSeekHarnessEnabled(),
-      ...(security.workflowAdapter ? { workflowPlan: workflowAdapter } : {}),
-    },
-    goalBackend,
-  );
-  const messages: TranscriptMessage[] = [];
-  try {
-    await backend.start({
-      onMessage: (message) => {
-        messages.push(message);
-      },
-      onMessageUpdate: (id, patch) => {
-        const index = messages.findIndex((message) => message.id === id);
-        const current = messages[index];
-        if (index >= 0 && current) messages[index] = { ...current, ...patch } as TranscriptMessage;
-      },
-      onBusy: () => {},
-      onUsage: () => {},
-      onNotice: (text, tone) => {
-        if (tone === "error" || tone === "warning") process.stderr.write(`${text}\n`);
-      },
-      onSessionInvalidating: () => {},
-      onSessionReset: () => {},
-    });
-    const result = await backend.send(prompt, { attachments: [], effort: "medium", behavior: "prompt" });
-    const reply = [...messages].reverse().find((message) => message.role === "assistant" && message.kind === "text");
-    if (reply && reply.kind === "text") process.stdout.write(`${reply.text}\n`);
-    if (result && result.status === "cancelled") process.exitCode = 130;
-  } finally {
-    await backend.dispose();
-  }
-}
-
 const rawEntry = process.argv[2];
 // -c/--continue 与 -r/--resume 归一为对应子命令后再分发。
 const entry =
@@ -459,7 +349,7 @@ const entry =
     : rawEntry === "-r" || rawEntry === "--resume"
       ? "resume"
       : rawEntry;
-if (entry === "run") await runOnce(process.argv.slice(3).join(" "));
+if (entry === "run" || entry === "exec") await runExec(process.argv.slice(3));
 else if (entry === "update") await selfUpdate();
 else if (entry === "config" || entry === "init" || entry === "login" || entry === "logout") {
   if (entry === "init") process.stderr.write("vspi init 已更名为 vspi config；本次继续执行配置。\n");

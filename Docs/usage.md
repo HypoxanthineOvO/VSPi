@@ -25,6 +25,7 @@ VSPi 沿用 Pi 的模型、Provider、凭据和 session 目录，不另建 Secre
 ### 启动选项细节
 
 - `vspi continue`（等价 `npm run dev -- continue`）续接最近的会话。
+- 非交互执行：`vspi exec "<prompt>"` 新会话执行单次 prompt；`vspi exec resume "<prompt>"` 续接最近会话；`vspi exec resume <session-id> "<prompt>"` 续接指定会话（id 支持唯一前缀，可在 TUI 的 `/sessions` 面板查看）。`vspi run "<prompt>"` 是兼容别名。最终 assistant 文本写入 stdout，运行期 notice 写入 stderr；退出码 0 成功、1 运行失败、2 用法错误、130 已取消。`--policy`、`--trust-project`、`--recovery`、`--workflow` 可出现在 exec 参数任意位置；模型与 effort 沿用持久化的 runtime defaults。若目标会话正被其他 VSPi 进程持有，exec 会通过既有的前台移交机制等待接管（stderr 会提示持有者）。
 - `--trust-project` 显式信任当前项目，仅绑定启动时 workspace 的 realpath；trust 不通过环境变量自动授予，也不会在 Session 切换到其他 cwd 时继承，无 flag 时项目 Provider overlay 与 `.vspi/settings.json` 不读取。
 - `--recovery` 无条件覆盖 `--policy`、`--trust-project` 与 `--workflow`，强制 `Standard ⋅ Host`，拒绝需提升审批的工具、global-only settings/models，完全不读取项目 Policy 配置；Pi ResourceLoader 同时禁用 extensions、skills、prompt templates、themes 与 project context files，界面明确显示 `Recovery`。它不加载 Workflow Adapter，也不叫 `--safe`。
 - 后端模式：默认真实 Pi 启动新会话，缺少模型或凭据时显示 setup error，不回退 Fixture。
