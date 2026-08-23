@@ -672,7 +672,20 @@ const actions: InteractionDefinition[] = [
     },
   }),
   ...(
-    ["models", "settings", "usage", "theme", "question", "approval", "effort", "policy", "tools", "agents"] as const
+    [
+      "models",
+      "settings",
+      "usage",
+      "theme",
+      "question",
+      "approval",
+      "effort",
+      "policy",
+      "tools",
+      "agents",
+      "goal",
+      "prompt",
+    ] as const
   ).map((context) =>
     keyAction({
       id: `panel.${context}.close`,

@@ -741,6 +741,11 @@ export class PanelController {
         this.state.scroll = 0;
         return;
       }
+      if (this.kind === "prompt" && this.promptImportEditing) {
+        this.promptImportEditing = false;
+        this.promptImportPath = "";
+        return;
+      }
       if (this.providerEditing) {
         this.providerEditing = false;
         return;

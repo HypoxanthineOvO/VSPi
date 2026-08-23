@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/domain/fixtures.js";
 import type { SessionOption } from "../src/domain/types.js";
 import { stripAnsi } from "../src/ui/ansi.js";
+import { matchingInteraction } from "../src/ui/interactions.js";
 import { PanelController } from "../src/ui/panels.js";
 import { plainTheme } from "./helpers.js";
 
@@ -109,6 +110,33 @@ describe("M1 state-aware interaction hints", () => {
 
     expect(hintText(panel)).toContain("Enter 执行");
     expect(panel.handleInput("\r")).toMatchObject({ type: "command", command: { id: "providers" } });
+  });
+
+  it("registers an Escape close action for every modal panel kind", () => {
+    // plan 是常驻工作区面板，不在模态集合内；其余所有可打开面板都必须能 Esc 关闭，
+    // 否则 handleInput 的模态路由会把按键全部吞掉（Goal 面板曾因此成为输入黑洞）。
+    const modalKinds = [
+      "goal",
+      "prompt",
+      "commands",
+      "models",
+      "providers",
+      "sessions",
+      "externalImport",
+      "skills",
+      "settings",
+      "usage",
+      "theme",
+      "question",
+      "approval",
+      "effort",
+      "tools",
+      "agents",
+      "policy",
+    ] as const;
+    for (const kind of modalKinds) {
+      expect(matchingInteraction("panel", kind, "\u001b"), `panel ${kind} must close on Escape`).toBeDefined();
+    }
   });
 });
 
