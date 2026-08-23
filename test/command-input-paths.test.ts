@@ -5,6 +5,7 @@ import type { AttachmentService } from "../src/attachments/service.js";
 import type { ChatBackend, ChatBackendEvents } from "../src/backend/types.js";
 import { DEFAULT_SETTINGS } from "../src/domain/fixtures.js";
 import { stripAnsi } from "../src/ui/ansi.js";
+import type { PanelController } from "../src/ui/panels.js";
 import { plainTheme } from "./helpers.js";
 
 /**
@@ -37,12 +38,19 @@ function backend(overrides: Partial<ChatBackend> = {}): ChatBackend {
     start: vi.fn(async (_events: ChatBackendEvents) => undefined),
     send: vi.fn(async () => ({ status: "completed" as const })),
     cancel: vi.fn(async () => undefined),
+    compact: vi.fn(async () => undefined),
     newSession: vi.fn(async () => undefined),
     listSessions: vi.fn(async () => []),
     switchSession: vi.fn(async () => undefined),
     dispose: vi.fn(async () => undefined),
     ...overrides,
   };
+}
+
+type TestableApp = { panels: PanelController };
+
+function asTestable(app: VspiApp): TestableApp {
+  return app as unknown as TestableApp;
 }
 
 async function createApp(overrides: Partial<ChatBackend> = {}): Promise<VspiApp> {
@@ -80,7 +88,7 @@ describe("命令输入路径", () => {
     try {
       await typeAndEnter(app, "/goal status");
 
-      expect(app.panels.kind).toBe("goal");
+      expect(asTestable(app).panels.kind).toBe("goal");
       expect(createGoal).not.toHaveBeenCalled();
       expect(send).not.toHaveBeenCalled();
       expect(app.composer.getText()).toBe("");
@@ -109,7 +117,7 @@ describe("命令输入路径", () => {
     try {
       for (const character of "//goal hello") app.handleInput(character);
       await new Promise((resolve) => setImmediate(resolve));
-      expect(app.panels.kind).not.toBe("commands");
+      expect(asTestable(app).panels.kind).not.toBe("commands");
 
       app.handleInput(ENTER);
       await new Promise((resolve) => setImmediate(resolve));
@@ -127,7 +135,7 @@ describe("命令输入路径", () => {
     try {
       await typeAndEnter(app, "/goa");
 
-      expect(app.panels.kind).toBe("goal");
+      expect(asTestable(app).panels.kind).toBe("goal");
       expect(app.composer.getText()).toBe("");
     } finally {
       await app.dispose();

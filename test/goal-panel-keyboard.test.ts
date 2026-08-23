@@ -5,6 +5,7 @@ import type { AttachmentService } from "../src/attachments/service.js";
 import type { ChatBackend, ChatBackendEvents } from "../src/backend/types.js";
 import { DEFAULT_SETTINGS } from "../src/domain/fixtures.js";
 import { stripAnsi } from "../src/ui/ansi.js";
+import type { PanelController } from "../src/ui/panels.js";
 import { plainTheme } from "./helpers.js";
 
 /**
@@ -39,12 +40,19 @@ function backend(overrides: Partial<ChatBackend> = {}): ChatBackend {
     start: vi.fn(async (_events: ChatBackendEvents) => undefined),
     send: vi.fn(async () => ({ status: "completed" as const })),
     cancel: vi.fn(async () => undefined),
+    compact: vi.fn(async () => undefined),
     newSession: vi.fn(async () => undefined),
     listSessions: vi.fn(async () => []),
     switchSession: vi.fn(async () => undefined),
     dispose: vi.fn(async () => undefined),
     ...overrides,
   };
+}
+
+type TestableApp = { panels: PanelController };
+
+function asTestable(app: VspiApp): TestableApp {
+  return app as unknown as TestableApp;
 }
 
 async function createApp(overrides: Partial<ChatBackend> = {}): Promise<VspiApp> {
@@ -81,14 +89,14 @@ describe("Goal 面板键盘路径", () => {
       await type(app, "/goal");
       await press(app, ENTER);
 
-      expect(app.panels.kind).toBe("goal");
+      expect(asTestable(app).panels.kind).toBe("goal");
       const panelText = renderedText(app);
       expect(panelText).toContain("当前 Session 没有绑定 Goal");
       // 面板打开时必须宣告退出方式，不能是无提示的黑洞。
-      expect(stripAnsi(app.panels.renderHint(100, plainTheme()))).toContain("Esc 关闭");
+      expect(stripAnsi(asTestable(app).panels.renderHint(100, plainTheme()))).toContain("Esc 关闭");
 
       await press(app, ESCAPE);
-      expect(app.panels.kind).not.toBe("goal");
+      expect(asTestable(app).panels.kind).not.toBe("goal");
 
       await type(app, "继续输入");
       expect(app.composer.getText()).toBe("继续输入");
@@ -102,7 +110,7 @@ describe("Goal 面板键盘路径", () => {
     try {
       await type(app, "/goal");
       await press(app, ENTER);
-      expect(app.panels.kind).toBe("goal");
+      expect(asTestable(app).panels.kind).toBe("goal");
 
       await type(app, "abc");
       expect(app.composer.getText()).toBe("");
@@ -118,13 +126,13 @@ describe("Goal 面板键盘路径", () => {
   it("Prompt 面板同样支持 Esc 关闭，import 编辑态 Esc 只取消编辑", async () => {
     const app = await createApp();
     try {
-      app.panels.open("prompt");
+      asTestable(app).panels.open("prompt");
       await press(app, "i"); // 进入 import 路径编辑
-      expect(app.panels.kind).toBe("prompt");
+      expect(asTestable(app).panels.kind).toBe("prompt");
       await press(app, ESCAPE); // 退出编辑态，面板保留
-      expect(app.panels.kind).toBe("prompt");
+      expect(asTestable(app).panels.kind).toBe("prompt");
       await press(app, ESCAPE); // 关闭面板
-      expect(app.panels.kind).not.toBe("prompt");
+      expect(asTestable(app).panels.kind).not.toBe("prompt");
 
       await type(app, "abc");
       expect(app.composer.getText()).toBe("abc");
