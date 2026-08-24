@@ -652,6 +652,97 @@ describe("PiAgentManager", () => {
     await Promise.all([firstManager.dispose(), secondManager.dispose()]);
   });
 
+  it("serializes the same file across managers without blocking writes to other files", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-file-writer-"));
+    const options = {
+      cwd,
+      agentDir: cwd,
+      trustedProject: false,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory: async () => fakeSession(async () => "unused"),
+    };
+    const [firstManager, secondManager, thirdManager] = await Promise.all([
+      PiAgentManager.create(options),
+      PiAgentManager.create(options),
+      PiAgentManager.create(options),
+    ]);
+    let releaseFirst!: () => void;
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolvePromise) => {
+      markFirstStarted = resolvePromise;
+    });
+    const first = firstManager.withToolBoundary(
+      { kind: "file-write", target: join(cwd, "same.txt"), operation: "write" },
+      async () => {
+        markFirstStarted();
+        await new Promise<void>((resolvePromise) => {
+          releaseFirst = resolvePromise;
+        });
+      },
+    );
+    await firstStarted;
+
+    let sameFileStarted = false;
+    const sameFile = secondManager.withToolBoundary(
+      { kind: "file-write", target: join(cwd, "same.txt"), operation: "edit" },
+      async () => {
+        sameFileStarted = true;
+      },
+    );
+    await thirdManager.withToolBoundary(
+      { kind: "file-write", target: join(cwd, "other.txt"), operation: "write" },
+      async () => undefined,
+    );
+    expect(sameFileStarted).toBe(false);
+
+    releaseFirst();
+    await Promise.all([first, sameFile]);
+    expect(sameFileStarted).toBe(true);
+    await Promise.all([firstManager.dispose(), secondManager.dispose(), thirdManager.dispose()]);
+  });
+
+  it("does not make a file write wait for an unrelated Bash boundary in another manager", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-file-bash-"));
+    const options = {
+      cwd,
+      agentDir: cwd,
+      trustedProject: false,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory: async () => fakeSession(async () => "unused"),
+    };
+    const [firstManager, secondManager] = await Promise.all([
+      PiAgentManager.create(options),
+      PiAgentManager.create(options),
+    ]);
+    let releaseBash!: () => void;
+    let markBashStarted!: () => void;
+    const bashStarted = new Promise<void>((resolvePromise) => {
+      markBashStarted = resolvePromise;
+    });
+    const bash = firstManager.withToolBoundary({ kind: "process", operation: "bash" }, async () => {
+      markBashStarted();
+      await new Promise<void>((resolvePromise) => {
+        releaseBash = resolvePromise;
+      });
+    });
+    await bashStarted;
+
+    await expect(
+      secondManager.withToolBoundary(
+        { kind: "file-write", target: join(cwd, "independent.txt"), operation: "write" },
+        async () => "written",
+      ),
+    ).resolves.toBe("written");
+
+    releaseBash();
+    await bash;
+    await Promise.all([firstManager.dispose(), secondManager.dispose()]);
+  });
+
   it("falls back only after a quota error and reports the model change to the parent surface", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-fallback-"));
     const events: AgentStatusEvent[] = [];

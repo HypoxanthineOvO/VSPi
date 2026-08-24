@@ -1001,7 +1001,7 @@ export class PiAgentManager {
         const lease = await acquireAgentExclusiveLease({
           agentDir: this.options.agentDir,
           namespace: "writer",
-          identity: resolve(this.options.cwd),
+          identity: writerLeaseIdentity(this.options.cwd, action),
           ...(signal ? { signal } : {}),
           wait: true,
         });
@@ -1484,4 +1484,12 @@ function isPersistentAgentMutation(action: PolicyAction, cwd: string): boolean {
     target.startsWith(`${sessionsPath}/`) ||
     /(?:^|[\\/])\.vspi[\\/](?:agents\.json|agent-sessions)(?:$|[\\/\s'"])/u.test(target)
   );
+}
+
+function writerLeaseIdentity(cwd: string, action: PolicyAction): string {
+  const workspace = resolve(cwd);
+  if (action.kind === "file-write" && action.target) {
+    return `${workspace}\0file\0${resolve(workspace, action.target)}`;
+  }
+  return `${workspace}\0shared`;
 }
