@@ -11,7 +11,7 @@ import {
   resolvePiTuiRoots,
 } from "../scripts/patch-pi-editor-performance.mjs";
 
-/** Runtime-public Editor methods that the 0.84.2 declarations mark private. */
+/** Runtime-public Editor methods that the 0.84.3 declarations mark private. */
 interface EditorTestAccess {
   moveToLineEnd(): void;
   handlePaste(text: string): void;
@@ -66,7 +66,7 @@ describe("pi editor performance patch source guard", () => {
     expect(patchEditorSource(once)).toBe(once);
   });
 
-  it("fails closed when the source no longer matches the 0.84.2 contract", async () => {
+  it("fails closed when the source no longer matches the 0.84.3 contract", async () => {
     const source = stripPatch(await installedEditorSource());
     expect(() =>
       patchEditorSource(
@@ -86,7 +86,7 @@ describe("pi editor performance patch source guard", () => {
     await writeFile(join(root, "package.json"), JSON.stringify({ name: PI_TUI_PACKAGE, version: "0.84.1" }));
     const source = await installedEditorSource();
     await writeFile(join(root, "dist/components/editor.js"), source);
-    await expect(prepareEditorPackage(root)).rejects.toThrow(/expected 0\.84\.2/);
+    await expect(prepareEditorPackage(root)).rejects.toThrow(/expected 0\.84\.3/);
   });
 });
 
@@ -157,7 +157,7 @@ describe("installed pi editor performance patch", () => {
     }
     const elapsedMs = performance.now() - start;
     expect(editor.getCursor().col).toBe(text.length - 120);
-    // Upstream 0.84.2 takes ~1.5s for the same 120 moves + redraws; the cache
+    // Upstream 0.84.3 takes ~1.5s for the same 120 moves + redraws; the cache
     // prototype measured ~7ms. 500ms leaves ample CI headroom while still
     // catching a regression to the uncached path.
     expect(elapsedMs).toBeLessThan(500);

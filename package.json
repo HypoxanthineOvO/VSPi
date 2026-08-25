@@ -1,6 +1,6 @@
 {
   "name": "vspi",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "A Chinese terminal UI for Pi coding agents with optional read-only Hypo-Workflow integration.",
   "homepage": "https://github.com/HypoxanthineOvO/VSPi",
   "repository": {
@@ -54,8 +54,8 @@
     "tui"
   ],
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.84.2",
-    "@earendil-works/pi-tui": "0.84.2",
+    "@earendil-works/pi-coding-agent": "0.84.3",
+    "@earendil-works/pi-tui": "0.84.3",
     "brace-expansion": "5.0.9",
     "chalk": "5.6.2",
     "grok-mermaid": "0.2.2",

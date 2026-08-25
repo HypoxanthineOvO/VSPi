@@ -1,8 +1,6 @@
-import { execFile as execFileCallback } from "node:child_process";
 import { mkdtemp, readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import {
   type AgentSession,
   type AgentSessionEvent,
@@ -14,8 +12,6 @@ import { defaultAgentProjectConfig, saveAgentProjectConfig } from "../src/agents
 import { PiAgentManager } from "../src/agents/manager.js";
 import type { AgentStatusEvent } from "../src/agents/types.js";
 import { createExecutionPolicyService } from "../src/policy/execution-policy.js";
-
-const execFile = promisify(execFileCallback);
 
 function fakeSession(prompt: (text: string) => Promise<string>, inputTokens = 2): AgentSession {
   const messages: unknown[] = [];
@@ -615,9 +611,8 @@ describe("PiAgentManager", () => {
     await recovery.dispose();
   });
 
-  it("serializes all Bash boundaries across managers, including commands labelled read-only", async () => {
+  it("does not serialize opaque shell boundaries across independent managers", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-writer-"));
-    const output = join(cwd, "writer-order.txt");
     const options = {
       cwd,
       agentDir: cwd,
@@ -631,25 +626,62 @@ describe("PiAgentManager", () => {
       PiAgentManager.create(options),
       PiAgentManager.create(options),
     ]);
-    const first = firstManager.withToolBoundary({ kind: "process", operation: "read" }, async () => {
-      await execFile(process.execPath, [
-        "-e",
-        "const {appendFileSync}=require('node:fs');appendFileSync(process.argv[1],'A');setTimeout(()=>appendFileSync(process.argv[1],'B'),100)",
-        output,
-      ]);
+    let releaseFirst!: () => void;
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolvePromise) => {
+      markFirstStarted = resolvePromise;
     });
-    while (true) {
-      try {
-        if ((await readFile(output, "utf8")) === "A") break;
-      } catch {}
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 5));
-    }
-    const second = secondManager.withToolBoundary({ kind: "process", operation: "read" }, async () => {
-      await execFile(process.execPath, ["-e", "require('node:fs').appendFileSync(process.argv[1],'C')", output]);
+    const first = firstManager.withToolBoundary({ kind: "process", operation: "bash" }, async () => {
+      markFirstStarted();
+      await new Promise<void>((resolvePromise) => {
+        releaseFirst = resolvePromise;
+      });
     });
-    await Promise.all([first, second]);
-    expect(await readFile(output, "utf8")).toBe("ABC");
+    await firstStarted;
+    await expect(
+      secondManager.withToolBoundary({ kind: "process", operation: "bash" }, async () => "second-ran"),
+    ).resolves.toBe("second-ran");
+    releaseFirst();
+    await first;
     await Promise.all([firstManager.dispose(), secondManager.dispose()]);
+  });
+
+  it("keeps opaque shell and file mutations serialized inside one manager", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-local-writer-"));
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: false,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory: async () => fakeSession(async () => "unused"),
+    });
+    let releaseFirst!: () => void;
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolvePromise) => {
+      markFirstStarted = resolvePromise;
+    });
+    const first = manager.withToolBoundary({ kind: "process", operation: "bash" }, async () => {
+      markFirstStarted();
+      await new Promise<void>((resolvePromise) => {
+        releaseFirst = resolvePromise;
+      });
+    });
+    await firstStarted;
+    let fileStarted = false;
+    const file = manager.withToolBoundary(
+      { kind: "file-write", target: join(cwd, "same-tree.txt"), operation: "edit" },
+      async () => {
+        fileStarted = true;
+      },
+    );
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+    expect(fileStarted).toBe(false);
+    releaseFirst();
+    await Promise.all([first, file]);
+    expect(fileStarted).toBe(true);
+    await manager.dispose();
   });
 
   it("serializes the same file across managers without blocking writes to other files", async () => {

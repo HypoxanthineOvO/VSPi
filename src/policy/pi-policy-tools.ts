@@ -7,6 +7,7 @@ import {
   createFindToolDefinition,
   createGrepToolDefinition,
   createLsToolDefinition,
+  createPowerShellToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
   type ToolDefinition,
@@ -15,12 +16,13 @@ import type { Static, TSchema } from "typebox";
 import { createDeepSeekEditorToolDefinition } from "../deepseek/editor-tool.js";
 import type { ExecutionPolicyService, PolicyAction } from "./execution-policy.js";
 
-type PolicyToolOverrides = {
+export type PolicyToolOverrides = {
   read: ReturnType<typeof createReadToolDefinition>;
   ls: ReturnType<typeof createLsToolDefinition>;
   find: ReturnType<typeof createFindToolDefinition>;
   grep: ReturnType<typeof createGrepToolDefinition>;
   bash: ReturnType<typeof createBashToolDefinition>;
+  powershell: ReturnType<typeof createPowerShellToolDefinition>;
   edit: ReturnType<typeof createEditToolDefinition>;
   write: ReturnType<typeof createWriteToolDefinition>;
   str_replace_editor: ReturnType<typeof createDeepSeekEditorToolDefinition>;
@@ -41,6 +43,7 @@ export function createPolicyToolOverrides(options: {
     find: createFindToolDefinition(workspace),
     grep: createGrepToolDefinition(workspace),
     bash: createBashToolDefinition(workspace, options.bashOperations ? { operations: options.bashOperations } : {}),
+    powershell: createPowerShellToolDefinition(workspace),
     edit: createEditToolDefinition(workspace),
     write: createWriteToolDefinition(workspace),
     str_replace_editor: createDeepSeekEditorToolDefinition(),
@@ -72,6 +75,7 @@ export function createPolicyToolOverrides(options: {
       operation: "grep",
     })),
     bash: guard(native.bash, (input) => classifyBash((input as { command: string }).command)),
+    powershell: guard(native.powershell, (input) => classifyPowerShell((input as { command: string }).command)),
     edit: guard(native.edit, (input) => ({
       kind: "file-write",
       target: resolve(workspace, (input as { path: string }).path),
@@ -125,6 +129,38 @@ export function createPolicyToolOverrides(options: {
       },
     };
   }
+}
+
+export function platformShellName(platform: NodeJS.Platform = process.platform): "bash" | "powershell" {
+  return platform === "win32" ? "powershell" : "bash";
+}
+
+export function platformShellPrompt(platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32"
+    ? "Platform: Windows. Use the powershell tool with PowerShell syntax and Windows path rules; Bash is unavailable."
+    : "Platform: Unix. Use the bash tool with Bash syntax; PowerShell is unavailable.";
+}
+
+export function platformRootToolNames(platform: NodeJS.Platform = process.platform): string[] {
+  return ["read", "ls", "find", "grep", platformShellName(platform), "edit", "write"];
+}
+
+export function platformChildToolNames(
+  tools: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  return tools.filter((tool) => tool !== "powershell" && (platform !== "win32" || tool !== "bash"));
+}
+
+export function policyToolsForPlatform(
+  overrides: PolicyToolOverrides,
+  options: { child?: boolean; platform?: NodeJS.Platform } = {},
+): Array<PolicyToolOverrides[keyof PolicyToolOverrides]> {
+  const platform = options.platform ?? process.platform;
+  const shell = options.child && platform === "win32" ? undefined : platformShellName(platform);
+  return Object.values(overrides).filter(
+    (tool) => (tool.name !== "bash" && tool.name !== "powershell") || tool.name === shell,
+  );
 }
 
 async function assertWorkspaceTarget(workspace: string, target: string | undefined): Promise<void> {
@@ -186,6 +222,20 @@ export function classifyBash(command: string): PolicyAction {
     return { kind: "process", target: bounded, risk: "low", category: "bash-read", operation: "read" };
   }
   return { kind: "process", target: bounded, risk: "low", category: "process", operation: "bash" };
+}
+
+export function classifyPowerShell(command: string): PolicyAction {
+  const bounded = Array.from(command).slice(0, 240).join("");
+  if (/\b(?:Remove-Item|Clear-Content|Format-Volume|rm|rmdir|del|erase|shred)\b/iu.test(command)) {
+    return { kind: "process", target: bounded, risk: "high", category: "destructive", operation: "powershell" };
+  }
+  if (/\b(?:Stop-Computer|Restart-Computer|Stop-Process|sudo|shutdown|reboot|kill|pkill)\b/iu.test(command)) {
+    return { kind: "process", target: bounded, risk: "high", category: "system", operation: "powershell" };
+  }
+  if (/\b(?:Invoke-WebRequest|Invoke-RestMethod|Start-BitsTransfer|curl|wget|ssh|scp|rsync)\b/iu.test(command)) {
+    return { kind: "network", target: bounded, risk: "medium", category: "network", operation: "powershell" };
+  }
+  return { kind: "process", target: bounded, risk: "low", category: "process", operation: "powershell" };
 }
 
 function looksReadOnly(command: string): boolean {

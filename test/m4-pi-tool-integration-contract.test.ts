@@ -7,12 +7,21 @@ import {
   createFindTool,
   createGrepTool,
   createLsTool,
+  createPowerShellTool,
   createReadTool,
   createWriteTool,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { createExecutionPolicyService } from "../src/policy/execution-policy.js";
-import { classifyBash, createPolicyToolOverrides } from "../src/policy/pi-policy-tools.js";
+import {
+  classifyBash,
+  classifyPowerShell,
+  createPolicyToolOverrides,
+  platformChildToolNames,
+  platformRootToolNames,
+  platformShellPrompt,
+  policyToolsForPlatform,
+} from "../src/policy/pi-policy-tools.js";
 
 function execute(tool: unknown, input: unknown, signal?: AbortSignal) {
   const definition = tool as {
@@ -35,6 +44,7 @@ describe("M1 Pi-native policy tool integration", () => {
       "find",
       "grep",
       "ls",
+      "powershell",
       "read",
       "str_replace_editor",
       "write",
@@ -45,6 +55,7 @@ describe("M1 Pi-native policy tool integration", () => {
       find: createFindTool(workspace),
       grep: createGrepTool(workspace),
       bash: createBashTool(workspace),
+      powershell: createPowerShellTool(workspace),
       edit: createEditTool(workspace),
       write: createWriteTool(workspace),
     };
@@ -134,5 +145,39 @@ describe("M1 Pi-native policy tool integration", () => {
     expect(classifyBash("git push origin main")).toMatchObject({ category: "git-write" });
     expect(classifyBash("docker stop api")).toMatchObject({ category: "container", risk: "high" });
     expect(classifyBash("rm -rf build")).toMatchObject({ category: "destructive", risk: "high" });
+  });
+
+  it("selects exactly one root shell per platform and no child shell on Windows", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "vspi-platform-tools-"));
+    const tools = createPolicyToolOverrides({
+      workspace,
+      executionPolicy: createExecutionPolicyService({ workspace, policy: "Auto" }),
+    });
+    expect(policyToolsForPlatform(tools, { platform: "linux" }).map((tool) => tool.name)).toContain("bash");
+    expect(policyToolsForPlatform(tools, { platform: "linux" }).map((tool) => tool.name)).not.toContain("powershell");
+    expect(policyToolsForPlatform(tools, { platform: "win32" }).map((tool) => tool.name)).toContain("powershell");
+    expect(policyToolsForPlatform(tools, { platform: "win32" }).map((tool) => tool.name)).not.toContain("bash");
+    const windowsChildTools = policyToolsForPlatform(tools, { child: true, platform: "win32" }).map(
+      (tool) => tool.name,
+    );
+    expect(windowsChildTools).not.toContain("bash");
+    expect(windowsChildTools).not.toContain("powershell");
+    expect(platformRootToolNames("linux")).toContain("bash");
+    expect(platformRootToolNames("win32")).toContain("powershell");
+    expect(platformChildToolNames(["read", "bash", "edit"], "win32")).toEqual(["read", "edit"]);
+    expect(platformChildToolNames(["read", "bash", "powershell"], "linux")).toEqual(["read", "bash"]);
+    expect(platformShellPrompt("win32")).toContain("Windows");
+  });
+
+  it("classifies PowerShell conservatively without treating unknown cmdlets as read-only", () => {
+    expect(classifyPowerShell("Get-Content README.md")).toMatchObject({ category: "process", operation: "powershell" });
+    expect(classifyPowerShell("Remove-Item -Recurse build")).toMatchObject({
+      category: "destructive",
+      risk: "high",
+    });
+    expect(classifyPowerShell("Invoke-WebRequest https://example.com")).toMatchObject({
+      kind: "network",
+      category: "network",
+    });
   });
 });

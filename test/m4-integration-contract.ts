@@ -17,7 +17,7 @@ export interface PolicyToolModule {
   createPolicyToolOverrides(options: {
     workspace: string;
     executionPolicy: ExecutionPolicyService;
-  }): Record<"read" | "bash" | "edit" | "write", AgentToolLike>;
+  }): Record<"read" | "bash" | "powershell" | "edit" | "write", AgentToolLike>;
 }
 
 export interface PolicyConfigSnapshot {

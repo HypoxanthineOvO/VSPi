@@ -3,9 +3,9 @@ import { dirname, join, parse } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const PI_TUI_PACKAGE = "@earendil-works/pi-tui";
-export const PI_TUI_VERSION = "0.84.2";
+export const PI_TUI_VERSION = "0.84.3";
 export const EDITOR_RELATIVE_PATH = "dist/components/editor.js";
-export const PATCH_MARKER = "/* vspi-pi-editor-performance-patch:0.84.2 */";
+export const PATCH_MARKER = "/* vspi-pi-editor-performance-patch:0.84.3 */";
 
 const SOURCE_MAP_MARKER = "//# sourceMappingURL=editor.js.map";
 const SOURCE_ANCHORS = [

@@ -58,7 +58,12 @@ import {
   type PolicyLevel,
   type PolicySnapshot,
 } from "../policy/execution-policy.js";
-import { createPolicyToolOverrides } from "../policy/pi-policy-tools.js";
+import {
+  createPolicyToolOverrides,
+  platformRootToolNames,
+  platformShellPrompt,
+  policyToolsForPlatform,
+} from "../policy/pi-policy-tools.js";
 import type { EffectivePromptSegment } from "../prompts/effective-prompt.js";
 import { createPromptProfileExtension } from "../prompts/pi-prompt-profile-extension.js";
 import type { ModelIdentity, ResolvedPromptProfile } from "../prompts/types.js";
@@ -1221,7 +1226,8 @@ export class PiRuntimeBackend implements ChatBackend {
         : undefined;
       const externalImportCompatibilityExtension = createExternalImportCompatibilityExtension();
       const providerRequestCompatibilityExtension = createProviderRequestCompatibilityExtension();
-      const deepSeekHarnessEnabled = this.options.deepSeekHarness === true && this.options.recovery !== true;
+      const deepSeekHarnessEnabled =
+        this.options.deepSeekHarness === true && this.options.recovery !== true && process.platform !== "win32";
       const persistentBash = deepSeekHarnessEnabled ? new DeepSeekPersistentBashOperations() : undefined;
       const deepSeekToolBridge: DeepSeekToolBridge = {};
       const deepSeekHarnessExtension = deepSeekHarnessEnabled
@@ -1236,6 +1242,7 @@ export class PiRuntimeBackend implements ChatBackend {
         settingsManager,
         ...(this.options.modelRuntime ? { modelRuntime: this.options.modelRuntime as never } : {}),
         resourceLoaderOptions: {
+          appendSystemPrompt: [platformShellPrompt()],
           ...(this.options.recovery
             ? {
                 noExtensions: true,
@@ -1310,7 +1317,7 @@ export class PiRuntimeBackend implements ChatBackend {
           bashOperations: persistentBash,
         }).bash;
       }
-      const policyTools = Object.values(policyToolOverrides);
+      const policyTools = policyToolsForPlatform(policyToolOverrides);
       const question = createQuestionToolDefinition({
         request: (questions, signal) => {
           const request = this.events?.onQuestion;
@@ -1367,7 +1374,7 @@ export class PiRuntimeBackend implements ChatBackend {
       });
       this.replacementModelIdentity = undefined;
       this.replacementThinking = undefined;
-      const rootAgentTools = ["read", "ls", "find", "grep", "bash", "edit", "write"];
+      const rootAgentTools = platformRootToolNames();
       const subagentTool = nextAgentManager.createTool(rootAgentTools, true);
       const activeToolNames = [
         ...rootAgentTools,
@@ -1396,13 +1403,7 @@ export class PiRuntimeBackend implements ChatBackend {
             ...(!this.options.recovery ? [subagentTool] : []),
           ] as unknown as ToolDefinition[],
           tools: [
-            "read",
-            "ls",
-            "find",
-            "grep",
-            "bash",
-            "edit",
-            "write",
+            ...rootAgentTools,
             "question",
             "skill_list",
             "skill_manage",

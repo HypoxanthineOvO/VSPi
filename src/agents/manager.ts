@@ -14,7 +14,11 @@ import {
 import { type Static, Type } from "typebox";
 import type { EffortLevel } from "../domain/types.js";
 import type { ExecutionPolicyService, PolicyAction } from "../policy/execution-policy.js";
-import { createPolicyToolOverrides } from "../policy/pi-policy-tools.js";
+import {
+  createPolicyToolOverrides,
+  platformChildToolNames,
+  policyToolsForPlatform,
+} from "../policy/pi-policy-tools.js";
 import {
   AGENT_TOOL_NAMES,
   defaultAgentProjectConfig,
@@ -859,12 +863,13 @@ export class PiAgentManager {
     context: AgentTreeContext | undefined,
   ): Promise<AgentSession> {
     const model = await this.resolveModel(selector);
+    const activeTools = platformChildToolNames(tools);
     if (this.options.sessionFactory) {
       return this.options.sessionFactory({
         manager,
         model: selector,
         effort,
-        tools: [...tools],
+        tools: activeTools,
         systemPrompt,
         instructions,
         ...(context ? { context } : {}),
@@ -874,7 +879,9 @@ export class PiAgentManager {
       projectTrusted: this.options.trustedProject,
     });
     const factualBoundary = [
-      `Workspace boundary: ${resolve(this.options.cwd)}. File tools are confined to it; bash runs in a bubblewrap sandbox with a blank HOME.`,
+      process.platform === "win32"
+        ? `Workspace boundary: ${resolve(this.options.cwd)}. File tools are confined to it; shell tools are unavailable to child agents on Windows.`
+        : `Workspace boundary: ${resolve(this.options.cwd)}. File tools are confined to it; bash runs in a bubblewrap sandbox with a blank HOME.`,
       `Delegation pool: request child roles (${AGENT_ROLES.join(", ")}) instead of model names. The runtime maps roles within the current provider unless project configuration explicitly permits cross-provider delegation.`,
       "Persistent Teammate creation, deletion, reset, and model changes are user-authorized operations and are unavailable to child agents.",
       ...(instructions.trim() ? [instructions.trim()] : []),
@@ -894,7 +901,7 @@ export class PiAgentManager {
         appendSystemPrompt: factualBoundary,
       },
     });
-    const policyTools = Object.values(
+    const policyTools = policyToolsForPlatform(
       createPolicyToolOverrides({
         workspace: this.options.cwd,
         executionPolicy: this.options.executionPolicy,
@@ -903,6 +910,7 @@ export class PiAgentManager {
         preflight: (action) => this.assertChildAction(action),
         executionBoundary: (action, operation, signal) => this.withToolBoundary(action, operation, signal),
       }),
+      { child: true },
     );
     const recursive = this.createTool(tools, false, context);
     const result = await createAgentSessionFromServices({
@@ -911,7 +919,7 @@ export class PiAgentManager {
       model,
       thinkingLevel: effort,
       customTools: [...policyTools, recursive] as ToolDefinition[],
-      tools: [...tools, "subagent"],
+      tools: [...activeTools, "subagent"],
     });
     return result.session;
   }
@@ -997,7 +1005,7 @@ export class PiAgentManager {
     return this.scheduler.withWriter(
       writes,
       async () => {
-        if (!writes) return operation();
+        if (action.kind !== "file-write") return operation();
         const lease = await acquireAgentExclusiveLease({
           agentDir: this.options.agentDir,
           namespace: "writer",
@@ -1491,5 +1499,5 @@ function writerLeaseIdentity(cwd: string, action: PolicyAction): string {
   if (action.kind === "file-write" && action.target) {
     return `${workspace}\0file\0${resolve(workspace, action.target)}`;
   }
-  return `${workspace}\0shared`;
+  throw new Error("File writer lease target is missing");
 }

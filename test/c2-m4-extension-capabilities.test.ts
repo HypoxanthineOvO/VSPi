@@ -8,6 +8,7 @@ import type { AttachmentService } from "../src/attachments/service.js";
 import { FixtureBackend } from "../src/backend/fixture-backend.js";
 import { getActionDefinition } from "../src/domain/commands.js";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/domain/fixtures.js";
+import { platformRootToolNames } from "../src/policy/pi-policy-tools.js";
 import { TOOL_CAPABILITIES } from "../src/tools/capability-catalog.js";
 import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
 import { PanelController } from "../src/ui/panels.js";
@@ -31,9 +32,17 @@ function productionToolAllowlist(source: string): string[] {
               (ts.isStringLiteral(candidate.name) && candidate.name.text === "tools")),
         );
         if (property && ts.isArrayLiteralExpression(property.initializer)) {
-          allowlist = property.initializer.elements
-            .filter((element): element is ts.StringLiteral => ts.isStringLiteral(element))
-            .map((element) => element.text);
+          allowlist = property.initializer.elements.flatMap((element) => {
+            if (ts.isStringLiteral(element)) return [element.text];
+            if (
+              ts.isSpreadElement(element) &&
+              ts.isIdentifier(element.expression) &&
+              element.expression.text === "rootAgentTools"
+            ) {
+              return platformRootToolNames();
+            }
+            return [];
+          });
         }
       }
     }
@@ -127,19 +136,7 @@ describe("C2 M4 extension capability boundaries", () => {
     );
     const tools = productionToolAllowlist(source);
 
-    expect(tools).toEqual([
-      "read",
-      "ls",
-      "find",
-      "grep",
-      "bash",
-      "edit",
-      "write",
-      "question",
-      "skill_list",
-      "skill_manage",
-      "str_replace_editor",
-    ]);
+    expect(tools).toEqual([...platformRootToolNames(), "question", "skill_list", "skill_manage", "str_replace_editor"]);
     expect(tools).not.toEqual(expect.arrayContaining(["browser", "mcp", "pty", "ssh", "git"]));
   });
 

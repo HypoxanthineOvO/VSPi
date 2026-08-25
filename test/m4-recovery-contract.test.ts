@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PiBackend } from "../src/backend/pi-backend.js";
+import { platformShellPrompt } from "../src/policy/pi-policy-tools.js";
 import { stripAnsi } from "../src/ui/ansi.js";
 import { loadStartupSecurityModule } from "./m4-contract.js";
 
@@ -159,7 +160,7 @@ describe("M4 recovery startup boundary", () => {
       expect.soft(session.resourceLoader.getThemes().themes).toEqual([]);
       expect.soft(session.resourceLoader.getAgentsFiles().agentsFiles).toEqual([]);
       expect.soft(session.resourceLoader.getSystemPrompt()).toBeUndefined();
-      expect(session.resourceLoader.getAppendSystemPrompt()).toEqual([]);
+      expect(session.resourceLoader.getAppendSystemPrompt()).toEqual([platformShellPrompt()]);
     } finally {
       await backend.dispose();
     }
