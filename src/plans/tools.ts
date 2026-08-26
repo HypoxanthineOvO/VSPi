@@ -108,9 +108,7 @@ export function createPlanToolDefinitions(options: {
             bindingWarning = `Plan created but binding the active session failed: ${error instanceof Error ? error.message : "unknown error"}. Run plan_bind to bind it manually.`;
           }
           await options.onMutation?.("create", plan);
-          return bindingWarning === undefined
-            ? projectPlan(plan)
-            : { ...projectPlan(plan), bindingWarning };
+          return bindingWarning === undefined ? projectPlan(plan) : { ...projectPlan(plan), bindingWarning };
         }),
     ),
     tool(

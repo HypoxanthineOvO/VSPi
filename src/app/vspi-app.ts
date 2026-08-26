@@ -1007,6 +1007,7 @@ export class VspiApp implements Component, Focusable {
     }
     const { activityActive, composer, activity, queuedMessages, status } = dock;
     const transcriptFocused = this.workspaceFocus === "transcript";
+    const interactiveSurfaceFocused = transcriptFocused || this.workspaceFocus === "plan";
     const planSurfaceVisible =
       !transcriptFocused && (this.panels.kind !== "plan" || this.panels.hasPlanContent() || this.planPanelExplicit);
     const panelRows = this.panelRowBudget(composer.length, activity.length, queuedMessages.length, status.length);
@@ -1020,8 +1021,12 @@ export class VspiApp implements Component, Focusable {
     const terminalRows = Number.isFinite(this.tui.terminal.rows) ? this.tui.terminal.rows : 24;
     const questionGutterRows = !previewLines && this.panels.kind === "question" ? 1 : 0;
     const activeSurfaceRows =
-      this.tui.mode === "fullscreen" ? Number.MAX_SAFE_INTEGER : transcriptFocused ? terminalRows : terminalRows * 3;
-    const transcriptRows = transcriptFocused
+      this.tui.mode === "fullscreen"
+        ? Number.MAX_SAFE_INTEGER
+        : interactiveSurfaceFocused
+          ? terminalRows
+          : terminalRows * 3;
+    const transcriptRows = interactiveSurfaceFocused
       ? Math.max(
           3,
           activeSurfaceRows -
@@ -1186,13 +1191,15 @@ export class VspiApp implements Component, Focusable {
         Math.max(3, this.tui.terminal.rows - composerRows - activityRows - queuedRows - statusRows - 6),
       );
     }
-    if (this.tui.terminal.rows <= 24) {
+    if (this.tui.terminal.rows <= 24 && this.panels.kind !== "plan") {
       return Math.max(3, (this.panels.kind === "models" ? 10 : 9) - activityRows - queuedRows - (statusRows - 1));
     }
-    return Math.min(
-      this.panels.kind === "models" ? 24 : this.panels.kind === "question" ? 22 : 16,
-      Math.max(3, this.tui.terminal.rows - composerRows - activityRows - queuedRows - 7 - statusRows),
+    const availableRows = Math.max(
+      3,
+      this.tui.terminal.rows - composerRows - activityRows - queuedRows - 7 - statusRows,
     );
+    if (this.panels.kind === "plan") return availableRows;
+    return Math.min(this.panels.kind === "models" ? 24 : this.panels.kind === "question" ? 22 : 16, availableRows);
   }
 
   invalidate(): void {
@@ -3101,7 +3108,7 @@ export class VspiApp implements Component, Focusable {
   /** Rows retained in the active waterfall before stable content is rebased into native scrollback. */
   private transcriptViewportRows(width: number): number {
     const terminalRows = Number.isFinite(this.tui.terminal.rows) ? this.tui.terminal.rows : 24;
-    if (this.workspaceFocus !== "transcript") return terminalRows * 3;
+    if (this.workspaceFocus !== "transcript" && this.workspaceFocus !== "plan") return terminalRows * 3;
     const activityActive = this.activityActive();
     const composerRows = this.composer.render(width, activityActive ? this.composerActivity() : undefined).length;
     const activityRows = activityActive && this.options.settings.workingStyle === 1 ? 1 : 0;
@@ -3167,6 +3174,11 @@ export class VspiApp implements Component, Focusable {
 
   private cycleWorkspaceFocus(): void {
     const hasPlan = this.panels.hasPlanContent();
+    if (this.tui.mode === "regular" && hasPlan) {
+      if (this.workspaceFocus !== "plan") this.focusPlan();
+      else this.focusComposer();
+      return;
+    }
     if (this.workspaceFocus === "composer") {
       if (buildTranscriptNodes(this.messages).length > 0) this.focusTranscript();
       else if (hasPlan) this.focusPlan();

@@ -1,6 +1,6 @@
 {
   "name": "vspi",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "A Chinese terminal UI for Pi coding agents with optional read-only Hypo-Workflow integration.",
   "homepage": "https://github.com/HypoxanthineOvO/VSPi",
   "repository": {

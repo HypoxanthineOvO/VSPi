@@ -98,6 +98,7 @@ interface TestableApp {
   submit(raw: string): Promise<void>;
   applyPanelEvent(event: PanelEvent | PlanEditEvent): Promise<void>;
   panels: PanelController;
+  render(width: number): string[];
 }
 
 const PLAN: LocalPlanSnapshot = {
@@ -459,6 +460,23 @@ describe("M6 Local Plan workspace projection", () => {
     expect(ordered.every((position, index) => index === 0 || position > (ordered[index - 1] ?? -1))).toBe(true);
   });
 
+  it("wraps long Plan content and keeps it complete", () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    const longPlan = structuredClone(PLAN);
+    const firstItem = longPlan.items[0];
+    const blockedItem = longPlan.items[2];
+    if (!firstItem || !blockedItem) throw new Error("Plan fixture is incomplete");
+    longPlan.goal = "这是一个必须完整显示的目标文本，不能因为面板宽度而静默截断";
+    firstItem.title = "这是一个必须完整显示的计划项标题尾部XYZ";
+    blockedItem.blocker = "这是一个必须完整显示的阻塞原因说明";
+    setSnapshot(panel, longPlan);
+    const rendered = planRender(panel, 40, 40);
+    const compact = rendered.replace(/[\s│|]/gu, "");
+    expect(compact).toContain(longPlan.goal.replace(/\s/gu, ""));
+    expect(compact).toContain(firstItem.title.replace(/\s/gu, ""));
+    expect(compact).toContain(blockedItem.blocker.replace(/\s/gu, ""));
+  });
+
   it("collapses the whole Plan to one titled row and restores the nested tree", () => {
     const panel = new PanelController(DEFAULT_SETTINGS);
     setSnapshot(panel, PLAN);
@@ -603,6 +621,36 @@ async function planApp(
 }
 
 describe("M6 VspiApp Plan integration and intent routing", () => {
+  it("uses the available height for a long Plan instead of capping the body at 14 rows", async () => {
+    const tallPlan: LocalPlanSnapshot = {
+      ...PLAN,
+      items: Array.from({ length: 20 }, (_, index) => ({
+        id: `item-${index}`,
+        title: `计划项 ${index}`,
+        status: index === 0 ? "in_progress" : "pending",
+      })),
+      focusItemId: "item-0",
+    };
+    const controlled = appBackend({ planId: tallPlan.id });
+    const planBackend: PlanBackendView = {
+      read: vi.fn(async () => structuredClone(tallPlan)),
+      update: vi.fn(async () => structuredClone(tallPlan)),
+    };
+    const app = await planApp(controlled.backend, planBackend);
+    try {
+      const testable = app as unknown as TestableApp;
+      await vi.waitFor(() => expect(planBackend.read).toHaveBeenCalledWith(tallPlan.id));
+      testable.panels.open("plan");
+      const lines = testable.render(100);
+      const rendered = lines.map(stripAnsi).join("\n");
+      expect(lines.length).toBeLessThanOrEqual(40);
+      expect(rendered).toContain("计划项 19");
+      expect(rendered).not.toContain("1-14 / 22");
+    } finally {
+      await app.dispose();
+    }
+  });
+
   it("uses the default router to question an obviously separate multi-step task", async () => {
     const route = await createDefaultPlanTaskRouter().route({
       text: "Design a billing system, implement its migration, and deploy it",

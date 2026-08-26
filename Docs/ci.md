@@ -22,22 +22,23 @@ Pi 原生 `find` 与 `grep` 分别依赖 `fd` 和 `rg`，Subagent workspace 安�
 
 ## Pipeline 契约
 
-Merge Request 和分支 Pipeline 包含四个独立关卡：
+当前 GitLab Pipeline 仅由 Tag 触发。创建发布 Tag 前，维护者必须在目标提交本地完成以下四项等价验证：
 
 - `quality`：TypeScript 与 Biome 检查。
 - `test`：限制并发的确定性 Vitest 测试。
 - `package`：只构建一个 npm tarball，验证包内容并生成 SHA-256。
 - `install-smoke`：在干净目录中按正常生命周期安装同一个 tarball，并执行 CLI。
 
-SemVer Tag 会增加不可中断的 `release` Job。它把 package 阶段的原始 tarball 上传到 Generic Package Registry，并创建指向不可变包地址的 GitLab Release；发布阶段绝不重新构建。版本、文件名和 tag 都从 `package.json` 派生，测试不得写死当前发布版本。
+SemVer Tag Pipeline 执行 `package` 和不可中断的 `release` Job。它把 package 阶段的原始 tarball 上传到 Generic Package Registry，并创建指向不可变包地址的 GitLab Release；发布阶段绝不重新构建。版本、文件名和 tag 都从 `package.json` 派生，测试不得写死当前发布版本。
 
-GitLab 项目设置要求 main 仅 Maintainer 可 push/merge且禁止 force push，`v*` Tag 仅 Maintainer 可创建，Merge Request 必须通过 Pipeline。Container Registry 每日执行清理，保留最近 10 个镜像 Tag，并且只清理 90 天以上的旧 Tag。
+GitLab 项目设置要求 main 仅 Maintainer 可 push/merge 且禁止 force push，`v*` Tag 仅 Maintainer 可创建。Container Registry 每日执行清理，保留最近 10 个镜像 Tag，并且只清理 90 天以上的旧 Tag。
 
 ## 发布流程
 
 1. 把 `package.json` 和 `package-lock.json` 更新到目标版本。
-2. main Pipeline 成功后才合并。
-3. 在已验证提交上创建受保护的 `v<version>` Tag。
-4. 检查 Tag Pipeline、包上传、Release 资产、校验和、匿名下载与全局安装。
+2. 在目标提交上依次完成 `npm run check`、限制并发的全量 Vitest、tarball 校验和干净目录安装 smoke。
+3. 先把该提交推送到 GitLab 与 GitHub 的 `main`，确认两个远端指向同一提交。
+4. 在已验证提交上创建受保护的 `v<version>` Tag，并推送到两个远端。
+5. 检查 GitLab Tag Pipeline、GitHub Release workflow、包上传、Release 资产、校验和、匿名下载与全局安装。
 
 禁止移动已经发布的 Tag；错误发布必须用新的 patch 版本修复。

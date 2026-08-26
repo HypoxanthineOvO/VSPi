@@ -672,6 +672,54 @@ describe("panel controller", () => {
     expect(lines.at(-1)).toContain("Enter 确认");
   });
 
+  it("wraps long Question labels before descriptions instead of truncating the answer", () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    const label = "这是一个超过二十四列的选项标签尾部标记XYZ";
+    const description = "说明也应该完整显示";
+    panel.openQuestions([
+      {
+        id: "long",
+        title: "Long",
+        prompt: "Choose",
+        kind: "singleChoice",
+        options: [{ id: "long", label, description }],
+      },
+    ]);
+    const lines = panel.render(40, 18, plainTheme(), DEFAULT_USAGE).map(stripAnsi);
+    const compact = lines.join("\n").replace(/[\s│|]/gu, "");
+    expect(compact).toContain(label.replace(/\s/gu, ""));
+    expect(compact).toContain(description.replace(/\s/gu, ""));
+    expect(lines.findIndex((line) => line.includes(description))).toBeGreaterThan(
+      lines.findIndex((line) => line.includes(label.slice(0, 8))),
+    );
+  });
+
+  it("scrolls through a selected Question option taller than the viewport", () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    panel.openQuestions([
+      {
+        id: "tall",
+        title: "Tall option",
+        prompt: "Read all details",
+        kind: "singleChoice",
+        options: [
+          {
+            id: "tall",
+            label: "完整选项",
+            description: Array.from({ length: 32 }, (_, index) => `说明${index}`).join(" "),
+          },
+        ],
+      },
+    ]);
+    let rendered = text(panel, 40, 12);
+    expect(rendered).not.toContain("说明31");
+    for (let index = 0; index < 5; index += 1) {
+      panel.handleInput(Key.pageDown);
+      rendered = text(panel, 40, 12);
+    }
+    expect(rendered).toContain("说明31");
+  });
+
   it("does not treat content containing › as the selected row when scrolling", () => {
     const panel = new PanelController(DEFAULT_SETTINGS);
     panel.setPlanItems(

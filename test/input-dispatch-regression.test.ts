@@ -1231,7 +1231,7 @@ describe("rename and inspect Ctrl+C semantics", () => {
       });
       ref.events?.onMessage({ id: "answer", role: "assistant", kind: "text", text: "done" });
 
-      app.handleInput("\x1b[Z");
+      app.handleInput("\t");
       expect(testable.workspaceFocus).toBe("transcript");
       expect(testable.inspectNodeId).toBe("answer");
 
@@ -1265,6 +1265,41 @@ describe("rename and inspect Ctrl+C semantics", () => {
       expect(testable.workspaceFocus).toBe("plan");
       app.handleInput("\x1b[Z");
       expect(testable.workspaceFocus).toBe("composer");
+    } finally {
+      await app.dispose();
+    }
+  });
+
+  it("keeps regular-mode Shift+Tab focus surfaces within the terminal viewport", async () => {
+    const ref: { events?: ChatBackendEvents } = {};
+    const app = await createApp(backendWith(ref));
+    const testable = app as unknown as TestableApp;
+    (app as unknown as { tui: { mode: string } }).tui.mode = "regular";
+    try {
+      for (let index = 0; index < 30; index += 1) {
+        ref.events?.onMessage({ id: `message-${index}`, role: "assistant", kind: "text", text: `Message ${index}` });
+      }
+      testable.panels.setPlanSnapshot({
+        ...PLAN,
+        items: Array.from({ length: 30 }, (_, index) => ({
+          id: `item-${index}`,
+          title: `Long plan item ${index}`,
+          status: index === 0 ? "in_progress" : "pending",
+        })),
+      });
+
+      app.handleInput("\t");
+      expect(testable.workspaceFocus).toBe("transcript");
+      expect(app.render(80).length).toBeLessThanOrEqual(24);
+      app.handleInput("\x1b[Z");
+      expect(testable.workspaceFocus).toBe("plan");
+      const planLines = app.render(80);
+      expect(planLines.length).toBeLessThanOrEqual(24);
+      expect(planLines.map(stripAnsi).join("\n")).toMatch(/\d+-\d+ \/ 32/);
+      app.handleInput("\x1b[Z");
+      expect(testable.workspaceFocus).toBe("composer");
+      app.handleInput("\x1b[Z");
+      expect(testable.workspaceFocus).toBe("plan");
     } finally {
       await app.dispose();
     }

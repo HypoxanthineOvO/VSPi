@@ -258,10 +258,23 @@ function mermaidRenderingLabel(mode: AppSettings["mermaidRendering"]): string {
   return "完成后";
 }
 
-function selectedLine(text: string, selected: boolean, width: number, theme: VspiTheme): string {
-  const marker = selected ? theme.focus("› ") : "  ";
+function selectedLine(text: string, selected: boolean, width: number, theme: VspiTheme, continuation = false): string {
+  const marker = selected && !continuation ? theme.focus("› ") : "  ";
   const line = padLine(`${marker}${text}`, width);
   return selected ? theme.selected(line) : line;
+}
+
+function wrapPrefixedLine(prefix: string, text: string, width: number): string[] {
+  const prefixWidth = visibleWidth(prefix);
+  const textWidth = Math.max(1, width - prefixWidth);
+  const wrapped = wrapTextWithAnsi(text, textWidth);
+  const continuation = " ".repeat(prefixWidth);
+  return wrapped.map((line, index) => `${index === 0 ? prefix : continuation}${line}`);
+}
+
+function wrapHeadingWithRight(title: string, right: string, width: number): string[] {
+  if (visibleWidth(title) + visibleWidth(right) + 1 <= width) return [alignRight(title, right, width)];
+  return [...wrapTextWithAnsi(title, width), alignRight("", right, width)];
 }
 
 function truncateStart(text: string, width: number): string {
@@ -414,6 +427,7 @@ export class PanelController {
   private planActionIndex = 0;
   private planNextActionEditing = false;
   private planNextActionInput = "";
+  private planSelectionRange: [number, number] | undefined;
   private promptSnapshot: PromptPanelSnapshot = {
     profiles: [],
     rules: [],
@@ -856,9 +870,15 @@ export class PanelController {
         const selectionStart = Math.max(0, this.questionSelectionRange[0] - pinnedRows);
         const selectionEnd = Math.max(selectionStart, this.questionSelectionRange[1] - pinnedRows);
         this.state.scroll = Math.max(0, Math.min(this.state.scroll, Math.max(0, scrollable.length - scrollRows)));
-        if (selectionStart < this.state.scroll) this.state.scroll = selectionStart;
-        if (selectionEnd - selectionStart < scrollRows && selectionEnd >= this.state.scroll + scrollRows) {
-          this.state.scroll = selectionEnd - scrollRows + 1;
+        const selectionRows = selectionEnd - selectionStart + 1;
+        if (selectionRows > scrollRows) {
+          this.state.scroll = Math.max(
+            selectionStart,
+            Math.min(this.state.scroll, Math.max(selectionStart, selectionEnd - scrollRows + 1)),
+          );
+        } else {
+          if (selectionStart < this.state.scroll) this.state.scroll = selectionStart;
+          if (selectionEnd >= this.state.scroll + scrollRows) this.state.scroll = selectionEnd - scrollRows + 1;
         }
         const visible = scrollable.slice(this.state.scroll, this.state.scroll + scrollRows);
         body = [...pinned, ...visible];
@@ -867,11 +887,15 @@ export class PanelController {
         let selectionStart: number;
         let selectionEnd: number;
         // selectedLine may sit behind a panel gutter; only accept a leading marker after whitespace.
-        const highlightedRows = body
-          .map((line, index) => (/^\s*› /.test(stripAnsi(line)) ? index : -1))
-          .filter((index) => index >= 0);
-        selectionStart = Math.max(0, Math.min(highlightedRows[0] ?? this.state.selected, body.length - 1));
-        selectionEnd = highlightedRows.at(-1) ?? selectionStart;
+        if (this.kind === "plan" && this.planSelectionRange) {
+          [selectionStart, selectionEnd] = this.planSelectionRange;
+        } else {
+          const highlightedRows = body
+            .map((line, index) => (/^\s*› /.test(stripAnsi(line)) ? index : -1))
+            .filter((index) => index >= 0);
+          selectionStart = Math.max(0, Math.min(highlightedRows[0] ?? this.state.selected, body.length - 1));
+          selectionEnd = highlightedRows.at(-1) ?? selectionStart;
+        }
         if (this.kind === "tools") {
           selectionStart = Math.min(this.state.selected * 2, body.length - 1);
           selectionEnd = Math.min(selectionStart + 1, body.length - 1);
@@ -1618,6 +1642,14 @@ export class PanelController {
       return;
     }
     const options = [...(question.options ?? []), { id: "other", label: "其他" }];
+    if (panelKey(data, Key.pageUp)) {
+      this.state.scroll = Math.max(0, this.state.scroll - 8);
+      return;
+    }
+    if (panelKey(data, Key.pageDown)) {
+      this.state.scroll += 8;
+      return;
+    }
     if (this.move(data, options.length)) return;
     if (panelKey(data, Key.tab)) {
       this.questionDirectAnswer = true;
@@ -2644,6 +2676,7 @@ export class PanelController {
   }
 
   private renderPlan(width: number, theme: VspiTheme, focused: boolean): string[] {
+    this.planSelectionRange = undefined;
     if (this.workflowSnapshot) return this.renderWorkflowPlan(width, theme, focused);
     const items = this.visiblePlanItems();
     if (items.length === 0) return [padLine("", width)];
@@ -2651,12 +2684,12 @@ export class PanelController {
     const complete = this.planItems.filter((item) => item.status === "done").length;
     const lines = snapshot
       ? [
-          alignRight(
+          ...wrapHeadingWithRight(
             theme.blue(theme.bold(snapshot.title)),
             theme.muted(`r${snapshot.revision} · ${complete}/${this.planItems.length}`),
             width,
           ),
-          padLine(`${theme.warning(theme.bold("目标"))}  ${snapshot.goal}`, width),
+          ...wrapPrefixedLine(`${theme.warning(theme.bold("目标"))}  `, snapshot.goal, width),
         ]
       : [alignRight("", theme.muted(`${complete} / ${this.planItems.length}`), width)];
     items.forEach((item, index) => {
@@ -2670,11 +2703,23 @@ export class PanelController {
               : theme.muted("○");
       const label = item.focused ? theme.focus(theme.bold(item.label)) : item.label;
       const prefix = planTreePrefix(items, index, theme);
-      lines.push(selectedLine(`${prefix}${symbol} ${label}`, focused && index === this.state.selected, width, theme));
+      const itemStart = lines.length;
+      const selected = focused && index === this.state.selected;
+      const itemLines = wrapPrefixedLine(`${prefix}${symbol} `, label, Math.max(1, width - 2));
+      itemLines.forEach((line, lineIndex) => {
+        lines.push(selectedLine(line, selected, width, theme, lineIndex > 0));
+      });
       if (item.status === "blocked" && item.blocker) {
         const indent = " ".repeat(visibleWidth(stripAnsi(prefix)) + 2);
-        lines.push(padLine(`${indent}${theme.warning("阻塞")} ${theme.muted(item.blocker)}`, width));
+        lines.push(
+          ...wrapPrefixedLine(
+            `${indent}${theme.warning("阻塞")} `,
+            theme.muted(item.blocker),
+            Math.max(1, width - 2),
+          ).map((line) => selectedLine(line, selected, width, theme, true)),
+        );
       }
+      if (selected) this.planSelectionRange = [itemStart, lines.length - 1];
     });
     if (snapshot) {
       if (this.planActionMenu) {
@@ -2690,32 +2735,33 @@ export class PanelController {
   }
 
   private renderWorkflowPlan(width: number, theme: VspiTheme, focused: boolean): string[] {
+    this.planSelectionRange = undefined;
     const snapshot = this.workflowSnapshot;
     if (!snapshot) return [theme.muted(padLine("Workflow Plan 未加载", width))];
     if (snapshot.status !== "ready" || !snapshot.delivery) {
       return [
-        alignRight(
+        ...wrapHeadingWithRight(
           theme.bold("Workflow Plan"),
           theme.warning(WORKFLOW_STATUS_LABELS[snapshot.status] ?? snapshot.status),
           width,
         ),
-        theme.muted(padLine(snapshot.diagnostic, width)),
+        ...wrapTextWithAnsi(theme.muted(snapshot.diagnostic), width),
       ];
     }
     const delivery = snapshot.delivery;
     const identity = snapshot.identity;
     const version = identity?.version?.split("+")[0] ?? "unknown";
     const lines = [
-      alignRight(
+      ...wrapHeadingWithRight(
         theme.bold(theme.focus(humanizePlanId(delivery.id))),
         theme.muted(`${DELIVERY_STATUS_LABELS[delivery.status] ?? delivery.status} · 修订 ${delivery.revision}`),
         width,
       ),
-      theme.muted(
-        padLine(
+      ...wrapTextWithAnsi(
+        theme.muted(
           `Workflow · ${DELIVERY_KIND_LABELS[delivery.kind] ?? delivery.kind} · Workspace Read-only · 契约 v${identity?.contractVersion ?? "?"} · ${version}`,
-          width,
         ),
+        width,
       ),
       theme.border(padLine((theme.capabilities.unicode ? "─" : "-").repeat(width), width)),
     ];
@@ -2733,17 +2779,21 @@ export class PanelController {
       // 标记已承载 done/in_progress/pending 语义，只有"待锚定"这类附加信息才补文字
       const statusText = milestone?.status === "pending_stone" ? " · 待锚定" : "";
       const id = (milestone?.id ?? item.id).padEnd(idWidth);
-      lines.push(
-        selectedLine(
-          `${symbol} ${id} ${milestone?.title ?? item.label}${statusText}`,
-          focused && index === this.state.selected,
-          width,
-          theme,
-        ),
+      const itemStart = lines.length;
+      const selected = focused && index === this.state.selected;
+      const itemLines = wrapPrefixedLine(
+        `${symbol} ${id} `,
+        `${milestone?.title ?? item.label}${statusText}`,
+        Math.max(1, width - 2),
       );
+      itemLines.forEach((line, lineIndex) => {
+        lines.push(selectedLine(line, selected, width, theme, lineIndex > 0));
+      });
+      if (selected) this.planSelectionRange = [itemStart, lines.length - 1];
     });
-    if (delivery.currentMilestoneId)
-      lines.push(theme.blue(padLine(`当前里程碑  ${delivery.currentMilestoneId}`, width)));
+    if (delivery.currentMilestoneId) {
+      lines.push(...wrapPrefixedLine("当前里程碑  ", theme.blue(delivery.currentMilestoneId), width));
+    }
     return lines;
   }
 
@@ -2872,10 +2922,13 @@ export class PanelController {
     });
     const itemContentWidth = Math.max(1, contentWidth - 2);
     const labelWidth = Math.min(24, Math.max(...decorated.map(({ label }) => visibleWidth(label))));
-    const inlineDescriptions = decorated.every(({ option }) => {
-      const description = "description" in option ? option.description : undefined;
-      return !description || labelWidth + 2 + visibleWidth(description) <= itemContentWidth;
-    });
+    const labelsFitAlignmentColumn = decorated.every(({ label }) => visibleWidth(label) <= labelWidth);
+    const inlineDescriptions =
+      labelsFitAlignmentColumn &&
+      decorated.every(({ option }) => {
+        const description = "description" in option ? option.description : undefined;
+        return !description || labelWidth + 2 + visibleWidth(description) <= itemContentWidth;
+      });
     const itemLine = (value: string, selected: boolean, continuation = false) => {
       const marker = !continuation && selected ? theme.focus("› ") : "  ";
       const content = padLine(`${marker}${value}`, contentWidth);
