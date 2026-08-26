@@ -19,6 +19,9 @@ export interface ParentDeathWatchdogOptions {
  * to the PTY; a parent-death watchdog restores the terminal by shutting down
  * instead of idling with a dead launcher. Only active when stdin is a real TTY
  * and can be disabled with VSPi_NO_PARENT_WATCHDOG=1.
+ *
+ * /reload 续接进程是预期的孤儿（parent 是老进程，lease 移交后退出，ppid 会变 1），
+ * 由 spawnReloadChild 注入 VSPi_NO_PARENT_WATCHDOG=1 豁免，否则会在宽限期后被误杀。
  */
 export function startParentDeathWatchdog(
   onParentDeath: () => void,

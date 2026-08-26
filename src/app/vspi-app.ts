@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   type Component,
@@ -107,6 +106,7 @@ import { VspiTuiAltScreen } from "../ui/tui-frame-pacer.js";
 import { type SelfUpdateResult, updateVspi } from "../update/self-update.js";
 import { VSPI_VERSION } from "../version.js";
 import type { WorkflowAdapter, WorkflowSnapshot } from "../workflow/types.js";
+import { spawnReloadChild } from "./reload-launcher.js";
 
 export interface VspiAppOptions {
   cwd: string;
@@ -1675,21 +1675,7 @@ export class VspiApp implements Component, Focusable {
         this.showNotice("会话运行中，无法 /reload；请先等待完成或 ESC 中断", "warning");
         return;
       }
-      const launch =
-        this.options.reloadLauncher ??
-        (() =>
-          new Promise<void>((resolve, reject) => {
-            // detached + 同 tty：新进程接管前端，本进程随后经 lease handoff 退出。
-            const child = spawn(process.execPath, [process.argv[1] ?? "vspi", "continue"], {
-              stdio: ["inherit", "inherit", "inherit"],
-              detached: false,
-            });
-            child.once("spawn", () => {
-              child.unref();
-              resolve();
-            });
-            child.once("error", reject);
-          }));
+      const launch = this.options.reloadLauncher ?? spawnReloadChild;
       try {
         await launch();
         // 新进程接管 lease 后本进程会走 onTakeover 退出；兜底：3 秒仍未移交则直接退出。
