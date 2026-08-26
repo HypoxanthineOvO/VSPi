@@ -10,6 +10,8 @@ const END_SYNC = "\u001b[?2026l";
 const DISABLE_AUTOWRAP = "\u001b[?7l";
 const ENABLE_AUTOWRAP = "\u001b[?7h";
 const CLEAR_VIEWPORT_HOME = "\u001b[2J\u001b[H";
+const FOCUS_IN = "\u001b[I";
+const FOCUS_OUT = "\u001b[O";
 
 export interface StaticCommitTerminal extends Terminal {
   commitStatic(lines: readonly string[]): void;
@@ -110,6 +112,9 @@ export class ScrollbackTUI extends TuiMainScreen {
     super(terminal, showHardwareCursor, logDirectory);
     this.framePacer = new TuiFramePacer(resolveTuiFrameInterval());
     this.setClearOnShrink(false);
+    // Some terminals can report focus after switching away from fullscreen.
+    // Treat those reports as terminal metadata, not latency-sensitive user input.
+    this.addInputListener((data) => (data === FOCUS_IN || data === FOCUS_OUT ? { consume: true } : undefined));
   }
 
   protected override doRender(): void {

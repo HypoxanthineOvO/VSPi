@@ -16,9 +16,15 @@ class RecordingStaticTerminal implements StaticCommitTerminal {
   readonly kittyProtocolActive = false;
   readonly writes: string[] = [];
   readonly commits: string[][] = [];
+  private onInput: ((data: string) => void) | undefined;
 
-  start(): void {}
+  start(onInput: (data: string) => void): void {
+    this.onInput = onInput;
+  }
   stop(): void {}
+  emit(data: string): void {
+    this.onInput?.(data);
+  }
   async drainInput(): Promise<void> {}
   write(data: string): void {
     this.writes.push(preserveTerminalScrollback(data));
@@ -152,5 +158,48 @@ describe("scrollback-preserving terminal", () => {
 
     expect(tui.commitStatic(["visible-prefix"])).toBe(false);
     tui.stop();
+  });
+
+  it("consumes terminal focus reports without repainting the regular viewport", async () => {
+    vi.useFakeTimers();
+    const terminal = new RecordingStaticTerminal();
+    const handleInput = vi.fn();
+    const tui = new ScrollbackTUI(terminal, true);
+    const component = { render: () => ["history", "composer"], invalidate() {}, handleInput };
+    tui.addChild(component);
+    tui.setFocus(component);
+    tui.start();
+    await vi.runAllTimersAsync();
+    terminal.writes.length = 0;
+
+    terminal.emit("\u001b[O");
+    terminal.emit("\u001b[I");
+    await vi.runAllTimersAsync();
+
+    expect(handleInput).not.toHaveBeenCalled();
+    expect(terminal.writes).toEqual([]);
+    tui.stop({ preserveScreen: true });
+  });
+
+  it("resumes a preserved regular screen without clearing or replaying it", async () => {
+    vi.useFakeTimers();
+    const terminal = new RecordingStaticTerminal();
+    const tui = new ScrollbackTUI(terminal, true);
+    tui.addChild({ render: () => ["history", "composer"], invalidate() {} });
+    tui.start();
+    await vi.runAllTimersAsync();
+
+    tui.stop({ preserveScreen: true });
+    terminal.writes.length = 0;
+    tui.start();
+    tui.requestRender();
+    await vi.runAllTimersAsync();
+
+    const output = terminal.writes.join("");
+    expect(output).not.toContain("history");
+    expect(output).not.toContain("\u001b[2J");
+    expect(output).not.toContain("\u001b[3J");
+    expect(output).not.toContain("\u001b[H");
+    tui.stop({ preserveScreen: true });
   });
 });

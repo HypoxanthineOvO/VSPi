@@ -205,15 +205,17 @@ async function interactive(): Promise<void> {
     ...(sessionMode.openOnStart ? { openOnStart: sessionMode.openOnStart } : {}),
     onForegroundRelinquish: () => {
       if (!foregroundAttached) return;
-      app.getActiveTui().stop();
+      const activeTui = app.getActiveTui();
+      activeTui.stop({ preserveScreen: activeTui.mode === "regular" });
       foregroundAttached = false;
       void terminal.drainInput();
     },
     onForegroundResume: () => {
       if (foregroundAttached || closing) return;
-      app.getActiveTui().start();
+      const activeTui = app.getActiveTui();
+      activeTui.start();
       foregroundAttached = true;
-      app.getActiveTui().requestRender(true);
+      activeTui.requestRender(activeTui.mode === "fullscreen");
     },
     onExit: () => void shutdown(),
   });
