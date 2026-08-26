@@ -80,6 +80,10 @@ vspi exec resume "继续"   # 非交互续接最近会话
 vspi update
 ```
 
+## 参与贡献
+
+欢迎提交 PR！提 PR（或 GitLab MR）前请先阅读[贡献指南](CONTRIBUTING.md)：包含开发环境、Commit 规范、分支命名、PR Checklist 与发布流程。
+
 ## 详细文档
 
 - [使用手册](Docs/usage.md)
