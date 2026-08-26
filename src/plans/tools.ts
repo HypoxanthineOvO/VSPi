@@ -93,13 +93,24 @@ export function createPlanToolDefinitions(options: {
     tool(
       "plan_create",
       "Plan Create",
-      "Create a local plan with at most three work-item levels.",
+      "Create a local plan with at most three work-item levels. Creating a plan binds it to the active Pi Session automatically, so /plan tracks it right away.",
       CreateParameters,
       (raw) =>
         execute("plan create", async () => {
           const plan = await options.backend.create(raw.plan as PlanInput);
+          // 创建即绑定：/plan 面板只显示当前会话绑定的 plan，不绑定的 plan 创建后永远不可见
+          // （曾表现为“模型调了 plan_create 但面板什么都不出”）。绑定失败不阻断创建，
+          // plan 本身已落盘，plan_list / plan_read 仍可用；把失败原因返回给模型。
+          let bindingWarning: string | undefined;
+          try {
+            await options.binding.bind(plan.id);
+          } catch (error) {
+            bindingWarning = `Plan created but binding the active session failed: ${error instanceof Error ? error.message : "unknown error"}. Run plan_bind to bind it manually.`;
+          }
           await options.onMutation?.("create", plan);
-          return projectPlan(plan);
+          return bindingWarning === undefined
+            ? projectPlan(plan)
+            : { ...projectPlan(plan), bindingWarning };
         }),
     ),
     tool(

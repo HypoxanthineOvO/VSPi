@@ -294,6 +294,35 @@ describe("M6 typed plan tool routing", () => {
     expect(archived).toMatchObject({ id: "plan-01", revision: 4, archived: true });
   });
 
+  it("binds the newly created plan to the active session so /plan can show it", async () => {
+    const backend = backendMock();
+    const binding = bindingMock();
+    const { byName } = await toolsFor(backend, binding);
+
+    const created = resultPayload(await execute(byName.get("plan_create"), { plan: planToolInput() }));
+
+    expect(binding.bind).toHaveBeenCalledWith("plan-01");
+    expect(created).toMatchObject({ id: "plan-01", revision: 3 });
+    expect(created).not.toHaveProperty("bindingWarning");
+  });
+
+  it("keeps the created plan when binding fails and surfaces the reason", async () => {
+    const backend = backendMock();
+    const binding: PlanBindingPort = {
+      read: vi.fn(async () => null),
+      bind: vi.fn(async () => {
+        throw new Error("compaction in progress");
+      }),
+    };
+    const { byName } = await toolsFor(backend, binding);
+
+    const created = resultPayload(await execute(byName.get("plan_create"), { plan: planToolInput() }));
+
+    expect(backend.create).toHaveBeenCalledOnce();
+    expect(created).toMatchObject({ id: "plan-01" });
+    expect(String((created as { bindingWarning?: string }).bindingWarning)).toContain("compaction in progress");
+  });
+
   it("binds through the injected Session custom-entry port and verifies the requested revision", async () => {
     const backend = backendMock();
     const binding = bindingMock();
