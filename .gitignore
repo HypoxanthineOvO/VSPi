@@ -5,10 +5,7 @@ build/
 *.log
 .DS_Store
 tmp/
-.pipeline/memory/inbox/
-.pipeline/runtime/
-.pipeline/snapshots/
-.pipeline/local/
+.pipeline/
 .artifacts/
 .package-smoke/
 .pty-plans/
