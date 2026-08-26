@@ -1,14 +1,18 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, unlink, utimes, writeFile } from "node:fs/promises";
+import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   acquireSessionLease,
+  killUnresponsiveSessionOwner,
   readSessionLease,
   type SessionHandoffChannel,
   type SessionLease,
+  SessionLeaseUnresponsiveError,
   sessionSocketNamespaceMatches,
   sessionSocketPath,
+  terminateUnresponsiveSessionOwner,
 } from "../src/sessions/lease.js";
 
 describe("session socket path", () => {
@@ -43,6 +47,25 @@ describe("session socket path", () => {
 });
 
 describe("session owner lease", () => {
+  it.runIf(process.platform === "linux")("records a Linux kernel process identity in new leases", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vspi-session-identity-"));
+    const agentDir = join(root, "agent");
+    const sessionFile = join(root, "session.jsonl");
+    await writeFile(sessionFile, '{"type":"session","version":3,"id":"identity-test"}\n');
+    const acquired = await acquireSessionLease(sessionFile, { agentDir, onTakeover: vi.fn() });
+
+    expect(acquired.lease.owner).toMatchObject({
+      schemaVersion: 2,
+      processIdentity: {
+        kind: "linux-proc",
+        bootId: expect.stringMatching(/^[0-9a-f-]+$/u),
+        startTimeTicks: expect.stringMatching(/^\d+$/u),
+        uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+      },
+    });
+    await acquired.lease.release();
+  });
+
   it("hands the same Session to a waiting owner only after the current owner releases it", async () => {
     const root = await mkdtemp(join(tmpdir(), "vspi-session-lease-"));
     const agentDir = join(root, "agent");
@@ -279,6 +302,177 @@ describe("session owner lease", () => {
     await acquired.lease.release();
   });
 
+  it.runIf(process.platform === "linux")("returns a typed error with the owner when handoff times out", async () => {
+    const fixture = await createRecoveryFixture("timeout");
+    const sockets = new Set<Socket>();
+    const server = createServer((socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+    });
+    await new Promise<void>((resolvePromise) => server.listen(fixture.socketPath, resolvePromise));
+    const waiting = acquireSessionLease(fixture.sessionFile, { agentDir: fixture.agentDir, onTakeover: vi.fn() });
+
+    await expect(waiting).rejects.toMatchObject({
+      name: "SessionLeaseUnresponsiveError",
+      owner: expect.objectContaining({ token: fixture.owner.token, processIdentity: fixture.owner.processIdentity }),
+    });
+    await expect(waiting).rejects.toBeInstanceOf(SessionLeaseUnresponsiveError);
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+  });
+
+  it.runIf(process.platform === "linux")("retries acquisition after explicit owner recovery", async () => {
+    const fixture = await createRecoveryFixture("callback");
+    const sockets = new Set<Socket>();
+    const server = createServer((socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+    });
+    await new Promise<void>((resolvePromise) => server.listen(fixture.socketPath, resolvePromise));
+    const recovered = vi.fn(async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+      await unlink(fixture.leasePath);
+    });
+
+    const acquired = await acquireSessionLease(fixture.sessionFile, {
+      agentDir: fixture.agentDir,
+      onTakeover: vi.fn(),
+      onUnresponsiveOwner: recovered,
+    });
+
+    expect(recovered).toHaveBeenCalledOnce();
+    expect(acquired.waited).toBe(true);
+    expect(acquired.lease.owner.token).not.toBe(fixture.owner.token);
+    await acquired.lease.release();
+  });
+
+  it.runIf(process.platform === "linux")(
+    "recovers when an accepted handoff stops heartbeating without closing its socket",
+    async () => {
+      const fixture = await createRecoveryFixture("accepted-frozen");
+      const sockets = new Set<Socket>();
+      const server = createServer((socket) => {
+        sockets.add(socket);
+        socket.once("close", () => sockets.delete(socket));
+        socket.once("data", () => socket.write(`${JSON.stringify({ status: "accepted" })}\n`));
+      });
+      await new Promise<void>((resolvePromise) => server.listen(fixture.socketPath, resolvePromise));
+      const stale = new Date(Date.now() - 60_000);
+      await utimes(fixture.leasePath, stale, stale);
+      const recovered = vi.fn(async () => {
+        for (const socket of sockets) socket.destroy();
+        await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+        await unlink(fixture.leasePath);
+      });
+
+      const acquired = await acquireSessionLease(fixture.sessionFile, {
+        agentDir: fixture.agentDir,
+        onTakeover: vi.fn(),
+        onUnresponsiveOwner: recovered,
+      });
+
+      expect(recovered).toHaveBeenCalledWith(
+        expect.objectContaining({ token: fixture.owner.token, heartbeatAt: stale.toISOString() }),
+      );
+      expect(acquired.waited).toBe(true);
+      expect(acquired.lease.owner.token).not.toBe(fixture.owner.token);
+      await acquired.lease.release();
+    },
+  );
+
+  it.runIf(process.platform === "linux")("fails closed when an old-schema owner cannot be identified", async () => {
+    const fixture = await createRecoveryFixture("legacy");
+    const { processIdentity: _processIdentity, ...legacyOwner } = fixture.owner;
+    const legacy = { ...legacyOwner, schemaVersion: 1 as const };
+    await writeFile(fixture.leasePath, `${JSON.stringify(legacy)}\n`, { mode: 0o600 });
+    const signal = vi.spyOn(process, "kill");
+    await expect(terminateUnresponsiveSessionOwner(fixture.sessionFile, fixture.agentDir, legacy, 0)).rejects.toThrow(
+      "缺少可验证",
+    );
+    expect(signal).not.toHaveBeenCalled();
+    signal.mockRestore();
+  });
+
+  it.runIf(process.platform === "linux")(
+    "removes a PID-reused lease without signalling the unrelated process",
+    async () => {
+      const fixture = await createRecoveryFixture("pid-reuse");
+      const processIdentity = fixture.owner.processIdentity;
+      if (!processIdentity) throw new Error("Linux process identity fixture is missing");
+      const stale = {
+        ...fixture.owner,
+        processIdentity: {
+          ...processIdentity,
+          startTimeTicks: `${BigInt(processIdentity.startTimeTicks) + 1n}`,
+        },
+      };
+      await writeFile(fixture.leasePath, `${JSON.stringify(stale)}\n`, { mode: 0o600 });
+      const signal = vi.spyOn(process, "kill");
+
+      await expect(terminateUnresponsiveSessionOwner(fixture.sessionFile, fixture.agentDir, stale, 0)).resolves.toBe(
+        "released",
+      );
+      expect(signal).not.toHaveBeenCalled();
+      expect(await readSessionLease(fixture.sessionFile, fixture.agentDir)).toBeUndefined();
+      signal.mockRestore();
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "reports still-running after explicit TERM or KILL without stealing the lease",
+    async () => {
+      for (const [operation, expectedSignal] of [
+        [terminateUnresponsiveSessionOwner, "SIGTERM"],
+        [killUnresponsiveSessionOwner, "SIGKILL"],
+      ] as const) {
+        const fixture = await createRecoveryFixture(expectedSignal.toLowerCase());
+        const signal = vi.spyOn(process, "kill").mockImplementation(() => true);
+        await expect(operation(fixture.sessionFile, fixture.agentDir, fixture.owner, 0)).resolves.toBe("still-running");
+        expect(signal).toHaveBeenCalledWith(process.pid, expectedSignal);
+        expect((await readSessionLease(fixture.sessionFile, fixture.agentDir))?.token).toBe(fixture.owner.token);
+        signal.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform === "linux")("serializes recovery attempts with an exclusive claim", async () => {
+    const fixture = await createRecoveryFixture("claim");
+    await writeFile(`${fixture.leasePath}.recovery`, '{"token":"other"}\n', { mode: 0o600 });
+    const signal = vi.spyOn(process, "kill");
+
+    await expect(
+      terminateUnresponsiveSessionOwner(fixture.sessionFile, fixture.agentDir, fixture.owner, 0),
+    ).rejects.toThrow("另一个进程正在恢复");
+    expect(signal).not.toHaveBeenCalled();
+    expect((await readSessionLease(fixture.sessionFile, fixture.agentDir))?.token).toBe(fixture.owner.token);
+    signal.mockRestore();
+  });
+
+  it.runIf(process.platform === "linux")("reclaims a recovery claim whose identified process has exited", async () => {
+    const fixture = await createRecoveryFixture("stale-claim");
+    const processIdentity = fixture.owner.processIdentity;
+    if (!processIdentity) throw new Error("Linux process identity fixture is missing");
+    await writeFile(
+      `${fixture.leasePath}.recovery`,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        token: "stale-claim-token",
+        ownerToken: fixture.owner.token,
+        pid: 2_147_483_647,
+        processIdentity,
+      })}\n`,
+      { mode: 0o600 },
+    );
+    const signal = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    await expect(
+      terminateUnresponsiveSessionOwner(fixture.sessionFile, fixture.agentDir, fixture.owner, 0),
+    ).resolves.toBe("still-running");
+    expect(signal).toHaveBeenCalledWith(process.pid, "SIGTERM");
+    signal.mockRestore();
+  });
+
   it("cancels a waiting owner without disturbing the active owner", async () => {
     const root = await mkdtemp(join(tmpdir(), "vspi-session-cancel-"));
     const agentDir = join(root, "agent");
@@ -368,6 +562,20 @@ describe("session owner lease", () => {
     await thirdAcquired.lease.release();
   });
 });
+
+async function createRecoveryFixture(name: string) {
+  const root = await mkdtemp(join(tmpdir(), `vspi-r-${name}-`));
+  const agentDir = join(root, "agent");
+  const sessionFile = join(root, "session.jsonl");
+  await writeFile(sessionFile, `{"type":"session","version":3,"id":"${name}"}\n`);
+  const acquired = await acquireSessionLease(sessionFile, { agentDir, onTakeover: vi.fn() });
+  const { leasePath, owner } = acquired.lease;
+  await acquired.lease.release();
+  const socketPath = join(agentDir, "session-leases", `${name}.sock`);
+  const stored = { ...owner, socketPath };
+  await writeFile(leasePath, `${JSON.stringify(stored)}\n`, { mode: 0o600 });
+  return { agentDir, sessionFile, leasePath, socketPath, owner: stored };
+}
 
 async function waitUntil(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 2_000;

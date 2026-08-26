@@ -118,16 +118,8 @@ export class AdaptiveBackend implements ChatBackend {
     await this.active.switchSession(id);
   }
 
-  getPendingModelFallback() {
-    return this.active.getPendingModelFallback?.();
-  }
-
-  async confirmModelFallback(): Promise<void> {
-    await this.active.confirmModelFallback?.();
-  }
-
-  discardPendingModelFallback(): void {
-    this.active.discardPendingModelFallback?.();
+  consumeResolvedModelFallback(): boolean {
+    return this.active.consumeResolvedModelFallback?.() ?? false;
   }
 
   async forkSession(id: string): Promise<void> {

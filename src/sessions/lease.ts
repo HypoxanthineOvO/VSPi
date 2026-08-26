@@ -5,8 +5,11 @@ import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const HEARTBEAT_MS = 2_000;
+const HEARTBEAT_STALE_MS = 15_000;
 const CONNECT_TIMEOUT_MS = 2_000;
 const WAIT_POLL_MS = 200;
+const OWNER_EXIT_WAIT_MS = 3_000;
+const RECOVERY_CLAIM_GRACE_MS = 5_000;
 const MAX_CONTROL_BYTES = 16 * 1024 * 1024;
 const WINDOWS_PIPE_PREFIX = "\\\\.\\pipe\\vspi-session-";
 
@@ -18,6 +21,24 @@ export interface SessionLeaseOwner {
   sessionPath: string;
   socketPath: string;
   token: string;
+  schemaVersion: 1 | 2;
+  processIdentity?: LinuxProcessIdentity;
+}
+
+export interface LinuxProcessIdentity {
+  kind: "linux-proc";
+  bootId: string;
+  startTimeTicks: string;
+  uid: number;
+}
+
+export type SessionOwnerRecoveryResult = "released" | "still-running" | "owner-changed";
+
+export class SessionLeaseUnresponsiveError extends Error {
+  constructor(readonly owner: SessionLeaseOwner) {
+    super("Session owner 未响应接管请求");
+    this.name = "SessionLeaseUnresponsiveError";
+  }
 }
 
 export interface SessionLeaseAcquireOptions {
@@ -28,6 +49,7 @@ export interface SessionLeaseAcquireOptions {
   onInteraction?: (interaction: SessionHandoffInteraction, signal?: AbortSignal) => Promise<unknown>;
   onProjection?: (projection: SessionHandoffProjection) => void;
   onConnected?: (client: SessionHandoffClient) => void;
+  onUnresponsiveOwner?: (owner: SessionLeaseOwner) => Promise<void>;
 }
 
 export interface SessionHandoffInteraction {
@@ -63,9 +85,7 @@ export interface AcquiredSessionLease {
   waited: boolean;
 }
 
-export interface SessionLeaseSuccessor extends Omit<SessionLeaseOwner, "heartbeatAt"> {
-  schemaVersion: 1;
-}
+export type SessionLeaseSuccessor = Omit<SessionLeaseOwner, "heartbeatAt">;
 
 type StoredLeaseOwner = SessionLeaseSuccessor;
 
@@ -142,14 +162,16 @@ export async function acquireSessionLease(
   let takeoverStarted = false;
   let lease: SessionLease | undefined;
   const socketsBeforeLease = new Set<Socket>();
+  const processIdentity = await currentLinuxProcessIdentity();
   const owner: StoredLeaseOwner = {
-    schemaVersion: 1,
+    schemaVersion: processIdentity ? 2 : 1,
     pid: process.pid,
     hostname: hostname(),
     startedAt: new Date().toISOString(),
     sessionPath,
     socketPath,
     token,
+    ...(processIdentity ? { processIdentity } : {}),
   };
   const server = createServer((socket) => {
     if (lease) lease.track(socket);
@@ -204,6 +226,10 @@ export async function acquireSessionLease(
   try {
     while (true) {
       throwIfAborted(options.signal);
+      if (await recoveryClaimIsActive(leasePath)) {
+        await waitForPoll(options.signal);
+        continue;
+      }
       try {
         const handle = await open(leasePath, "wx", 0o600);
         try {
@@ -229,7 +255,10 @@ export async function acquireSessionLease(
         continue;
       }
       if (!(await ownerIsAlive(existing))) {
-        await removeIfOwned(leasePath, existing.token);
+        if (!(await removeDeadOwnerLease(leasePath, existing))) {
+          await waitForPoll(options.signal);
+          continue;
+        }
         await removeSocketFile(existing.socketPath);
         continue;
       }
@@ -244,8 +273,13 @@ export async function acquireSessionLease(
         requestedOwnerToken = existing.token;
         options.onWait?.(existing);
         try {
-          await requestTakeover(existing, owner, options);
+          await requestTakeover(leasePath, existing, owner, options);
         } catch (error) {
+          if (error instanceof SessionLeaseUnresponsiveError && options.onUnresponsiveOwner) {
+            await options.onUnresponsiveOwner(error.owner);
+            requestedOwnerToken = undefined;
+            continue;
+          }
           await waitForPoll(options.signal);
           const current = await readLeaseOwner(leasePath);
           if (!current || current.token !== existing.token || !(await ownerIsAlive(current))) {
@@ -270,7 +304,7 @@ export async function readSessionLease(sessionFile: string, agentDir: string): P
   const leasePath = join(resolve(agentDir), "session-leases", `${identity}.json`);
   const owner = await readLeaseOwner(leasePath);
   if (!owner || (await ownerIsAlive(owner))) return owner;
-  await removeIfOwned(leasePath, owner.token);
+  if (!(await removeDeadOwnerLease(leasePath, owner))) return owner;
   await removeSocketFile(owner.socketPath);
   return undefined;
 }
@@ -298,6 +332,14 @@ async function recentlyCreated(path: string): Promise<boolean> {
 
 async function ownerIsAlive(owner: SessionLeaseOwner): Promise<boolean> {
   if (owner.hostname !== hostname()) return true;
+  if (owner.schemaVersion === 2 && owner.processIdentity) {
+    if (process.platform !== "linux") return true;
+    try {
+      return sameProcessIdentity(await readLinuxProcessIdentity(owner.pid), owner.processIdentity);
+    } catch {
+      return true;
+    }
+  }
   try {
     process.kill(owner.pid, 0);
     return true;
@@ -307,6 +349,7 @@ async function ownerIsAlive(owner: SessionLeaseOwner): Promise<boolean> {
 }
 
 async function requestTakeover(
+  leasePath: string,
   owner: SessionLeaseOwner,
   successor: SessionLeaseSuccessor,
   options: SessionLeaseAcquireOptions,
@@ -320,22 +363,50 @@ async function requestTakeover(
     let input = "";
     const interactionControllers = new Set<AbortController>();
     let client: SocketHandoffClient | undefined;
+    let heartbeatTimer: NodeJS.Timeout | undefined;
     const timer = setTimeout(() => {
       socket.destroy();
-      rejectPromise(new Error("Session owner 未响应接管请求"));
+      finish(new SessionLeaseUnresponsiveError(owner));
     }, CONNECT_TIMEOUT_MS);
     const onAbort = () => {
       socket.destroy();
-      rejectPromise(new Error("Session 接管已取消"));
+      finish(new Error("Session 接管已取消"));
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (heartbeatTimer) clearTimeout(heartbeatTimer);
       signal?.removeEventListener("abort", onAbort);
       if (error) rejectPromise(error);
       else resolvePromise();
+    };
+    const monitorHeartbeat = () => {
+      heartbeatTimer = setTimeout(() => {
+        void readLeaseOwner(leasePath).then(
+          (current) => {
+            if (settled) return;
+            if (!current || current.token !== owner.token) {
+              finish();
+              socket.end();
+              return;
+            }
+            const heartbeatAt = Date.parse(current.heartbeatAt);
+            if (Number.isFinite(heartbeatAt) && Date.now() - heartbeatAt > HEARTBEAT_STALE_MS) {
+              finish(new SessionLeaseUnresponsiveError(current));
+              socket.destroy();
+              return;
+            }
+            monitorHeartbeat();
+          },
+          (error: unknown) => {
+            finish(error instanceof Error ? error : new Error("Session owner heartbeat check failed"));
+            socket.destroy();
+          },
+        );
+      }, WAIT_POLL_MS);
+      heartbeatTimer.unref();
     };
     socket.setEncoding("utf8");
     socket.once("connect", () =>
@@ -359,6 +430,7 @@ async function requestTakeover(
               clearTimeout(timer);
               client = new SocketHandoffClient(socket);
               options.onConnected?.(client);
+              monitorHeartbeat();
             } else if (parsed.status === "waiting") {
               finish();
               socket.end();
@@ -409,9 +481,71 @@ async function requestTakeover(
       if (accepted) finish();
     });
     socket.once("error", (error) => {
-      finish(error);
+      finish(accepted ? error : new SessionLeaseUnresponsiveError(owner));
     });
   });
+}
+
+export async function terminateUnresponsiveSessionOwner(
+  sessionFile: string,
+  agentDir: string,
+  owner: SessionLeaseSuccessor,
+  waitMs = OWNER_EXIT_WAIT_MS,
+): Promise<SessionOwnerRecoveryResult> {
+  return signalUnresponsiveSessionOwner(sessionFile, agentDir, owner, "SIGTERM", waitMs);
+}
+
+export async function killUnresponsiveSessionOwner(
+  sessionFile: string,
+  agentDir: string,
+  owner: SessionLeaseSuccessor,
+  waitMs = OWNER_EXIT_WAIT_MS,
+): Promise<SessionOwnerRecoveryResult> {
+  return signalUnresponsiveSessionOwner(sessionFile, agentDir, owner, "SIGKILL", waitMs);
+}
+
+async function signalUnresponsiveSessionOwner(
+  sessionFile: string,
+  agentDir: string,
+  expected: SessionLeaseSuccessor,
+  signal: "SIGTERM" | "SIGKILL",
+  waitMs: number,
+): Promise<SessionOwnerRecoveryResult> {
+  const sessionPath = resolve(sessionFile);
+  const identity = createHash("sha256").update(sessionPath).digest("hex").slice(0, 20);
+  const leasePath = join(resolve(agentDir), "session-leases", `${identity}.json`);
+  const claim = await acquireRecoveryClaim(leasePath, expected);
+  if (!claim) throw new Error("另一个进程正在恢复这个 Session");
+  try {
+    const current = await readLeaseOwner(leasePath);
+    if (!current || !sameRecoveryOwner(current, expected)) return "owner-changed";
+    const processIdentity = requireRecoverableIdentity(current);
+    const observed = await readLinuxProcessIdentity(current.pid);
+    if (!sameProcessIdentity(observed, processIdentity)) {
+      return (await removeRecoveredLease(leasePath, current)) ? "released" : "owner-changed";
+    }
+    try {
+      process.kill(current.pid, signal);
+    } catch (error) {
+      if (!hasCode(error, "ESRCH")) throw error;
+      const liveIdentity = await readLinuxProcessIdentity(current.pid);
+      if (sameProcessIdentity(liveIdentity, processIdentity)) throw error;
+      return (await removeRecoveredLease(leasePath, current)) ? "released" : "owner-changed";
+    }
+    const deadline = Date.now() + Math.max(0, waitMs);
+    do {
+      await waitForPoll();
+      const latest = await readLeaseOwner(leasePath);
+      if (!sameRecoveryOwner(latest, current)) return "owner-changed";
+      const liveIdentity = await readLinuxProcessIdentity(current.pid);
+      if (!sameProcessIdentity(liveIdentity, processIdentity)) {
+        return (await removeRecoveredLease(leasePath, current)) ? "released" : "owner-changed";
+      }
+    } while (Date.now() < deadline);
+    return "still-running";
+  } finally {
+    await releaseRecoveryClaim(claim);
+  }
 }
 
 async function waitForLeaseRelease(path: string, token: string, signal?: AbortSignal): Promise<void> {
@@ -432,6 +566,207 @@ async function removeIfOwned(path: string, token: string): Promise<void> {
   const current = await readLeaseOwner(path);
   if (current?.token !== token) return;
   await unlink(path).catch(ignoreMissing);
+}
+
+interface RecoveryClaim {
+  path: string;
+  token: string;
+}
+
+interface StoredRecoveryClaim {
+  schemaVersion: 1;
+  token: string;
+  ownerToken: string;
+  pid: number;
+  processIdentity?: LinuxProcessIdentity;
+}
+
+async function acquireRecoveryClaim(
+  leasePath: string,
+  owner: SessionLeaseSuccessor,
+): Promise<RecoveryClaim | undefined> {
+  const path = `${leasePath}.recovery`;
+  const token = randomBytes(16).toString("hex");
+  const processIdentity = await currentLinuxProcessIdentity();
+  const stored: StoredRecoveryClaim = {
+    schemaVersion: 1,
+    token,
+    ownerToken: owner.token,
+    pid: process.pid,
+    ...(processIdentity ? { processIdentity } : {}),
+  };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const handle = await open(path, "wx", 0o600);
+      try {
+        await handle.writeFile(`${JSON.stringify(stored)}\n`, "utf8");
+      } finally {
+        await handle.close();
+      }
+      return { path, token };
+    } catch (error) {
+      if (!hasCode(error, "EEXIST")) throw error;
+      const existing = await readRecoveryClaim(path);
+      if (!existing) {
+        if (await removeStaleMalformedRecoveryClaim(path)) continue;
+        return undefined;
+      }
+      if (
+        !existing.processIdentity ||
+        process.platform !== "linux" ||
+        sameProcessIdentity(await readLinuxProcessIdentity(existing.pid), existing.processIdentity)
+      ) {
+        return undefined;
+      }
+      await removeRecoveryClaimIfOwned(path, existing.token);
+    }
+  }
+  return undefined;
+}
+
+async function releaseRecoveryClaim(claim: RecoveryClaim): Promise<void> {
+  await removeRecoveryClaimIfOwned(claim.path, claim.token);
+}
+
+async function readRecoveryClaim(path: string): Promise<StoredRecoveryClaim | undefined> {
+  try {
+    const value = JSON.parse(await readFile(path, "utf8")) as Partial<StoredRecoveryClaim>;
+    if (
+      value.schemaVersion !== 1 ||
+      typeof value.token !== "string" ||
+      typeof value.ownerToken !== "string" ||
+      !Number.isInteger(value.pid) ||
+      (value.pid ?? 0) <= 0 ||
+      (value.processIdentity !== undefined && !isLinuxProcessIdentity(value.processIdentity))
+    ) {
+      return undefined;
+    }
+    return value as StoredRecoveryClaim;
+  } catch (error) {
+    if (hasCode(error, "ENOENT")) return undefined;
+    return undefined;
+  }
+}
+
+async function removeRecoveryClaimIfOwned(path: string, token: string): Promise<void> {
+  const current = await readRecoveryClaim(path);
+  if (current?.token === token) await unlink(path).catch(ignoreMissing);
+}
+
+async function recoveryClaimIsActive(leasePath: string): Promise<boolean> {
+  const path = `${leasePath}.recovery`;
+  const claim = await readRecoveryClaim(path);
+  if (!claim) {
+    return !(await removeStaleMalformedRecoveryClaim(path));
+  }
+  if (
+    claim.processIdentity &&
+    process.platform === "linux" &&
+    !sameProcessIdentity(await readLinuxProcessIdentity(claim.pid), claim.processIdentity)
+  ) {
+    await removeRecoveryClaimIfOwned(path, claim.token);
+    return false;
+  }
+  return true;
+}
+
+async function removeStaleMalformedRecoveryClaim(path: string): Promise<boolean> {
+  try {
+    const metadata = await stat(path);
+    if (Date.now() - metadata.mtimeMs <= RECOVERY_CLAIM_GRACE_MS) return false;
+    await unlink(path).catch(ignoreMissing);
+    return true;
+  } catch (error) {
+    return hasCode(error, "ENOENT");
+  }
+}
+
+async function removeDeadOwnerLease(path: string, owner: SessionLeaseOwner): Promise<boolean> {
+  const claim = await acquireRecoveryClaim(path, owner);
+  if (!claim) return false;
+  try {
+    if (await ownerIsAlive(owner)) return false;
+    return removeRecoveredLease(path, owner);
+  } finally {
+    await releaseRecoveryClaim(claim);
+  }
+}
+
+async function removeRecoveredLease(path: string, owner: SessionLeaseOwner): Promise<boolean> {
+  const current = await readLeaseOwner(path);
+  if (!sameRecoveryOwner(current, owner)) return false;
+  await unlink(path).catch(ignoreMissing);
+  return true;
+}
+
+function sameRecoveryOwner(left: SessionLeaseOwner | undefined, right: SessionLeaseSuccessor): boolean {
+  if (left?.token !== right.token) return false;
+  if (!left.processIdentity || !right.processIdentity) {
+    return left.processIdentity === undefined && right.processIdentity === undefined;
+  }
+  return sameProcessIdentity(left.processIdentity, right.processIdentity);
+}
+
+function requireRecoverableIdentity(owner: SessionLeaseOwner): LinuxProcessIdentity {
+  if (
+    process.platform !== "linux" ||
+    owner.hostname !== hostname() ||
+    owner.schemaVersion !== 2 ||
+    !owner.processIdentity
+  ) {
+    throw new Error("Session owner 缺少可验证的同主机 Linux 进程身份，拒绝强制恢复");
+  }
+  if (typeof process.getuid !== "function" || owner.processIdentity.uid !== process.getuid()) {
+    throw new Error("Session owner UID 与当前用户不一致，拒绝发送信号");
+  }
+  return owner.processIdentity;
+}
+
+async function currentLinuxProcessIdentity(): Promise<LinuxProcessIdentity | undefined> {
+  if (process.platform !== "linux") return undefined;
+  try {
+    return await readLinuxProcessIdentity(process.pid);
+  } catch {
+    return undefined;
+  }
+}
+
+async function readLinuxProcessIdentity(pid: number): Promise<LinuxProcessIdentity | undefined> {
+  if (process.platform !== "linux") return undefined;
+  try {
+    const [bootIdRaw, statRaw, statusRaw] = await Promise.all([
+      readFile("/proc/sys/kernel/random/boot_id", "utf8"),
+      readFile(`/proc/${pid}/stat`, "utf8"),
+      readFile(`/proc/${pid}/status`, "utf8"),
+    ]);
+    const closing = statRaw.lastIndexOf(")");
+    if (closing < 0) return undefined;
+    const fields = statRaw
+      .slice(closing + 2)
+      .trim()
+      .split(/\s+/u);
+    const startTimeTicks = fields[19];
+    const uidMatch = /^Uid:\s+(\d+)/mu.exec(statusRaw);
+    const uid = Number(uidMatch?.[1]);
+    const bootId = bootIdRaw.trim();
+    if (!startTimeTicks || !/^\d+$/u.test(startTimeTicks) || !Number.isSafeInteger(uid) || uid < 0 || !bootId)
+      return undefined;
+    return { kind: "linux-proc", bootId, startTimeTicks, uid };
+  } catch (error) {
+    if (hasCode(error, "ENOENT") || hasCode(error, "ESRCH")) return undefined;
+    throw error;
+  }
+}
+
+function sameProcessIdentity(left: LinuxProcessIdentity | undefined, right: LinuxProcessIdentity | undefined): boolean {
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    left.kind === right.kind &&
+    left.bootId === right.bootId &&
+    left.startTimeTicks === right.startTimeTicks &&
+    left.uid === right.uid
+  );
 }
 
 function parseTakeoverRequest(
@@ -665,14 +1000,27 @@ function isStoredOwner(value: unknown): value is StoredLeaseOwner {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const owner = value as Partial<StoredLeaseOwner>;
   return (
-    owner.schemaVersion === 1 &&
+    (owner.schemaVersion === 1 || owner.schemaVersion === 2) &&
     Number.isInteger(owner.pid) &&
     (owner.pid ?? 0) > 0 &&
     typeof owner.hostname === "string" &&
     typeof owner.startedAt === "string" &&
     typeof owner.sessionPath === "string" &&
     typeof owner.socketPath === "string" &&
-    typeof owner.token === "string"
+    typeof owner.token === "string" &&
+    (owner.schemaVersion === 1 || isLinuxProcessIdentity(owner.processIdentity))
+  );
+}
+
+function isLinuxProcessIdentity(value: unknown): value is LinuxProcessIdentity {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const identity = value as Partial<LinuxProcessIdentity>;
+  return (
+    identity.kind === "linux-proc" &&
+    typeof identity.bootId === "string" &&
+    typeof identity.startTimeTicks === "string" &&
+    Number.isSafeInteger(identity.uid) &&
+    (identity.uid ?? -1) >= 0
   );
 }
 

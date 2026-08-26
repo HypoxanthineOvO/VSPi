@@ -86,10 +86,12 @@ import { createExternalImportCompatibilityExtension } from "../sessions/import-c
 import {
   type AcquiredSessionLease,
   acquireSessionLease,
+  killUnresponsiveSessionOwner,
   readSessionLease,
   type SessionHandoffChannel,
   type SessionHandoffClient,
   type SessionLease,
+  terminateUnresponsiveSessionOwner,
   type SessionHandoffInteraction as WireSessionHandoffInteraction,
   type SessionHandoffProjection as WireSessionHandoffProjection,
 } from "../sessions/lease.js";
@@ -103,7 +105,6 @@ import type {
   ChatBackend,
   ChatBackendEvents,
   ChatQueueState,
-  ModelFallbackNotice,
   ModelSelectionResult,
   NewSessionOptions,
   ProviderAuthInteraction,
@@ -289,7 +290,7 @@ export class PiRuntimeBackend implements ChatBackend {
   private trustedWorkspaceRealpath: string | undefined;
   private replacementInvalidated = false;
   private unusableError: Error | undefined;
-  private pendingModelFallback: ModelFallbackNotice | undefined;
+  private resolvedModelFallback: "same-provider" | "other-provider" | undefined;
   private effectivePromptSegments: EffectivePromptSegment[] = [];
   private readonly reviewTracker = createReviewTracker();
   private taskEpoch = 0;
@@ -1754,7 +1755,8 @@ export class PiRuntimeBackend implements ChatBackend {
   private async bindCurrentSession(reason: SessionResetReason, continuePlan?: boolean): Promise<void> {
     const runtime = this.requireRuntime();
     const session = runtime.session;
-    this.pendingModelFallback = this.detectModelFallback(session, runtime.modelFallbackMessage);
+    this.resolvedModelFallback = undefined;
+    await this.resolveModelFallback(session, runtime.modelFallbackMessage);
     this.unusableError = undefined;
     this.contentIds.clear();
     this.toolIds.clear();
@@ -1911,6 +1913,19 @@ export class PiRuntimeBackend implements ChatBackend {
           void client.closed.then(() => {
             if (this.handoffClient === client) this.handoffClient = undefined;
           });
+        },
+        onUnresponsiveOwner: async (owner) => {
+          const recover = this.events?.onSessionOwnerRecovery;
+          if (!recover) throw new Error("Session owner 无响应；请从 Sessions 面板显式终止后重试");
+          const agentDir = this.options.agentDir ?? getAgentDir();
+          const first = await recover(owner, "terminate");
+          if (first === "cancel") throw new Error("Session owner 恢复已取消");
+          const result = await terminateUnresponsiveSessionOwner(owner.sessionPath, agentDir, owner);
+          if (result === "released" || result === "owner-changed") return;
+          const second = await recover(owner, "kill");
+          if (second !== "kill") throw new Error("Session owner 仍在运行；未接管");
+          const killed = await killUnresponsiveSessionOwner(owner.sessionPath, agentDir, owner);
+          if (killed !== "released") throw new Error("Session owner 仍在运行或 ownership 已变化；未接管");
         },
       });
     } finally {
@@ -2072,46 +2087,36 @@ export class PiRuntimeBackend implements ChatBackend {
     }
   }
 
-  /**
-   * A session whose recorded model is gone but whose runtime already resolved a
-   * working default-model fallback stays usable: record the fallback so the app
-   * layer can ask the user once (UI is not up yet inside bind). Placeholder or
-   * missing models still fail closed via assertConfiguredSession.
-   */
-  private detectModelFallback(
-    session: AgentSession,
-    fallbackMessage: string | undefined,
-  ): ModelFallbackNotice | undefined {
+  private async resolveModelFallback(session: AgentSession, fallbackMessage: string | undefined): Promise<void> {
     if (!fallbackMessage) {
       this.assertConfiguredSession(session);
-      return undefined;
+      return;
     }
-    const model = session.model;
-    const isPlaceholder = model?.provider === "unknown" && model?.id === "unknown";
-    if (!model || isPlaceholder) {
+    const upstreamFallback = session.model;
+    const isPlaceholder = upstreamFallback?.provider === "unknown" && upstreamFallback?.id === "unknown";
+    if (!upstreamFallback || isPlaceholder) {
       this.assertConfiguredSession(session, fallbackMessage);
-      return undefined;
+      return;
     }
-    return { message: fallbackMessage, provider: model.provider, modelId: model.id };
+    const saved = session.sessionManager?.buildSessionContext().model;
+    let fallback = upstreamFallback as Parameters<AgentSession["setModel"]>[0];
+    if (saved?.provider) {
+      const sameProvider = await this.requireModelRuntime()
+        .getAvailable(saved.provider)
+        .catch(() => [] as readonly RuntimeModel[]);
+      fallback =
+        (sameProvider[0] as unknown as Parameters<AgentSession["setModel"]>[0] | undefined) ?? upstreamFallback;
+    }
+    await session.setModel(fallback);
+    this.resolvedModelFallback = saved?.provider === fallback.provider ? "same-provider" : "other-provider";
+    const previous = saved ? `${saved.provider}/${saved.modelId}` : "原会话模型";
+    this.events?.onNotice(`模型 ${previous} 不可用，已自动改用 ${fallback.provider}/${fallback.id}`, "warning");
   }
 
-  getPendingModelFallback(): ModelFallbackNotice | undefined {
-    return this.pendingModelFallback;
-  }
-
-  async confirmModelFallback(): Promise<void> {
-    const pending = this.pendingModelFallback;
-    if (!pending) return;
-    const session = this.session;
-    const model = session?.model;
-    if (!session || !model) throw new Error("会话当前没有可确认的回退模型");
-    await session.setModel(model);
-    this.pendingModelFallback = undefined;
-    this.events?.onNotice(`已改用 ${pending.provider}/${pending.modelId} 打开本会话`, "success");
-  }
-
-  discardPendingModelFallback(): void {
-    this.pendingModelFallback = undefined;
+  consumeResolvedModelFallback(): boolean {
+    const skipRuntimeDefault = this.resolvedModelFallback === "same-provider";
+    this.resolvedModelFallback = undefined;
+    return skipRuntimeDefault;
   }
 
   private hydrateMessage(message: unknown, messageIndex: number): void {

@@ -122,7 +122,9 @@ Model、Provider、Sessions、Settings、Usage、Theme 和 Question 共用底部
 
 ### 同服务器前台迁移
 
-同一台服务器上的每个 Pi Session 只允许一个执行 owner 和一个可交互前台。Sessions 面板把其他进程持有的会话标为“使用中”，选择后可迁移前台、从最后一个完整回复创建分支或取消。普通接管不会 abort 旧任务：新 TUI 立即成为唯一交互前台，以正常主界面接收旧 runtime 的完整快照和实时输出；旧 TUI 显示“已在另一终端继续”后停止读取输入，但旧进程暂时保留不可序列化的 Pi runtime，直到当前 generation、工具或压缩结束。新前台在此期间发送的普通消息通过 `0600` Unix control socket 存入旧 owner 的等待队列，不会进入当前 generation；安全点到达后按顺序执行。新前台按 Esc 才会通过同一控制通道明确中断旧 runtime，随后继续处理已接受的等待消息。
+同一台服务器上的每个 Pi Session 只允许一个执行 owner 和一个可交互前台。Sessions 面板把其他进程持有的会话标为“使用中”，选择后可迁移前台、从最后一个完整回复创建分支或取消。普通接管不会 abort 旧任务：新 TUI 立即成为唯一交互前台，以正常主界面接收旧 runtime 的完整快照和实时输出；旧 TUI 显示“已在另一终端继续”后停止读取输入，但旧进程暂时保留不可序列化的 Pi runtime，直到当前 generation、工具或压缩结束。新前台在此期间发送的普通消息通过 `0600` Unix control socket 存入旧 owner 的等待队列，不会进入当前 generation；安全点到达后按顺序执行。新前台按 Esc 才会通过同一控制通道明确中断旧 runtime，随后继续处理已接受的等待消息。若同主机 Linux owner 在接管握手前无响应，或接受接管后 heartbeat 停止 15 秒，新 TUI 会要求显式确认终止旧 VSPi 进程：先发送 SIGTERM，超时后再次确认才发送 SIGKILL；只有验证原进程实例已经退出后才清理 lease 并接管。旧版 lease、跨主机 owner、不同 UID 或无法核验 `/proc` 进程身份时拒绝强制恢复，仍可等待或创建安全分支。
+
+恢复历史 Session 时，如果记录的模型已删除或 Provider 认证已移除，VSPi 不再阻止打开：原 Provider 仍有可用模型时优先选择其中第一个；否则采用当前全局默认或 Pi 已解析的其他可用模型。自动选择会写入该 Session 的 `model_change` 并显示提示，后续不重复 fallback；完全没有可用 Provider/model 时仍要求先完成 Provider 配置。
 
 pending 或随后出现的 Question/Approval 会迁移到新前台，回答仍回到旧进程原有的工具 Promise。所有活动和等待消息结束后，旧 owner 把 lease 原子改写给唯一指定的 successor，再退出；其他终端只能观察新 owner 并串行请求下一次迁移，不能争抢空锁或同时回答交互。新前台在安全点前断开时，旧 TUI 恢复，pending 交互重新弹出，已经被 owner 接受的等待消息仍会执行。`vspi continue` 遇到占用时采用同样机制。普通退出不在后台继续任务；恢复只加载已落盘内容，不重连旧请求、不自动重试。锁只保证同服务器进程，跨服务器共享目录不在 v1.0.0 的支持范围内。
 

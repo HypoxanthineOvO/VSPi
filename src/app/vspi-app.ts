@@ -24,6 +24,7 @@ import type {
   SessionHandoffProjection,
   SessionHandoffRelay,
   SessionHandoffResponse,
+  SessionOwnerRecoveryAction,
 } from "../backend/types.js";
 import { loadSettingsLayers, saveSettings } from "../config/settings.js";
 import { COMPACTION_PROFILES, type CompactOptions } from "../continuity/compaction-profiles.js";
@@ -70,6 +71,7 @@ import type {
 } from "../prompts/types.js";
 import { UserQuestionCancelledError } from "../questions/tool.js";
 import type { ExternalSessionSource } from "../sessions/external-history.js";
+import type { SessionLeaseOwner } from "../sessions/lease.js";
 import { normalizeSkillInstallSource } from "../skills/service.js";
 import type { SkillCatalogItem, SkillScope } from "../skills/types.js";
 import {
@@ -307,6 +309,7 @@ export class VspiApp implements Component, Focusable {
   private readonly executionPolicy: ExecutionPolicyUi;
   private readonly yoloAcknowledgementBroker: YoloAcknowledgementBroker;
   private pendingQuestion: PendingQuestion | undefined;
+  private ownerRecoveryPromptActive = false;
   private pendingApproval: PendingApproval | undefined;
   private attachmentSessionId: string | undefined;
   private planSnapshot: StoredPlan | undefined;
@@ -466,6 +469,8 @@ export class VspiApp implements Component, Focusable {
             void this.initializeRuntimeSurface().catch((error) => this.handleRuntimeError(error));
         },
         onSessionError: (error) => this.handleRuntimeError(error),
+        onSessionOwnerRecovery: (owner: SessionLeaseOwner, phase: "terminate" | "kill") =>
+          this.confirmOwnerRecovery(owner, phase),
         onHandoffInteraction: (interaction, signal) => this.answerHandoffInteraction(interaction, signal),
         onHandoffProjection: (projection) => this.applyHandoffProjection(projection),
         onHandoffPending: (relay) => this.beginSessionHandoff(relay),
@@ -572,7 +577,7 @@ export class VspiApp implements Component, Focusable {
       }
       this.currentModelIdentity = backendModelIdentity;
       this.runtimeDefaults = this.options.runtimeDefaultsFactory?.(this.backend.isProjectTrusted?.() ?? false);
-      await this.applyRuntimeDefaults();
+      await this.applyRuntimeDefaults({ applyModel: !this.backend.consumeResolvedModelFallback?.() });
       if (this.attachmentSessionId) await this.switchAttachmentSession(this.attachmentSessionId, this.sessionEpoch);
       if (this.startupRuntimeDefaultsDiagnostic) {
         const diagnostic = this.startupRuntimeDefaultsDiagnostic;
@@ -1981,13 +1986,11 @@ export class VspiApp implements Component, Focusable {
           return;
         }
       }
-      const previousSessionId = this.attachmentSessionId;
       const epoch = this.sessionEpoch;
       this.beginSessionTransition();
       try {
         await this.backend.switchSession(event.session.id);
         await this.finishSessionTransition(epoch);
-        await this.handleSessionModelFallback(previousSessionId);
       } catch (error) {
         this.abortSessionTransition();
         this.showNotice(`会话切换失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
@@ -1999,7 +2002,6 @@ export class VspiApp implements Component, Focusable {
         if (!this.backend.forkSession) throw new Error("当前后端不支持会话分支");
         await this.backend.forkSession(event.session.id);
         await this.finishSessionTransition(epoch);
-        await this.handleSessionModelFallback(undefined);
       } catch (error) {
         this.abortSessionTransition();
         this.showNotice(`会话分支失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
@@ -2732,70 +2734,30 @@ export class VspiApp implements Component, Focusable {
     });
   }
 
-  /** Called from the interactive entry once the TUI owns the screen. */
-  async handleStartupModelFallback(): Promise<void> {
-    await this.handleSessionModelFallback(undefined);
-  }
-
-  /**
-   * A resumed session may have opened on a default-model fallback. The
-   * question is asked here — never inside backend.start/bind — so the panel is
-   * rendered after the session transition finished and the keyboard is live.
-   */
-  private async handleSessionModelFallback(previousSessionId: string | undefined): Promise<void> {
-    const pending = this.backend.getPendingModelFallback?.();
-    if (!pending) return;
-    let answered: Question | undefined;
+  private async confirmOwnerRecovery(
+    owner: SessionLeaseOwner,
+    phase: "terminate" | "kill",
+  ): Promise<SessionOwnerRecoveryAction> {
+    if (!this.renderReady || this.disposing) return "cancel";
+    const isKill = phase === "kill";
+    this.ownerRecoveryPromptActive = true;
     try {
-      [answered] = await this.requestQuestions([
+      const [answer] = await this.requestQuestions([
         {
-          id: "session-model-fallback",
-          title: "会话模型已回退",
-          prompt: `该会话记录的模型已无法恢复（${pending.message}），当前以 ${pending.provider}/${pending.modelId} 打开。`,
+          id: isKill ? "session-owner-kill" : "session-owner-terminate",
+          title: isKill ? "终止无响应 Session 进程" : "终止无响应 Session 进程",
+          prompt: `${owner.hostname} · PID ${owner.pid} 长时间未响应接管请求。${isKill ? "SIGTERM 未退出，SIGKILL 可能丢失未落盘内容。" : "将先发送 SIGTERM 并等待其退出。"}`,
           kind: "singleChoice",
           options: [
-            {
-              id: "continue",
-              label: `使用 ${pending.provider}/${pending.modelId} 继续`,
-              description: "接受回退模型，写入 model_change 后不再询问",
-            },
-            {
-              id: "cancel",
-              label: "取消打开",
-              description: previousSessionId ? "返回之前的会话" : "改用全新会话",
-            },
+            { id: isKill ? "kill" : "terminate", label: isKill ? "发送 SIGKILL 并接管" : "终止进程并接管" },
+            { id: "cancel", label: "取消", description: "保留原进程，不接管 Session" },
           ],
         },
       ]);
-    } catch {
-      // The panel was dismissed or another interaction owns the UI; keep the
-      // session usable and keep the fallback pending for the next switch.
-      this.showNotice(`会话模型已回退到 ${pending.provider}/${pending.modelId}，可用 /model 切换`, "info");
-      return;
-    }
-    if (answered?.answer === "continue") {
-      try {
-        await this.backend.confirmModelFallback?.();
-      } catch (error) {
-        this.showNotice(`模型回退确认失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
-      }
-      return;
-    }
-    this.backend.discardPendingModelFallback?.();
-    await this.revertModelFallbackSession(previousSessionId);
-  }
-
-  private async revertModelFallbackSession(previousSessionId: string | undefined): Promise<void> {
-    const epoch = this.sessionEpoch;
-    this.beginSessionTransition();
-    try {
-      if (previousSessionId) await this.backend.switchSession(previousSessionId);
-      else await this.backend.newSession();
-      await this.finishSessionTransition(epoch, "replace");
-      this.showNotice(previousSessionId ? "已返回之前的会话" : "已改为全新会话", "info");
-    } catch (error) {
-      this.abortSessionTransition();
-      this.showNotice(`回退会话失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+      return answer?.answer === (isKill ? "kill" : "terminate") ? (isKill ? "kill" : "terminate") : "cancel";
+    } finally {
+      this.ownerRecoveryPromptActive = false;
+      this.requestRender();
     }
   }
 
@@ -3061,15 +3023,20 @@ export class VspiApp implements Component, Focusable {
     }
   }
 
-  private async applyRuntimeDefaults(): Promise<void> {
+  private async applyRuntimeDefaults(options: { applyModel?: boolean } = {}): Promise<void> {
     const defaults = await this.runtimeDefaults?.load();
     if (!defaults) return;
     const diagnostics = [...defaults.diagnostics];
-    if (defaults.value.model && this.backend.kind === "pi") {
+    if (options.applyModel !== false && defaults.value.model && this.backend.kind === "pi") {
       const identity = `${defaults.value.model.provider}/${defaults.value.model.id}`;
       try {
-        if (!this.backend.selectModel) throw new Error("当前后端不支持默认模型选择");
-        await this.backend.selectModel(defaults.value.model.provider, defaults.value.model.id);
+        const alreadySelected =
+          this.currentModelIdentity?.provider === defaults.value.model.provider &&
+          this.currentModelIdentity.id === defaults.value.model.id;
+        if (!alreadySelected) {
+          if (!this.backend.selectModel) throw new Error("当前后端不支持默认模型选择");
+          await this.backend.selectModel(defaults.value.model.provider, defaults.value.model.id);
+        }
         this.currentModelIdentity = { ...defaults.value.model };
         this.modelLabel = this.backend.modelLabel;
         this.refreshModelPresentation();
@@ -3773,7 +3740,7 @@ export class VspiApp implements Component, Focusable {
 
   private requestRender(force = false): void {
     this.fullscreenRenderRevision += 1;
-    if (this.renderReady && !this.sessionTransition) this.tui.requestRender(force);
+    if (this.renderReady && (!this.sessionTransition || this.ownerRecoveryPromptActive)) this.tui.requestRender(force);
   }
 
   private refreshModelPresentation(): void {

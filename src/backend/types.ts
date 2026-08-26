@@ -20,8 +20,10 @@ import type {
   ExternalSessionSource,
   ExternalSessionSummary,
 } from "../sessions/external-history.js";
+import type { SessionLeaseOwner } from "../sessions/lease.js";
 import type { SkillCatalogSnapshot, SkillInstallResult, SkillManager, SkillScope } from "../skills/types.js";
 import type { WorkflowSnapshot } from "../workflow/types.js";
+export type SessionOwnerRecoveryAction = "terminate" | "kill" | "cancel";
 
 export interface RuntimeModelOption extends ModelOption {
   provider: string;
@@ -118,6 +120,10 @@ export interface ChatBackendEvents {
   onSessionWait?: (waiting: boolean) => void;
   onSessionReady?: () => void;
   onSessionError?: (error: Error) => void;
+  onSessionOwnerRecovery?: (
+    owner: SessionLeaseOwner,
+    phase: "terminate" | "kill",
+  ) => Promise<SessionOwnerRecoveryAction>;
   onHandoffInteraction?: (
     interaction: SessionHandoffInteraction,
     signal?: AbortSignal,
@@ -162,12 +168,6 @@ export interface SendOptions {
   clientMessageId?: string;
 }
 
-export interface ModelFallbackNotice {
-  message: string;
-  provider: string;
-  modelId: string;
-}
-
 export interface ChatBackend {
   readonly kind: "fixture" | "pi";
   readonly modelLabel: string;
@@ -186,9 +186,7 @@ export interface ChatBackend {
   newSession(options?: NewSessionOptions): Promise<void>;
   listSessions(): Promise<SessionOption[]>;
   switchSession(id: string): Promise<void>;
-  getPendingModelFallback?(): ModelFallbackNotice | undefined;
-  confirmModelFallback?(): Promise<void>;
-  discardPendingModelFallback?(): void;
+  consumeResolvedModelFallback?(): boolean;
   forkSession?(id: string): Promise<void>;
   listExternalSessions?(options?: {
     source?: ExternalSessionSource;
