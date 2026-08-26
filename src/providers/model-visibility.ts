@@ -66,19 +66,43 @@ function matchesAnthropic(model: CatalogModel): boolean {
   return /fable[- ]5(?:\D|$)/i.test(value);
 }
 
+function matchesOpenaiFamily(value: string): boolean {
+  return /gpt[- ]5[.-](?:4|5|6)(?:\D|$)/i.test(value);
+}
+
+function matchesKimiFamily(value: string): boolean {
+  return /(?:k2[.-](?:6|7)|\bcode\b|coding|\bk3\b)/i.test(value);
+}
+
+function matchesDeepSeekFamily(value: string): boolean {
+  return /deepseek[- ]v4(?:\D|$)/i.test(value);
+}
+
+function matchesGlmFamily(value: string): boolean {
+  return /glm[- ]5[.-](?:1|2|3)(?:\D|$)/i.test(value);
+}
+
 function matchesCuratedFamily(model: CatalogModel): boolean {
   const value = searchable(model);
-  if (model.provider === "openai" || model.provider === "openai-codex" || model.provider === "vsplab") {
-    return /gpt[- ]5[.-](?:4|5|6)(?:\D|$)/i.test(value);
+  if (model.provider === "vsplab") {
+    // VSPLab 复合目录横跨多家品牌：按模型家族复用各家 curated 规则，而不是只看 GPT。
+    return (
+      matchesOpenaiFamily(value) ||
+      matchesAnthropic(model) ||
+      matchesKimiFamily(value) ||
+      matchesDeepSeekFamily(value) ||
+      matchesGlmFamily(value)
+    );
   }
+  if (model.provider === "openai" || model.provider === "openai-codex") return matchesOpenaiFamily(value);
   if (model.provider === "anthropic") return matchesAnthropic(model);
   if (model.provider === "kimi-coding" || model.provider.startsWith("moonshotai")) {
-    return /(?:k2[.-](?:6|7)|\bcode\b|coding|\bk3\b)/i.test(value);
+    return matchesKimiFamily(value);
   }
   if (model.provider.startsWith("xiaomi")) return /mimo[- ]v?2[.-]5(?:\D|$)/i.test(value);
-  if (model.provider === "deepseek") return /deepseek[- ]v4(?:\D|$)/i.test(value);
+  if (model.provider === "deepseek") return matchesDeepSeekFamily(value);
   if (model.provider === "zai" || model.provider === "zai-coding-cn") {
-    return /glm[- ]5[.-](?:1|2|3)(?:\D|$)/i.test(value);
+    return matchesGlmFamily(value);
   }
   if (model.provider.startsWith("qwen-token-plan")) {
     return /qwen[- ]?(?:3[.-]8[- ]max[- ]preview|3[.-]7[- ](?:max|plus))(?:\D|$)/i.test(value);

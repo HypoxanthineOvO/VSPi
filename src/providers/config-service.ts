@@ -20,6 +20,8 @@ export interface ProviderModelRecord {
   outputUsdPerMillion?: number;
   api?: string;
   baseUrl?: string;
+  /** 上游 Pi catalog 的 provider id；设置后按模型继承共享元数据（contextWindow、cost、thinking map 等）。 */
+  inheritFrom?: string;
   reasoning?: boolean;
   thinkingLevelMap?: Partial<Record<EffortLevel, string | null>>;
   cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
@@ -96,6 +98,7 @@ const MODEL_FIELDS = new Set([
   "outputUsdPerMillion",
   "api",
   "baseUrl",
+  "inheritFrom",
   "reasoning",
   "thinkingLevelMap",
   "cost",
@@ -425,6 +428,9 @@ function parseModels(value: unknown, project: boolean, providerId: string): Prov
       model.api = api;
     }
     if (input.baseUrl !== undefined) model.baseUrl = validateBaseUrl(input.baseUrl, "model.baseUrl");
+    if (input.inheritFrom !== undefined) {
+      model.inheritFrom = requiredString(input.inheritFrom, "model.inheritFrom");
+    }
     if (input.reasoning !== undefined) {
       if (typeof input.reasoning !== "boolean") throw new Error("model.reasoning 必须是 boolean");
       model.reasoning = input.reasoning;
@@ -460,6 +466,7 @@ function serializeGlobalModel(model: ProviderModelRecord, api: SupportedProvider
     name: model.name,
     api,
     ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
+    ...(model.inheritFrom ? { inheritFrom: model.inheritFrom } : {}),
     ...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
     ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
     ...(model.input ? { input: model.input } : {}),

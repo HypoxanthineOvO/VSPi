@@ -10,6 +10,8 @@ interface RuntimeProviderModel {
   name: string;
   api?: string;
   baseUrl?: string;
+  /** 上游 Pi catalog 的 provider id；优先于 provider 级 inheritModelsFrom。 */
+  inheritFrom?: string;
   input?: string[];
   reasoning?: boolean;
   thinkingLevelMap?: Partial<Record<EffortLevel, string | null>>;
@@ -46,7 +48,16 @@ export function normalizeBuiltinProvider(provider: ProviderRecord, runtime?: Pic
     name: provider.name,
     ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
     apiKey: `$${envVar}`,
-    models: provider.models.map((model) => normalizeRuntimeModel(resolveInheritedModel(provider, model, runtime), api)),
+    models: provider.models.map((model) => {
+      const resolved = resolveInheritedModel(provider, model, runtime);
+      // 复合中转站目录里不同家族走不同协议（如 Claude → anthropic-messages），
+      // per-model api 覆盖 provider 默认；baseUrl 同理（Anthropic SDK 自拼 /v1/messages）。
+      const modelApi = resolved.api ? normalizeProviderApi(resolved.api, "model.api") : api;
+      return {
+        ...normalizeRuntimeModel(resolved, modelApi),
+        ...(resolved.baseUrl ? { baseUrl: resolved.baseUrl } : {}),
+      };
+    }),
   };
 }
 
@@ -55,17 +66,21 @@ export function normalizeBuiltinProvider(provider: ProviderRecord, runtime?: Pic
  * input capabilities, reasoning, thinking map, cost tiers). VSPi records only override
  * fields they explicitly set. Missing upstream entries fail closed: guessing a context
  * window here is how the 1.05M/272K drift happened.
+ *
+ * 继承来源优先级：model.inheritFrom（复合目录按模型指定上游）→ provider.inheritModelsFrom；
+ * 两者均未设置时不继承，直接使用模型自身声明（保持 api / baseUrl 等 VSPi 专属字段）。
  */
 function resolveInheritedModel(
   provider: ProviderRecord,
   model: ProviderRecord["models"][number],
   runtime: Pick<ModelRuntime, "getModel"> | undefined,
 ): RuntimeProviderModel {
-  if (!provider.inheritModelsFrom) return model;
-  const upstream = runtime?.getModel(provider.inheritModelsFrom, model.id);
+  const inheritFrom = model.inheritFrom ?? provider.inheritModelsFrom;
+  if (!inheritFrom) return model;
+  const upstream = runtime?.getModel(inheritFrom, model.id);
   if (!upstream) {
     throw new Error(
-      `${provider.name} model ${model.id} requires the Pi ${provider.inheritModelsFrom} catalog entry, but it is missing`,
+      `${provider.name} model ${model.id} requires the Pi ${inheritFrom} catalog entry, but it is missing`,
     );
   }
   const thinkingLevelMap = model.thinkingLevelMap ?? upstream.thinkingLevelMap;
@@ -81,6 +96,8 @@ function resolveInheritedModel(
     contextWindow: model.contextWindow ?? upstream.contextWindow,
     maxTokens: model.maxTokens ?? upstream.maxTokens,
     ...(upstream.compat ? { compat: upstream.compat as object } : {}),
+    ...(model.api ? { api: model.api } : {}),
+    ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
   };
 }
 

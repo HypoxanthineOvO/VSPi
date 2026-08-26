@@ -179,7 +179,10 @@ export function resolveOfficialCnySchedule(
   timestamp: number,
 ): Readonly<TokenPriceSchedule> | undefined {
   const key = `${provider}/${model}`.toLowerCase();
-  if (key.includes("kimi") && key.includes("k3")) return PRICE_SCHEDULES.kimiK3;
+  // VSPLab 复合目录里 Kimi 家族模型 id 不带 "kimi" 前缀（如 vsplab/k3），用 /k3 前缀兜底命中官方牌价。
+  if (key.includes("kimi") || key.includes("/k3")) {
+    return key.includes("k3") ? PRICE_SCHEDULES.kimiK3 : undefined;
+  }
   if (!key.includes("deepseek")) return undefined;
   const family = key.includes("flash") ? "flash" : key.includes("pro") ? "pro" : undefined;
   if (!family) return undefined;

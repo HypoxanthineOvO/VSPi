@@ -15,31 +15,88 @@ function provider(id: string, label: string): ProviderOption {
 }
 
 describe("builtin providers", () => {
-  it("ships VSPLab with openai-responses protocol, upstream inheritance and no credentials", () => {
+  it("ships the VSPLab composite catalog with per-family protocols and no credentials", () => {
     const vsplab = BUILTIN_PROVIDERS.find((item) => item.id === "vsplab");
     expect(vsplab).toBeDefined();
     expect(vsplab?.source).toBe("builtin");
     expect(vsplab?.protocol).toBe("openai-responses");
     expect(vsplab?.baseUrl).toBe("https://api.vsplab.cn/v1");
-    expect(vsplab?.inheritModelsFrom).toBe("openai-codex");
+    // 继承已下沉到 per-model inheritFrom；provider 级不再整体挂 openai-codex。
+    expect(vsplab?.inheritModelsFrom).toBeUndefined();
+
     expect(vsplab?.models.map((model) => model.id)).toEqual([
+      // GLM
+      "glm-5.3",
+      "glm-5.2",
+      "glm-5.1",
+      "glm-5",
+      "glm-5-turbo",
+      "glm-4.7",
+      "glm-4.6",
+      "glm-4.5",
+      "glm-4.5-air",
+      // Kimi
+      "kimi-for-coding",
+      "kimi-for-coding-highspeed",
+      "k3",
+      "k3-256k",
+      "kimi-k2.7-code",
+      // DeepSeek
+      "deepseek-chat",
+      "deepseek-reasoner",
+      "deepseek-v4-flash",
+      "deepseek-v4-pro",
+      // GPT
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
       "gpt-5.5",
       "gpt-5.4",
+      "gpt-5.4-mini",
+      "gpt-5.2",
+      "gpt-5.2-pro",
+      // Claude
+      "claude-opus-5",
+      "claude-opus-4-8",
+      "claude-opus-4-7",
+      "claude-opus-4-6",
+      "claude-sonnet-5",
+      "claude-sonnet-4-6",
+      "claude-fable-5",
     ]);
+
+    const byId = new Map(vsplab?.models.map((model) => [model.id, model]));
+    // Kimi 家族走 chat completions；Claude 家族走 anthropic-messages 且 baseUrl 去掉 /v1。
+    for (const id of ["kimi-for-coding", "kimi-for-coding-highspeed", "k3", "k3-256k", "kimi-k2.7-code"]) {
+      expect(byId.get(id)?.api).toBe("openai-completions");
+    }
+    for (const id of [
+      "claude-opus-5",
+      "claude-opus-4-8",
+      "claude-opus-4-7",
+      "claude-opus-4-6",
+      "claude-sonnet-5",
+      "claude-sonnet-4-6",
+      "claude-fable-5",
+    ]) {
+      expect(byId.get(id)?.api).toBe("anthropic-messages");
+      expect(byId.get(id)?.baseUrl).toBe("https://api.vsplab.cn");
+    }
+    // GPT / DeepSeek / GLM 未声明 per-model api，随 provider 默认 openai-responses。
+    for (const id of ["gpt-5.6-sol", "deepseek-v4-pro", "glm-5.3"]) {
+      expect(byId.get(id)?.api).toBeUndefined();
+    }
     // 内置 catalog 绝不携带 credential 字段，也不再手抄上游维护的规格
     expect(JSON.stringify(BUILTIN_PROVIDERS)).not.toMatch(/"(api[-_]?key|secret|password|credential)"/i);
     expect(JSON.stringify(vsplab?.models)).not.toContain("1050000");
   });
 
-  it("inherits the Pi openai-codex catalog at registration and guards the Codex 272K ceiling", async () => {
+  it("registers every composite model and inherits shared metadata per family", async () => {
     const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
     registerBuiltinProviders(runtime, BUILTIN_PROVIDERS);
 
-    const ids = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"];
-    for (const id of ids) {
+    const codexIds = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"];
+    for (const id of codexIds) {
       const model = runtime.getModel("vsplab", id);
       expect(model, `vsplab/${id} must register`).toBeDefined();
       expect(model?.contextWindow).toBe(272_000);
@@ -51,11 +108,39 @@ describe("builtin providers", () => {
       expect(model?.cost).toEqual(upstream?.cost);
       expect(model?.thinkingLevelMap).toEqual(upstream?.thinkingLevelMap);
     }
-    const efforts = Object.fromEntries(ids.map((id) => [id, modelEffortLevels(runtime.getModel("vsplab", id) ?? {})]));
+    const efforts = Object.fromEntries(
+      codexIds.map((id) => [id, modelEffortLevels(runtime.getModel("vsplab", id) ?? {})]),
+    );
     expect(efforts["gpt-5.4"]).toEqual(["off", "minimal", "low", "medium", "high", "xhigh"]);
-    expect(efforts["gpt-5.5"]).toEqual(["off", "minimal", "low", "medium", "high", "xhigh"]);
     for (const id of ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]) {
       expect(efforts[id]).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+    }
+
+    // 国产模型家族：协议覆盖生效，共享规格按各家上游目录继承。
+    const kimi = runtime.getModel("vsplab", "kimi-for-coding");
+    expect(kimi?.api).toBe("openai-completions");
+    expect(kimi?.contextWindow).toBe(runtime.getModel("kimi-coding", "kimi-for-coding")?.contextWindow);
+    expect(runtime.getModel("vsplab", "k3-256k")?.contextWindow).toBe(
+      runtime.getModel("kimi-coding", "k3-256k")?.contextWindow,
+    );
+    const glm = runtime.getModel("vsplab", "glm-5.3");
+    expect(glm?.api).toBe("openai-responses");
+    expect(glm?.cost).toEqual(runtime.getModel("zai", "glm-5.3")?.cost);
+    const deepseek = runtime.getModel("vsplab", "deepseek-v4-pro");
+    expect(deepseek?.contextWindow).toBe(runtime.getModel("deepseek", "deepseek-v4-pro")?.contextWindow);
+
+    // Claude 家族走 anthropic-messages，baseUrl 去掉 /v1（SDK 自拼 /v1/messages）。
+    const claude = runtime.getModel("vsplab", "claude-opus-5");
+    expect(claude?.api).toBe("anthropic-messages");
+    expect(claude?.baseUrl).toBe("https://api.vsplab.cn");
+    expect(claude?.contextWindow).toBe(runtime.getModel("anthropic", "claude-opus-5")?.contextWindow);
+
+    // 无上游条目的模型不继承也不手抄，保持运行时默认（fail-closed 的另一面：不猜规格）。
+    for (const id of ["glm-5", "glm-4.5", "deepseek-chat", "gpt-5.2"]) {
+      const model = runtime.getModel("vsplab", id);
+      expect(model, `vsplab/${id} must register`).toBeDefined();
+      expect(model?.contextWindow).toBe(128_000);
+      expect(model?.maxTokens).toBe(8_192);
     }
   });
 
@@ -67,7 +152,7 @@ describe("builtin providers", () => {
     const broken = [
       {
         ...vsplab,
-        models: [{ id: "gpt-not-in-codex", name: "Ghost" }],
+        models: [{ id: "gpt-not-in-codex", name: "Ghost", inheritFrom: "openai-codex" }],
       },
     ];
     expect(() => registerBuiltinProviders(runtime, broken)).toThrow(/openai-codex.*missing|missing.*openai-codex/i);
