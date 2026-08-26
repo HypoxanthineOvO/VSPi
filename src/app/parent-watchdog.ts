@@ -20,8 +20,9 @@ export interface ParentDeathWatchdogOptions {
  * instead of idling with a dead launcher. Only active when stdin is a real TTY
  * and can be disabled with VSPi_NO_PARENT_WATCHDOG=1.
  *
- * /reload 续接进程是预期的孤儿（parent 是老进程，lease 移交后退出，ppid 会变 1），
- * 由 spawnReloadChild 注入 VSPi_NO_PARENT_WATCHDOG=1 豁免，否则会在宽限期后被误杀。
+ * /reload 的老进程会作为前台 job 驻留到 successor 退出（见 spawnReloadChild），
+ * 因此续接进程的 parent 不会变 1，watchdog 不会误杀；老进程意外崩溃时 watchdog
+ * 收掉孤儿化的续接进程、把终端还给 shell，是预期自愈路径，不要为 reload 注入豁免。
  */
 export function startParentDeathWatchdog(
   onParentDeath: () => void,

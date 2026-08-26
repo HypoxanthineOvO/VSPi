@@ -43,7 +43,49 @@ function emptyFixtureResume(home: string, workspace: string): PtyHarness {
   });
 }
 
+function fixtureShell(home: string, workspace: string): PtyHarness {
+  return new PtyHarness("bash", ["--noprofile", "--norc", "-i"], {
+    cwd: workspace,
+    columns: 80,
+    rows: 24,
+    env: {
+      PATH: process.env.PATH,
+      HOME: home,
+      XDG_CONFIG_HOME: join(home, ".config"),
+      PI_CODING_AGENT_DIR: join(home, ".pi-agent"),
+      PS1: "VSPI_RELOAD_PROMPT> ",
+      TERM: "xterm-256color",
+      VSPi_FIXTURE: "1",
+      VSPi_REDUCED_MOTION: "1",
+      VSPi_TUI_MODE: "fullscreen",
+    },
+  });
+}
+
 describe("PTY continuity scenarios", () => {
+  it("keeps the shell foreground job alive while a reload successor owns the TTY", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "vspi-pty-reload-"));
+    const home = await mkdtemp(join(tmpdir(), "vspi-pty-reload-home-"));
+    const harness = fixtureShell(home, workspace);
+    try {
+      await harness.waitFor("VSPI_RELOAD_PROMPT>", 5_000);
+      harness.write(`${process.execPath} ${join(ROOT, "dist", "index.js")}\r`);
+      await harness.waitFor("Offline Fixture", 15_000);
+      harness.write("/reload\r");
+
+      await new Promise((resolve) => setTimeout(resolve, 4_000));
+      harness.write("/model\r");
+      await harness.waitFor("选择模型", 5_000);
+      const output = harness.scrollbackText();
+      expect(output.match(/VSPI_RELOAD_PROMPT>/gu)).toHaveLength(1);
+      expect(output).not.toContain("read EIO");
+      expect(output).not.toContain("Unhandled 'error' event");
+      expect(output).toContain("Offline Fixture");
+    } finally {
+      await harness.close();
+    }
+  }, 25_000);
+
   it("lets Question replace Composer with one gutter before the two-line Status", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "vspi-pty-question-"));
     const harness = scenario(workspace, { VSPI_PTY_QUESTION: "1" });
