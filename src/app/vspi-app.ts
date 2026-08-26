@@ -1981,11 +1981,13 @@ export class VspiApp implements Component, Focusable {
           return;
         }
       }
+      const previousSessionId = this.attachmentSessionId;
       const epoch = this.sessionEpoch;
       this.beginSessionTransition();
       try {
         await this.backend.switchSession(event.session.id);
         await this.finishSessionTransition(epoch);
+        await this.handleSessionModelFallback(previousSessionId);
       } catch (error) {
         this.abortSessionTransition();
         this.showNotice(`会话切换失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
@@ -1997,6 +1999,7 @@ export class VspiApp implements Component, Focusable {
         if (!this.backend.forkSession) throw new Error("当前后端不支持会话分支");
         await this.backend.forkSession(event.session.id);
         await this.finishSessionTransition(epoch);
+        await this.handleSessionModelFallback(undefined);
       } catch (error) {
         this.abortSessionTransition();
         this.showNotice(`会话分支失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
@@ -2727,6 +2730,73 @@ export class VspiApp implements Component, Focusable {
       this.requestRender();
       if (signal?.aborted) abort();
     });
+  }
+
+  /** Called from the interactive entry once the TUI owns the screen. */
+  async handleStartupModelFallback(): Promise<void> {
+    await this.handleSessionModelFallback(undefined);
+  }
+
+  /**
+   * A resumed session may have opened on a default-model fallback. The
+   * question is asked here — never inside backend.start/bind — so the panel is
+   * rendered after the session transition finished and the keyboard is live.
+   */
+  private async handleSessionModelFallback(previousSessionId: string | undefined): Promise<void> {
+    const pending = this.backend.getPendingModelFallback?.();
+    if (!pending) return;
+    let answered: Question | undefined;
+    try {
+      [answered] = await this.requestQuestions([
+        {
+          id: "session-model-fallback",
+          title: "会话模型已回退",
+          prompt: `该会话记录的模型已无法恢复（${pending.message}），当前以 ${pending.provider}/${pending.modelId} 打开。`,
+          kind: "singleChoice",
+          options: [
+            {
+              id: "continue",
+              label: `使用 ${pending.provider}/${pending.modelId} 继续`,
+              description: "接受回退模型，写入 model_change 后不再询问",
+            },
+            {
+              id: "cancel",
+              label: "取消打开",
+              description: previousSessionId ? "返回之前的会话" : "改用全新会话",
+            },
+          ],
+        },
+      ]);
+    } catch {
+      // The panel was dismissed or another interaction owns the UI; keep the
+      // session usable and keep the fallback pending for the next switch.
+      this.showNotice(`会话模型已回退到 ${pending.provider}/${pending.modelId}，可用 /model 切换`, "info");
+      return;
+    }
+    if (answered?.answer === "continue") {
+      try {
+        await this.backend.confirmModelFallback?.();
+      } catch (error) {
+        this.showNotice(`模型回退确认失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+      }
+      return;
+    }
+    this.backend.discardPendingModelFallback?.();
+    await this.revertModelFallbackSession(previousSessionId);
+  }
+
+  private async revertModelFallbackSession(previousSessionId: string | undefined): Promise<void> {
+    const epoch = this.sessionEpoch;
+    this.beginSessionTransition();
+    try {
+      if (previousSessionId) await this.backend.switchSession(previousSessionId);
+      else await this.backend.newSession();
+      await this.finishSessionTransition(epoch, "replace");
+      this.showNotice(previousSessionId ? "已返回之前的会话" : "已改为全新会话", "info");
+    } catch (error) {
+      this.abortSessionTransition();
+      this.showNotice(`回退会话失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+    }
   }
 
   private async confirmSessionCollision(session: SessionOption): Promise<"takeover" | "fork" | "cancel"> {

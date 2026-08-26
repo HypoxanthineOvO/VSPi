@@ -65,6 +65,7 @@ function fakePiSession(
       };
     },
     setThinkingLevel: vi.fn(),
+    setModel: vi.fn(async (_model: unknown) => {}),
     prompt: vi.fn(async (_text: string, _options?: PromptOptions) => options.prompt?.()),
     steer: vi.fn(async () => {}),
     followUp: vi.fn(async () => {}),
@@ -568,27 +569,86 @@ describe("M2 Pi history hydration", () => {
     await backend.dispose();
   });
 
-  it.each([
-    ["fallback", true],
-    ["missing", false],
-  ] as const)("fails closed for a %s default model and disposes the unusable runtime", async (_case, fallback) => {
-    const fake = fakePiSession([], { configured: fallback });
+  it("fails closed for a missing default model and disposes the unusable runtime", async () => {
+    const fake = fakePiSession([], { configured: false });
     const recorder = eventRecorder();
     const reset = vi.fn();
     recorder.events.onSessionReset = reset;
     const backend = new PiBackend({
       cwd: await mkdtemp(join(tmpdir(), "vspi-m2-setup-error-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+
+    await expect(backend.start(recorder.events)).rejects.toThrow(/没有可用模型.*Provider.*不会自动进入 Fixture/);
+    expect(reset).not.toHaveBeenCalled();
+    expect(fake.session.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a fallback-resolved session usable and exposes the pending model notice", async () => {
+    const fake = fakePiSession([], { configured: true });
+    const recorder = eventRecorder();
+    const reset = vi.fn();
+    recorder.events.onSessionReset = reset;
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-m2-model-fallback-open-")),
       sessionFactory: async () => ({
         session: fake.session,
-        ...(fallback ? { modelFallbackMessage: "saved default no longer exists" } : {}),
+        modelFallbackMessage: "Could not restore model deepseek/deepseek-v4-flash",
       }),
     });
 
-    await expect(backend.start(recorder.events)).rejects.toThrow(
-      fallback ? /默认模型不可用.*Provider.*默认模型配置/ : /没有可用模型.*Provider.*不会自动进入 Fixture/,
+    await backend.start(recorder.events);
+
+    expect(reset).toHaveBeenCalledOnce();
+    expect(fake.session.dispose).not.toHaveBeenCalled();
+    expect(backend.getPendingModelFallback()).toEqual({
+      message: "Could not restore model deepseek/deepseek-v4-flash",
+      provider: "anthropic",
+      modelId: "m2-model",
+    });
+    await backend.dispose();
+  });
+
+  it("persists the accepted fallback as a model_change on the session", async () => {
+    const fake = fakePiSession([], { configured: true });
+    const recorder = eventRecorder();
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-m2-model-fallback-confirm-")),
+      sessionFactory: async () => ({
+        session: fake.session,
+        modelFallbackMessage: "Could not restore model deepseek/deepseek-v4-flash",
+      }),
+    });
+    await backend.start(recorder.events);
+
+    await backend.confirmModelFallback();
+
+    expect(fake.session.setModel).toHaveBeenCalledOnce();
+    expect(fake.session.setModel).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "anthropic", id: "m2-model" }),
     );
-    expect(reset).not.toHaveBeenCalled();
-    expect(fake.session.dispose).toHaveBeenCalledOnce();
+    expect(backend.getPendingModelFallback()).toBeUndefined();
+    expect(recorder.events.onNotice).toHaveBeenCalledWith("已改用 anthropic/m2-model 打开本会话", "success");
+    await backend.dispose();
+  });
+
+  it("discarding the pending fallback clears it without touching the session", async () => {
+    const fake = fakePiSession([], { configured: true });
+    const recorder = eventRecorder();
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-m2-model-fallback-discard-")),
+      sessionFactory: async () => ({
+        session: fake.session,
+        modelFallbackMessage: "Could not restore model deepseek/deepseek-v4-flash",
+      }),
+    });
+    await backend.start(recorder.events);
+
+    backend.discardPendingModelFallback();
+
+    expect(backend.getPendingModelFallback()).toBeUndefined();
+    expect(fake.session.setModel).not.toHaveBeenCalled();
+    await backend.dispose();
   });
 
   it("fails a broken replacement without publishing a false reset or accepting another prompt", async () => {

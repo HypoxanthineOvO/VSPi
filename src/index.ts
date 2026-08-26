@@ -251,6 +251,7 @@ async function interactive(): Promise<void> {
       startTui: async (startupSurface) => {
         app.setStartupSurface(startupSurface);
         app.getActiveTui().start();
+        await app.handleStartupModelFallback();
         if (sessionMode.initialCommand) await app.runStartupCommand(sessionMode.initialCommand);
       },
     });

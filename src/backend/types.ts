@@ -162,6 +162,12 @@ export interface SendOptions {
   clientMessageId?: string;
 }
 
+export interface ModelFallbackNotice {
+  message: string;
+  provider: string;
+  modelId: string;
+}
+
 export interface ChatBackend {
   readonly kind: "fixture" | "pi";
   readonly modelLabel: string;
@@ -180,6 +186,9 @@ export interface ChatBackend {
   newSession(options?: NewSessionOptions): Promise<void>;
   listSessions(): Promise<SessionOption[]>;
   switchSession(id: string): Promise<void>;
+  getPendingModelFallback?(): ModelFallbackNotice | undefined;
+  confirmModelFallback?(): Promise<void>;
+  discardPendingModelFallback?(): void;
   forkSession?(id: string): Promise<void>;
   listExternalSessions?(options?: {
     source?: ExternalSessionSource;

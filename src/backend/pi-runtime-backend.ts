@@ -103,6 +103,7 @@ import type {
   ChatBackend,
   ChatBackendEvents,
   ChatQueueState,
+  ModelFallbackNotice,
   ModelSelectionResult,
   NewSessionOptions,
   ProviderAuthInteraction,
@@ -288,6 +289,7 @@ export class PiRuntimeBackend implements ChatBackend {
   private trustedWorkspaceRealpath: string | undefined;
   private replacementInvalidated = false;
   private unusableError: Error | undefined;
+  private pendingModelFallback: ModelFallbackNotice | undefined;
   private effectivePromptSegments: EffectivePromptSegment[] = [];
   private readonly reviewTracker = createReviewTracker();
   private taskEpoch = 0;
@@ -1752,7 +1754,7 @@ export class PiRuntimeBackend implements ChatBackend {
   private async bindCurrentSession(reason: SessionResetReason, continuePlan?: boolean): Promise<void> {
     const runtime = this.requireRuntime();
     const session = runtime.session;
-    this.assertConfiguredSession(session, runtime.modelFallbackMessage);
+    this.pendingModelFallback = this.detectModelFallback(session, runtime.modelFallbackMessage);
     this.unusableError = undefined;
     this.contentIds.clear();
     this.toolIds.clear();
@@ -2068,6 +2070,48 @@ export class PiRuntimeBackend implements ChatBackend {
     if (!session.model) {
       throw new Error("没有可用模型。请先配置 Provider 和默认模型；VSPi 不会自动进入 Fixture。");
     }
+  }
+
+  /**
+   * A session whose recorded model is gone but whose runtime already resolved a
+   * working default-model fallback stays usable: record the fallback so the app
+   * layer can ask the user once (UI is not up yet inside bind). Placeholder or
+   * missing models still fail closed via assertConfiguredSession.
+   */
+  private detectModelFallback(
+    session: AgentSession,
+    fallbackMessage: string | undefined,
+  ): ModelFallbackNotice | undefined {
+    if (!fallbackMessage) {
+      this.assertConfiguredSession(session);
+      return undefined;
+    }
+    const model = session.model;
+    const isPlaceholder = model?.provider === "unknown" && model?.id === "unknown";
+    if (!model || isPlaceholder) {
+      this.assertConfiguredSession(session, fallbackMessage);
+      return undefined;
+    }
+    return { message: fallbackMessage, provider: model.provider, modelId: model.id };
+  }
+
+  getPendingModelFallback(): ModelFallbackNotice | undefined {
+    return this.pendingModelFallback;
+  }
+
+  async confirmModelFallback(): Promise<void> {
+    const pending = this.pendingModelFallback;
+    if (!pending) return;
+    const session = this.session;
+    const model = session?.model;
+    if (!session || !model) throw new Error("会话当前没有可确认的回退模型");
+    await session.setModel(model);
+    this.pendingModelFallback = undefined;
+    this.events?.onNotice(`已改用 ${pending.provider}/${pending.modelId} 打开本会话`, "success");
+  }
+
+  discardPendingModelFallback(): void {
+    this.pendingModelFallback = undefined;
   }
 
   private hydrateMessage(message: unknown, messageIndex: number): void {
