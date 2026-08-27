@@ -44,6 +44,7 @@ describe("M9 npm package artifact", () => {
         "Docs/usage.md",
         "Docs/tui-v1.md",
         "dist/index.js",
+        "skills/vspi-subagent/SKILL.md",
       ]),
     );
     expect(dryPaths.some((path) => /^(?:src|test|\.pipeline|tmp)\//.test(path))).toBe(false);
@@ -56,6 +57,7 @@ describe("M9 npm package artifact", () => {
     const tarball = join(output, packed.filename);
     const listing = (await execFile("tar", ["-tf", tarball], { timeout: 30_000 })).stdout.trim().split("\n").sort();
     expect(listing).toContain("package/dist/index.js");
+    expect(listing).toContain("package/skills/vspi-subagent/SKILL.md");
     expect(listing).toContain("package/package.json");
     expect(listing.some((path) => path.includes("/test/") || path.includes("/.pipeline/"))).toBe(false);
     expect(listing).toContain("package/dist/update/self-update.js");

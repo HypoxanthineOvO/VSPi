@@ -52,6 +52,7 @@
 # D. 交互工具
 
 - [ ]  Question Tools：单选 / 多选 / 排序 / 填空【Ext】registerTool + ctx.ui（select/confirm/input）；自制前端用 SelectList + Editor
+- [ ]  `pi-fff` 并行搜索能力【后续独立 Cycle】：精确 pin 官方 `@ff-labs/pi-fff`，先注册独立 `ffgrep` / `fffind`，不覆盖 canonical `grep`；禁止扫描 `$HOME` 与 `/`，保留 `rg` fallback。接入前必须验证 cold/warm p50/p95、RSS/CPU/I/O、结果等价性、无效 UTF-8 与 native crash 隔离，稳定性达标后再讨论默认启用。
 - [ ]  密码输入自动打码【Ext】
 - [ ]  密码不落上下文：Agent 只传密码 ID，执行侧注入明文【Ext + SDK + 待讨论】需自建 secret 存储
 - [ ]  思维链自动翻译成中文【Ext】订阅 thinking 流事件接翻译服务；翻译服务选型待定

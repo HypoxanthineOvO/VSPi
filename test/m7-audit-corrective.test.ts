@@ -10,7 +10,11 @@ import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/domain/fixtures.js";
 import { composeEffectivePrompt } from "../src/prompts/effective-prompt.js";
 import { createFactoryPromptRegistry } from "../src/prompts/factory-registry.js";
 import { checkHarnessSources, type HarnessSource } from "../src/prompts/harness-check.js";
-import { createPromptProfileExtension, VSPI_LANGUAGE_CONTRACT } from "../src/prompts/pi-prompt-profile-extension.js";
+import {
+  createPromptProfileExtension,
+  environmentContext,
+  VSPI_LANGUAGE_CONTRACT,
+} from "../src/prompts/pi-prompt-profile-extension.js";
 import { createPromptProfileService, type PromptProfileService } from "../src/prompts/profile-service.js";
 import type { PromptProfile, PromptProfileConfig, PromptProfileSnapshot } from "../src/prompts/types.js";
 import { stripAnsi } from "../src/ui/ansi.js";
@@ -451,6 +455,7 @@ describe("M7 corrective: effective runtime projection and Harness resolver", () 
     createPromptProfileExtension({
       resolve: async () => ({ profileId: "profile", overlay: "PROFILE OVERLAY" }),
       getModelIdentity: () => ({ provider: "openai", model: "gpt-5" }),
+      resolveEnvironment: () => ({ currentDate: "2026-08-27", timezone: "Asia/Shanghai" }),
       onEffectivePrompt,
     })({
       on(event: string, next: unknown) {
@@ -472,7 +477,10 @@ describe("M7 corrective: effective runtime projection and Harness resolver", () 
 
     expect(onEffectivePrompt).toHaveBeenCalledWith([
       { source: "pi-base", content: assembled },
-      { source: "append", content: VSPI_LANGUAGE_CONTRACT },
+      {
+        source: "append",
+        content: `${VSPI_LANGUAGE_CONTRACT}\n\n${environmentContext({ currentDate: "2026-08-27", timezone: "Asia/Shanghai" })}`,
+      },
       { source: "profile", content: "PROFILE OVERLAY" },
     ]);
     const segments = onEffectivePrompt.mock.calls[0]?.[0] as Array<{ source: string; content: string }>;

@@ -1,5 +1,8 @@
 import { Input, Key, matchesKey } from "@earendil-works/pi-tui";
 import type { AgentRunSnapshot, AgentSnapshot } from "../agents/types.js";
+import { nextCronTaskRun } from "../cron/runtime.js";
+import { formatCronLocalTime } from "../cron/schedule.js";
+import type { CronTask } from "../cron/types.js";
 import {
   BUILTIN_COMMAND_SOURCE,
   type CommandDefinition,
@@ -11,6 +14,7 @@ import {
 } from "../domain/commands.js";
 import { FX } from "../domain/defaults.js";
 import { effortLabel } from "../domain/effort.js";
+import { formatLocalDate, formatLocalTimestamp } from "../domain/local-time.js";
 import type {
   AppSettings,
   EffortLevel,
@@ -80,6 +84,7 @@ export type PanelKind =
   | "effort"
   | "tools"
   | "agents"
+  | "cron"
   | "policy";
 
 export type PanelEvent =
@@ -202,10 +207,6 @@ function usesWideModelLayout(bodyWidth: number): boolean {
   return bodyWidth >= MODEL_WIDE_MIN_BODY_WIDTH;
 }
 
-function capitalize(value: string): string {
-  return value.slice(0, 1).toLocaleUpperCase() + value.slice(1);
-}
-
 function formatAgentTokens(value: number): string {
   if (value < 1_000) return String(Math.max(0, Math.round(value)));
   if (value < 10_000) return `${(value / 1_000).toFixed(1)}K`;
@@ -302,13 +303,11 @@ function centerText(text: string, width: number): string {
 }
 
 function formatExternalDate(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? "--/--" : date.toISOString().slice(5, 10).replace("-", "/");
+  return formatLocalDate(value) ?? "--/--";
 }
 
 function formatExternalTimestamp(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? "未知" : date.toISOString().slice(0, 16).replace("T", " ");
+  return formatLocalTimestamp(value) ?? "未知";
 }
 
 function tabLine(tabs: string[], selected: number, width: number, theme: VspiTheme): string {
@@ -483,8 +482,10 @@ export class PanelController {
     authority: { pendingRequired: [], turnOverrides: [], sessionOverrides: [], taskEpoch: 0 },
     diagnostic: "Subagent runtime is not ready",
   };
-  private agentTab: "map" | "timeline" | "tools" | "pools" = "map";
+  private agentView: "list" | "detail" = "list";
   private agentSelectedRunId: string | undefined;
+  private cronTasks: CronTask[] = [];
+  private cronSelectedId: string | undefined;
 
   constructor(settings: AppSettings) {
     this.settings = { ...settings };
@@ -728,6 +729,21 @@ export class PanelController {
     this.agentSelectedRunId = runs[this.state.selected]?.id;
   }
 
+  setCronTasks(tasks: readonly CronTask[]): void {
+    const selected = this.cronTasks[this.state.selected]?.id ?? this.cronSelectedId;
+    this.cronTasks = tasks
+      .map((task) => ({ ...task }))
+      .sort((left, right) => {
+        const leftNext = nextCronTaskRun(left) ?? Number.POSITIVE_INFINITY;
+        const rightNext = nextCronTaskRun(right) ?? Number.POSITIVE_INFINITY;
+        return leftNext - rightNext || right.createdAt - left.createdAt;
+      });
+    const selectedIndex = selected ? this.cronTasks.findIndex((task) => task.id === selected) : -1;
+    this.state.selected =
+      selectedIndex >= 0 ? selectedIndex : Math.min(this.state.selected, Math.max(0, this.cronTasks.length - 1));
+    this.cronSelectedId = this.cronTasks[this.state.selected]?.id;
+  }
+
   setCommandQuery(query: string): void {
     this.commandQuery = query;
     // “//” 是字面消息转义：不弹命令面板，避免视觉干扰。
@@ -815,6 +831,13 @@ export class PanelController {
       if (interaction.handler === "moveSelection") this.move(data, TOOL_CAPABILITIES.length);
       return;
     }
+    if (this.kind === "cron") {
+      if (interaction.handler === "moveSelection") {
+        this.move(data, this.cronTasks.length);
+        this.cronSelectedId = this.cronTasks[this.state.selected]?.id;
+      }
+      return;
+    }
     if (this.kind === "policy") return this.handlePolicy(data);
     if (this.kind === "plan") return this.handlePlan(data, interaction.handler);
     return undefined;
@@ -842,8 +865,13 @@ export class PanelController {
     else if (this.kind === "approval") [title, body] = ["需要批准", this.renderApproval(bodyWidth, theme)];
     else if (this.kind === "effort") [title, body] = ["Effort", this.renderEffort(bodyWidth, theme)];
     else if (this.kind === "tools") [title, body] = ["Tools", this.renderTools(bodyWidth, theme)];
-    else if (this.kind === "agents")
-      [title, body] = [`Agents · ${capitalize(this.agentTab)}`, this.renderAgents(bodyWidth, theme)];
+    else if (this.kind === "agents") {
+      const selected = this.selectedAgentRun();
+      [title, body] = [
+        this.agentView === "detail" && selected ? `Agent · ${selected.agentId.slice(0, 8)}` : "Agents",
+        this.renderAgents(bodyWidth, theme),
+      ];
+    } else if (this.kind === "cron") [title, body] = ["Cron", this.renderCron(bodyWidth, theme)];
     else if (this.kind === "policy") [title, body] = ["Policy", this.renderPolicy(bodyWidth, theme)];
     else [title, body] = ["Plan", this.renderPlan(bodyWidth, theme, planFocused)];
 
@@ -887,7 +915,10 @@ export class PanelController {
         let selectionStart: number;
         let selectionEnd: number;
         // selectedLine may sit behind a panel gutter; only accept a leading marker after whitespace.
-        if (this.kind === "plan" && this.planSelectionRange) {
+        if (this.kind === "agents" && this.agentView === "detail") {
+          selectionStart = this.state.scroll;
+          selectionEnd = selectionStart;
+        } else if (this.kind === "plan" && this.planSelectionRange) {
           [selectionStart, selectionEnd] = this.planSelectionRange;
         } else {
           const highlightedRows = body
@@ -1068,6 +1099,11 @@ export class PanelController {
             : "choice";
     } else if (this.kind === "approval") {
       state.approvalReasonEditing = this.approvalReasonEditing;
+    } else if (this.kind === "agents") {
+      state.hasItems = this.agentRuns().length > 0;
+      state.agentDetail = this.agentView === "detail";
+    } else if (this.kind === "cron") {
+      state.hasItems = this.cronTasks.length > 0;
     }
     return state;
   }
@@ -2394,19 +2430,9 @@ export class PanelController {
 
   private agentRuns(): AgentRunSnapshot[] {
     const byId = new Map<string, AgentRunSnapshot>();
-    for (const run of [...this.agentSnapshot.active, ...this.agentSnapshot.recent]) byId.set(run.id, run);
-    const children = new Map<string | undefined, AgentRunSnapshot[]>();
-    for (const run of byId.values()) children.set(run.parentId, [...(children.get(run.parentId) ?? []), run]);
-    const ordered: AgentRunSnapshot[] = [];
-    const visit = (parentId: string | undefined) => {
-      for (const run of children.get(parentId) ?? []) {
-        ordered.push(run);
-        visit(run.id);
-      }
-    };
-    visit(undefined);
-    for (const run of byId.values()) if (!ordered.some((item) => item.id === run.id)) ordered.push(run);
-    return ordered.slice(0, 64);
+    for (const run of this.agentSnapshot.active) byId.set(run.id, run);
+    for (const run of this.agentSnapshot.recent) if (!byId.has(run.id)) byId.set(run.id, run);
+    return [...byId.values()].slice(0, 64);
   }
 
   private selectedAgentRun(): AgentRunSnapshot | undefined {
@@ -2415,28 +2441,30 @@ export class PanelController {
 
   private handleAgents(data: string): PanelEvent | undefined {
     if (panelKey(data, Key.escape)) {
-      if (this.agentTab !== "map") {
-        this.agentTab = "map";
+      if (this.agentView === "detail") {
+        this.agentView = "list";
         this.state.scroll = 0;
         return;
       }
       this.close();
       return { type: "close" };
     }
-    if (panelKey(data, Key.tab)) {
-      const tabs = ["map", "timeline", "tools", "pools"] as const;
-      this.agentTab = tabs[(tabs.indexOf(this.agentTab) + 1) % tabs.length] ?? "map";
-      this.state.scroll = 0;
+    const runs = this.agentRuns();
+    if (this.agentView === "detail") {
+      const page = Math.max(1, this.lastBodyWidth > 0 ? 8 : 1);
+      if (panelKey(data, Key.up)) this.state.scroll = Math.max(0, this.state.scroll - 1);
+      else if (panelKey(data, Key.down)) this.state.scroll += 1;
+      else if (panelKey(data, Key.pageUp)) this.state.scroll = Math.max(0, this.state.scroll - page);
+      else if (panelKey(data, Key.pageDown)) this.state.scroll += page;
       return;
     }
-    const runs = this.agentRuns();
     if (panelKey(data, Key.up) || panelKey(data, Key.down)) {
       this.move(data, runs.length);
       this.agentSelectedRunId = this.selectedAgentRun()?.id;
       return;
     }
     if (panelKey(data, Key.enter) && this.selectedAgentRun()) {
-      this.agentTab = "timeline";
+      this.agentView = "detail";
       this.state.scroll = 0;
       return;
     }
@@ -2490,36 +2518,19 @@ export class PanelController {
   }
 
   private renderAgents(width: number, theme: VspiTheme): string[] {
-    const limits = this.agentSnapshot.limits;
-    const headers = [
-      theme.muted(padLine("Map  Timeline  Tools  Pools", width)),
-      ...wrapTextWithAnsi(`depth ${limits.maxDepth} · token/cost/duration 为遥测警戒线，不拦截`, width).map((line) =>
-        theme.muted(line),
-      ),
-    ];
-    if (this.agentTab === "pools") {
-      const lines = [...headers];
-      for (const pool of this.agentSnapshot.pools) {
-        lines.push(theme.bold(`${pool.provider} · ${pool.source}`));
-        for (const role of ["orchestrator", "researcher", "analyst", "worker"] as const) {
-          lines.push(...wrapTextWithAnsi(`  ${role.padEnd(12)} ${pool.roles[role]}`, width));
-        }
-      }
-      if (this.agentSnapshot.pools.length === 0) lines.push(theme.muted("No available model pools"));
-      return lines;
-    }
     const selected = this.selectedAgentRun();
-    if (this.agentTab === "timeline" || this.agentTab === "tools") {
-      if (!selected) return [...headers, theme.muted("No Agent run selected")];
+    if (this.agentView === "detail") {
+      if (!selected) return [theme.muted("No Agent run selected")];
       const breadcrumb = this.agentBreadcrumb(selected);
-      const lines = [...headers, theme.focus(`Root › ${breadcrumb.join(" › ")}`)];
+      const execution = selected.background ? "background" : "foreground";
+      const lines = [theme.focus(`Root › ${breadcrumb.join(" › ")}`)];
       lines.push(
         ...wrapTextWithAnsi(
-          `${selected.role} · ${selected.provider}/${selected.model.split("/").at(-1)} · ${selected.effort} · ${selected.status}`,
+          `${selected.profile} · ${selected.provider}/${selected.model.split("/").at(-1)} · ${selected.effort} · ${selected.status} · ${execution}${selected.resumed ? " · resumed" : ""}`,
           width,
         ),
         ...wrapTextWithAnsi(
-          `run ${selected.id} · tree ${selected.treeId}${selected.parentId ? ` · parent ${selected.parentId}` : ""}`,
+          `agent ${selected.agentId} · run ${selected.id} · tree ${selected.treeId}${selected.parentId ? ` · parent ${selected.parentId}` : ""}`,
           width,
         ).map((line) => theme.muted(line)),
         ...wrapTextWithAnsi(
@@ -2536,62 +2547,74 @@ export class PanelController {
               width,
             ).map((line) => theme.muted(line))),
       );
-      if (this.agentTab === "tools") {
-        lines.push(
-          theme.bold("Tools"),
-          ...(selected.tools.length ? selected.tools.map((tool) => `  ${tool}`) : ["  none"]),
-        );
-      } else {
-        lines.push(theme.bold("Task"), ...wrapTextWithAnsi(selected.task, width));
-        const usage = selected.usage;
-        const budget = selected.budget;
-        // C19 P0-2/P0-5：预算显示为已用量 + 警戒线标记，不再展示 "tokens left"。
-        const runBudgetLine = `  run ${formatAgentTokens(budget.runTokensUsed)} / ${formatAgentTokens(budget.maxRunTokens)}${budget.warnRunTokens ? " ⚠" : ""}`;
-        const treeBudgetLine = `  tree ${formatAgentTokens(budget.treeTokensUsed)} / ${formatAgentTokens(budget.maxTreeTokens)}${budget.warnTreeTokens ? " ⚠" : ""} · $${budget.treeCostUsd.toFixed(2)} / $${budget.maxTreeCostUsd}${budget.warnTreeCost ? " ⚠" : ""}`;
-        lines.push(
-          theme.bold("Usage"),
-          ...wrapTextWithAnsi(runBudgetLine, width).map((line) =>
-            budget.warnRunTokens ? theme.warning(line) : theme.muted(line),
-          ),
-          ...wrapTextWithAnsi(treeBudgetLine, width).map((line) =>
-            budget.warnTreeTokens || budget.warnTreeCost ? theme.warning(line) : theme.muted(line),
-          ),
-          ...wrapTextWithAnsi(
-            `  in ${formatAgentTokens(usage.input)} · out ${formatAgentTokens(usage.output)} · cache ${formatAgentTokens(usage.cacheRead + usage.cacheWrite)} · ${usage.turns} turns`,
-            width,
-          ).map((line) => theme.muted(line)),
-          theme.bold("Timeline"),
-          ...selected.timeline.flatMap((event) =>
-            wrapTextWithAnsi(`  ${event.at.slice(11, 19)} ${event.kind} · ${event.summary}`, width),
-          ),
-        );
-        lines.push(theme.bold("Run output preview"));
-        lines.push(...wrapTextWithAnsi(selected.outputPreview ?? "Waiting for output...", width));
-      }
+      lines.push(theme.bold("Task"), ...wrapTextWithAnsi(selected.task, width));
+      if (selected.error) lines.push(theme.bold("Error"), ...wrapTextWithAnsi(theme.error(selected.error), width));
+      lines.push(
+        theme.bold(selected.summary ? "Summary" : "Live activity"),
+        ...wrapTextWithAnsi(selected.summary ?? selected.outputPreview ?? "Waiting for output...", width),
+      );
+      const usage = selected.usage;
+      const budget = selected.budget;
+      const runBudgetLine = `  run ${formatAgentTokens(budget.runTokensUsed)} / ${formatAgentTokens(budget.maxRunTokens)}${budget.warnRunTokens ? " ⚠" : ""}`;
+      const treeBudgetLine = `  tree ${formatAgentTokens(budget.treeTokensUsed)} / ${formatAgentTokens(budget.maxTreeTokens)}${budget.warnTreeTokens ? " ⚠" : ""} · $${budget.treeCostUsd.toFixed(2)} / $${budget.maxTreeCostUsd}${budget.warnTreeCost ? " ⚠" : ""}`;
+      lines.push(
+        theme.bold("Usage"),
+        ...wrapTextWithAnsi(runBudgetLine, width).map((line) =>
+          budget.warnRunTokens ? theme.warning(line) : theme.muted(line),
+        ),
+        ...wrapTextWithAnsi(treeBudgetLine, width).map((line) =>
+          budget.warnTreeTokens || budget.warnTreeCost ? theme.warning(line) : theme.muted(line),
+        ),
+        ...wrapTextWithAnsi(
+          `  in ${formatAgentTokens(usage.input)} · out ${formatAgentTokens(usage.output)} · cache ${formatAgentTokens(usage.cacheRead + usage.cacheWrite)} · ${usage.turns} turns`,
+          width,
+        ).map((line) => theme.muted(line)),
+        theme.bold("Tools"),
+        ...(selected.tools.length ? selected.tools.map((tool) => `  ${tool}`) : ["  none"]),
+        theme.bold("Timeline"),
+        ...selected.timeline.flatMap((event) =>
+          wrapTextWithAnsi(`  ${event.at.slice(11, 19)} ${event.kind} · ${event.summary}`, width),
+        ),
+      );
       return lines.map((line) => padLine(line, width));
     }
     const runs = this.agentRuns();
-    const lines = [...headers];
+    const lines: string[] = [];
     if (this.agentSnapshot.diagnostic) lines.push(theme.warning(this.agentSnapshot.diagnostic));
     runs.forEach((run, index) => {
       const symbol =
-        run.status === "success" ? theme.success("✓") : run.status === "error" ? theme.error("×") : theme.focus("●");
-      const branch = `${"  ".repeat(Math.max(0, run.depth - 1))}${run.depth > 1 ? "└─ " : ""}`;
+        run.status === "success"
+          ? theme.success("✓")
+          : run.status === "error"
+            ? theme.error("×")
+            : run.status === "cancelled"
+              ? theme.muted("−")
+              : run.status === "queued"
+                ? theme.muted("○")
+                : theme.focus("●");
       const current = index === this.state.selected ? "› " : "  ";
-      // C19 P0-5：运行中的 run 显示当前工具、轮次与最近活动时间。
-      const activity =
-        run.status === "running" || run.status === "queued"
-          ? ` · ${run.currentTool ? `tool ${run.currentTool}` : "thinking"} · t${run.usage.turns + 1}${run.lastActivityAt ? ` · ${run.lastActivityAt.slice(11, 19)}` : ""}`
-          : "";
-      lines.push(
-        ...wrapTextWithAnsi(
-          `${current}${branch}${symbol} ${run.role} · ${run.model.split("/").at(-1)} · ${run.status}${activity} · ${run.task}`,
-          width,
-        ),
-      );
+      const summary = (run.summary ?? run.outputPreview ?? run.task).replace(/\s+/gu, " ").trim();
+      const row = `${current}${symbol} ${run.agentId.slice(0, 8)}  ${run.profile}  ${run.status}  ${agentElapsed(run)}  ${run.model.split("/").at(-1)}  ${summary}`;
+      lines.push(padLine(truncateToWidth(row, width), width));
     });
     if (runs.length === 0) lines.push(theme.muted("No recent Agent runs"));
     return lines;
+  }
+
+  private renderCron(width: number, theme: VspiTheme): string[] {
+    if (this.cronTasks.length === 0) return [theme.muted(padLine("No scheduled tasks", width))];
+    return this.cronTasks.map((task, index) => {
+      const status = task.lastError ? theme.error("failed") : theme.focus("scheduled");
+      const schedule = task.cron ? task.cron : task.runAt ? formatCronLocalTime(task.runAt) : "—";
+      const prompt = task.prompt.replace(/\s+/gu, " ").trim();
+      const detail = task.lastError ? `${prompt} · ${task.lastError}` : prompt;
+      return selectedLine(
+        `${task.id}  ${status}  ${schedule}  ${task.recurring ? "recurring" : "once"}  ${detail}`,
+        index === this.state.selected,
+        width,
+        theme,
+      );
+    });
   }
 
   private agentBreadcrumb(run: AgentRunSnapshot): string[] {

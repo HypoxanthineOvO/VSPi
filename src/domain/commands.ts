@@ -28,6 +28,7 @@ export type ActionHandler =
   | "policy"
   | "tools"
   | "agents"
+  | "cron"
   | "usage"
   | "theme"
   | "tui"
@@ -202,6 +203,15 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
     description: "查看 Subagent 与 Teammate 状态",
     group: "VSPi",
     handler: "agents",
+    availability: "enabled",
+  },
+  {
+    id: "cron",
+    aliases: ["schedule"],
+    label: "/cron",
+    description: "查看、创建或取消前台定时任务",
+    group: "VSPi",
+    handler: "cron",
     availability: "enabled",
   },
   {

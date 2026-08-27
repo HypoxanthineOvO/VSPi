@@ -27,6 +27,7 @@ describe("builtin providers", () => {
     expect(vsplab?.models.map((model) => model.id)).toEqual([
       // GLM
       "glm-5.3",
+      "glm-5.3-flash",
       "glm-5.2",
       "glm-5.1",
       "glm-5",
@@ -83,12 +84,15 @@ describe("builtin providers", () => {
       expect(byId.get(id)?.baseUrl).toBe("https://api.vsplab.cn");
     }
     // GPT / DeepSeek / GLM 未声明 per-model api，随 provider 默认 openai-responses。
-    for (const id of ["gpt-5.6-sol", "deepseek-v4-pro", "glm-5.3"]) {
+    for (const id of ["gpt-5.6-sol", "deepseek-v4-pro", "glm-5.3", "glm-5.3-flash"]) {
       expect(byId.get(id)?.api).toBeUndefined();
     }
-    // 内置 catalog 绝不携带 credential 字段，也不再手抄上游维护的规格
+    // 内置 catalog 绝不携带 credential 字段；GPT-5.6 显式选择 1.05M 长上下文。
     expect(JSON.stringify(BUILTIN_PROVIDERS)).not.toMatch(/"(api[-_]?key|secret|password|credential)"/i);
-    expect(JSON.stringify(vsplab?.models)).not.toContain("1050000");
+    for (const id of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+      expect(byId.get(id)?.contextWindow).toBe(1_050_000);
+      expect(byId.get(id)?.maxTokens).toBe(128_000);
+    }
   });
 
   it("registers every composite model and inherits shared metadata per family", async () => {
@@ -99,7 +103,8 @@ describe("builtin providers", () => {
     for (const id of codexIds) {
       const model = runtime.getModel("vsplab", id);
       expect(model, `vsplab/${id} must register`).toBeDefined();
-      expect(model?.contextWindow).toBe(272_000);
+      const expectedContextWindow = id.startsWith("gpt-5.6-") ? 1_050_000 : 272_000;
+      expect(model?.contextWindow).toBe(expectedContextWindow);
       expect(model?.maxTokens).toBe(128_000);
       expect(model?.reasoning).toBe(true);
       expect(model?.input).toContain("text");
@@ -126,6 +131,14 @@ describe("builtin providers", () => {
     const glm = runtime.getModel("vsplab", "glm-5.3");
     expect(glm?.api).toBe("openai-responses");
     expect(glm?.cost).toEqual(runtime.getModel("zai", "glm-5.3")?.cost);
+    const glmFlash = runtime.getModel("vsplab", "glm-5.3-flash");
+    expect(glmFlash).toMatchObject({
+      name: "GLM 5.3 Flash",
+      api: "openai-responses",
+      contextWindow: 200_000,
+      maxTokens: 32_768,
+      input: ["text", "image"],
+    });
     const deepseek = runtime.getModel("vsplab", "deepseek-v4-pro");
     expect(deepseek?.contextWindow).toBe(runtime.getModel("deepseek", "deepseek-v4-pro")?.contextWindow);
 

@@ -28,6 +28,7 @@ import type {
 } from "../backend/types.js";
 import { loadSettingsLayers, saveSettings } from "../config/settings.js";
 import { COMPACTION_PROFILES, type CompactOptions } from "../continuity/compaction-profiles.js";
+import { parseCronDuration, parseCronRunAt } from "../cron/schedule.js";
 import {
   type ActionDefinition,
   type ActionHandler,
@@ -459,6 +460,10 @@ export class VspiApp implements Component, Focusable {
         onAgentSnapshot: (snapshot) => {
           this.panels.setAgentSnapshot(snapshot);
           if (this.panels.kind === "agents") this.requestRender();
+        },
+        onCronSnapshot: (tasks) => {
+          this.panels.setCronTasks(tasks);
+          if (this.panels.kind === "cron") this.requestRender();
         },
         onSessionWait: (waiting) => {
           this.setRunActive(waiting);
@@ -1769,6 +1774,23 @@ export class VspiApp implements Component, Focusable {
         this.panels.open("agents");
       } catch (error) {
         this.showNotice(`Agents 操作失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+      }
+    } else if (action.handler === "cron") {
+      try {
+        const command = parseCronCommand(raw);
+        if (command.kind === "create") {
+          if (!this.backend.createCronTask) throw new Error("当前后端不支持 Cron");
+          const task = await this.backend.createCronTask({ runAt: command.runAt, prompt: command.prompt });
+          this.showNotice(`Cron ${task.id} 已安排`, "success");
+        } else if (command.kind === "cancel") {
+          if (!this.backend.deleteCronTask) throw new Error("当前后端不支持 Cron");
+          if (!(await this.backend.deleteCronTask(command.id))) throw new Error(`找不到 Cron ${command.id}`);
+          this.showNotice(`Cron ${command.id} 已取消`, "success");
+        }
+        this.panels.setCronTasks(this.backend.listCronTasks?.() ?? []);
+        this.panels.open("cron");
+      } catch (error) {
+        this.showNotice(`Cron 操作失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
       }
     } else if (action.handler === "plan") {
       this.planPanelExplicit = true;
@@ -3774,6 +3796,41 @@ export function parseAgentsCommand(
     return { kind: "pool", provider: parts[2] as string, role: parts[3] as AgentRole, model: parts[4] as string };
   }
   throw new Error("用法：/agents、/agents pool <provider> <orchestrator|researcher|analyst|worker> <provider/model>");
+}
+
+export type CronCommand =
+  | { kind: "list" }
+  | { kind: "cancel"; id: string }
+  | { kind: "create"; runAt: number; prompt: string };
+
+const CRON_WAKE_PROMPT =
+  "检查当前模型的额度或预算是否已经恢复；若可用，继续当前 Session 中最新的未完成用户任务。先核对上下文和工作区现状，不要重复已经完成的工作。";
+
+export function parseCronCommand(raw: string, now = Date.now()): CronCommand {
+  const text = raw.replace(/^\/(?:cron|schedule)(?:\s+|$)/u, "").trim();
+  if (!text || text === "list") return { kind: "list" };
+  const [operation, first, ...rest] = text.split(/\s+/u);
+  if (operation === "cancel" || operation === "delete") {
+    if (!first || rest.length > 0) throw new Error("用法：/cron cancel <id>");
+    return { kind: "cancel", id: first };
+  }
+  if (operation === "wake") {
+    if (!first || rest.length > 0) throw new Error("用法：/cron wake <duration>，例如 /cron wake 2h");
+    return { kind: "create", runAt: now + parseCronDuration(first), prompt: CRON_WAKE_PROMPT };
+  }
+  if (operation === "in") {
+    const prompt = rest.join(" ").trim();
+    if (!first || !prompt) throw new Error("用法：/cron in <duration> <prompt>");
+    return { kind: "create", runAt: now + parseCronDuration(first), prompt };
+  }
+  if (operation === "at") {
+    const prompt = rest.join(" ").trim();
+    if (!first || !prompt) throw new Error("用法：/cron at <ISO date-time> <prompt>");
+    return { kind: "create", runAt: parseCronRunAt(first, now), prompt };
+  }
+  throw new Error(
+    "用法：/cron、/cron wake <duration>、/cron in <duration> <prompt>、/cron at <time> <prompt>、/cron cancel <id>",
+  );
 }
 
 type GoalCommand =

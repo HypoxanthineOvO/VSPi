@@ -19,6 +19,13 @@ import type { ProviderModelRecord, ProviderRecord } from "./config-service.js";
 const VSPLAB_MODELS: ProviderModelRecord[] = [
   // GLM（智谱）
   { id: "glm-5.3", name: "GLM 5.3", inheritFrom: "zai" },
+  {
+    id: "glm-5.3-flash",
+    name: "GLM 5.3 Flash",
+    contextWindow: 200_000,
+    maxTokens: 32_768,
+    input: ["text", "image"],
+  },
   { id: "glm-5.2", name: "GLM 5.2", inheritFrom: "zai" },
   { id: "glm-5.1", name: "GLM 5.1", inheritFrom: "zai-coding-cn" },
   { id: "glm-5", name: "GLM 5" },
@@ -44,9 +51,21 @@ const VSPLAB_MODELS: ProviderModelRecord[] = [
   { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", inheritFrom: "deepseek" },
   { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", inheritFrom: "deepseek" },
   // GPT（OpenAI）
-  { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", inheritFrom: "openai-codex" },
-  { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", inheritFrom: "openai-codex" },
-  { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", inheritFrom: "openai-codex" },
+  { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", inheritFrom: "openai-codex", contextWindow: 1_050_000, maxTokens: 128_000 },
+  {
+    id: "gpt-5.6-terra",
+    name: "GPT-5.6 Terra",
+    inheritFrom: "openai-codex",
+    contextWindow: 1_050_000,
+    maxTokens: 128_000,
+  },
+  {
+    id: "gpt-5.6-luna",
+    name: "GPT-5.6 Luna",
+    inheritFrom: "openai-codex",
+    contextWindow: 1_050_000,
+    maxTokens: 128_000,
+  },
   { id: "gpt-5.5", name: "GPT-5.5", inheritFrom: "openai-codex" },
   { id: "gpt-5.4", name: "GPT-5.4", inheritFrom: "openai-codex" },
   { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", inheritFrom: "openai-codex" },

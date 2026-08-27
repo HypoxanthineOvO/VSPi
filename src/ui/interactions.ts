@@ -31,6 +31,7 @@ export interface InteractionState {
   skillCanDisable?: boolean;
   skillCanUpdate?: boolean;
   skillCanRemove?: boolean;
+  agentDetail?: boolean;
 }
 
 export interface InteractionDefinition {
@@ -441,7 +442,7 @@ const actions: InteractionDefinition[] = [
     handler: "closeSkillPanel",
     hint: (state) => (state.skillAdding === true || state.skillViewing === true ? "Esc 返回" : "Esc 关闭"),
   }),
-  ...(["models", "settings", "theme", "policy", "effort", "approval", "tools", "agents"] as const).map((context) =>
+  ...(["models", "settings", "theme", "policy", "effort", "approval", "tools", "cron"] as const).map((context) =>
     keyAction({
       id: `panel.${context}.move`,
       surface: "panel",
@@ -452,6 +453,25 @@ const actions: InteractionDefinition[] = [
       hint: "↑↓ 选择",
     }),
   ),
+  keyAction({
+    id: "panel.agents.move",
+    surface: "panel",
+    context: "agents",
+    keys: ["Up", "Down"],
+    keyValues: [Key.up, Key.down],
+    handler: "moveAgent",
+    hint: (state) => (state.agentDetail === true ? "↑↓/PgUp/PgDn 滚动" : "↑↓ 选择"),
+  }),
+  keyAction({
+    id: "panel.agents.open",
+    surface: "panel",
+    context: "agents",
+    keys: ["Enter"],
+    keyValues: [Key.enter],
+    handler: "openAgent",
+    enabled: (state) => state.hasItems === true && state.agentDetail !== true,
+    hint: "Enter 详情",
+  }),
   keyAction({
     id: "panel.models.switch",
     surface: "panel",
@@ -682,7 +702,7 @@ const actions: InteractionDefinition[] = [
       "effort",
       "policy",
       "tools",
-      "agents",
+      "cron",
       "goal",
       "prompt",
     ] as const
@@ -697,6 +717,15 @@ const actions: InteractionDefinition[] = [
       hint: "Esc 关闭",
     }),
   ),
+  keyAction({
+    id: "panel.agents.close",
+    surface: "panel",
+    context: "agents",
+    keys: ["Escape"],
+    keyValues: [Key.escape],
+    handler: "closePanel",
+    hint: (state) => (state.agentDetail === true ? "Esc 返回" : "Esc 关闭"),
+  }),
   keyAction({
     id: "composer.cancel",
     surface: "composer",

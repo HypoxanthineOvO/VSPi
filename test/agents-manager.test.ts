@@ -10,7 +10,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { defaultAgentProjectConfig, saveAgentProjectConfig } from "../src/agents/config.js";
 import { PiAgentManager } from "../src/agents/manager.js";
-import type { AgentStatusEvent } from "../src/agents/types.js";
+import type { AgentCompletionEvent, AgentStatusEvent } from "../src/agents/types.js";
 import { createExecutionPolicyService } from "../src/policy/execution-policy.js";
 
 function fakeSession(prompt: (text: string) => Promise<string>, inputTokens = 2): AgentSession {
@@ -195,7 +195,8 @@ describe("PiAgentManager", () => {
       sessionFactory: async () => fakeSession(async () => "unused"),
     });
 
-    const schema = manager.createTool(["read"], true).parameters as {
+    const tool = manager.createTool(["read"], true);
+    const schema = tool.parameters as {
       required?: string[];
       properties?: Record<string, unknown>;
     };
@@ -203,6 +204,8 @@ describe("PiAgentManager", () => {
     expect(schema.properties).not.toHaveProperty("tasks");
     expect(schema.properties).not.toHaveProperty("teammate");
     expect(schema.properties).not.toHaveProperty("lane");
+    expect(tool.promptSnippet).toContain("background");
+    expect(tool.promptGuidelines?.join(" ")).toContain("completion is delivered automatically");
     expect(JSON.stringify(schema.properties?.model)).not.toContain("claude-3-5-sonnet");
     await manager.dispose();
   });
@@ -225,6 +228,140 @@ describe("PiAgentManager", () => {
     expect(JSON.stringify(schema).length).toBeLessThan(5_000);
     expect(schema.properties?.model?.pattern).toBe("^[A-Za-z0-9._-]+/[A-Za-z0-9._:+-]+$");
     expect(JSON.stringify(schema)).not.toContain("provider/model-999");
+    await manager.dispose();
+  });
+
+  it("runs detached agents after the parent tool signal aborts and publishes terminal completion", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-background-"));
+    let release!: () => void;
+    const gate = new Promise<void>((resolvePromise) => {
+      release = resolvePromise;
+    });
+    let complete!: (event: AgentCompletionEvent) => void;
+    const completion = new Promise<AgentCompletionEvent>((resolvePromise) => {
+      complete = resolvePromise;
+    });
+    const longResult = `Background result: ${"technical evidence ".repeat(16)}`.trim();
+    const child = fakeSession(async () => {
+      await gate;
+      return longResult;
+    });
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: false,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      onCompletion: (event) => complete(event),
+      sessionFactory: async () => child,
+    });
+    const controller = new AbortController();
+    const result = await manager
+      .createTool(["read"], true)
+      .execute(
+        "background",
+        { task: "Research the detached behavior", run_in_background: true },
+        controller.signal,
+        undefined,
+        fakeToolContext(cwd) as never,
+      );
+    const launchText = (result.content[0] as { text: string }).text;
+    expect(launchText).toContain("status: running");
+    expect(launchText).toContain("automatic_notification: enabled");
+    controller.abort();
+    release();
+    const event = await completion;
+    expect(event).toMatchObject({
+      status: "success",
+      background: true,
+      result: longResult,
+      run: { status: "success", background: true, summary: longResult },
+    });
+    expect(manager.snapshot().recent[0]?.id).toBe(event.taskId);
+    expect(child.abort).not.toHaveBeenCalled();
+    await manager.dispose();
+  });
+
+  it("resumes a recent child session with a stable agent id and a new run id", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-resume-"));
+    const prompts: string[] = [];
+    const sessionFactory = vi.fn(async () =>
+      fakeSession(async (prompt) => {
+        prompts.push(prompt);
+        return `${prompt.includes("Follow up") ? "Follow-up" : "Initial"} result: ${"details ".repeat(30)}`;
+      }),
+    );
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: false,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory,
+    });
+    const tool = manager.createTool(["read"], true);
+    await tool.execute(
+      "initial",
+      { task: "Inspect the implementation" },
+      undefined,
+      undefined,
+      fakeToolContext(cwd) as never,
+    );
+    const first = manager.snapshot().recent[0];
+    expect(first).toBeDefined();
+    if (!first) throw new Error("Initial agent run is missing");
+    await tool.execute(
+      "resume",
+      { task: "Follow up on the evidence", resume: first.agentId },
+      undefined,
+      undefined,
+      fakeToolContext(cwd) as never,
+    );
+    const resumed = manager.snapshot().recent[0];
+    expect(resumed).toBeDefined();
+    if (!resumed) throw new Error("Resumed agent run is missing");
+    expect(resumed).toMatchObject({ agentId: first.agentId, resumed: true, modelReason: "resumed child binding" });
+    expect(resumed.id).not.toBe(first.id);
+    expect(sessionFactory).toHaveBeenCalledOnce();
+    expect(prompts).toHaveLength(2);
+    await expect(
+      tool.execute(
+        "invalid-resume",
+        { task: "Continue", resume: first.agentId, effort: "high" },
+        undefined,
+        undefined,
+        fakeToolContext(cwd) as never,
+      ),
+    ).rejects.toThrow("Cannot change effort");
+    await manager.dispose();
+  });
+
+  it("asks once for a fuller handoff when a successful summary is non-empty but too short", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-summary-"));
+    const prompts: string[] = [];
+    const expanded = `Expanded technical handoff: ${"validated implementation detail ".repeat(12)}`.trim();
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: false,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory: async () =>
+        fakeSession(async (prompt) => {
+          prompts.push(prompt);
+          return prompts.length === 1 ? "done" : expanded;
+        }),
+    });
+    const result = await manager
+      .createTool(["read"], true)
+      .execute("summary", { task: "Inspect summary behavior" }, undefined, undefined, fakeToolContext(cwd) as never);
+    expect((result.content[0] as { text: string }).text).toBe(expanded);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("comprehensive final handoff");
+    expect(manager.snapshot().recent[0]?.summary).toBe(expanded);
     await manager.dispose();
   });
 
@@ -333,7 +470,8 @@ describe("PiAgentManager", () => {
       recovery: false,
       modelRuntime: fakeRuntime(),
       executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
-      sessionFactory: async () => fakeSession(async () => "Bearer audit-secret-token api_key=output-secret"),
+      sessionFactory: async () =>
+        fakeSession(async () => `Bearer audit-secret-token api_key=output-secret ${"audit evidence ".repeat(20)}`),
     });
     await manager
       .createTool(["read"], true)
@@ -373,7 +511,7 @@ describe("PiAgentManager", () => {
       recovery: false,
       modelRuntime: fakeRuntime(),
       executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
-      sessionFactory: async () => fakeSession(async () => "done"),
+      sessionFactory: async () => fakeSession(async () => `done ${"tree evidence ".repeat(20)}`),
     });
     manager.beginRootTask("Run two checks");
     const tool = manager.createTool(["read"], true);
@@ -403,7 +541,7 @@ describe("PiAgentManager", () => {
       sessionFactory: async (input) => {
         sessions.push(input);
         return fakeSession(async (prompt) => {
-          childPrompt = prompt;
+          if (!prompt.includes("comprehensive final handoff")) childPrompt = prompt;
           return "custom result";
         });
       },
@@ -518,8 +656,8 @@ describe("PiAgentManager", () => {
       sessionFactory: async (input) =>
         fakeSession(async (received) => {
           expect(input.model).toBe("deepseek/reasoner");
-          prompt = received;
-          return "cross-provider result";
+          if (!received.includes("comprehensive final handoff")) prompt = received;
+          return `cross-provider result ${"evidence ".repeat(30)}`;
         }),
     });
     await manager
@@ -828,7 +966,7 @@ describe("PiAgentManager", () => {
         attempt += 1;
         return attempt === 1
           ? stoppedSession("error", "insufficient_quota", 10)
-          : fakeSession(async () => "fallback complete");
+          : fakeSession(async () => `fallback complete ${"evidence ".repeat(30)}`);
       },
     });
     await manager

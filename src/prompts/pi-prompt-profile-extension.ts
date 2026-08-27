@@ -1,6 +1,7 @@
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { CONTINUITY_STATUS_GUIDANCE } from "../continuity/status-tool.js";
 import { describeCommandsForPrompt } from "../domain/commands.js";
+import { type LocalEnvironment, resolveLocalEnvironment } from "../domain/local-time.js";
 import { composeEffectivePrompt, type EffectivePromptSegment } from "./effective-prompt.js";
 import type { ModelIdentity } from "./types.js";
 
@@ -20,23 +21,45 @@ ${CONTINUITY_STATUS_GUIDANCE}
 
 ${describeCommandsForPrompt()}`;
 
+export function environmentContext(
+  environment: LocalEnvironment = resolveLocalEnvironment(),
+  modelDisplayName?: string,
+): string {
+  return [
+    "<environment_context>",
+    `  <timezone>${environment.timezone}</timezone>`,
+    ...(modelDisplayName ? [`  <current_model>${xmlText(modelDisplayName)}</current_model>`] : []),
+    "</environment_context>",
+  ].join("\n");
+}
+
 export function createPromptProfileExtension(options: {
   resolve(identity: ModelIdentity): Promise<{ profileId?: string; overlay?: string }>;
   getModelIdentity(): ModelIdentity;
+  getModelDisplayName?(): string | undefined;
   onEffectivePrompt?(segments: EffectivePromptSegment[]): void;
+  resolveEnvironment?(): LocalEnvironment;
 }): ExtensionFactory {
   return (pi) => {
     pi.on("before_agent_start", async (event) => {
       const resolved = await options.resolve(options.getModelIdentity());
+      const append = `${VSPI_LANGUAGE_CONTRACT}\n\n${environmentContext(
+        options.resolveEnvironment?.(),
+        options.getModelDisplayName?.(),
+      )}`;
       const effective = composeEffectivePrompt({
         piBase: event.systemPrompt,
-        append: VSPI_LANGUAGE_CONTRACT,
+        append,
         ...(resolved.overlay ? { profile: resolved.overlay } : {}),
       });
       options.onEffectivePrompt?.(effective.segments);
       return {
-        systemPrompt: `${event.systemPrompt}\n\n${VSPI_LANGUAGE_CONTRACT}${resolved.overlay ? `\n\n${resolved.overlay}` : ""}`,
+        systemPrompt: `${event.systemPrompt}\n\n${append}${resolved.overlay ? `\n\n${resolved.overlay}` : ""}`,
       };
     });
   };
+}
+
+function xmlText(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }

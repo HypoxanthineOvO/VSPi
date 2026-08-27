@@ -26,6 +26,7 @@ VSPi 沿用 Pi 的模型、Provider、凭据和 session 目录，不另建 Secre
 
 - `vspi continue`（等价 `npm run dev -- continue`）续接最近的会话。
 - 非交互执行：`vspi exec "<prompt>"` 新会话执行单次 prompt；`vspi exec resume "<prompt>"` 续接最近会话；`vspi exec resume <session-id> "<prompt>"` 续接指定会话（id 支持唯一前缀，可在 TUI 的 `/sessions` 面板查看）。`vspi run "<prompt>"` 是兼容别名。最终 assistant 文本写入 stdout，运行期 notice 写入 stderr；退出码 0 成功、1 运行失败、2 用法错误、130 已取消。`--policy`、`--trust-project`、`--recovery`、`--workflow` 可出现在 exec 参数任意位置；模型与 effort 沿用持久化的 runtime defaults。若目标会话正被其他 VSPi 进程持有，exec 会通过既有的前台移交机制等待接管（stderr 会提示持有者）。
+- 非接管式控制：`vspi control status|snapshot [session]` 查看运行中 Session；`vspi control send [session] --idempotency-key <key> "<prompt>"` 提交消息；`vspi control wait [session] [timeout-ms]` 等待前台与队列空闲；`vspi control watch [session] [after-sequence]` 订阅可恢复的 JSONL event stream。该通道使用独立 `0700` descriptor 目录、`0600` descriptor/socket 与 capability token，不迁移 Session lease，也不暂停 TUI。默认选择最新运行会话；发布包附带通用 `vspi-subagent` Skill，供 Kimi Code、Codex、Claude Code 等外部 Agent 将运行中的 VSPi 作为非接管式 Subagent 使用。Skill 只定义 transport contract，不规定上层协作流程。
 - `--trust-project` 显式信任当前项目，仅绑定启动时 workspace 的 realpath；trust 不通过环境变量自动授予，也不会在 Session 切换到其他 cwd 时继承，无 flag 时项目 Provider overlay 与 `.vspi/settings.json` 不读取。
 - `--recovery` 无条件覆盖 `--policy`、`--trust-project` 与 `--workflow`，强制 `Standard ⋅ Host`，拒绝需提升审批的工具、global-only settings/models，完全不读取项目 Policy 配置；Pi ResourceLoader 同时禁用 extensions、skills、prompt templates、themes 与 project context files，界面明确显示 `Recovery`。它不加载 Workflow Adapter，也不叫 `--safe`。
 - 后端模式：默认真实 Pi 启动新会话，缺少模型或凭据时显示 setup error，不回退 Fixture。
@@ -144,7 +145,11 @@ pending 或随后出现的 Question/Approval 会迁移到新前台，回答仍�
 
 递归默认开启，但子代理不接收任意模型字符串：GPT Pool 自动把协调、研究、分析和快速任务映射到 Sol/Luna/Terra；DeepSeek Pro/Flash 与 Kimi K3/K2.6 这类双层目录会让多个强角色复用 Pro/K3，并把 `worker` 映射到 Flash/K2.6。默认最大深度 3、每棵树 12 个 Agent、每个节点 3 个直接子节点、全局 16 个 generation；受信项目硬上限分别为 5、128、16。默认每次 run 最多 120,000 tokens / 900 秒，每棵 tree 最多 500,000 tokens / 20 USD；Provider 无法在生成中精确截断 token 时，完成的当前响应可能产生一次有界超额，但不会再启动 fallback、follow-up 或 descendant。共享 workspace 采用跨进程单写者边界：读取可以并行，所有 Bash 与 `edit/write` 的实际执行串行；root cancellation 会终止 active 和 queued descendants。
 
-`/agents` 打开 Agent Map；`Up/Down` 选择节点，`Left/Right` 在父子节点间移动，`Enter` 进入节点 Timeline，`Tab` 切换 `Map / Timeline / Tools / Pools`，`Esc` 先返回 Map、再关闭。Timeline 是最多 32 条固定类型事件和 4K 字符脱敏输出 preview，不冒充完整对话；只有持久 Teammate lane 的真实 Pi Session 历史才称为 Transcript。Map/Timeline 展示 run/tree/parent ID、Provider/model、context 来源与字符数、usage、剩余 run/tree budget、required override scope 和 lane owner。主 Transcript 中每个 Subagent 使用独立状态框，展示角色、实际模型、任务、状态、剩余预算和流式预览。Pool 自动从真实模型目录生成；可信项目可执行 `/agents pool <provider> <role> <provider/model>` 覆盖一个角色，同 Provider 是默认边界，跨 Provider 必须在项目配置中显式开启。
+`/agents` 默认显示 active 优先的紧凑单行任务列表；`Up/Down` 选择，`Enter` 打开统一详情，`Esc` 先返回列表、再关闭。详情合并完整任务、canonical summary/error、live activity、run/agent/tree/parent ID、Provider/model/profile、context、usage/budget、tools 与最多 32 条 Timeline；Pool 配置继续使用 `/agents pool ...`，不占任务浏览视图。Subagent 支持前台等待和 `run_in_background=true` 后台运行；后台完成会自动向主 Session 注入结构化 completion 并触发或排队下一轮。使用完成结果中的稳定 `agent_id` 配合 `resume` 可在同一 VSPi 进程内继续该 child 对话，每次 resume 产生新的 `task_id`。
+
+前台 Session 还注册 `CronCreate`、`CronList`、`CronDelete`。`CronCreate` 接受本地时区的标准 5-field `cron`、相对 one-shot `after`（如 `2h`、`30m`）或绝对 one-shot `run_at`。模型可在未来续跑有价值时自主安排可见任务，例如预计模型额度或预算两小时后恢复；不得用 shell `sleep` 充当调度器。任务、fire cursor 和失败状态作为 Pi custom entries 落在当前 Session；VSPi 进程必须保持运行，且只在主 Session idle 时注入到期 prompt。忙碌期间错过的 recurring fire 会合并为一次并携带 `coalescedCount`；one-shot 成功完成后自动删除，模型调用失败则停止自动重试并在 `/cron` 面板保留为 `failed`。
+
+用户可手动执行 `/cron` 查看所有任务，`/cron wake 2h` 在两小时后检查额度并继续最新未完成任务，`/cron in 30m <prompt>` 安排相对 one-shot，`/cron at 2026-08-28T09:00:00+08:00 <prompt>` 安排绝对 one-shot，`/cron cancel <id>` 取消。duration 支持 `m/h/d` 组合且范围为 1 分钟至 366 天；任务由当前 Session 持有，不是离线 daemon。
 
 ### Teammate
 
@@ -206,6 +211,8 @@ Teammate 是受信项目内的持久角色，定义位于 `<workspace>/.vspi/age
 出厂内置 VSPLab 中转站 Provider（`https://api.vsplab.cn/v1`，OpenAI Responses 协议）；可通过 `vspi login` 交给 Pi 安全保存凭据，也可设置环境变量 `VSPLAB_API_KEY`。Provider 面板与模型列表按 VSPLab、DeepSeek、Xiaomi（MiMo）、Kimi、GLM（Zai）、MiniMax、OpenAI、Anthropic 优先排序，其余按字母序。Model 列表按 Provider 显示标题与模型数量，组内按显式发布日期或模型 identity 中的代际从新到旧排序；同代模型按输入、输出 USD 单价之和从高到低，再按名称与 id 稳定排序。超长标题只截断标题本身，不挤占右侧数量。没有可用角色预设时隐藏“模型组”页及对应 Tab 提示。
 
 Model 列表来自当前 Pi `ModelRuntime.getAvailable()`，不再使用生产 hard-coded catalog。选择模型会先 await `session.setModel()`；成功后才更新 Model、vision、Context、Profile model identity 和 UI，失败保留原状态。`/effort` 直接读取当前模型的 `getAvailableThinkingLevels()`，只显示该模型支持的 `Off / Minimal / Low / Medium / High / Xhigh / Max` 子集；展示名首字母大写，持久值保留 Pi 原生小写名称。VSPLab GPT 5.4 支持到 Xhigh，GPT 5.5 不提供 Minimal，GPT 5.6 系列支持到 Max；这些差异通过 `thinkingLevelMap` 原样注册到 Pi runtime。Enter 应用、Esc 取消，不再循环切换或立即落盘；旧中文低/中/高配置在读取时迁移为 low/medium/high。成功提示只报告当前 Model/Effort，不显示配置文件路径。外层 60 列及以上使用左列表/右详情；窄屏使用显式列表/详情导航。单模型 CNY 输入、输出单价仅显示在右侧详情，模型组不显示价格，也不显示汇率参考行。
+
+每轮实际请求都会在 Pi 已组装的 system prompt 后追加 `<environment_context>`，只包含稳定的 IANA `timezone`（`Asia/Shanghai`）和当前模型的正式显示名 `current_model`（例如 `Kimi K3`、`GLM 5.3 Flash`）。日期和时钟不会进入 system prompt，避免跨午夜或随时间变化破坏 prompt cache；切换模型后下一轮会更新模型名，而切换模型本身就不复用原模型缓存。Provider 可以在配置凭据后直接连接；网络 catalog refresh 只能刷新供应商实际公开的目录与可用性，不能可靠推导复合中转站各模型的协议、context、thinking map 和价格，因此 VSPLab 仍维护带 per-model metadata 的出厂目录，并包含 `GLM 5.3 Flash`。
 
 Provider Enter 只打开本地 action menu，不会隐式验证。`check-config` 只校验 schema、URL、协议和模型，不发网络；`test-connection` 是显式网络动作；`minimal-generation` 必须在面板内再次按 Enter 确认费用。编辑器只包含名称、Base URL 和协议，只有 `Ctrl+S` 保存，Enter 不保存。
 

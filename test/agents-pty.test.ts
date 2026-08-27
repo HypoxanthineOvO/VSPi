@@ -7,7 +7,7 @@ import { PtyHarness } from "./pty-harness.js";
 const ROOT = resolve(import.meta.dirname, "..");
 
 describe("real /agents PTY", () => {
-  it("opens and navigates Map, Timeline, Tools, and Pools at narrow and wide sizes", async () => {
+  it("opens the compact Agents list at narrow and wide sizes", async () => {
     const home = await mkdtemp(join(tmpdir(), "vspi-agents-pty-home-"));
     const workspace = await mkdtemp(join(tmpdir(), "vspi-agents-pty-workspace-"));
     const harness = new PtyHarness(join(ROOT, "node_modules", ".bin", "tsx"), [join(ROOT, "src", "index.ts")], {
@@ -30,21 +30,13 @@ describe("real /agents PTY", () => {
     try {
       await harness.waitFor("Offline Fixture", 20_000);
       harness.write("/agents\r");
-      await harness.waitFor("Agents · Map", 10_000);
-      expect(harness.screenText()).toContain("Map  Timeline  Tools  Pools");
-      expect(harness.screenText()).toContain("depth 3");
-
-      harness.write("\t");
-      await harness.waitFor("Agents · Timeline", 5_000);
-      harness.write("\t");
-      await harness.waitFor("Agents · Tools", 5_000);
-      harness.write("\t");
-      await harness.waitFor("Agents · Pools", 5_000);
+      await harness.waitFor("Agents", 10_000);
+      expect(harness.screenText()).not.toContain("Map  Timeline  Tools  Pools");
 
       for (const columns of [80, 120]) {
         harness.resize(columns, 24);
         await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
-        expect(harness.screenText()).toContain("Agents · Pools");
+        expect(harness.screenText()).toContain("Agents");
       }
     } finally {
       harness.write("\u001b");

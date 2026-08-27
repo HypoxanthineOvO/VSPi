@@ -1,5 +1,6 @@
 import type { AgentOverrideScope, AgentRole, AgentSnapshot } from "../agents/types.js";
 import type { CompactOptions } from "../continuity/compaction-profiles.js";
+import type { CronTask } from "../cron/types.js";
 import type {
   Attachment,
   EffortLevel,
@@ -117,6 +118,7 @@ export interface ChatBackendEvents {
   onEffectivePrompt?: (segments: EffectivePromptSegment[]) => void;
   onWorkflowSnapshot?: (snapshot: WorkflowSnapshot) => void;
   onAgentSnapshot?: (snapshot: AgentSnapshot) => void;
+  onCronSnapshot?: (tasks: readonly CronTask[]) => void;
   onSessionWait?: (waiting: boolean) => void;
   onSessionReady?: () => void;
   onSessionError?: (error: Error) => void;
@@ -218,6 +220,11 @@ export interface ChatBackend {
   setEffort?(level: EffortLevel): Promise<void>;
   setPolicy?(policy: PolicyLevel): Promise<PolicySnapshot>;
   getAgentSnapshot?(): AgentSnapshot;
+  listCronTasks?(): readonly CronTask[];
+  createCronTask?(
+    input: { cron: string; prompt: string; recurring?: boolean } | { runAt: number; prompt: string },
+  ): Promise<CronTask>;
+  deleteCronTask?(id: string): Promise<boolean>;
   switchTeammateModel?(id: string, model: string): Promise<void>;
   resetTeammateLane?(id: string, lane?: string): Promise<void>;
   overrideRequiredTeammate?(id: string, scope: AgentOverrideScope): Promise<void>;

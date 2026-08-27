@@ -39,6 +39,8 @@ async function runtimeModule() {
     createPromptProfileExtension(options: {
       resolve(identity: ModelIdentity): Promise<PromptOverlayResolution>;
       getModelIdentity(): ModelIdentity;
+      getModelDisplayName?(): string | undefined;
+      resolveEnvironment?(): { currentDate: string; timezone: string };
     }): PiExtensionFactory;
   };
 }
@@ -77,20 +79,21 @@ describe("M7 Pi per-turn Prompt Profile overlay", () => {
       createPromptProfileExtension({
         resolve,
         getModelIdentity: () => identity,
+        getModelDisplayName: () => (identity.model === "gpt-5" ? "GPT-5" : "Claude Sonnet 4"),
+        resolveEnvironment: () => ({ currentDate: "2026-08-27", timezone: "Asia/Shanghai" }),
       }),
     );
 
     const first = await handler(beforeAgentStart("Pi base turn one"));
-    expect(first).toEqual({
-      systemPrompt: `Pi base turn one\n\n${VSPI_LANGUAGE_CONTRACT}\n\nProfile for openai/gpt-5`,
-    });
+    expect(first?.systemPrompt).toBe(
+      `Pi base turn one\n\n${VSPI_LANGUAGE_CONTRACT}\n\n<environment_context>\n  <timezone>Asia/Shanghai</timezone>\n  <current_model>GPT-5</current_model>\n</environment_context>\n\nProfile for openai/gpt-5`,
+    );
     expect(first).not.toHaveProperty("message");
 
     identity = { provider: "anthropic", model: "claude-sonnet-4" };
     const second = await handler(beforeAgentStart("Pi base turn two"));
-    expect(second).toEqual({
-      systemPrompt: `Pi base turn two\n\n${VSPI_LANGUAGE_CONTRACT}\n\nProfile for anthropic/claude-sonnet-4`,
-    });
+    expect(second?.systemPrompt).toContain("Profile for anthropic/claude-sonnet-4");
+    expect(second?.systemPrompt).toContain("<current_model>Claude Sonnet 4</current_model>");
     expect(resolve).toHaveBeenNthCalledWith(1, { provider: "openai", model: "gpt-5" });
     expect(resolve).toHaveBeenNthCalledWith(2, { provider: "anthropic", model: "claude-sonnet-4" });
   });
@@ -101,11 +104,14 @@ describe("M7 Pi per-turn Prompt Profile overlay", () => {
       createPromptProfileExtension({
         resolve: async () => ({}),
         getModelIdentity: () => ({ provider: "openai", model: "gpt-5" }),
+        resolveEnvironment: () => ({ currentDate: "2026-08-27", timezone: "Asia/Shanghai" }),
       }),
     );
 
     const result = await handler(beforeAgentStart("Original assembled Pi prompt"));
-    expect(result).toEqual({ systemPrompt: `Original assembled Pi prompt\n\n${VSPI_LANGUAGE_CONTRACT}` });
+    expect(result?.systemPrompt).toContain(`Original assembled Pi prompt\n\n${VSPI_LANGUAGE_CONTRACT}`);
+    expect(result?.systemPrompt).not.toContain("current_date");
+    expect(result?.systemPrompt).toContain("<timezone>Asia/Shanghai</timezone>");
     expect(VSPI_LANGUAGE_CONTRACT).toMatch(/简体中文为主进行思考/);
     expect(VSPI_LANGUAGE_CONTRACT).toMatch(/不使用 emoji.*标题前缀/);
     expect(VSPI_LANGUAGE_CONTRACT).toMatch(/后续工作确实依赖用户回答[\s\S]*调用 question 工具/);

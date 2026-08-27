@@ -55,7 +55,11 @@ vspi                      # 开始新对话
 vspi continue             # 继续最近一次对话
 vspi exec "解释这段代码"   # 单次任务，直接输出结果（非交互）
 vspi exec resume "继续"   # 非交互续接最近会话
+vspi control status       # 非接管式查看运行中的 VSPi Session
+vspi control send "检查当前改动" # 向运行中的 Session 提交消息
 ```
+
+交互模式可用 `/cron wake 2h` 在模型额度预计恢复后自动唤醒当前 Session；`/cron` 面板持续显示 scheduled/failed 状态。VSPi 进程需要保持运行。
 
 ## 功能一览
 

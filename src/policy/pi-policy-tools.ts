@@ -5,7 +5,6 @@ import {
   createBashToolDefinition,
   createEditToolDefinition,
   createFindToolDefinition,
-  createGrepToolDefinition,
   createLsToolDefinition,
   createPowerShellToolDefinition,
   createReadToolDefinition,
@@ -14,13 +13,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
 import { createDeepSeekEditorToolDefinition } from "../deepseek/editor-tool.js";
+import { createVspiGrepToolDefinition } from "../tools/grep.js";
 import type { ExecutionPolicyService, PolicyAction } from "./execution-policy.js";
 
 export type PolicyToolOverrides = {
   read: ReturnType<typeof createReadToolDefinition>;
   ls: ReturnType<typeof createLsToolDefinition>;
   find: ReturnType<typeof createFindToolDefinition>;
-  grep: ReturnType<typeof createGrepToolDefinition>;
+  grep: ReturnType<typeof createVspiGrepToolDefinition>;
   bash: ReturnType<typeof createBashToolDefinition>;
   powershell: ReturnType<typeof createPowerShellToolDefinition>;
   edit: ReturnType<typeof createEditToolDefinition>;
@@ -41,7 +41,7 @@ export function createPolicyToolOverrides(options: {
     read: createReadToolDefinition(workspace),
     ls: createLsToolDefinition(workspace),
     find: createFindToolDefinition(workspace),
-    grep: createGrepToolDefinition(workspace),
+    grep: createVspiGrepToolDefinition(workspace),
     bash: createBashToolDefinition(workspace, options.bashOperations ? { operations: options.bashOperations } : {}),
     powershell: createPowerShellToolDefinition(workspace),
     edit: createEditToolDefinition(workspace),

@@ -57,6 +57,8 @@ export interface AgentProjectConfig {
 
 export interface AgentRunSnapshot {
   id: string;
+  /** Stable child identity. A resumed child gets a new run id but keeps this agent id. */
+  agentId: string;
   treeId: string;
   parentId?: string;
   kind: "task" | "teammate";
@@ -66,6 +68,7 @@ export interface AgentRunSnapshot {
   model: string;
   provider: string;
   role: AgentRole;
+  profile: string;
   modelReason: string;
   preferredModel?: string;
   effort: EffortLevel;
@@ -74,10 +77,14 @@ export interface AgentRunSnapshot {
   task: string;
   tools: string[];
   outputPreview?: string;
+  summary?: string;
+  error?: string;
   usage: AgentUsageSnapshot;
   budget: AgentRunBudgetSnapshot;
   timeline: AgentTimelineEvent[];
   status: AgentRunStatus;
+  background: boolean;
+  resumed: boolean;
   fallbackReason?: string;
   startedAt?: string;
   deadlineAt?: string;
@@ -160,4 +167,14 @@ export interface AgentSnapshot {
 export interface AgentStatusEvent {
   run: AgentRunSnapshot;
   fallbackNotice?: string;
+}
+
+export interface AgentCompletionEvent {
+  taskId: string;
+  agentId: string;
+  status: "success" | "error" | "cancelled";
+  background: true;
+  result?: string;
+  error?: string;
+  run: AgentRunSnapshot;
 }

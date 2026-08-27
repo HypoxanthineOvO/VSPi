@@ -10,6 +10,7 @@ import { VspiApp } from "./app/vspi-app.js";
 import { AttachmentService } from "./attachments/service.js";
 import { AdaptiveBackend } from "./backend/adaptive-backend.js";
 import { resolveBackendMode } from "./backend/mode.js";
+import { runControl } from "./cli/control.js";
 import { runExec } from "./cli/exec.js";
 import { deepSeekHarnessEnabled } from "./config/deepseek-harness.js";
 import { createRuntimeDefaultsService } from "./config/runtime-defaults.js";
@@ -307,6 +308,7 @@ function printHelp(): void {
                             导入外部 Agent 的历史会话
   vspi skills               管理、安装与导入 Skill
   vspi exec "<prompt>"     非交互执行单个 prompt，结果输出到 stdout
+  vspi control ...         非接管式控制运行中的 Session
   vspi exec resume "<prompt>"
                             续接最近会话非交互执行
   vspi exec resume <id> "<prompt>"
@@ -352,6 +354,7 @@ const entry =
       ? "resume"
       : rawEntry;
 if (entry === "run" || entry === "exec") await runExec(process.argv.slice(3));
+else if (entry === "control") await runControl(process.argv.slice(3));
 else if (entry === "update") await selfUpdate();
 else if (entry === "config" || entry === "init" || entry === "login" || entry === "logout") {
   if (entry === "init") process.stderr.write("vspi init 已更名为 vspi config；本次继续执行配置。\n");

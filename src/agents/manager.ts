@@ -28,6 +28,7 @@ import {
 import { AgentLeaseConflictError, acquireAgentExclusiveLease } from "./exclusive-lease.js";
 import { type AgentGenerationLease, type AgentTreeContext, AgentTreeScheduler } from "./scheduler.js";
 import type {
+  AgentCompletionEvent,
   AgentLaneSnapshot,
   AgentProjectConfig,
   AgentRole,
@@ -42,6 +43,9 @@ import { createWorkspaceBashOperations } from "./workspace-tools.js";
 
 const ModelSelector = Type.String({ minLength: 3, maxLength: 200, pattern: "^[A-Za-z0-9._-]+/[A-Za-z0-9._:+-]+$" });
 const MAX_ENUMERATED_MODEL_SELECTORS = 64;
+const SUMMARY_MIN_LENGTH = 200;
+const SUMMARY_CONTINUATION_PROMPT = `Your previous response was too brief. Provide a comprehensive final handoff for the parent agent. Include concrete technical details, findings, changes made, validation performed, unresolved risks, and any next steps. Return the complete report in this response.`;
+const RETAINED_TASK_AGENT_LIMIT = 16;
 const Effort = Type.Union([
   Type.Literal("off"),
   Type.Literal("minimal"),
@@ -62,6 +66,8 @@ const BaseTaskAgentParameters = Type.Object(
     effort: Type.Optional(Effort),
     tools: Type.Optional(Type.Array(Type.Union(AGENT_TOOL_NAMES.map((name) => Type.Literal(name))), { maxItems: 7 })),
     inherit_parent_context: Type.Optional(Type.Boolean()),
+    run_in_background: Type.Optional(Type.Boolean()),
+    resume: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
   },
   { additionalProperties: false },
 );
@@ -91,6 +97,16 @@ interface RunOutcome {
   usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number };
 }
 
+interface RetainedTaskAgent {
+  session: AgentSession;
+  manager: SessionManager;
+  model: string;
+  effort: EffortLevel;
+  tools: string[];
+  systemPrompt: string;
+  instructions: string;
+}
+
 interface ResolvedRunSettings {
   teammate?: TeammateDefinition;
   tools: string[];
@@ -108,6 +124,7 @@ export interface PiAgentManagerOptions {
   modelRuntime: ModelRuntime;
   executionPolicy: ExecutionPolicyService;
   onStatus?: (event: AgentStatusEvent) => void;
+  onCompletion?: (event: AgentCompletionEvent) => void | Promise<void>;
   sessionFactory?: (input: {
     manager: SessionManager;
     model: string;
@@ -130,6 +147,7 @@ export class PiAgentManager {
   private readonly active = new Map<string, AgentRunSnapshot>();
   private readonly recent: AgentRunSnapshot[] = [];
   private readonly activeSessions = new Map<string, AgentSession>();
+  private readonly retainedTaskAgents = new Map<string, RetainedTaskAgent>();
   private readonly lanes = new Map<string, CachedLane>();
   private readonly laneTails = new Map<string, Promise<void>>();
   private readonly laneStates = new Map<string, AgentLaneSnapshot>();
@@ -222,38 +240,77 @@ export class PiAgentManager {
           ? `Configured teammates: ${teammateSummary}. A teammate call requires teammate and may set lane.`
           : "Choose role instead of a concrete model; the child inherits its provider's configured model pool.",
         "Run parallel tasks by issuing multiple subagent tool calls in one response.",
+        "Set run_in_background=true only for independent work; completion is delivered automatically.",
+        "Use resume with a completed agent_id and a new task prompt to continue that child conversation.",
         `Nested agents may spawn children up to depth ${this.scheduler.maxDepth}.`,
         "Token, cost and duration figures are telemetry only; they never block or discard results.",
       ].join(" "),
       promptSnippet:
-        "Delegated agents are available with isolated context, explicit model/effort/tool selection, and project Teammate lanes where configured.",
+        "Run foreground or background delegated agents with isolated context; completed children can be resumed by agent_id.",
+      promptGuidelines: [
+        "Use background subagents only for independent work; their completion is delivered automatically, and resume continues a completed child by agent_id.",
+      ],
       parameters,
       executionMode: "parallel",
       execute: async (_toolCallId, raw, signal, onUpdate, ctx) => {
         if (this.diagnostic) throw new Error(this.diagnostic);
         if (this.disposed) throw new Error("Agent manager is disposed");
         const task = raw as AgentTaskValue;
+        this.validateResumeTask(task);
         if (!allowTeammates && task.teammate) {
           throw new Error("Child agents cannot invoke persistent Teammates");
         }
         if (allowTeammates && task.teammate && !PiAgentManager.teammatesEnabled) {
           throw new Error("Teammates are temporarily disabled; use task agents instead");
         }
-        const root = inherited ?? this.rootContext ?? this.scheduler.root();
-        const ownsTree = inherited === undefined && this.rootContext === undefined;
+        const background = task.run_in_background === true;
+        const root = background ? this.scheduler.root() : (inherited ?? this.rootContext ?? this.scheduler.root());
+        const ownsTree = background || (inherited === undefined && this.rootContext === undefined);
+        const taskId = randomUUID();
+        const agentId = task.resume?.trim() || taskId;
         const parent: ParentIdentity = {
           ...(ctx.model ? { model: { provider: ctx.model.provider, id: ctx.model.id } } : {}),
           effort: normalizeEffort(ctx.thinkingLevel),
           tools: parentTools,
         };
+        const fingerprint = compactText(task.task, 2_000).toLocaleLowerCase();
+        if (/^(?:no[ -]?op|noop|unused|test|测试)[.!。\s]*$/iu.test(fingerprint)) {
+          throw new Error("Subagent task must request substantive work");
+        }
+        if (!task.resume) this.resolveRunSettings(task, parent);
         const parentContext = () =>
           serializeParentContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId());
+        const operation = this.run(
+          task,
+          root,
+          parent,
+          parentContext,
+          background ? undefined : signal,
+          (message) => {
+            onUpdate?.({ content: [{ type: "text", text: message }], details: { status: "running" } });
+          },
+          taskId,
+          agentId,
+          background,
+        );
+        if (background) {
+          void operation
+            .then((outcome) => this.emitCompletion(this.requireTerminalRun(taskId), outcome.output))
+            .catch((error) => this.emitCompletion(this.requireTerminalRun(taskId), undefined, error))
+            .finally(() => {
+              if (ownsTree) this.scheduler.finishTree(root.treeId);
+            });
+          const text = [
+            `task_id: ${taskId}`,
+            "status: running",
+            `agent_id: ${agentId}`,
+            "automatic_notification: enabled",
+            `resume_hint: call subagent with resume="${agentId}" and a new task prompt after completion`,
+          ].join("\n");
+          return { content: [{ type: "text", text }], details: { taskId, agentId, status: "running" } };
+        }
         try {
-          const outcomes = [
-            await this.run(task, root, parent, parentContext, signal, (message) => {
-              onUpdate?.({ content: [{ type: "text", text: message }], details: { status: "running" } });
-            }),
-          ];
+          const outcomes = [await operation];
           const details = { results: outcomes };
           return {
             content: [
@@ -503,6 +560,8 @@ export class PiAgentManager {
     await this.cancelAll();
     for (const lane of this.lanes.values()) lane.session.dispose();
     this.lanes.clear();
+    for (const retained of this.retainedTaskAgents.values()) retained.session.dispose();
+    this.retainedTaskAgents.clear();
   }
 
   private async run(
@@ -512,17 +571,28 @@ export class PiAgentManager {
     parentHistory: () => string,
     signal: AbortSignal | undefined,
     update: (message: string) => void,
+    runId: string,
+    agentId: string,
+    background: boolean,
   ): Promise<RunOutcome> {
     if (task.teammate && !PiAgentManager.teammatesEnabled) {
       throw new Error("Teammates are temporarily disabled; use task agents instead");
     }
     const taskEpoch = this.rootTaskEpoch;
-    const runId = randomUUID();
     const fingerprint = compactText(task.task, 2_000).toLocaleLowerCase();
     if (/^(?:no[ -]?op|noop|unused|test|测试)[.!。\s]*$/iu.test(fingerprint)) {
       throw new Error("Subagent task must request substantive work");
     }
-    const settings = this.resolveRunSettings(task, parent);
+    const retained = task.resume ? this.requireRetainedAgent(agentId) : undefined;
+    const settings = retained
+      ? {
+          tools: [...retained.tools],
+          effort: retained.effort,
+          role: task.role ?? inferAgentRole(task.task),
+          preferred: retained.model,
+          modelReason: "resumed child binding",
+        }
+      : this.resolveRunSettings(task, parent);
     const context = this.scheduler.child(parentContext, runId, fingerprint);
     const treeSignal = this.scheduler.treeSignal(context.treeId);
     const runSignal = signal ? AbortSignal.any([signal, treeSignal]) : treeSignal;
@@ -531,6 +601,7 @@ export class PiAgentManager {
     const queuedAt = new Date().toISOString();
     const run: AgentRunSnapshot = {
       id: runId,
+      agentId,
       treeId: context.treeId,
       ...(context.parentRunId ? { parentId: context.parentRunId } : {}),
       kind: teammate ? "teammate" : "task",
@@ -540,6 +611,7 @@ export class PiAgentManager {
       model: settings.preferred,
       provider: providerFromSelector(settings.preferred),
       role: settings.role,
+      profile: teammate?.id ?? settings.role,
       modelReason: settings.modelReason,
       ...(teammate?.preferredModel ? { preferredModel: teammate.preferredModel } : {}),
       effort: settings.effort,
@@ -551,6 +623,8 @@ export class PiAgentManager {
       budget: this.runBudget(context.treeId, emptyUsage()),
       timeline: [{ at: queuedAt, kind: "queued", summary: "Run queued" }],
       status: "queued",
+      background,
+      resumed: retained !== undefined,
     };
     this.publish(run);
     const lease = this.scheduler.createLease();
@@ -588,6 +662,8 @@ export class PiAgentManager {
           update,
           run,
           lease,
+          agentId,
+          retained,
         );
       };
       const outcome =
@@ -596,10 +672,13 @@ export class PiAgentManager {
         if (teammate) this.pendingRequired.delete(teammate.id);
       }
       this.publish(run);
+      run.summary = redactAuditText(outcome.output, 12_000);
+      this.publish(run);
       return outcome;
     } catch (error) {
       run.status = error instanceof Error && error.name === "AbortError" ? "cancelled" : "error";
       run.finishedAt = new Date().toISOString();
+      run.error = safeError(error);
       appendTimeline(
         run,
         run.status === "cancelled" ? "cancelled" : isBudgetError(error) ? "budget" : "failed",
@@ -627,6 +706,8 @@ export class PiAgentManager {
     update: (message: string) => void,
     run: AgentRunSnapshot,
     lease: AgentGenerationLease,
+    agentId: string,
+    retained: RetainedTaskAgent | undefined,
   ): Promise<RunOutcome> {
     const fallbackModels = task.fallback_models ?? teammate?.fallbackModels ?? [];
     const candidates = [preferred, ...fallbackModels.filter((model) => model !== preferred)];
@@ -636,7 +717,7 @@ export class PiAgentManager {
       const model = candidates[index];
       if (!model) continue;
       this.assertAllowedModel(model);
-      this.assertProviderBoundary(model, parent, task.inherit_parent_context === true);
+      if (!retained) this.assertProviderBoundary(model, parent, task.inherit_parent_context === true);
       try {
         const outcome =
           teammate && lane
@@ -667,6 +748,8 @@ export class PiAgentManager {
                 update,
                 run,
                 lease,
+                agentId,
+                retained,
               );
         run.status = "success";
         run.finishedAt = new Date().toISOString();
@@ -730,19 +813,32 @@ export class PiAgentManager {
     update: (message: string) => void,
     run: AgentRunSnapshot,
     lease: AgentGenerationLease,
+    agentId: string,
+    retained: RetainedTaskAgent | undefined,
   ): Promise<RunOutcome> {
     const manager = SessionManager.inMemory(this.options.cwd);
     const inherited = task.inherit_parent_context ? parentHistory() : undefined;
     run.contextChars = (task.context?.length ?? 0) + (inherited?.length ?? 0);
-    const session = await this.createSession(
-      manager,
+    const systemPrompt = retained?.systemPrompt ?? task.system_prompt ?? "";
+    const instructions = retained?.instructions ?? task.instructions ?? "";
+    const activeManager = retained?.manager ?? manager;
+    const session =
+      retained && this.options.sessionFactory
+        ? retained.session
+        : await this.createSession(activeManager, model, effort, tools, systemPrompt, instructions, {
+            ...context,
+            lease,
+          });
+    if (retained && session !== retained.session) retained.session.dispose();
+    this.retainTaskAgent(agentId, {
+      session,
+      manager: activeManager,
       model,
       effort,
-      tools,
-      task.system_prompt ?? "",
-      task.instructions ?? "",
-      { ...context, lease },
-    );
+      tools: [...tools],
+      systemPrompt,
+      instructions,
+    });
     return this.executeSession(session, taskPrompt(task, inherited), signal, update, run, parent, model);
   }
 
@@ -792,6 +888,7 @@ export class PiAgentManager {
     model: string,
   ): Promise<RunOutcome> {
     this.activeSessions.set(run.id, session);
+    const baselineUsage = run.resumed ? sessionUsage(session.messages) : emptyUsage();
     let latest = "";
     const unsubscribe = session.subscribe((event) => {
       if (event.type === "message_update") {
@@ -823,18 +920,29 @@ export class PiAgentManager {
     try {
       await session.prompt(prompt, { expandPromptTemplates: false, source: "interactive" });
       if (timedOut) throw new Error(`Agent run deadline exceeded (${this.config.maxRunSeconds}s)`);
-      const usage = addUsage(run.usage, sessionUsage(session.messages));
       const failure = assistantFailure(session.messages);
       if (failure) {
         const error = new Error(failure.message);
         if (failure.aborted) error.name = "AbortError";
         throw error;
       }
-      const output = finalAssistantText(session.messages);
+      let output = finalAssistantText(session.messages).trim();
+      if (output.length > 0 && output.length < SUMMARY_MIN_LENGTH) {
+        await session.prompt(SUMMARY_CONTINUATION_PROMPT, { expandPromptTemplates: false, source: "interactive" });
+        if (timedOut) throw new Error(`Agent run deadline exceeded (${this.config.maxRunSeconds}s)`);
+        const continuationFailure = assistantFailure(session.messages);
+        if (continuationFailure) {
+          const error = new Error(continuationFailure.message);
+          if (continuationFailure.aborted) error.name = "AbortError";
+          throw error;
+        }
+        output = finalAssistantText(session.messages).trim();
+      }
+      const usage = addUsage(run.usage, subtractUsage(sessionUsage(session.messages), baselineUsage));
       run.outputPreview = redactAuditText(output || "(no output)", 4_000);
       return { output: truncateOutput(output || "(no output)"), run: cloneRun(run), usage };
     } finally {
-      const attemptUsage = sessionUsage(session.messages);
+      const attemptUsage = subtractUsage(sessionUsage(session.messages), baselineUsage);
       run.usage = addUsage(run.usage, attemptUsage);
       delete run.currentTool;
       this.scheduler.recordUsage(
@@ -849,7 +957,6 @@ export class PiAgentManager {
       signal?.removeEventListener("abort", abort);
       unsubscribe();
       this.activeSessions.delete(run.id);
-      if (run.kind === "task") session.dispose();
     }
   }
 
@@ -1226,6 +1333,80 @@ export class PiAgentManager {
     }
   }
 
+  private validateResumeTask(task: AgentTaskValue): void {
+    const agentId = task.resume?.trim();
+    if (!agentId) return;
+    const spawnOnly = [
+      ["role", task.role],
+      ["context", task.context],
+      ["instructions", task.instructions],
+      ["system_prompt", task.system_prompt],
+      ["effort", task.effort],
+      ["tools", task.tools],
+      ["inherit_parent_context", task.inherit_parent_context],
+      ["model", task.model],
+      ["fallback_models", task.fallback_models],
+      ["teammate", task.teammate],
+      ["lane", task.lane],
+    ].filter(([, value]) => value !== undefined);
+    if (spawnOnly.length > 0) {
+      throw new Error(`Cannot change ${spawnOnly.map(([name]) => name).join(", ")} when resuming an agent`);
+    }
+    if (this.active.size > 0 && [...this.active.values()].some((run) => run.agentId === agentId)) {
+      throw new Error(`Agent ${agentId} is already running`);
+    }
+    if (!this.retainedTaskAgents.has(agentId)) {
+      throw new Error(
+        `Agent ${agentId} is not available to resume; only active or recent agents in this process can resume`,
+      );
+    }
+  }
+
+  private requireRetainedAgent(agentId: string): RetainedTaskAgent {
+    const retained = this.retainedTaskAgents.get(agentId);
+    if (!retained) {
+      throw new Error(
+        `Agent ${agentId} is not available to resume; only active or recent agents in this process can resume`,
+      );
+    }
+    this.retainedTaskAgents.delete(agentId);
+    this.retainedTaskAgents.set(agentId, retained);
+    return retained;
+  }
+
+  private retainTaskAgent(agentId: string, retained: RetainedTaskAgent): void {
+    const previous = this.retainedTaskAgents.get(agentId);
+    if (previous && previous.session !== retained.session) previous.session.dispose();
+    this.retainedTaskAgents.delete(agentId);
+    this.retainedTaskAgents.set(agentId, retained);
+    while (this.retainedTaskAgents.size > RETAINED_TASK_AGENT_LIMIT) {
+      const oldest = this.retainedTaskAgents.entries().next().value as [string, RetainedTaskAgent] | undefined;
+      if (!oldest) break;
+      this.retainedTaskAgents.delete(oldest[0]);
+      oldest[1].session.dispose();
+    }
+  }
+
+  private requireTerminalRun(taskId: string): AgentRunSnapshot {
+    const run = this.recent.find((candidate) => candidate.id === taskId);
+    if (!run) throw new Error(`Terminal agent run is unavailable: ${taskId}`);
+    return cloneRun(run);
+  }
+
+  private async emitCompletion(run: AgentRunSnapshot, result?: string, error?: unknown): Promise<void> {
+    if (!this.options.onCompletion) return;
+    const completion: AgentCompletionEvent = {
+      taskId: run.id,
+      agentId: run.agentId,
+      status: run.status === "cancelled" ? "cancelled" : run.status === "success" ? "success" : "error",
+      background: true,
+      ...(result !== undefined ? { result } : {}),
+      ...(error !== undefined ? { error: safeError(error) } : run.error ? { error: run.error } : {}),
+      run: cloneRun(run),
+    };
+    await Promise.resolve(this.options.onCompletion(completion)).catch(() => undefined);
+  }
+
   private publish(run: AgentRunSnapshot, fallbackNotice?: string): void {
     if (run.status === "queued" || run.status === "running") this.active.set(run.id, cloneRun(run));
     else {
@@ -1292,6 +1473,17 @@ function addUsage(left: RunOutcome["usage"], right: RunOutcome["usage"]): RunOut
     cacheWrite: left.cacheWrite + right.cacheWrite,
     cost: left.cost + right.cost,
     turns: left.turns + right.turns,
+  };
+}
+
+function subtractUsage(total: RunOutcome["usage"], baseline: RunOutcome["usage"]): RunOutcome["usage"] {
+  return {
+    input: Math.max(0, total.input - baseline.input),
+    output: Math.max(0, total.output - baseline.output),
+    cacheRead: Math.max(0, total.cacheRead - baseline.cacheRead),
+    cacheWrite: Math.max(0, total.cacheWrite - baseline.cacheWrite),
+    cost: Math.max(0, total.cost - baseline.cost),
+    turns: Math.max(0, total.turns - baseline.turns),
   };
 }
 

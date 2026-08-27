@@ -15,16 +15,18 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { PiAgentManager } from "../agents/manager.js";
-import type { AgentRole, AgentSnapshot, AgentStatusEvent } from "../agents/types.js";
+import type { AgentCompletionEvent, AgentRole, AgentSnapshot, AgentStatusEvent } from "../agents/types.js";
 import { readVerifiedAttachmentBytes } from "../attachments/store.js";
 import { type CompactOptions, resolveCompactionProfile } from "../continuity/compaction-profiles.js";
 import { createReviewTracker } from "../continuity/review-tracker.js";
 import { createContinuityStatusTool } from "../continuity/status-tool.js";
+import { CronRuntime, createCronToolDefinitions, sessionManagerCronStore } from "../cron/index.js";
 import { createDeepSeekHarnessExtension, type DeepSeekToolBridge } from "../deepseek/extension.js";
 import { DeepSeekPersistentBashOperations } from "../deepseek/persistent-bash.js";
 import { FX } from "../domain/defaults.js";
 import { modelEffortLevels, normalizeEffortLevel } from "../domain/effort.js";
 import { formatErrorDetails } from "../domain/error-details.js";
+import { resolveLocalEnvironment } from "../domain/local-time.js";
 import { formatProviderName } from "../domain/providers.js";
 import type {
   EffortLevel,
@@ -75,6 +77,7 @@ import { type ProviderProtocol, runProtocolProbe } from "../providers/protocol-p
 import { createProviderRequestCompatibilityExtension } from "../providers/request-compatibility.js";
 import { normalizeProjectProvider, registerBuiltinProviders } from "../providers/runtime-registration.js";
 import { createQuestionToolDefinition } from "../questions/tool.js";
+import { type SessionControlServer, startSessionControlServer } from "../sessions/control.js";
 import {
   ExternalSessionCatalog,
   type ExternalSessionPreview,
@@ -316,6 +319,7 @@ export class PiRuntimeBackend implements ChatBackend {
   private latestAssistantMessage: object | undefined;
   private estimatedContextTokens: number | undefined;
   private sessionLease: SessionLease | undefined;
+  private sessionControl: SessionControlServer | undefined;
   private handoffRequested = false;
   private handoffFinalizing = false;
   private handoffChannel: SessionHandoffChannel | undefined;
@@ -342,6 +346,7 @@ export class PiRuntimeBackend implements ChatBackend {
   private availableModelsSnapshot: readonly RuntimeModel[] | undefined;
   private modelCatalogRefreshStarted = false;
   private agentManager: PiAgentManager | undefined;
+  private cronRuntime: CronRuntime | undefined;
   private readonly agentMessageIds = new Set<string>();
   private readonly startupPolicy: PolicyLevel;
 
@@ -420,32 +425,46 @@ export class PiRuntimeBackend implements ChatBackend {
       onMessage: (message) => {
         events.onMessage(message);
         this.projectHandoff({ kind: "message", message: structuredClone(message) });
+        this.publishSessionControl("message", message);
       },
       onMessageUpdate: (id, patch) => {
         events.onMessageUpdate(id, patch);
         this.projectHandoff({ kind: "message-update", id, patch: structuredClone(patch) });
+        this.publishSessionControl("message-update", { id, patch });
       },
       onBusy: (busy) => {
         events.onBusy(busy);
         this.projectHandoff({ kind: "busy", busy });
+        this.publishSessionControl("busy", { busy });
       },
       onQueueUpdate: (queue) => {
         events.onQueueUpdate?.(queue);
         this.projectHandoff({ kind: "queue", queue: { ...queue } });
+        this.publishSessionControl("queue", queue);
       },
       onUsage: (usage) => {
         events.onUsage(usage);
         this.projectHandoff({ kind: "usage", usage: structuredClone(usage) });
+        this.publishSessionControl("usage", usage);
       },
       onNotice: (message, tone) => {
         events.onNotice(message, tone);
         this.projectHandoff({ kind: "notice", message, tone });
+        this.publishSessionControl("notice", { message, tone });
       },
     };
   }
 
   private projectHandoff(projection: SessionHandoffProjection): void {
     this.handoffChannel?.project(encodeHandoffProjection(projection));
+  }
+
+  private publishSessionControl(kind: string, payload?: unknown): void {
+    try {
+      this.sessionControl?.publish(kind, payload);
+    } catch {
+      // Session replacement may close the control endpoint between an event and its projection.
+    }
   }
 
   private async finishStartup(manager: SessionManager, acquired: AcquiredSessionLease | undefined): Promise<void> {
@@ -1192,6 +1211,10 @@ export class PiRuntimeBackend implements ChatBackend {
     this.events?.onSessionInvalidating?.();
     this.unsubscribeCurrent();
     try {
+      this.cronRuntime?.stop();
+      this.cronRuntime = undefined;
+      await this.sessionControl?.close();
+      this.sessionControl = undefined;
       await this.agentManager?.dispose();
       this.agentManager = undefined;
       await this.runtime?.dispose();
@@ -1213,20 +1236,20 @@ export class PiRuntimeBackend implements ChatBackend {
       const projectTrusted =
         this.trustedWorkspaceRealpath !== undefined && effectiveWorkspaceRealpath === this.trustedWorkspaceRealpath;
       const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
-      const promptProfileExtension = this.options.promptProfiles
-        ? createPromptProfileExtension({
-            resolve: (identity) => this.options.promptProfiles?.resolve(identity) ?? Promise.resolve({}),
-            getModelIdentity: () => {
-              const current = this.session?.model;
-              if (!current) throw new Error("Prompt Profile model identity is unavailable");
-              return { provider: current.provider, model: current.id };
-            },
-            onEffectivePrompt: (segments) => {
-              this.effectivePromptSegments = structuredClone(segments);
-              this.events?.onEffectivePrompt?.(structuredClone(segments));
-            },
-          })
-        : undefined;
+      const promptProfileExtension = createPromptProfileExtension({
+        resolve: (identity) => this.options.promptProfiles?.resolve(identity) ?? Promise.resolve({}),
+        getModelIdentity: () => {
+          const current = this.session?.model;
+          if (!current) throw new Error("Prompt Profile model identity is unavailable");
+          return { provider: current.provider, model: current.id };
+        },
+        getModelDisplayName: () => this.session?.model?.name,
+        resolveEnvironment: () => resolveLocalEnvironment(new Date(), "Asia/Shanghai"),
+        onEffectivePrompt: (segments) => {
+          this.effectivePromptSegments = structuredClone(segments);
+          this.events?.onEffectivePrompt?.(structuredClone(segments));
+        },
+      });
       const externalImportCompatibilityExtension = createExternalImportCompatibilityExtension();
       const providerRequestCompatibilityExtension = createProviderRequestCompatibilityExtension();
       const deepSeekHarnessEnabled =
@@ -1258,9 +1281,9 @@ export class PiRuntimeBackend implements ChatBackend {
           ...(!this.options.recovery
             ? {
                 extensionFactories: [
+                  promptProfileExtension,
                   externalImportCompatibilityExtension,
                   providerRequestCompatibilityExtension,
-                  promptProfileExtension,
                   deepSeekHarnessExtension,
                 ].filter((factory) => factory !== undefined),
               }
@@ -1292,6 +1315,44 @@ export class PiRuntimeBackend implements ChatBackend {
         throw new Error(`新 Pi runtime 中找不到继承模型 ${modelIdentity.provider}/${modelIdentity.id}`);
       }
       const thinkingLevel = this.replacementThinking;
+      let rootSession: AgentSession | undefined;
+      const deliverAutomaticMessage = async (customType: string, content: string, details: unknown): Promise<void> => {
+        const session = rootSession;
+        if (!session) throw new Error("Root Pi session is unavailable");
+        await session.sendCustomMessage(
+          { customType, content, display: false, details },
+          session.isStreaming ? { deliverAs: "followUp" } : { triggerTurn: true },
+        );
+      };
+      const nextCronRuntime = await CronRuntime.restore({
+        store: sessionManagerCronStore(sessionManager),
+        isIdle: () =>
+          Boolean(rootSession) &&
+          rootSession?.isStreaming !== true &&
+          this.activeGeneration === undefined &&
+          !this.compacting,
+        injectPrompt: async (prompt, fire) => {
+          this.agentManager?.beginRootTask(prompt);
+          this.activeTaskEpoch = ++this.taskEpoch;
+          this.planMutatedThisTask = false;
+          this.goalMutatedThisTask = false;
+          const generation = ++this.generation;
+          this.activeGeneration = generation;
+          this.publishActivity();
+          try {
+            const messageStart = rootSession?.messages.length ?? 0;
+            await deliverAutomaticMessage("vspi.cron-fire", prompt, fire);
+            const failure = automaticTurnFailure(rootSession?.messages.slice(messageStart) ?? []);
+            if (failure) throw new Error(failure);
+            if (!this.cancelledGenerations.has(generation)) this.agentManager?.assertRootTaskComplete();
+          } finally {
+            if (this.activeGeneration === generation) this.activeGeneration = undefined;
+            this.cancelledGenerations.delete(generation);
+            this.publishActivity();
+          }
+        },
+        onChange: (tasks) => this.events?.onCronSnapshot?.(tasks),
+      });
       const nextAgentManager = await PiAgentManager.create({
         cwd,
         agentDir,
@@ -1300,6 +1361,7 @@ export class PiRuntimeBackend implements ChatBackend {
         modelRuntime: services.modelRuntime,
         executionPolicy: this.options.executionPolicy,
         onStatus: (event) => this.publishAgentStatus(event),
+        onCompletion: (event) => this.deliverAgentCompletion(event, deliverAutomaticMessage),
       });
       const policyToolOptions = {
         workspace: cwd,
@@ -1375,6 +1437,7 @@ export class PiRuntimeBackend implements ChatBackend {
         readReview: () => this.reviewTracker.snapshot(),
         resolveCheckpoint: () => this.resolvePlanReconciliationCheckpoint(),
       });
+      const cronTools = createCronToolDefinitions(nextCronRuntime);
       this.replacementModelIdentity = undefined;
       this.replacementThinking = undefined;
       const rootAgentTools = platformRootToolNames();
@@ -1386,6 +1449,7 @@ export class PiRuntimeBackend implements ChatBackend {
         "skill_manage",
         ...planTools.map((tool) => tool.name),
         ...goalTools.map((tool) => tool.name),
+        ...cronTools.map((tool) => tool.name),
         continuityStatusTool.name,
         ...(!this.options.recovery ? ["subagent"] : []),
       ];
@@ -1402,6 +1466,7 @@ export class PiRuntimeBackend implements ChatBackend {
             ...(this.events?.onQuestion ? [question, ...skillTools] : []),
             ...planTools,
             ...goalTools,
+            ...cronTools,
             continuityStatusTool,
             ...(!this.options.recovery ? [subagentTool] : []),
           ] as unknown as ToolDefinition[],
@@ -1412,19 +1477,26 @@ export class PiRuntimeBackend implements ChatBackend {
             "skill_manage",
             ...planTools.map((tool) => tool.name),
             ...goalTools.map((tool) => tool.name),
+            ...cronTools.map((tool) => tool.name),
             continuityStatusTool.name,
             ...(!this.options.recovery ? ["subagent"] : []),
             "str_replace_editor",
           ],
         });
+        rootSession = created.session;
         created.session.setActiveToolsByName(activeToolNames);
       } catch (error) {
+        nextCronRuntime.stop();
         await persistentBash?.reset();
         await nextAgentManager.dispose();
         throw error;
       }
       const previousAgentManager = this.agentManager;
+      const previousCronRuntime = this.cronRuntime;
       this.agentManager = nextAgentManager;
+      this.cronRuntime = nextCronRuntime;
+      nextCronRuntime.start();
+      previousCronRuntime?.stop();
       await previousAgentManager?.dispose();
       return {
         ...created,
@@ -1464,6 +1536,22 @@ export class PiRuntimeBackend implements ChatBackend {
     );
   }
 
+  listCronTasks() {
+    return this.cronRuntime?.list() ?? [];
+  }
+
+  async createCronTask(
+    input: { cron: string; prompt: string; recurring?: boolean } | { runAt: number; prompt: string },
+  ) {
+    if (!this.cronRuntime) throw new Error("Cron runtime is not ready");
+    return "cron" in input ? this.cronRuntime.create(input) : this.cronRuntime.createAt(input);
+  }
+
+  async deleteCronTask(id: string): Promise<boolean> {
+    if (!this.cronRuntime) throw new Error("Cron runtime is not ready");
+    return this.cronRuntime.delete(id);
+  }
+
   async switchTeammateModel(id: string, model: string): Promise<void> {
     this.assertHandoffWritable();
     if (!this.agentManager) throw new Error("Subagent runtime is not ready");
@@ -1497,6 +1585,10 @@ export class PiRuntimeBackend implements ChatBackend {
       id,
       role: "assistant" as const,
       kind: "subagent" as const,
+      agentId: event.run.agentId,
+      profile: event.run.profile,
+      background: event.run.background,
+      resumed: event.run.resumed,
       model: event.run.model,
       agentRole: event.run.role,
       modelReason: event.run.modelReason,
@@ -1507,6 +1599,8 @@ export class PiRuntimeBackend implements ChatBackend {
       task: event.run.task,
       tools: event.run.tools,
       ...(event.run.outputPreview ? { outputPreview: event.run.outputPreview } : {}),
+      ...(event.run.summary ? { summary: event.run.summary } : {}),
+      ...(event.run.error ? { error: event.run.error } : {}),
       status: event.run.status,
       agentKind: event.run.kind,
       ...(event.run.teammateId ? { teammateId: event.run.teammateId } : {}),
@@ -1545,6 +1639,19 @@ export class PiRuntimeBackend implements ChatBackend {
     }
     if (event.fallbackNotice) this.events.onNotice(event.fallbackNotice, "warning");
     this.events.onAgentSnapshot?.(this.getAgentSnapshot());
+  }
+
+  private async deliverAgentCompletion(
+    event: AgentCompletionEvent,
+    deliver: (customType: string, content: string, details: unknown) => Promise<void>,
+  ): Promise<void> {
+    const body = event.result ?? event.error ?? "No result was returned.";
+    const content = [
+      `<subagent-completion taskId=${JSON.stringify(event.taskId)} agentId=${JSON.stringify(event.agentId)} status=${JSON.stringify(event.status)}>`,
+      body,
+      "</subagent-completion>",
+    ].join("\n");
+    await deliver("vspi.subagent-completion", content, event);
   }
 
   private async appendPlanBinding(planId: string | undefined): Promise<void> {
@@ -1823,7 +1930,76 @@ export class PiRuntimeBackend implements ChatBackend {
     }
     this.publishUsage();
     this.publishActivity();
+    await this.bindSessionControl(session);
     await this.reconcileRestoredGoalOwner(reason);
+  }
+
+  private async bindSessionControl(session: AgentSession): Promise<void> {
+    await this.sessionControl?.close();
+    this.sessionControl = undefined;
+    const getSessionFile = (session.sessionManager as { getSessionFile?: () => string | undefined } | undefined)
+      ?.getSessionFile;
+    const sessionFile = typeof getSessionFile === "function" ? getSessionFile.call(session.sessionManager) : undefined;
+    if (!sessionFile || this.options.recovery) return;
+    try {
+      this.sessionControl = await startSessionControlServer({
+        agentDir: this.options.agentDir ?? getAgentDir(),
+        sessionFile,
+        handlers: {
+          status: () => this.sessionControlStatus(),
+          snapshot: () => ({
+            ...this.sessionControlStatus(),
+            agents: this.getAgentSnapshot(),
+            cron: this.cronRuntime?.list() ?? [],
+          }),
+          send: async (payload) => {
+            if (!isRecord(payload) || typeof payload.text !== "string" || !payload.text.trim()) {
+              throw new Error("send requires a non-empty text field");
+            }
+            const effort = normalizeEffortLevel(typeof payload.effort === "string" ? payload.effort : "medium");
+            const behavior = payload.behavior === "followUp" ? "followUp" : "prompt";
+            return this.send(payload.text, {
+              attachments: [],
+              effort,
+              behavior,
+              ...(typeof payload.clientMessageId === "string" ? { clientMessageId: payload.clientMessageId } : {}),
+            });
+          },
+          wait: (payload) => this.waitForSessionControlIdle(payload),
+        },
+      });
+    } catch (error) {
+      this.events?.onNotice(
+        `Session Control 启动失败：${error instanceof Error ? error.message : "未知错误"}`,
+        "warning",
+      );
+    }
+  }
+
+  private sessionControlStatus(): Record<string, unknown> {
+    const session = this.session;
+    return {
+      sessionId: session?.sessionId,
+      model: this.modelId,
+      provider: this.modelProvider,
+      busy: session?.isStreaming === true || this.activeGeneration !== undefined || this.compacting,
+      queue: { ...this.queueState },
+      turn: this.turn,
+    };
+  }
+
+  private async waitForSessionControlIdle(payload: unknown): Promise<Record<string, unknown>> {
+    const timeoutMs =
+      isRecord(payload) && Number.isSafeInteger(payload.timeoutMs)
+        ? Math.max(0, Math.min(Number(payload.timeoutMs), 15 * 60_000))
+        : 60_000;
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      const status = this.sessionControlStatus();
+      if (status.busy === false && this.queueState.steering === 0 && this.queueState.followUp === 0) return status;
+      if (Date.now() >= deadline) throw new Error(`Session control wait timed out after ${timeoutMs}ms`);
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+    }
   }
 
   private rebindAfterCancelledReplacement(): void {
@@ -3548,6 +3724,18 @@ function stableForkLeafId(manager: SessionManager): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
+}
+
+function automaticTurnFailure(messages: readonly unknown[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!isRecord(message) || message.role !== "assistant") continue;
+    if (message.stopReason !== "error" && message.stopReason !== "aborted") return;
+    return typeof message.errorMessage === "string" && message.errorMessage.trim()
+      ? message.errorMessage
+      : `Agent stopped: ${String(message.stopReason)}`;
+  }
+  return "Cron turn completed without an assistant result";
 }
 
 function stringField(value: Record<string, unknown>, key: string): string {

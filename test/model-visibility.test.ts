@@ -21,6 +21,7 @@ describe("curated runtime model visibility", () => {
     expect(visible("deepseek", "deepseek-v4-pro")).toBe(true);
     expect(visible("zai", "glm-5.2")).toBe(true);
     expect(visible("zai", "glm-5.3")).toBe(true);
+    expect(visible("zai", "glm-5.3-flash")).toBe(true);
     expect(visible("zai-coding-cn", "GLM-5.3-highspeed")).toBe(true);
     expect(visible("qwen-token-plan", "qwen3.8-max-preview")).toBe(true);
     expect(visible("minimax", "MiniMax-M2.7-highspeed")).toBe(true);
@@ -29,6 +30,7 @@ describe("curated runtime model visibility", () => {
   it("applies each brand's family rules to the VSPLab composite catalog", () => {
     // GLM 家族：glm-5.1/5.2/5.3 可见，glm-5 / 4.x 不可见（与 zai 原生规则一致）。
     expect(visible("vsplab", "glm-5.3")).toBe(true);
+    expect(visible("vsplab", "glm-5.3-flash")).toBe(true);
     expect(visible("vsplab", "glm-5.1")).toBe(true);
     expect(visible("vsplab", "glm-5")).toBe(false);
     expect(visible("vsplab", "glm-4.5-air")).toBe(false);

@@ -65,12 +65,14 @@ describe("Agents UI", () => {
       recent: [
         {
           id: "run-1",
+          agentId: "agent-1",
           treeId: "tree-1",
           kind: "task",
           depth: 1,
           model: "openai/gpt-5",
           provider: "openai",
           role: "analyst",
+          profile: "analyst",
           modelReason: "automatic openai pool · analyst",
           effort: "high",
           contextMode: "inherited",
@@ -96,6 +98,9 @@ describe("Agents UI", () => {
             { at: "2026-07-31T00:00:01.000Z", kind: "completed", summary: "Run completed" },
           ],
           status: "success",
+          background: false,
+          resumed: false,
+          summary: "Audit completed with actionable findings",
         },
       ],
       authority: {
@@ -111,8 +116,10 @@ describe("Agents UI", () => {
     expect(text).not.toContain("frontend · Frontend");
     expect(text).not.toContain("main:blocked");
     expect(text).not.toContain("Authority");
-    expect(text).toContain("depth 3");
-    expect(text).toContain("analyst · gpt-5 · success · Audit implementation");
+    expect(text).not.toContain("Map  Timeline  Tools  Pools");
+    expect(text).toContain("agent-1");
+    expect(text).toContain("analyst  success");
+    expect(text).toContain("Audit completed with actionable findings");
     for (const width of [40, 80, 120]) {
       const map = panel.render(width, 40, plainTheme(), DEFAULT_USAGE);
       expect(map.every((line) => visibleWidth(line) <= width)).toBe(true);
@@ -121,12 +128,15 @@ describe("Agents UI", () => {
     }
     panel.handleInput(Key.enter);
     const timeline = panel.render(100, 20, plainTheme(), DEFAULT_USAGE).map(stripAnsi).join("\n");
-    expect(timeline).toContain("Agents · Timeline");
+    expect(timeline).toContain("Agent · agent-1");
     expect(timeline).toContain("automatic openai pool · analyst · context inherited/1024 chars");
     expect(timeline).toContain("run 2.6K / 120K");
     expect(timeline).toContain("tree 5.0K / 500K");
     expect(timeline).toContain("completed · Run completed");
-    expect(timeline).toContain("Run output preview");
+    expect(timeline).toContain("Summary");
+    expect(timeline).toContain("Audit completed with actionable findings");
+    expect(timeline).toContain("Tools");
+    expect(timeline).toContain("read");
     expect(timeline).not.toContain("Transcript");
     for (const width of [40, 80, 120]) {
       const rendered = panel.render(width, 40, plainTheme(), DEFAULT_USAGE);
@@ -136,19 +146,10 @@ describe("Agents UI", () => {
       expect(renderedText).toContain("context inherited/1024 chars");
       expect(renderedText).toContain("run 2.6K / 120K");
     }
-    panel.handleInput(Key.tab);
-    const tools = panel.render(100, 14, plainTheme(), DEFAULT_USAGE).map(stripAnsi).join("\n");
-    expect(tools).toContain("Agents · Tools");
-    expect(tools).toContain("read");
-    for (const width of [40, 80, 120]) {
-      expect(panel.render(width, 40, plainTheme(), DEFAULT_USAGE).every((line) => visibleWidth(line) <= width)).toBe(
-        true,
-      );
-    }
-    panel.handleInput(Key.tab);
-    const pools = panel.render(100, 14, plainTheme(), DEFAULT_USAGE).map(stripAnsi).join("\n");
-    expect(pools).toContain("Agents · Pools");
-    expect(pools).toContain("openai · automatic");
+    panel.handleInput(Key.escape);
+    const listAgain = panel.render(100, 14, plainTheme(), DEFAULT_USAGE).map(stripAnsi).join("\n");
+    expect(listAgain).toContain("Agents");
+    expect(listAgain).not.toContain("Agent · agent-1");
     for (const width of [40, 80, 120]) {
       expect(panel.render(width, 40, plainTheme(), DEFAULT_USAGE).every((line) => visibleWidth(line) <= width)).toBe(
         true,

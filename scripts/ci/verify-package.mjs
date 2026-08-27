@@ -56,13 +56,14 @@ for (const required of [
   "scripts/patch-pi-brace-expansion.mjs",
   "scripts/patch-pi-editor-performance.mjs",
   "scripts/trim-pi-docs.mjs",
+  "skills/vspi-subagent/SKILL.md",
 ]) {
   if (!files.has(required)) fail(`required file is missing: ${required}`);
 }
 if ((files.get("dist/index.js")?.mode & 0o111) === 0) fail("dist/index.js is not executable");
 
 const allowed =
-  /^(?:package\.json|README\.md|LICENSE$|THIRD_PARTY_NOTICES\.md$|dist\/|Docs\/(?:usage|tui-v1|testing-and-debugging)\.md$|Docs\/harness\/|scripts\/(?:patch-pi-brace-expansion|patch-pi-editor-performance|trim-pi-docs)\.mjs$)/;
+  /^(?:package\.json|README\.md|LICENSE$|THIRD_PARTY_NOTICES\.md$|dist\/|Docs\/(?:usage|tui-v1|testing-and-debugging)\.md$|Docs\/harness\/|scripts\/(?:patch-pi-brace-expansion|patch-pi-editor-performance|trim-pi-docs)\.mjs$|skills\/vspi-subagent\/SKILL\.md$)/;
 for (const path of files.keys()) {
   if (!allowed.test(path)) fail(`unexpected file in package: ${path}`);
   if (/^(?:src|test|node_modules|\.git)(?:\/|$)/.test(path)) fail(`private source leaked: ${path}`);

@@ -267,6 +267,22 @@ export class AdaptiveBackend implements ChatBackend {
     );
   }
 
+  listCronTasks() {
+    return this.active.listCronTasks?.() ?? [];
+  }
+
+  async createCronTask(
+    input: { cron: string; prompt: string; recurring?: boolean } | { runAt: number; prompt: string },
+  ) {
+    if (!this.active.createCronTask) throw new Error("当前后端不支持 Cron");
+    return this.active.createCronTask(input);
+  }
+
+  async deleteCronTask(id: string): Promise<boolean> {
+    if (!this.active.deleteCronTask) throw new Error("当前后端不支持 Cron");
+    return this.active.deleteCronTask(id);
+  }
+
   async switchTeammateModel(id: string, model: string): Promise<void> {
     if (!this.active.switchTeammateModel) throw new Error("当前后端不支持 Teammate 模型切换");
     await this.active.switchTeammateModel(id, model);
