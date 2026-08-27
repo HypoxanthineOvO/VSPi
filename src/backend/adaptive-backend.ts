@@ -303,6 +303,16 @@ export class AdaptiveBackend implements ChatBackend {
     await this.active.setAgentPoolRole(provider, role, model);
   }
 
+  async stopAgentTask(taskId: string): Promise<void> {
+    if (!this.active.stopAgentTask) throw new Error("当前后端不支持停止 Agent task");
+    await this.active.stopAgentTask(taskId);
+  }
+
+  async detachAgentTask(taskId: string): Promise<void> {
+    if (!this.active.detachAgentTask) throw new Error("当前后端不支持 detached Agent task");
+    await this.active.detachAgentTask(taskId);
+  }
+
   isProjectTrusted(): boolean {
     return this.active.isProjectTrusted?.() ?? false;
   }

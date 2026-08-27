@@ -229,6 +229,8 @@ export interface ChatBackend {
   resetTeammateLane?(id: string, lane?: string): Promise<void>;
   overrideRequiredTeammate?(id: string, scope: AgentOverrideScope): Promise<void>;
   setAgentPoolRole?(provider: string, role: AgentRole, model: string): Promise<void>;
+  stopAgentTask?(taskId: string): Promise<void>;
+  detachAgentTask?(taskId: string): Promise<void>;
   isProjectTrusted?(): boolean;
   runProviderProbe?(
     providerId: string,

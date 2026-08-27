@@ -1744,6 +1744,14 @@ export class VspiApp implements Component, Focusable {
           if (!this.backend.setAgentPoolRole) throw new Error("当前后端不支持 Agent Pool 配置");
           await this.backend.setAgentPoolRole(command.provider, command.role, command.model);
           this.showNotice(`${command.provider} · ${command.role} 已映射到 ${command.model}`, "success");
+        } else if (command.kind === "stop") {
+          if (!this.backend.stopAgentTask) throw new Error("当前后端不支持停止 Agent task");
+          await this.backend.stopAgentTask(command.taskId);
+          this.showNotice(`Agent task ${command.taskId} 已停止`, "success");
+        } else if (command.kind === "detach") {
+          if (!this.backend.detachAgentTask) throw new Error("当前后端不支持 detached Agent task");
+          await this.backend.detachAgentTask(command.taskId);
+          this.showNotice(`Agent task ${command.taskId} 已转入后台`, "success");
         } else if (command.kind === "override") {
           if (!this.backend.overrideRequiredTeammate) throw new Error("当前后端不支持 Teammate required override");
           await this.backend.overrideRequiredTeammate(command.id, command.scope);
@@ -3781,6 +3789,8 @@ export function parseAgentsCommand(
   | { kind: "model"; id: string; model: string }
   | { kind: "reset"; id: string; lane?: string }
   | { kind: "override"; id: string; scope: "turn" | "session" }
+  | { kind: "stop"; taskId: string }
+  | { kind: "detach"; taskId: string }
   | { kind: "pool"; provider: string; role: AgentRole; model: string } {
   const parts = raw.trim().split(/\s+/);
   if (parts.length <= 1) return { kind: "show" };
@@ -3788,6 +3798,8 @@ export function parseAgentsCommand(
   if (parts[1] === "model" || parts[1] === "reset" || parts[1] === "override") {
     throw new Error("Teammate 暂不可用（后续版本回归）；/agents pool 仍可配置 Agent Pool");
   }
+  if (parts[1] === "stop" && parts.length === 3) return { kind: "stop", taskId: parts[2] as string };
+  if (parts[1] === "detach" && parts.length === 3) return { kind: "detach", taskId: parts[2] as string };
   if (
     parts[1] === "pool" &&
     parts.length === 5 &&
@@ -3795,7 +3807,9 @@ export function parseAgentsCommand(
   ) {
     return { kind: "pool", provider: parts[2] as string, role: parts[3] as AgentRole, model: parts[4] as string };
   }
-  throw new Error("用法：/agents、/agents pool <provider> <orchestrator|researcher|analyst|worker> <provider/model>");
+  throw new Error(
+    "用法：/agents、/agents stop|detach <task-id>、/agents pool <provider> <orchestrator|researcher|analyst|worker> <provider/model>",
+  );
 }
 
 export type CronCommand =

@@ -31,7 +31,8 @@ SOFTWARE.
 
 ## Kimi Code
 
-VSPi's foreground cron expression support and Agent task browser behavior adapt
+VSPi's foreground cron expression support, Agent task browser, durable Agent
+task lifecycle, persistence, notification, resume, and task tool behavior adapt
 portions of `MoonshotAI/kimi-code`, commit
 `676e4d82240855044fe809fea89ce1dbe8e512cf`.
 

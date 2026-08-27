@@ -145,7 +145,11 @@ pending 或随后出现的 Question/Approval 会迁移到新前台，回答仍�
 
 递归默认开启，但子代理不接收任意模型字符串：GPT Pool 自动把协调、研究、分析和快速任务映射到 Sol/Luna/Terra；DeepSeek Pro/Flash 与 Kimi K3/K2.6 这类双层目录会让多个强角色复用 Pro/K3，并把 `worker` 映射到 Flash/K2.6。默认最大深度 3、每棵树 12 个 Agent、每个节点 3 个直接子节点、全局 16 个 generation；受信项目硬上限分别为 5、128、16。默认每次 run 最多 120,000 tokens / 900 秒，每棵 tree 最多 500,000 tokens / 20 USD；Provider 无法在生成中精确截断 token 时，完成的当前响应可能产生一次有界超额，但不会再启动 fallback、follow-up 或 descendant。共享 workspace 采用跨进程单写者边界：读取可以并行，所有 Bash 与 `edit/write` 的实际执行串行；root cancellation 会终止 active 和 queued descendants。
 
-`/agents` 默认显示 active 优先的紧凑单行任务列表；`Up/Down` 选择，`Enter` 打开统一详情，`Esc` 先返回列表、再关闭。详情合并完整任务、canonical summary/error、live activity、run/agent/tree/parent ID、Provider/model/profile、context、usage/budget、tools 与最多 32 条 Timeline；Pool 配置继续使用 `/agents pool ...`，不占任务浏览视图。Subagent 支持前台等待和 `run_in_background=true` 后台运行；后台完成会自动向主 Session 注入结构化 completion 并触发或排队下一轮。使用完成结果中的稳定 `agent_id` 配合 `resume` 可在同一 VSPi 进程内继续该 child 对话，每次 resume 产生新的 `task_id`。
+`/agents` 默认显示 active 优先的紧凑单行任务列表；`Up/Down` 选择，`Enter` 打开统一详情，`Esc` 先返回列表、再关闭。详情合并完整任务、canonical summary/error、live activity、run/agent/tree/parent ID、Provider/model/profile、context、usage/budget、tools 与最多 32 条 Timeline；Pool 配置继续使用 `/agents pool ...`，不占任务浏览视图。
+
+1.4.1 的 Subagent task lifecycle 按 Kimi Code 固定 commit `676e4d82240855044fe809fea89ce1dbe8e512cf` 移植：统一状态为 `running/completed/failed/timed_out/killed/lost`，前台与 `run_in_background=true` 后台任务都进入 durable registry；metadata 与完整 output log 分开落盘，output 超限会停止任务。主模型和 child 都可使用 `TaskList`、`TaskOutput`、`TaskStop`、`WaitFor`。`WaitFor` 报告的 terminal 结果会抑制同一 automatic notification；投递失败的 completion 保持 pending，并在主 Session idle 后重试。进程崩溃留下的 running task 恢复为 `lost`，不会假装仍可控制；compaction 后会提醒仍在运行的 task，避免重复启动。`/agents stop <task-id>` 停止任务，`/agents detach <task-id>` 把前台任务转入后台。
+
+每个 child 使用独立持久 Pi Session；使用稳定 `agent_id` 配合 `resume` 可在 VSPi 进程重启后继续 child 对话，每次运行生成新的 `task_id`。`fork=true` 创建新 child 并只继承一次 caller conversation snapshot，不与 resume、model/type override 混用。VSPi 保留自身 Provider/model 路由、Policy、workspace 写边界和时间限制；没有引入 Kimi 自有 DI/model engine。
 
 前台 Session 还注册 `CronCreate`、`CronList`、`CronDelete`。`CronCreate` 接受本地时区的标准 5-field `cron`、相对 one-shot `after`（如 `2h`、`30m`）或绝对 one-shot `run_at`。模型可在未来续跑有价值时自主安排可见任务，例如预计模型额度或预算两小时后恢复；不得用 shell `sleep` 充当调度器。任务、fire cursor 和失败状态作为 Pi custom entries 落在当前 Session；VSPi 进程必须保持运行，且只在主 Session idle 时注入到期 prompt。忙碌期间错过的 recurring fire 会合并为一次并携带 `coalescedCount`；one-shot 成功完成后自动删除，模型调用失败则停止自动重试并在 `/cron` 面板保留为 `failed`。
 

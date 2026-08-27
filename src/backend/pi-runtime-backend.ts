@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { open, realpath, rename, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -346,6 +346,7 @@ export class PiRuntimeBackend implements ChatBackend {
   private availableModelsSnapshot: readonly RuntimeModel[] | undefined;
   private modelCatalogRefreshStarted = false;
   private agentManager: PiAgentManager | undefined;
+  private agentManagerTaskDirectory: string | undefined;
   private cronRuntime: CronRuntime | undefined;
   private readonly agentMessageIds = new Set<string>();
   private readonly startupPolicy: PolicyLevel;
@@ -584,6 +585,7 @@ export class PiRuntimeBackend implements ChatBackend {
       this.cancelledGenerations.delete(generation);
       if (!this.compacting && this.activeGeneration === undefined) this.compactionMutationBlocked = false;
       this.publishActivity();
+      void this.agentManager?.retryTaskNotifications();
     }
   }
 
@@ -1217,6 +1219,7 @@ export class PiRuntimeBackend implements ChatBackend {
       this.sessionControl = undefined;
       await this.agentManager?.dispose();
       this.agentManager = undefined;
+      this.agentManagerTaskDirectory = undefined;
       await this.runtime?.dispose();
       this.runtime = undefined;
       this.events?.onBusy(false);
@@ -1319,6 +1322,12 @@ export class PiRuntimeBackend implements ChatBackend {
       const deliverAutomaticMessage = async (customType: string, content: string, details: unknown): Promise<void> => {
         const session = rootSession;
         if (!session) throw new Error("Root Pi session is unavailable");
+        if (
+          customType === "vspi.subagent-completion" &&
+          (session.isStreaming || this.activeGeneration !== undefined || this.compacting)
+        ) {
+          throw new Error("Main Session is busy; completion remains pending");
+        }
         await session.sendCustomMessage(
           { customType, content, display: false, details },
           session.isStreaming ? { deliverAs: "followUp" } : { triggerTurn: true },
@@ -1353,13 +1362,30 @@ export class PiRuntimeBackend implements ChatBackend {
         },
         onChange: (tasks) => this.events?.onCronSnapshot?.(tasks),
       });
-      const nextAgentManager = await PiAgentManager.create({
-        cwd,
+      const taskDirectory = join(
         agentDir,
-        trustedProject: projectTrusted,
-        recovery: this.options.recovery ?? false,
+        "vspi-agent-tasks",
+        createHash("sha256")
+          .update(sessionManager.getSessionFile() ?? sessionManager.getSessionId())
+          .digest("hex")
+          .slice(0, 20),
+      );
+      const reusedAgentManager = this.agentManagerTaskDirectory === taskDirectory ? this.agentManager : undefined;
+      const nextAgentManager =
+        reusedAgentManager ??
+        (await PiAgentManager.create({
+          cwd,
+          agentDir,
+          trustedProject: projectTrusted,
+          recovery: this.options.recovery ?? false,
+          modelRuntime: services.modelRuntime,
+          executionPolicy: this.options.executionPolicy,
+          taskDirectory,
+          onStatus: (event) => this.publishAgentStatus(event),
+          onCompletion: (event) => this.deliverAgentCompletion(event, deliverAutomaticMessage),
+        }));
+      reusedAgentManager?.rebindRuntime({
         modelRuntime: services.modelRuntime,
-        executionPolicy: this.options.executionPolicy,
         onStatus: (event) => this.publishAgentStatus(event),
         onCompletion: (event) => this.deliverAgentCompletion(event, deliverAutomaticMessage),
       });
@@ -1442,6 +1468,7 @@ export class PiRuntimeBackend implements ChatBackend {
       this.replacementThinking = undefined;
       const rootAgentTools = platformRootToolNames();
       const subagentTool = nextAgentManager.createTool(rootAgentTools, true);
+      const taskTools = this.options.recovery ? [] : nextAgentManager.createTaskTools();
       const activeToolNames = [
         ...rootAgentTools,
         "question",
@@ -1450,6 +1477,7 @@ export class PiRuntimeBackend implements ChatBackend {
         ...planTools.map((tool) => tool.name),
         ...goalTools.map((tool) => tool.name),
         ...cronTools.map((tool) => tool.name),
+        ...taskTools.map((tool) => tool.name),
         continuityStatusTool.name,
         ...(!this.options.recovery ? ["subagent"] : []),
       ];
@@ -1467,6 +1495,7 @@ export class PiRuntimeBackend implements ChatBackend {
             ...planTools,
             ...goalTools,
             ...cronTools,
+            ...taskTools,
             continuityStatusTool,
             ...(!this.options.recovery ? [subagentTool] : []),
           ] as unknown as ToolDefinition[],
@@ -1478,6 +1507,7 @@ export class PiRuntimeBackend implements ChatBackend {
             ...planTools.map((tool) => tool.name),
             ...goalTools.map((tool) => tool.name),
             ...cronTools.map((tool) => tool.name),
+            ...taskTools.map((tool) => tool.name),
             continuityStatusTool.name,
             ...(!this.options.recovery ? ["subagent"] : []),
             "str_replace_editor",
@@ -1485,19 +1515,21 @@ export class PiRuntimeBackend implements ChatBackend {
         });
         rootSession = created.session;
         created.session.setActiveToolsByName(activeToolNames);
+        await nextAgentManager.retryTaskNotifications();
       } catch (error) {
         nextCronRuntime.stop();
         await persistentBash?.reset();
-        await nextAgentManager.dispose();
+        if (!reusedAgentManager) await nextAgentManager.dispose();
         throw error;
       }
       const previousAgentManager = this.agentManager;
       const previousCronRuntime = this.cronRuntime;
       this.agentManager = nextAgentManager;
+      this.agentManagerTaskDirectory = taskDirectory;
       this.cronRuntime = nextCronRuntime;
       nextCronRuntime.start();
       previousCronRuntime?.stop();
-      await previousAgentManager?.dispose();
+      if (previousAgentManager && previousAgentManager !== nextAgentManager) await previousAgentManager.dispose();
       return {
         ...created,
         services,
@@ -1578,6 +1610,20 @@ export class PiRuntimeBackend implements ChatBackend {
     this.events?.onAgentSnapshot?.(this.getAgentSnapshot());
   }
 
+  async stopAgentTask(taskId: string): Promise<void> {
+    this.assertHandoffWritable();
+    if (!this.agentManager) throw new Error("Subagent runtime is not ready");
+    await this.agentManager.stopTask(taskId);
+    this.events?.onAgentSnapshot?.(this.getAgentSnapshot());
+  }
+
+  async detachAgentTask(taskId: string): Promise<void> {
+    this.assertHandoffWritable();
+    if (!this.agentManager) throw new Error("Subagent runtime is not ready");
+    await this.agentManager.detachTask(taskId);
+    this.events?.onAgentSnapshot?.(this.getAgentSnapshot());
+  }
+
   private publishAgentStatus(event: AgentStatusEvent): void {
     if (!this.events) return;
     const id = `subagent:${event.run.id}`;
@@ -1645,6 +1691,19 @@ export class PiRuntimeBackend implements ChatBackend {
     event: AgentCompletionEvent,
     deliver: (customType: string, content: string, details: unknown) => Promise<void>,
   ): Promise<void> {
+    const session = this.session;
+    if (
+      session?.messages.some(
+        (message) =>
+          isRecord(message) &&
+          message.role === "custom" &&
+          message.customType === "vspi.subagent-completion" &&
+          isRecord(message.details) &&
+          message.details.taskId === event.taskId,
+      )
+    ) {
+      return;
+    }
     const body = event.result ?? event.error ?? "No result was returned.";
     const content = [
       `<subagent-completion taskId=${JSON.stringify(event.taskId)} agentId=${JSON.stringify(event.agentId)} status=${JSON.stringify(event.status)}>`,
@@ -1817,11 +1876,12 @@ export class PiRuntimeBackend implements ChatBackend {
 
   private async continueAfterCompaction(): Promise<void> {
     try {
+      const taskReminder = this.agentManager?.capabilityContext();
       const binding = this.getGoalBinding();
       if (!binding) {
         this.pendingFollowUpTaskEpochs.push(++this.taskEpoch);
         await this.requireSession().followUp(
-          '<vspi_compaction_continuation hidden="true">上下文压缩已完成。立即继续同一个最新用户任务：先根据压缩摘要、工作区事实和绑定计划核对尚未完成的实现与验证，然后直接执行。计划复核、plan_update 或把计划项标为 done 都不是停止条件；只有用户要求的结果已实际完成并有相应验证证据时才能结束。</vspi_compaction_continuation>',
+          `<vspi_compaction_continuation hidden="true">上下文压缩已完成。立即继续同一个最新用户任务：先根据压缩摘要、工作区事实和绑定计划核对尚未完成的实现与验证，然后直接执行。计划复核、plan_update 或把计划项标为 done 都不是停止条件；只有用户要求的结果已实际完成并有相应验证证据时才能结束。</vspi_compaction_continuation>${taskReminder ? `\n\n${taskReminder}` : ""}`,
         );
         return;
       }
@@ -1829,7 +1889,7 @@ export class PiRuntimeBackend implements ChatBackend {
       if (goal && goal.state !== "executing") return;
       this.pendingFollowUpTaskEpochs.push(++this.taskEpoch);
       await this.requireSession().followUp(
-        `<vspi_goal_compaction_continuation hidden="true" goal_id="${goal?.id ?? binding.goalId}">Context compaction completed. Continue the same executing Goal from its durable contract, Working Plan, latest marker, and repository evidence.</vspi_goal_compaction_continuation>`,
+        `<vspi_goal_compaction_continuation hidden="true" goal_id="${goal?.id ?? binding.goalId}">Context compaction completed. Continue the same executing Goal from its durable contract, Working Plan, latest marker, and repository evidence.</vspi_goal_compaction_continuation>${taskReminder ? `\n\n${taskReminder}` : ""}`,
       );
     } catch (error) {
       this.events?.onNotice(`压缩后自动续跑失败：${error instanceof Error ? error.message : "未知错误"}`, "warning");
@@ -3229,7 +3289,9 @@ function isTranscriptMessage(value: unknown): value is TranscriptMessage {
     return (
       typeof value.name === "string" &&
       typeof value.summary === "string" &&
-      ["queued", "running", "success", "error", "cancelled"].includes(String(value.status)) &&
+      ["queued", "running", "success", "error", "cancelled", "timed_out", "killed", "lost"].includes(
+        String(value.status),
+      ) &&
       typeof value.expanded === "boolean"
     );
   }
@@ -3246,7 +3308,9 @@ function isTranscriptMessage(value: unknown): value is TranscriptMessage {
       typeof value.model === "string" &&
       typeof value.task === "string" &&
       isEffort(value.effort) &&
-      ["queued", "running", "success", "error", "cancelled"].includes(String(value.status))
+      ["queued", "running", "success", "error", "cancelled", "timed_out", "killed", "lost"].includes(
+        String(value.status),
+      )
     );
   }
   return value.kind === "session" && typeof value.text === "string";

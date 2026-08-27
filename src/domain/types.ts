@@ -68,7 +68,7 @@ export interface ToolMessage {
   groupId?: string;
   name: string;
   summary: string;
-  status: "queued" | "running" | "success" | "error" | "cancelled";
+  status: "queued" | "running" | "success" | "error" | "cancelled" | "timed_out" | "killed" | "lost";
   output?: string;
   expanded: boolean;
 }
@@ -87,7 +87,7 @@ export interface SubAgentMessage {
   task: string;
   tools?: string[];
   outputPreview?: string;
-  status: "queued" | "running" | "success" | "error" | "cancelled";
+  status: "queued" | "running" | "success" | "error" | "cancelled" | "timed_out" | "killed" | "lost";
   agentKind?: "task" | "teammate";
   teammateId?: string;
   lane?: string;

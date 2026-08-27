@@ -16,7 +16,16 @@ export interface ResolvedAgentModelPool {
   roles: Record<AgentRole, string>;
 }
 
-export const AGENT_RUN_STATUSES = ["queued", "running", "success", "error", "cancelled"] as const;
+export const AGENT_RUN_STATUSES = [
+  "queued",
+  "running",
+  "success",
+  "error",
+  "cancelled",
+  "timed_out",
+  "killed",
+  "lost",
+] as const;
 export type AgentRunStatus = (typeof AGENT_RUN_STATUSES)[number];
 
 export interface TeammateFallbackState {

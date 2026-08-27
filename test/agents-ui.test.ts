@@ -1,5 +1,6 @@
 import { Key } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
+import { parseAgentsCommand } from "../src/app/vspi-app.js";
 import { getActionDefinition } from "../src/domain/commands.js";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/domain/fixtures.js";
 import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
@@ -7,6 +8,19 @@ import { PanelController } from "../src/ui/panels.js";
 import { plainTheme } from "./helpers.js";
 
 describe("Agents UI", () => {
+  it("parses a typed task stop command", () => {
+    expect(parseAgentsCommand("/agents stop agent-deadbeef")).toEqual({
+      kind: "stop",
+      taskId: "agent-deadbeef",
+    });
+  });
+
+  it("parses a typed foreground detach command", () => {
+    expect(parseAgentsCommand("/agents detach agent-deadbeef")).toEqual({
+      kind: "detach",
+      taskId: "agent-deadbeef",
+    });
+  });
   it("registers /agents and renders current/preferred model, lane, and sticky fallback state", () => {
     expect(getActionDefinition("agents")?.handler).toBe("agents");
     const panel = new PanelController(DEFAULT_SETTINGS);

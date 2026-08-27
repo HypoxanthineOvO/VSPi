@@ -561,9 +561,9 @@ export function renderTranscriptMessage(
     const symbol =
       message.status === "success"
         ? theme.success("✓")
-        : message.status === "error"
+        : message.status === "error" || message.status === "timed_out" || message.status === "lost"
           ? theme.error("×")
-          : message.status === "cancelled"
+          : message.status === "cancelled" || message.status === "killed"
             ? theme.warning("−")
             : theme.focus("●");
     const identity = message.agentKind === "teammate" ? (message.teammateId ?? "teammate") : "task";
@@ -891,7 +891,9 @@ function toolGroupStatus(messages: Extract<TranscriptMessage, { kind: "tool" }>[
 }
 
 function allToolsTerminal(messages: Extract<TranscriptMessage, { kind: "tool" }>[]): boolean {
-  return messages.every((message) => ["success", "error", "cancelled"].includes(message.status));
+  return messages.every((message) =>
+    ["success", "error", "cancelled", "timed_out", "killed", "lost"].includes(message.status),
+  );
 }
 
 function treeConnector(last: boolean, theme: VspiTheme): string {

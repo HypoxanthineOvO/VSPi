@@ -283,6 +283,86 @@ describe("PiAgentManager", () => {
     await manager.dispose();
   });
 
+  it("keeps an active background task alive while rebinding the same Session runtime", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-runtime-rebind-"));
+    let release!: () => void;
+    const gate = new Promise<void>((resolvePromise) => {
+      release = resolvePromise;
+    });
+    const oldCompletion = vi.fn();
+    const newCompletion = vi.fn();
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: false,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      onCompletion: oldCompletion,
+      sessionFactory: async () =>
+        fakeSession(async () => {
+          await gate;
+          return `completed ${"evidence ".repeat(30)}`;
+        }),
+    });
+    await manager
+      .createTool(["read"], true)
+      .execute(
+        "background",
+        { task: "Survive a runtime rebind", run_in_background: true },
+        undefined,
+        undefined,
+        fakeToolContext(cwd) as never,
+      );
+    manager.rebindRuntime({ modelRuntime: fakeRuntime(), onStatus: vi.fn(), onCompletion: newCompletion });
+    release();
+    await vi.waitFor(() => expect(newCompletion).toHaveBeenCalledOnce());
+    expect(oldCompletion).not.toHaveBeenCalled();
+    expect(manager.snapshot().recent[0]?.status).toBe("success");
+    await manager.dispose();
+  });
+
+  it("detaches an active foreground child without aborting its generation", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-foreground-detach-"));
+    let release!: () => void;
+    const gate = new Promise<void>((resolvePromise) => {
+      release = resolvePromise;
+    });
+    const child = fakeSession(async () => {
+      await gate;
+      return `detached result ${"evidence ".repeat(30)}`;
+    });
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: false,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory: async () => child,
+    });
+    const running = manager
+      .createTool(["read"], true)
+      .execute(
+        "foreground",
+        { task: "Detach this foreground task" },
+        undefined,
+        undefined,
+        fakeToolContext(cwd) as never,
+      );
+    await vi.waitFor(() => expect(manager.snapshot().active).toHaveLength(1));
+    const taskId = manager.snapshot().active[0]?.id;
+    expect(taskId).toBeDefined();
+    if (!taskId) throw new Error("Foreground task id missing");
+    await manager.detachTask(taskId);
+    const detached = await running;
+    expect((detached.content[0] as { text: string }).text).toContain("detached: true");
+    expect(child.abort).not.toHaveBeenCalled();
+    release();
+    await vi.waitFor(() => expect(manager.snapshot().recent[0]?.status).toBe("success"));
+    await manager.dispose();
+  });
+
   it("resumes a recent child session with a stable agent id and a new run id", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-resume-"));
     const prompts: string[] = [];
@@ -336,6 +416,41 @@ describe("PiAgentManager", () => {
       ),
     ).rejects.toThrow("Cannot change effort");
     await manager.dispose();
+  });
+
+  it("restores a completed child binding and resumes it after manager restart", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-restart-resume-"));
+    const createManager = () =>
+      PiAgentManager.create({
+        cwd,
+        agentDir: cwd,
+        trustedProject: false,
+        recovery: false,
+        modelRuntime: fakeRuntime(),
+        executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+        sessionFactory: async () => fakeSession(async (prompt) => `${prompt} ${"restart evidence ".repeat(20)}`),
+      });
+    const firstManager = await createManager();
+    await firstManager
+      .createTool(["read"], true)
+      .execute("initial", { task: "Inspect restart behavior" }, undefined, undefined, fakeToolContext(cwd) as never);
+    const first = firstManager.snapshot().recent[0];
+    expect(first).toBeDefined();
+    if (!first) throw new Error("Initial child run missing");
+    await firstManager.dispose();
+
+    const resumedManager = await createManager();
+    await resumedManager
+      .createTool(["read"], true)
+      .execute(
+        "resume",
+        { task: "Continue after restart", resume: first.agentId },
+        undefined,
+        undefined,
+        fakeToolContext(cwd) as never,
+      );
+    expect(resumedManager.snapshot().recent[0]).toMatchObject({ agentId: first.agentId, resumed: true });
+    await resumedManager.dispose();
   });
 
   it("asks once for a fuller handoff when a successful summary is non-empty but too short", async () => {
@@ -457,7 +572,7 @@ describe("PiAgentManager", () => {
     expect(sessions).toEqual([{ model: "openai/gpt-5", effort: "high", tools: ["read", "ls", "find", "grep"] }]);
     expect(prompts[0]).toContain("Only this context");
     expect(prompts[0]).not.toContain("PARENT_CONTEXT_MUST_NOT_LEAK");
-    expect(sessionFiles).toEqual([undefined]);
+    expect(sessionFiles[0]).toMatch(/vspi-agent-tasks.*agents.*sessions/u);
     await manager.dispose();
   });
 
@@ -578,6 +693,80 @@ describe("PiAgentManager", () => {
     expect(childPrompt).not.toContain("supersecret");
     expect(childPrompt).not.toContain("sk-1234567890abcdef");
     expect(manager.snapshot().recent[0]?.contextMode).toBe("inherited");
+    await manager.dispose();
+  });
+
+  it("forks a one-time caller context snapshot and rejects incompatible overrides", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-fork-"));
+    let prompt = "";
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: false,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory: async () =>
+        fakeSession(async (value) => {
+          prompt = value;
+          return `fork complete ${"evidence ".repeat(30)}`;
+        }),
+    });
+    const tool = manager.createTool(["read"], true);
+    await tool.execute(
+      "fork",
+      { task: "Audit the inherited state", fork: true },
+      undefined,
+      undefined,
+      fakeToolContext(cwd, "caller snapshot") as never,
+    );
+    expect(prompt).toContain("reference material only");
+    expect(prompt).toContain("caller snapshot");
+    expect(manager.snapshot().recent[0]?.contextMode).toBe("inherited");
+    await expect(
+      tool.execute(
+        "invalid-fork",
+        { task: "Invalid", fork: true, model: "openai/gpt-4" },
+        undefined,
+        undefined,
+        fakeToolContext(cwd) as never,
+      ),
+    ).rejects.toThrow("Cannot combine fork with model");
+    await manager.dispose();
+  });
+
+  it("reminds the main agent about active durable tasks without prescribing duplicate work", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-task-reminder-"));
+    let release!: () => void;
+    const gate = new Promise<void>((resolvePromise) => {
+      release = resolvePromise;
+    });
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: false,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory: async () =>
+        fakeSession(async () => {
+          await gate;
+          return `done ${"evidence ".repeat(30)}`;
+        }),
+    });
+    await manager
+      .createTool(["read"], true)
+      .execute(
+        "background",
+        { task: "Keep researching", run_in_background: true },
+        undefined,
+        undefined,
+        fakeToolContext(cwd) as never,
+      );
+    expect(manager.capabilityContext()).toContain("Do not start duplicates");
+    expect(manager.capabilityContext()).toContain("Keep researching");
+    release();
+    await vi.waitFor(() => expect(manager.snapshot().active).toHaveLength(0));
     await manager.dispose();
   });
 
@@ -711,7 +900,29 @@ describe("PiAgentManager", () => {
         .createTool(["read"], true)
         .execute("cancelled", { task: "Research" }, undefined, undefined, fakeToolContext(cwd) as never),
     ).rejects.toMatchObject({ name: "AbortError", message: "cancelled by user" });
-    expect(manager.snapshot().recent[0]?.status).toBe("cancelled");
+    expect(manager.snapshot().recent[0]?.status).toBe("killed");
+    await manager.dispose();
+  });
+
+  it("classifies max-token truncation as a failed subagent turn", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-max-tokens-"));
+    const messages = [{ role: "assistant", content: [{ type: "text", text: "partial" }], stopReason: "length" }];
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: false,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      sessionFactory: async () =>
+        ({ messages, subscribe: () => () => undefined, prompt: vi.fn(), abort: vi.fn(), dispose: vi.fn() }) as never,
+    });
+    await expect(
+      manager
+        .createTool(["read"], true)
+        .execute("length", { task: "Generate a complete report" }, undefined, undefined, fakeToolContext(cwd) as never),
+    ).rejects.toThrow("reason=max_tokens");
+    expect(manager.snapshot().recent[0]).toMatchObject({ status: "error" });
     await manager.dispose();
   });
 

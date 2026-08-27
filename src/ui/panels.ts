@@ -2585,9 +2585,9 @@ export class PanelController {
       const symbol =
         run.status === "success"
           ? theme.success("✓")
-          : run.status === "error"
+          : run.status === "error" || run.status === "timed_out" || run.status === "lost"
             ? theme.error("×")
-            : run.status === "cancelled"
+            : run.status === "cancelled" || run.status === "killed"
               ? theme.muted("−")
               : run.status === "queued"
                 ? theme.muted("○")

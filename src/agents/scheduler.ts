@@ -18,6 +18,7 @@ export interface AgentTreeContext {
   depth: number;
   runId?: string;
   parentRunId?: string;
+  agentId?: string;
   lease?: AgentGenerationLease;
 }
 
@@ -93,7 +94,7 @@ export class AgentTreeScheduler {
     return { treeId, depth: 0 };
   }
 
-  child(parent: AgentTreeContext, runId: string, fingerprint?: string): AgentTreeContext {
+  child(parent: AgentTreeContext, runId: string, fingerprint?: string, agentId?: string): AgentTreeContext {
     const tree = this.requireTree(parent.treeId);
     if (tree.cancelled) throw abortError("Agent tree was cancelled");
     // C19 P0-2：预算与 per-parent child/tree size 不再构成拒绝条件，仅保留深度限制；
@@ -107,6 +108,7 @@ export class AgentTreeScheduler {
       treeId: parent.treeId,
       depth,
       runId,
+      ...(agentId ? { agentId } : {}),
       ...(parent.runId ? { parentRunId: parent.runId } : {}),
     };
   }
