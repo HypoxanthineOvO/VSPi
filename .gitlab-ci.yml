@@ -4,6 +4,7 @@ workflow:
     - when: never
 
 stages:
+  - quality
   - package
   - release
 
@@ -23,6 +24,12 @@ variables:
   npm_config_fetch_retries: "5"
   npm_config_fetch_retry_maxtimeout: "120000"
   npm_config_fetch_retry_mintimeout: "10000"
+
+quality:
+  stage: quality
+  script:
+    - npm run check
+    - npm test
 
 package:
   stage: package

@@ -5,10 +5,32 @@ import {
 } from "../src/providers/error-retry-compatibility.js";
 import {
   createProviderRequestCompatibilityExtension,
+  normalizeKimiInstructionRoles,
   sanitizeOpenAiToolSchemaBounds,
 } from "../src/providers/request-compatibility.js";
 
 describe("provider request compatibility", () => {
+  it("downgrades Kimi developer instructions to the supported system role", () => {
+    const payload = {
+      model: "k3",
+      messages: [
+        { role: "developer", content: "coding policy" },
+        { role: "user", content: "hello" },
+      ],
+    };
+    expect(normalizeKimiInstructionRoles(payload)).toEqual({
+      ...payload,
+      messages: [
+        { role: "system", content: "coding policy" },
+        { role: "user", content: "hello" },
+      ],
+    });
+    expect(normalizeKimiInstructionRoles({ ...payload, messages: [{ role: "system", content: "ok" }] })).toEqual({
+      ...payload,
+      messages: [{ role: "system", content: "ok" }],
+    });
+  });
+
   it("adds a retryable status only to known transient gateway errors", () => {
     expect(normalizeTransientProviderError("stream_read_error")).toBe("503: stream_read_error");
     expect(normalizeTransientProviderError(" upstream_error: Upstream request failed ")).toBe(
@@ -118,5 +140,30 @@ describe("provider request compatibility", () => {
       await handler?.({ payload }, { model: { api: "openai-completions", compat: { supportsStrictMode: true } } }),
     ).toBeUndefined();
     expect(await handler?.({ payload }, { model: { api: "openai-responses" } })).toBeUndefined();
+  });
+
+  it("normalizes developer roles only for VSPLab Kimi models", async () => {
+    let handler: ((event: { payload: unknown }, context: { model?: unknown }) => unknown) | undefined;
+    createProviderRequestCompatibilityExtension()({
+      on: vi.fn((event, registered) => {
+        if (event === "before_provider_request") handler = registered;
+      }),
+    } as never);
+    const payload = { messages: [{ role: "developer", content: "policy" }] };
+
+    expect(
+      await handler?.({ payload }, { model: { provider: "vsplab", id: "k3", api: "openai-completions" } }),
+    ).toEqual({
+      messages: [{ role: "system", content: "policy" }],
+    });
+    expect(
+      await handler?.({ payload }, { model: { provider: "vsplab-open", id: "k3-256k", api: "openai-completions" } }),
+    ).toBeUndefined();
+    expect(
+      await handler?.({ payload }, { model: { provider: "vsplab", id: "gpt-5.6-sol", api: "openai-responses" } }),
+    ).toBeUndefined();
+    expect(
+      await handler?.({ payload }, { model: { provider: "kimi-coding", id: "k3", api: "openai-completions" } }),
+    ).toBeUndefined();
   });
 });

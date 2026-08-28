@@ -1,6 +1,6 @@
 import type { TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
-import { VspiApp, type VspiAppOptions } from "../src/app/vspi-app.js";
+import { VspiApp } from "../src/app/vspi-app.js";
 import type { AttachmentService } from "../src/attachments/service.js";
 import type { ChatBackend, ChatBackendEvents } from "../src/backend/types.js";
 import { DEFAULT_SETTINGS } from "../src/domain/fixtures.js";

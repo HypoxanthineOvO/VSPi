@@ -26,6 +26,7 @@ export interface ProviderModelRecord {
   thinkingLevelMap?: Partial<Record<EffortLevel, string | null>>;
   cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
   maxTokens?: number;
+  compat?: object;
   headers?: Record<string, string>;
 }
 
@@ -103,6 +104,7 @@ const MODEL_FIELDS = new Set([
   "thinkingLevelMap",
   "cost",
   "maxTokens",
+  "compat",
   "headers",
 ]);
 const SENSITIVE_FIELD = /(?:api[-_]?key|token|secret|password|credential)/i;
@@ -445,6 +447,10 @@ function parseModels(value: unknown, project: boolean, providerId: string): Prov
         throw new Error(`${providerId}.models[${index}].maxTokens 不能大于 contextWindow`);
       }
     }
+    if (input.compat !== undefined) {
+      if (!isRecord(input.compat)) throw new Error("model.compat 必须是 object");
+      model.compat = structuredClone(input.compat);
+    }
     if (input.headers !== undefined) model.headers = parseHeaders(input.headers, project);
     return model;
   });
@@ -473,6 +479,7 @@ function serializeGlobalModel(model: ProviderModelRecord, api: SupportedProvider
     ...(cost ? { cost } : {}),
     ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
     ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
+    ...(model.compat ? { compat: model.compat } : {}),
     ...(model.headers ? { headers: model.headers } : {}),
   };
 }

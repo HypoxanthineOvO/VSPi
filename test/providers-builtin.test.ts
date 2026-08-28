@@ -128,6 +128,20 @@ describe("builtin providers", () => {
     expect(runtime.getModel("vsplab", "k3-256k")?.contextWindow).toBe(
       runtime.getModel("kimi-coding", "k3-256k")?.contextWindow,
     );
+    for (const id of ["kimi-for-coding", "kimi-for-coding-highspeed", "k3", "k3-256k", "kimi-k2.7-code"]) {
+      expect(runtime.getModel("vsplab", id)?.compat).toMatchObject({
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        supportsReasoningEffort: false,
+        maxTokensField: "max_tokens",
+      });
+    }
+    expect(runtime.getModel("vsplab", "k3")?.compat).not.toHaveProperty("forceAdaptiveThinking");
+    expect(runtime.getModel("vsplab", "k3")?.compat).not.toHaveProperty("allowEmptySignature");
+    expect(runtime.getModel("vsplab", "kimi-k2.7-code")?.compat).toMatchObject({
+      supportsStrictMode: false,
+      thinkingFormat: "deepseek",
+    });
     const glm = runtime.getModel("vsplab", "glm-5.3");
     expect(glm?.api).toBe("openai-responses");
     expect(glm?.cost).toEqual(runtime.getModel("zai", "glm-5.3")?.cost);

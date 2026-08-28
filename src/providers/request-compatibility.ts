@@ -1,6 +1,7 @@
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 const REPETITION_BOUNDS = new Set(["minLength", "maxLength", "minItems", "maxItems"]);
+const VSPLAB_KIMI_MODELS = new Set(["k3", "k3-256k", "kimi-for-coding", "kimi-for-coding-highspeed", "kimi-k2.7-code"]);
 
 /**
  * llama.cpp eagerly expands bounded JSON-schema repetitions into a GBNF grammar. Large tool
@@ -28,12 +29,27 @@ export function createProviderRequestCompatibilityExtension(): ExtensionFactory 
   return (pi) => {
     pi.on("before_provider_request", (event, context) => {
       const model = context.model;
-      if (model?.api !== "openai-completions" || !isRecord(model.compat) || model.compat.supportsStrictMode !== false) {
-        return undefined;
+      let payload = event.payload;
+      if (model?.api === "openai-completions" && model.provider === "vsplab" && VSPLAB_KIMI_MODELS.has(model.id)) {
+        payload = normalizeKimiInstructionRoles(payload);
       }
-      return sanitizeOpenAiToolSchemaBounds(event.payload);
+      if (model?.api === "openai-completions" && isRecord(model.compat) && model.compat.supportsStrictMode === false) {
+        payload = sanitizeOpenAiToolSchemaBounds(payload);
+      }
+      return payload === event.payload ? undefined : payload;
     });
   };
+}
+
+export function normalizeKimiInstructionRoles(payload: unknown): unknown {
+  if (!isRecord(payload) || !Array.isArray(payload.messages)) return payload;
+  let changed = false;
+  const messages = payload.messages.map((message) => {
+    if (!isRecord(message) || message.role !== "developer") return message;
+    changed = true;
+    return { ...message, role: "system" };
+  });
+  return changed ? { ...payload, messages } : payload;
 }
 
 function stripRepetitionBounds(value: unknown): unknown {

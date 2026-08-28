@@ -1,15 +1,12 @@
 import { homedir } from "node:os";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { AdaptiveBackend } from "../backend/adaptive-backend.js";
 import { resolveBackendMode } from "../backend/mode.js";
 import { deepSeekHarnessEnabled } from "../config/deepseek-harness.js";
-import { createRuntimeDefaultsService } from "../config/runtime-defaults.js";
 import type { TranscriptMessage } from "../domain/types.js";
 import { createStartupGoalBackend } from "../goals/startup.js";
 import { createStartupLocalPlanBackend } from "../plans/startup.js";
 import { composeStartupPolicy } from "../policy/startup-compose.js";
 import { createPromptProfileService } from "../prompts/profile-service.js";
-import { BUILTIN_PROVIDERS } from "../providers/builtins.js";
 
 /**
  * 非交互执行入口：`vspi exec "<prompt>"` 新会话执行单次 prompt；

@@ -1,5 +1,18 @@
 import type { ProviderModelRecord, ProviderRecord } from "./config-service.js";
 
+const KIMI_CHAT_COMPAT = {
+  supportsStore: false,
+  supportsDeveloperRole: false,
+  supportsReasoningEffort: false,
+  maxTokensField: "max_tokens",
+};
+
+const KIMI_K27_CHAT_COMPAT = {
+  ...KIMI_CHAT_COMPAT,
+  supportsStrictMode: false,
+  thinkingFormat: "deepseek",
+};
+
 /**
  * 出厂内置 Provider。只包含公开元数据（baseUrl、协议、模型目录），
  * 绝不包含 credential；API key 通过 `$<ID>_API_KEY` 环境变量引用注入。
@@ -35,16 +48,41 @@ const VSPLAB_MODELS: ProviderModelRecord[] = [
   { id: "glm-4.5", name: "GLM 4.5" },
   { id: "glm-4.5-air", name: "GLM 4.5 Air" },
   // Kimi（月之暗面）
-  { id: "kimi-for-coding", name: "Kimi For Coding", api: "openai-completions", inheritFrom: "kimi-coding" },
+  {
+    id: "kimi-for-coding",
+    name: "Kimi For Coding",
+    api: "openai-completions",
+    inheritFrom: "kimi-coding",
+    compat: KIMI_CHAT_COMPAT,
+  },
   {
     id: "kimi-for-coding-highspeed",
     name: "Kimi For Coding Highspeed",
     api: "openai-completions",
     inheritFrom: "kimi-coding",
+    compat: KIMI_CHAT_COMPAT,
   },
-  { id: "k3", name: "Kimi K3", api: "openai-completions", inheritFrom: "kimi-coding" },
-  { id: "k3-256k", name: "Kimi K3 256K", api: "openai-completions", inheritFrom: "kimi-coding" },
-  { id: "kimi-k2.7-code", name: "Kimi K2.7 Code", api: "openai-completions", inheritFrom: "moonshotai" },
+  {
+    id: "k3",
+    name: "Kimi K3",
+    api: "openai-completions",
+    inheritFrom: "kimi-coding",
+    compat: KIMI_CHAT_COMPAT,
+  },
+  {
+    id: "k3-256k",
+    name: "Kimi K3 256K",
+    api: "openai-completions",
+    inheritFrom: "kimi-coding",
+    compat: KIMI_CHAT_COMPAT,
+  },
+  {
+    id: "kimi-k2.7-code",
+    name: "Kimi K2.7 Code",
+    api: "openai-completions",
+    inheritFrom: "moonshotai",
+    compat: KIMI_K27_CHAT_COMPAT,
+  },
   // DeepSeek
   { id: "deepseek-chat", name: "DeepSeek Chat" },
   { id: "deepseek-reasoner", name: "DeepSeek Reasoner" },

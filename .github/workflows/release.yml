@@ -18,6 +18,10 @@ jobs:
           node-version: 22.22.0
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - name: Validate release source
+        run: |
+          npm run check
+          npm test
       - name: Build release assets
         run: |
           VERSION="$(node -p "require('./package.json').version")"

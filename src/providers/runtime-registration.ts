@@ -95,7 +95,7 @@ function resolveInheritedModel(
     cost: model.cost ?? upstream.cost,
     contextWindow: model.contextWindow ?? upstream.contextWindow,
     maxTokens: model.maxTokens ?? upstream.maxTokens,
-    ...(upstream.compat ? { compat: upstream.compat as object } : {}),
+    ...((model.compat ?? upstream.compat) ? { compat: (model.compat ?? upstream.compat) as object } : {}),
     ...(model.api ? { api: model.api } : {}),
     ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
   };
