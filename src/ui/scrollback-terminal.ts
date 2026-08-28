@@ -59,6 +59,41 @@ export function renderSurfaceEpochBreak(lineOffset = 0): string {
 
 export class ScrollbackProcessTerminal extends ProcessTerminal implements StaticCommitTerminal {
   private readonly frameOptimizer = new TerminalFrameOptimizer();
+  private reloadHandoff = false;
+
+  /**
+   * /reload 静默移交：续接进程已 spawn 并即将接管同一 TTY。
+   *
+   * raw mode 是 PTY 的设备级属性：本进程退出路径的 stop() 会执行
+   * setRawMode(wasRaw) 恢复 cooked + ECHO；若此刻续接进程已完成自己的
+   * setRawMode(true)，终端就被打回 cooked——按键被内核回显为控制记法
+   * （^[ 乱码）并被行缓冲吞掉，表现为 reload 后无法输入。因此移交后：
+   * 停止读取 stdin，后续 stop()/drainInput() 不再恢复终端模式，
+   * termios 与终端状态完全交由续接进程管理。
+   */
+  prepareReloadHandoff(): void {
+    if (this.reloadHandoff) return;
+    this.reloadHandoff = true;
+    const internals = this as unknown as {
+      stdinDataHandler?: (data: string) => void;
+      inputHandler?: unknown;
+    };
+    if (internals.stdinDataHandler) process.stdin.removeListener("data", internals.stdinDataHandler);
+    internals.inputHandler = undefined;
+    process.stdin.pause();
+  }
+
+  override stop(): void {
+    // 静默移交后不写恢复序列、不恢复 termios（见 prepareReloadHandoff）。
+    if (this.reloadHandoff) return;
+    super.stop();
+  }
+
+  override drainInput(): Promise<void> {
+    // 静默移交后不重新挂输入监听、不发键盘协议复位序列。
+    if (this.reloadHandoff) return Promise.resolve();
+    return super.drainInput();
+  }
 
   override write(data: string): void {
     super.write(adaptInteractiveTerminalOutput(this.frameOptimizer.optimize(data, this.rows, this.columns)));

@@ -6,6 +6,7 @@ import {
   renderStaticCommit,
   renderStaticReplacement,
   renderSurfaceEpochBreak,
+  ScrollbackProcessTerminal,
   ScrollbackTUI,
   type StaticCommitTerminal,
 } from "../src/ui/scrollback-terminal.js";
@@ -58,6 +59,33 @@ afterEach(() => {
 });
 
 describe("scrollback-preserving terminal", () => {
+  it("goes silent for reload handoff without writing terminal restore sequences", () => {
+    const terminal = new ScrollbackProcessTerminal();
+    const writes: string[] = [];
+    const pauses: number[] = [];
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    const pauseSpy = vi.spyOn(process.stdin, "pause").mockImplementation((() => {
+      pauses.push(1);
+      return process.stdin;
+    }) as typeof process.stdin.pause);
+    try {
+      terminal.prepareReloadHandoff();
+      expect(pauses).toHaveLength(1);
+      // 静默移交后 stop()/drainInput() 不得写任何恢复序列（含 setRawMode 前的
+      // bracketed-paste/kitty 复位），也不得重新挂输入监听。
+      terminal.stop();
+      expect(writes).toEqual([]);
+      expect(pauses).toHaveLength(1);
+      void terminal.drainInput();
+      expect(writes).toEqual([]);
+    } finally {
+      writeSpy.mockRestore();
+      pauseSpy.mockRestore();
+    }
+  });
   it("removes only CSI 3 J while preserving viewport clear and synchronized output", () => {
     const input = "\u001b[?2026h\u001b[2J\u001b[H\u001b[3Jframe\u001b[?2026l";
     expect(preserveTerminalScrollback(input)).toBe("\u001b[?2026h\u001b[2J\u001b[Hframe\u001b[?2026l");

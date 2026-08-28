@@ -127,6 +127,8 @@ export interface VspiAppOptions {
   promptProfiles?: PromptProfileUi;
   selfUpdate?: (currentVersion: string) => Promise<SelfUpdateResult>;
   reloadLauncher?: () => Promise<void>;
+  /** /reload 续接进程 spawn 成功后回调：旧进程应立即静默移交 TTY。 */
+  onReloadSpawned?: () => void;
   thinkingTranslator?: ThinkingTranslator;
   openOnStart?: "sessions" | "providers";
   onForegroundRelinquish?: () => void;
@@ -1695,6 +1697,9 @@ export class VspiApp implements Component, Focusable {
       const launch = this.options.reloadLauncher ?? spawnReloadChild;
       try {
         await launch();
+        // 续接进程已接管同一 TTY：旧进程立即静默，停止读取 stdin 与终端恢复，
+        // 避免 setRawMode(false) 把续接进程已设好的 raw 终端打回 cooked+ECHO。
+        this.options.onReloadSpawned?.();
         // 新进程接管 lease 后本进程会走 onTakeover 退出；兜底：3 秒仍未移交则直接退出。
         const fallback = setTimeout(() => this.options.onExit(), 3_000);
         fallback.unref?.();

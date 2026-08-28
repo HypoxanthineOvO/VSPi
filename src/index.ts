@@ -219,6 +219,7 @@ async function interactive(): Promise<void> {
       activeTui.requestRender(activeTui.mode === "fullscreen");
     },
     onExit: () => void shutdown(),
+    onReloadSpawned: () => terminal.prepareReloadHandoff(),
   });
 
   const shutdown = async () => {

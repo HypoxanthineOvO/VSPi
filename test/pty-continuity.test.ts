@@ -74,6 +74,12 @@ describe("PTY continuity scenarios", () => {
       harness.write("/reload\r");
 
       await new Promise((resolve) => setTimeout(resolve, 4_000));
+      // reload 后普通按键必须进入续接进程的 composer：若旧进程退出时把 PTY
+      // 打回 cooked+ECHO，这里会变成内核回显的控制记法乱码而非可用输入。
+      harness.write("zzreload9");
+      await harness.waitFor("zzreload9", 5_000);
+      harness.write("\x7f".repeat(9));
+      await new Promise((resolve) => setTimeout(resolve, 300));
       harness.write("/model\r");
       await harness.waitFor("选择模型", 5_000);
       const output = harness.scrollbackText();
