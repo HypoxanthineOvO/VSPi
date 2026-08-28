@@ -1,10 +1,48 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createProviderErrorRetryCompatibilityExtension,
+  normalizeTransientProviderError,
+} from "../src/providers/error-retry-compatibility.js";
+import {
   createProviderRequestCompatibilityExtension,
   sanitizeOpenAiToolSchemaBounds,
 } from "../src/providers/request-compatibility.js";
 
 describe("provider request compatibility", () => {
+  it("adds a retryable status only to known transient gateway errors", () => {
+    expect(normalizeTransientProviderError("stream_read_error")).toBe("503: stream_read_error");
+    expect(normalizeTransientProviderError(" upstream_error: Upstream request failed ")).toBe(
+      "503: upstream_error: Upstream request failed",
+    );
+    expect(normalizeTransientProviderError("503: stream_read_error")).toBe("503: stream_read_error");
+    expect(normalizeTransientProviderError("OpenAI API error (400): invalid_request_error")).toBe(
+      "OpenAI API error (400): invalid_request_error",
+    );
+    expect(normalizeTransientProviderError("Request aborted")).toBe("Request aborted");
+  });
+
+  it("normalizes transient assistant failures before Pi classifies retries", async () => {
+    let handler: ((event: { message: unknown }) => unknown) | undefined;
+    createProviderErrorRetryCompatibilityExtension()({
+      on: vi.fn((event, registered) => {
+        if (event === "message_end") handler = registered;
+      }),
+    } as never);
+    const message = {
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      errorMessage: "stream_read_error",
+    };
+
+    expect(await handler?.({ message })).toEqual({
+      message: { ...message, errorMessage: "503: stream_read_error" },
+    });
+    expect(
+      await handler?.({ message: { ...message, stopReason: "aborted", errorMessage: "Request aborted" } }),
+    ).toBeUndefined();
+  });
+
   it("removes only repetition bounds from OpenAI function parameter schemas", () => {
     const payload = {
       model: "local-model",

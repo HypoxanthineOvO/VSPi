@@ -3,6 +3,7 @@ import {
   catalogSnapshotIsStale,
   PRICE_SCHEDULES,
   priceTokensCny,
+  resolveKnownCnySchedule,
   resolveOfficialCnySchedule,
 } from "../src/domain/pricing.js";
 
@@ -42,6 +43,13 @@ describe("C17 price schedules", () => {
       cacheWrite: 1.7,
       contextWindow: 272_000,
     });
+    expect(PRICE_SCHEDULES.terra56).toMatchObject({
+      provenance: "catalogEstimateCny",
+      cacheRead: 1.36,
+      uncached: 13.6,
+      cacheWrite: 17,
+      output: 81.6,
+    });
     expect(PRICE_SCHEDULES.sol56).toMatchObject({
       provenance: "catalogEstimateCny",
       cacheRead: 3.4,
@@ -64,6 +72,15 @@ describe("C17 price schedules", () => {
     expect(resolveOfficialCnySchedule("deepseek", "V4 Pro", Date.parse("2026-08-17T18:00:00+08:00"))?.id).toBe(
       "deepseek-v4-pro-idle",
     );
+  });
+
+  it("resolves known catalog prices from normalized complete model names without guessing adjacent versions", () => {
+    const now = Date.parse("2026-08-28T12:00:00+08:00");
+    expect(resolveKnownCnySchedule("vsplab", "GPT-5.6 Sol", now)?.id).toBe("gpt-5.6-sol");
+    expect(resolveKnownCnySchedule("VSPLAB", "gpt_5.6_terra", now)?.id).toBe("gpt-5.6-terra");
+    expect(resolveKnownCnySchedule("open-code-go", " GLM 5.2 ", now)?.id).toBe("glm-5.2");
+    expect(resolveKnownCnySchedule("vsplab", "GLM-5.3", now)).toBeUndefined();
+    expect(resolveKnownCnySchedule("vsplab", "gpt-5.6-sol-preview", now)).toBeUndefined();
   });
 
   it("prices each token bucket and detects stale or invalid catalog dates", () => {

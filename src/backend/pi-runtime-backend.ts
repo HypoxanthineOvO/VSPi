@@ -71,6 +71,7 @@ import { createPromptProfileExtension } from "../prompts/pi-prompt-profile-exten
 import type { ModelIdentity, ResolvedPromptProfile } from "../prompts/types.js";
 import { BUILTIN_PROVIDERS } from "../providers/builtins.js";
 import { createProviderConfigService } from "../providers/config-service.js";
+import { createProviderErrorRetryCompatibilityExtension } from "../providers/error-retry-compatibility.js";
 import { loginProviderWithoutModelNetwork, oauthAvailableInCurrentTerminal } from "../providers/login.js";
 import { isVisibleRuntimeModel } from "../providers/model-visibility.js";
 import { type ProviderProtocol, runProtocolProbe } from "../providers/protocol-probe.js";
@@ -1255,6 +1256,7 @@ export class PiRuntimeBackend implements ChatBackend {
       });
       const externalImportCompatibilityExtension = createExternalImportCompatibilityExtension();
       const providerRequestCompatibilityExtension = createProviderRequestCompatibilityExtension();
+      const providerErrorRetryCompatibilityExtension = createProviderErrorRetryCompatibilityExtension();
       const deepSeekHarnessEnabled =
         this.options.deepSeekHarness === true && this.options.recovery !== true && process.platform !== "win32";
       const persistentBash = deepSeekHarnessEnabled ? new DeepSeekPersistentBashOperations() : undefined;
@@ -1287,6 +1289,7 @@ export class PiRuntimeBackend implements ChatBackend {
                   promptProfileExtension,
                   externalImportCompatibilityExtension,
                   providerRequestCompatibilityExtension,
+                  providerErrorRetryCompatibilityExtension,
                   deepSeekHarnessExtension,
                 ].filter((factory) => factory !== undefined),
               }
@@ -2576,10 +2579,24 @@ export class PiRuntimeBackend implements ChatBackend {
     }
     if (event.type === "agent_end") {
       if (!this.compacting) this.compactionMutationBlocked = false;
-      this.agentRunning = false;
+      this.agentRunning = event.willRetry;
       this.publishActivity();
       this.publishUsage();
-      void this.continueGoalAfterTurn(this.turn);
+      if (!event.willRetry) void this.continueGoalAfterTurn(this.turn);
+      return;
+    }
+    if (event.type === "auto_retry_start") {
+      this.events.onNotice(
+        `请求暂时失败，${formatRetryDelay(event.delayMs)}后自动重试（${event.attempt}/${event.maxAttempts}）`,
+        "warning",
+      );
+      return;
+    }
+    if (event.type === "auto_retry_end") {
+      this.events.onNotice(
+        event.success ? `请求已在第 ${event.attempt} 次重试后恢复` : `自动重试 ${event.attempt} 次后仍然失败`,
+        event.success ? "success" : "error",
+      );
       return;
     }
     if (event.type === "compaction_start") {
@@ -3068,6 +3085,12 @@ function formatEvidenceToken(value: number | null): string {
 
 function formatEvidenceUsage(tokens: number | null, contextWindow: number): string {
   return `${formatEvidenceToken(tokens)}/${Math.max(0, Math.round(contextWindow))}`;
+}
+
+function formatRetryDelay(delayMs: number): string {
+  if (delayMs < 1_000) return `${Math.max(0, Math.round(delayMs))} ms`;
+  const seconds = delayMs / 1_000;
+  return `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1)} 秒`;
 }
 
 function assistantClaimsCompletion(message: unknown): boolean {

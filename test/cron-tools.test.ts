@@ -27,12 +27,14 @@ async function execute(tool: ToolDefinition | undefined, input: Record<string, u
 }
 
 describe("Cron tools", () => {
-  it("exposes create/list/delete with strict bounded schemas", async () => {
+  it("exposes create/list/delete with a provider-compatible bounded object schema", async () => {
     const byName = await tools();
     expect([...byName.keys()]).toEqual(["CronCreate", "CronList", "CronDelete"]);
-    expect(Value.Check(byName.get("CronCreate")?.parameters as never, { cron: "5 * * * *", prompt: "check" })).toBe(
-      true,
-    );
+    const createParameters = byName.get("CronCreate")?.parameters as Record<string, unknown>;
+    expect(createParameters.type).toBe("object");
+    expect(createParameters).not.toHaveProperty("anyOf");
+    expect(createParameters).not.toHaveProperty("oneOf");
+    expect(Value.Check(createParameters as never, { cron: "5 * * * *", prompt: "check" })).toBe(true);
     expect(
       Value.Check(byName.get("CronCreate")?.parameters as never, { cron: "5 * * * *", prompt: "check", extra: true }),
     ).toBe(false);
@@ -47,6 +49,19 @@ describe("Cron tools", () => {
     ).toBe(true);
     expect(byName.get("CronCreate")?.promptSnippet).toContain("one-shot");
     expect(byName.get("CronCreate")?.promptGuidelines?.join(" ")).toContain("quota");
+  });
+
+  it("rejects missing, conflicting, and mode-specific schedule parameters", async () => {
+    const byName = await tools();
+    await expect(execute(byName.get("CronCreate"), { prompt: "missing schedule" })).rejects.toThrow(
+      "exactly one of cron, after, or run_at",
+    );
+    await expect(
+      execute(byName.get("CronCreate"), { after: "2h", run_at: "2026-08-28T13:00+08:00", prompt: "conflict" }),
+    ).rejects.toThrow("exactly one of cron, after, or run_at");
+    await expect(
+      execute(byName.get("CronCreate"), { after: "2h", prompt: "one shot", recurring: false }),
+    ).rejects.toThrow("recurring is valid only with cron");
   });
 
   it("creates a native relative one-shot", async () => {

@@ -154,6 +154,21 @@ export const PRICE_SCHEDULES = Object.freeze({
     output: 8.16,
     contextWindow: 272_000,
   }),
+  terra56: schedule({
+    id: "gpt-5.6-terra",
+    provider: "VSPLab catalog",
+    model: "GPT-5.6 Terra",
+    currency: "CNY",
+    provenance: "catalogEstimateCny",
+    source: "Pi 0.84.3 openai-codex USD catalog converted at USD/CNY 6.80",
+    sourceVersion: "0.84.3 / 2026-08-28 snapshot",
+    effectiveAt: "2026-08-28T00:00:00+08:00",
+    cacheRead: 1.36,
+    uncached: 13.6,
+    cacheWrite: 17,
+    output: 81.6,
+    contextWindow: 272_000,
+  }),
   sol56: schedule({
     id: "gpt-5.6-sol",
     provider: "VSPLab catalog",
@@ -192,6 +207,32 @@ export function resolveOfficialCnySchedule(
   const peak = (chinaHour >= 9 && chinaHour < 12) || (chinaHour >= 14 && chinaHour < 18);
   if (family === "flash") return peak ? PRICE_SCHEDULES.deepseekFlashPeak : PRICE_SCHEDULES.deepseekFlashIdle;
   return peak ? PRICE_SCHEDULES.deepseekProPeak : PRICE_SCHEDULES.deepseekProIdle;
+}
+
+export function resolveKnownCnySchedule(
+  provider: string,
+  model: string,
+  timestamp: number,
+): Readonly<TokenPriceSchedule> | undefined {
+  const official = resolveOfficialCnySchedule(provider, model, timestamp);
+  if (official) return official;
+
+  const id = normalizeModelPriceId(model);
+  if (id === "glm-5.2") return PRICE_SCHEDULES.glm52;
+  if (id === "gpt-5.6-luna") return PRICE_SCHEDULES.luna56;
+  if (id === "gpt-5.6-terra") return PRICE_SCHEDULES.terra56;
+  if (id === "gpt-5.6-sol") return PRICE_SCHEDULES.sol56;
+  return undefined;
+}
+
+function normalizeModelPriceId(model: string): string {
+  return model
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-")
+    .replace(/[^a-z0-9.-]+/g, "")
+    .replace(/-+/g, "-");
 }
 
 export function priceTokensCny(

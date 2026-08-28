@@ -442,6 +442,66 @@ describe("M2 Pi history hydration", () => {
     await backend.dispose();
   });
 
+  it("keeps a retrying generation busy, reports recovery, and becomes idle only after the final agent end", async () => {
+    const fake = fakePiSession([]);
+    const recorder = eventRecorder();
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-m2-auto-retry-success-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+    await backend.start(recorder.events);
+
+    fake.emit({ type: "agent_start" } as AgentSessionEvent);
+    fake.emit({ type: "agent_end", messages: [], willRetry: true } as AgentSessionEvent);
+    expect(recorder.events.onBusy).toHaveBeenLastCalledWith(true);
+    fake.emit({
+      type: "auto_retry_start",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 2_000,
+      errorMessage: "503: stream_read_error",
+    } as AgentSessionEvent);
+    expect(recorder.events.onNotice).toHaveBeenLastCalledWith("请求暂时失败，2 秒后自动重试（1/3）", "warning");
+    fake.emit({ type: "auto_retry_end", success: true, attempt: 1 } as AgentSessionEvent);
+    expect(recorder.events.onNotice).toHaveBeenLastCalledWith("请求已在第 1 次重试后恢复", "success");
+    expect(recorder.events.onBusy).toHaveBeenLastCalledWith(true);
+    fake.emit({ type: "agent_end", messages: [], willRetry: false } as AgentSessionEvent);
+    expect(recorder.events.onBusy).toHaveBeenLastCalledWith(false);
+
+    await backend.dispose();
+  });
+
+  it("releases busy state and reports the final error when automatic retries are exhausted", async () => {
+    const fake = fakePiSession([]);
+    const recorder = eventRecorder();
+    const backend = new PiBackend({
+      cwd: await mkdtemp(join(tmpdir(), "vspi-m2-auto-retry-failure-")),
+      sessionFactory: async () => ({ session: fake.session }),
+    });
+    await backend.start(recorder.events);
+
+    fake.emit({ type: "agent_start" } as AgentSessionEvent);
+    fake.emit({ type: "agent_end", messages: [], willRetry: true } as AgentSessionEvent);
+    fake.emit({
+      type: "auto_retry_start",
+      attempt: 3,
+      maxAttempts: 3,
+      delayMs: 500,
+      errorMessage: "503: upstream_error: Upstream request failed",
+    } as AgentSessionEvent);
+    fake.emit({ type: "agent_end", messages: [], willRetry: false } as AgentSessionEvent);
+    expect(recorder.events.onBusy).toHaveBeenLastCalledWith(false);
+    fake.emit({
+      type: "auto_retry_end",
+      success: false,
+      attempt: 3,
+      finalError: "503: upstream_error: Upstream request failed",
+    } as AgentSessionEvent);
+    expect(recorder.events.onNotice).toHaveBeenLastCalledWith("自动重试 3 次后仍然失败", "error");
+
+    await backend.dispose();
+  });
+
   it("defers Session takeover until the active generation reaches idle without aborting it", async () => {
     let releasePrompt: (() => void) | undefined;
     const fake = fakePiSession([], {

@@ -5,30 +5,16 @@ import { type CronRuntime, nextCronTaskRun } from "./runtime.js";
 import { formatCronLocalTime, parseCronDuration, parseCronRunAt } from "./schedule.js";
 import { MAX_CRON_PROMPT_BYTES } from "./types.js";
 
-const CreateParameters = Type.Union([
-  Type.Object(
-    {
-      cron: Type.String({ minLength: 1, maxLength: 200 }),
-      prompt: Type.String({ minLength: 1, maxLength: MAX_CRON_PROMPT_BYTES }),
-      recurring: Type.Optional(Type.Boolean({ default: true })),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      after: Type.String({ minLength: 2, maxLength: 32, pattern: "^[0-9]+(?:[mMhHdD][0-9]*)*[mMhHdD]$" }),
-      prompt: Type.String({ minLength: 1, maxLength: MAX_CRON_PROMPT_BYTES }),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      run_at: Type.String({ minLength: 10, maxLength: 64 }),
-      prompt: Type.String({ minLength: 1, maxLength: MAX_CRON_PROMPT_BYTES }),
-    },
-    { additionalProperties: false },
-  ),
-]);
+const CreateParameters = Type.Object(
+  {
+    cron: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+    after: Type.Optional(Type.String({ minLength: 2, maxLength: 32, pattern: "^[0-9]+(?:[mMhHdD][0-9]*)*[mMhHdD]$" })),
+    run_at: Type.Optional(Type.String({ minLength: 10, maxLength: 64 })),
+    prompt: Type.String({ minLength: 1, maxLength: MAX_CRON_PROMPT_BYTES }),
+    recurring: Type.Optional(Type.Boolean({ default: true })),
+  },
+  { additionalProperties: false },
+);
 const ListParameters = Type.Object({}, { additionalProperties: false });
 const DeleteParameters = Type.Object(
   { id: Type.String({ minLength: 8, maxLength: 8, pattern: "^[0-9a-fA-F]{8}$" }) },
@@ -52,14 +38,19 @@ function createTool(runtime: CronRuntime): ToolDefinition<typeof CreateParameter
     parameters: CreateParameters,
     executionMode: "sequential",
     async execute(_id, raw) {
+      const schedule = normalizeCreateSchedule(raw);
       const task =
-        "cron" in raw
-          ? await runtime.create(raw)
+        schedule.kind === "cron"
+          ? await runtime.create({
+              cron: schedule.value,
+              prompt: raw.prompt,
+              ...(raw.recurring === undefined ? {} : { recurring: raw.recurring }),
+            })
           : await runtime.createAt({
               runAt:
-                "after" in raw
-                  ? runtime.now() + parseCronDuration(raw.after)
-                  : parseCronRunAt(raw.run_at, runtime.now()),
+                schedule.kind === "after"
+                  ? runtime.now() + parseCronDuration(schedule.value)
+                  : parseCronRunAt(schedule.value, runtime.now()),
               prompt: raw.prompt,
             });
       const details = {
@@ -112,6 +103,21 @@ function deleteTool(runtime: CronRuntime): ToolDefinition<typeof DeleteParameter
       return result({ deleted: raw.id });
     },
   };
+}
+
+function normalizeCreateSchedule(
+  raw: CronCreateParameters,
+): { kind: "cron"; value: string } | { kind: "after"; value: string } | { kind: "run_at"; value: string } {
+  const schedules = [
+    ...(raw.cron === undefined ? [] : [{ kind: "cron" as const, value: raw.cron }]),
+    ...(raw.after === undefined ? [] : [{ kind: "after" as const, value: raw.after }]),
+    ...(raw.run_at === undefined ? [] : [{ kind: "run_at" as const, value: raw.run_at }]),
+  ];
+  if (schedules.length !== 1) throw new Error("CronCreate requires exactly one of cron, after, or run_at");
+  if (schedules[0]?.kind !== "cron" && raw.recurring !== undefined) {
+    throw new Error("CronCreate recurring is valid only with cron");
+  }
+  return schedules[0] as (typeof schedules)[number];
 }
 
 function result<T>(details: T) {
