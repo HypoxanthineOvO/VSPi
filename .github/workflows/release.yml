@@ -17,11 +17,20 @@ jobs:
         with:
           node-version: 22.22.0
           cache: npm
+      - name: Install test runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ripgrep bubblewrap
       - run: npm ci --no-audit --no-fund
       - name: Validate release source
         run: |
           npm run check
-          npm test
+          npx vitest run \
+            test/providers-builtin.test.ts \
+            test/provider-request-compatibility.test.ts \
+            test/pi-backend.test.ts \
+            test/m2-backend-contract.test.ts \
+            test/ci-release.test.ts
       - name: Build release assets
         run: |
           VERSION="$(node -p "require('./package.json').version")"
@@ -31,6 +40,12 @@ jobs:
           node scripts/ci/verify-package.mjs .artifacts/pack.json
           cp ".artifacts/vspi-$VERSION.tgz" .artifacts/vspi-latest.tgz
           (cd .artifacts && sha256sum "vspi-$VERSION.tgz" vspi-latest.tgz > SHA256SUMS)
+      - name: Install packaged CLI
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          PREFIX="$(mktemp -d)"
+          npm install --global --prefix "$PREFIX" ".artifacts/vspi-$VERSION.tgz"
+          test "$("$PREFIX/bin/vspi" --version)" = "$VERSION"
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
