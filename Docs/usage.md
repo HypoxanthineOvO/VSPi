@@ -198,7 +198,7 @@ Teammate 是受信项目内的持久角色，定义位于 `<workspace>/.vspi/age
 }
 ```
 
-项目配置只有在 `--trust-project` 下读取；损坏 JSON、额外字段、symlink scope、非法模型或工具都会 fail closed。子代理文件工具拒绝 workspace 外路径和 symlink escape；Bash 在 Linux `bubblewrap` 中运行，使用空 HOME、清理后的环境和 workspace 单独可写挂载，缺少 `bwrap` 时 fail closed。Recovery 完全不注册 `subagent`。子代理不能创建、删除、重置 Teammate，也不能修改其模型或 lane。
+项目配置只有在 `--trust-project` 下读取；损坏 JSON、额外字段、symlink scope、非法模型或工具都会 fail closed。子代理文件工具拒绝 workspace 外路径和 symlink escape；Shell 在 Host 上以项目目录为 cwd，并继承父进程的 HOME、环境变量与 CLI 登录凭据，同时继续受 Session Policy 审批约束。Recovery 完全不注册 `subagent`。子代理不能创建、删除、重置 Teammate，也不能修改其模型或 lane。
 
 只有确认是额度耗尽的错误才会尝试 `fallbackModels`；普通 429、网络、认证或一般模型错误不会触发 fallback。失败 attempt 的 usage 同样计入 tree budget。Teammate fallback 会把 `currentModel` 与原因原子写回配置并保持 sticky，不探测首选模型、不自动恢复。主模型会收到结构化 tool result 和 warning notice，Transcript 与 `/agents` 同时显示角色、实际模型、选择原因、Effort、lane、任务和 fallback。用户可显式执行 `/agents model <teammate> <provider/model>`、`/agents reset <teammate> [lane]`、`/agents pool <provider> <role> <provider/model>` 或 `/agents override <teammate|all> [turn|session]`；项目配置写入都要求 `--trust-project`。
 

@@ -1,15 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { formatLocalDate, formatLocalTimestamp, resolveLocalEnvironment } from "../src/domain/local-time.js";
+import {
+  formatLocalDate,
+  formatLocalTime,
+  formatLocalTimestamp,
+  resolveLocalEnvironment,
+} from "../src/domain/local-time.js";
 import { environmentContext } from "../src/prompts/pi-prompt-profile-extension.js";
 
 describe("local time boundaries", () => {
   it("renders persisted UTC timestamps in the selected local timezone", () => {
     expect(formatLocalTimestamp("2026-08-27T04:15:10.672Z", "Asia/Shanghai")).toBe("2026-08-27 12:15");
+    expect(formatLocalTime("2026-08-27T04:15:10.672Z", "Asia/Shanghai")).toBe("12:15:10");
     expect(formatLocalDate("2026-08-26T18:00:00.000Z", "Asia/Shanghai")).toBe("08/27");
   });
 
   it("keeps invalid persisted timestamps out of the display", () => {
     expect(formatLocalDate("not-a-date", "Asia/Shanghai")).toBeUndefined();
+    expect(formatLocalTime("not-a-date", "Asia/Shanghai")).toBeUndefined();
     expect(formatLocalTimestamp("not-a-date", "Asia/Shanghai")).toBeUndefined();
   });
 

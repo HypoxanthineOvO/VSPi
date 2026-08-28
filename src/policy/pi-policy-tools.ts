@@ -149,7 +149,8 @@ export function platformChildToolNames(
   tools: readonly string[],
   platform: NodeJS.Platform = process.platform,
 ): string[] {
-  return tools.filter((tool) => tool !== "powershell" && (platform !== "win32" || tool !== "bash"));
+  const shell = platformShellName(platform);
+  return tools.filter((tool) => (tool !== "bash" && tool !== "powershell") || tool === shell);
 }
 
 export function policyToolsForPlatform(
@@ -157,7 +158,7 @@ export function policyToolsForPlatform(
   options: { child?: boolean; platform?: NodeJS.Platform } = {},
 ): Array<PolicyToolOverrides[keyof PolicyToolOverrides]> {
   const platform = options.platform ?? process.platform;
-  const shell = options.child && platform === "win32" ? undefined : platformShellName(platform);
+  const shell = platformShellName(platform);
   return Object.values(overrides).filter(
     (tool) => (tool.name !== "bash" && tool.name !== "powershell") || tool.name === shell,
   );

@@ -200,13 +200,24 @@ describe("PiAgentManager", () => {
       required?: string[];
       properties?: Record<string, unknown>;
     };
-    expect(schema.required).toContain("task");
+    expect(schema.required).toEqual(["task"]);
     expect(schema.properties).not.toHaveProperty("tasks");
     expect(schema.properties).not.toHaveProperty("teammate");
     expect(schema.properties).not.toHaveProperty("lane");
     expect(tool.promptSnippet).toContain("background");
     expect(tool.promptGuidelines?.join(" ")).toContain("completion is delivered automatically");
     expect(JSON.stringify(schema.properties?.model)).not.toContain("claude-3-5-sonnet");
+    expect(schema.properties?.resume).toMatchObject({ type: "string", maxLength: 100 });
+    expect(schema.properties?.resume).not.toHaveProperty("minLength");
+    await expect(
+      tool.execute(
+        "fresh-empty-resume",
+        { task: "Run as a fresh child despite an empty resume sentinel", resume: "" },
+        undefined,
+        undefined,
+        fakeToolContext(cwd) as never,
+      ),
+    ).resolves.toBeDefined();
     await manager.dispose();
   });
 
@@ -1122,6 +1133,68 @@ describe("PiAgentManager", () => {
     releaseBash();
     await bash;
     await Promise.all([firstManager.dispose(), secondManager.dispose()]);
+  });
+
+  it("publishes live run and tree token usage before the Subagent finishes", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "vspi-agent-live-usage-"));
+    const events: AgentStatusEvent[] = [];
+    const messages: unknown[] = [];
+    let subscriber: ((event: AgentSessionEvent) => void) | undefined;
+    const session = {
+      messages,
+      subscribe(callback: (event: AgentSessionEvent) => void) {
+        subscriber = callback;
+        return () => {
+          subscriber = undefined;
+        };
+      },
+      async prompt() {
+        const message = {
+          role: "assistant",
+          content: [{ type: "text", text: `streaming ${"output ".repeat(80)}` }],
+          stopReason: "stop",
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
+        };
+        messages.push(message);
+        subscriber?.({ type: "message_update", message } as AgentSessionEvent);
+        await Promise.resolve();
+        message.usage = { input: 100, output: 200, cacheRead: 1, cacheWrite: 0, cost: { total: 0.02 } };
+        subscriber?.({ type: "message_update", message } as AgentSessionEvent);
+      },
+      abort: vi.fn(async () => {}),
+      dispose: vi.fn(),
+    } as unknown as AgentSession;
+    const manager = await PiAgentManager.create({
+      cwd,
+      agentDir: cwd,
+      trustedProject: false,
+      recovery: false,
+      modelRuntime: fakeRuntime(),
+      executionPolicy: createExecutionPolicyService({ workspace: cwd, policy: "Standard" }),
+      onStatus: (event) => events.push(event),
+      sessionFactory: async () => session,
+    });
+
+    await manager
+      .createTool(["read"], true)
+      .execute(
+        "live-usage",
+        { task: "Stream enough output to expose live usage" },
+        undefined,
+        undefined,
+        fakeToolContext(cwd) as never,
+      );
+
+    const live = events.find(
+      (event) =>
+        event.run.status === "running" && event.run.budget.runTokensUsed > 0 && event.run.budget.treeTokensUsed > 0,
+    );
+    expect(live?.run.usage.output).toBeGreaterThan(0);
+    expect(manager.snapshot().recent[0]).toMatchObject({
+      usage: { input: 100, output: 200, cacheRead: 1, turns: 1 },
+      budget: { runTokensUsed: 301, treeTokensUsed: 301 },
+    });
+    await manager.dispose();
   });
 
   it("falls back only after a quota error and reports the model change to the parent surface", async () => {

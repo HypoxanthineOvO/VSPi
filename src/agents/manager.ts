@@ -41,7 +41,6 @@ import type {
   TeammateDefinition,
 } from "./types.js";
 import { AGENT_ROLES } from "./types.js";
-import { createWorkspaceBashOperations } from "./workspace-tools.js";
 
 const ModelSelector = Type.String({ minLength: 3, maxLength: 200, pattern: "^[A-Za-z0-9._-]+/[A-Za-z0-9._:+-]+$" });
 const MAX_ENUMERATED_MODEL_SELECTORS = 64;
@@ -70,7 +69,7 @@ const BaseTaskAgentParameters = Type.Object(
     inherit_parent_context: Type.Optional(Type.Boolean()),
     fork: Type.Optional(Type.Boolean()),
     run_in_background: Type.Optional(Type.Boolean()),
-    resume: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
+    resume: Type.Optional(Type.String({ maxLength: 100 })),
   },
   { additionalProperties: false },
 );
@@ -1054,27 +1053,44 @@ export class PiAgentManager {
   ): Promise<RunOutcome> {
     this.activeSessions.set(run.id, session);
     const baselineUsage = run.resumed ? sessionUsage(session.messages) : emptyUsage();
+    const settledRunUsage = { ...run.usage };
     let latest = "";
+    let latestReportedOutput = 0;
     let persistedLatest = "";
+    const refreshLiveUsage = () => {
+      const reported = subtractUsage(sessionUsage(session.messages), baselineUsage);
+      const estimatedOutput = Math.ceil(Buffer.byteLength(latest, "utf8") / 4);
+      const liveUsage = {
+        ...reported,
+        output: reported.output + Math.max(0, estimatedOutput - latestReportedOutput),
+        turns: Math.max(reported.turns, latest.length > 0 ? 1 : 0),
+      };
+      run.usage = addUsage(settledRunUsage, liveUsage);
+      run.budget = this.runBudget(run.treeId, run.usage, liveUsage);
+    };
     const unsubscribe = session.subscribe((event) => {
       if (event.type === "message_update") {
         latest = assistantText(event.message);
+        latestReportedOutput = assistantUsageOutput(event.message);
         if (latest) {
           const outputChunk = latest.startsWith(persistedLatest) ? latest.slice(persistedLatest.length) : `\n${latest}`;
           persistedLatest = latest;
           if (outputChunk) void this.taskRuntime.appendOutput(run.id, outputChunk);
           run.outputPreview = redactAuditText(latest, 4_000);
           run.lastActivityAt = new Date().toISOString();
+          refreshLiveUsage();
           this.publish(run);
           update(`${run.kind} ${run.id.slice(0, 8)} · ${model}\n${run.outputPreview}`);
         }
       } else if (event.type === "tool_execution_start") {
         run.currentTool = event.toolName;
         run.lastActivityAt = new Date().toISOString();
+        refreshLiveUsage();
         this.publish(run);
       } else if (event.type === "tool_execution_end") {
         delete run.currentTool;
         run.lastActivityAt = new Date().toISOString();
+        refreshLiveUsage();
         this.publish(run);
       }
     });
@@ -1107,12 +1123,12 @@ export class PiAgentManager {
         }
         output = finalAssistantText(session.messages).trim();
       }
-      const usage = addUsage(run.usage, subtractUsage(sessionUsage(session.messages), baselineUsage));
+      const usage = addUsage(settledRunUsage, subtractUsage(sessionUsage(session.messages), baselineUsage));
       run.outputPreview = redactAuditText(output || "(no output)", 4_000);
       return { output: truncateOutput(output || "(no output)"), run: cloneRun(run), usage };
     } finally {
       const attemptUsage = subtractUsage(sessionUsage(session.messages), baselineUsage);
-      run.usage = addUsage(run.usage, attemptUsage);
+      run.usage = addUsage(settledRunUsage, attemptUsage);
       delete run.currentTool;
       this.scheduler.recordUsage(
         run.treeId,
@@ -1155,9 +1171,7 @@ export class PiAgentManager {
       projectTrusted: this.options.trustedProject,
     });
     const factualBoundary = [
-      process.platform === "win32"
-        ? `Workspace boundary: ${resolve(this.options.cwd)}. File tools are confined to it; shell tools are unavailable to child agents on Windows.`
-        : `Workspace boundary: ${resolve(this.options.cwd)}. File tools are confined to it; bash runs in a bubblewrap sandbox with a blank HOME.`,
+      `Working directory: ${resolve(this.options.cwd)}. File tools are confined to this workspace; shell tools run on the Host and inherit the parent process environment and credentials.`,
       `Delegation pool: request child roles (${AGENT_ROLES.join(", ")}) instead of model names. The runtime maps roles within the current provider unless project configuration explicitly permits cross-provider delegation.`,
       "Persistent Teammate creation, deletion, reset, and model changes are user-authorized operations and are unavailable to child agents.",
       ...(instructions.trim() ? [instructions.trim()] : []),
@@ -1182,7 +1196,6 @@ export class PiAgentManager {
         workspace: this.options.cwd,
         executionPolicy: this.options.executionPolicy,
         workspaceBoundary: true,
-        bashOperations: createWorkspaceBashOperations(this.options.cwd),
         preflight: (action) => this.assertChildAction(action),
         executionBoundary: (action, operation, signal) => this.withToolBoundary(action, operation, signal),
       }),
@@ -1476,21 +1489,29 @@ export class PiAgentManager {
     }
   }
 
-  private runBudget(treeId: string, usage: RunOutcome["usage"]): AgentRunSnapshot["budget"] {
+  private runBudget(
+    treeId: string,
+    usage: RunOutcome["usage"],
+    unsettledUsage: RunOutcome["usage"] = emptyUsage(),
+  ): AgentRunSnapshot["budget"] {
     const tree = this.scheduler.budget(treeId);
     const runTokensUsed = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+    const unsettledTokens =
+      unsettledUsage.input + unsettledUsage.output + unsettledUsage.cacheRead + unsettledUsage.cacheWrite;
+    const treeTokensUsed = tree.tokens + unsettledTokens;
+    const treeCostUsd = tree.costUsd + unsettledUsage.cost;
     // 预算口径只产出 UI 警戒线；runtime 不据此拒绝、排队或作废成果（C19 P0-2）。
     return {
       runTokensUsed,
       maxRunTokens: this.config.maxRunTokens,
-      treeTokensUsed: tree.tokens,
+      treeTokensUsed,
       maxTreeTokens: this.config.maxTreeTokens,
-      treeCostUsd: tree.costUsd,
+      treeCostUsd,
       maxTreeCostUsd: this.config.maxTreeCostUsd,
       maxRunSeconds: this.config.maxRunSeconds,
       warnRunTokens: runTokensUsed > this.config.maxRunTokens,
-      warnTreeTokens: tree.tokens > this.config.maxTreeTokens,
-      warnTreeCost: tree.costUsd > this.config.maxTreeCostUsd,
+      warnTreeTokens: treeTokensUsed > this.config.maxTreeTokens,
+      warnTreeCost: treeCostUsd > this.config.maxTreeCostUsd,
       warnElapsed: false,
     };
   }
@@ -1797,6 +1818,10 @@ function assistantText(message: unknown): string {
     )
     .map((part) => part.text)
     .join("\n");
+}
+
+function assistantUsageOutput(message: unknown): number {
+  return isRecord(message) && isRecord(message.usage) ? numberValue(message.usage.output) : 0;
 }
 
 function finalAssistantText(messages: readonly unknown[]): string {

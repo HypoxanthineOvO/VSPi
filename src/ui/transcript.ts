@@ -1,5 +1,6 @@
 import { AssistantMessageComponent } from "@earendil-works/pi-coding-agent";
 import { effortLabel } from "../domain/effort.js";
+import { formatLocalTime } from "../domain/local-time.js";
 import type { TranscriptMessage } from "../domain/types.js";
 import { frame, padLine, stripAnsi, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./ansi.js";
 import { type DiffLine, renderDiff } from "./diff.js";
@@ -10,6 +11,7 @@ import type { VspiTheme } from "./theme.js";
  *  persistence/export; only the tail is sent through Markdown/layout so a giant
  *  streaming block cannot wedge the TUI renderer or grow the write without bound. */
 const MAX_THINKING_RENDER_CHARS = 200_000;
+const AGENT_TIMEZONE = "Asia/Shanghai";
 
 export interface TranscriptRenderOptions {
   inspectedId?: string;
@@ -577,18 +579,16 @@ export function renderTranscriptMessage(
     const agentRole = message.agentRole ? ` · ${message.agentRole}` : "";
     const metadata = `${symbol} ${identity}${agentRole} · ${theme.blue(message.model)}${preferred} · ${effortLabel(message.effort)}${context}${lane}${fallback}`;
     // C19 P0-5：运行中的进度行——当前工具、轮次、最近活动、耗时。
+    // 2026-08-28：不再渲染 run/tree 预算警戒线行。默认 120K/500K 上限对真实
+    // 多轮任务形同虚设，警告常亮失去信息量；用量细节移至 /agents 面板详情。
     const running = message.status === "running" || message.status === "queued";
     const progress = running
       ? [
           "Progress",
-          `  ${message.currentTool ? `tool ${message.currentTool}` : "thinking"} · turn ${(message.usageTurns ?? 0) + 1}${message.lastActivityAt ? ` · 活动于 ${message.lastActivityAt.slice(11, 19)}` : ""}${message.elapsedSeconds !== undefined ? ` · 已运行 ${formatSubagentDuration(message.elapsedSeconds)}` : ""}`,
+          `  ${message.currentTool ? `tool ${message.currentTool}` : "thinking"} · turn ${(message.usageTurns ?? 0) + 1}${message.lastActivityAt ? ` · 活动于 ${formatLocalTime(message.lastActivityAt, AGENT_TIMEZONE) ?? "--:--:--"}` : ""}${message.elapsedSeconds !== undefined ? ` · 已运行 ${formatSubagentDuration(message.elapsedSeconds)}` : ""}`,
         ]
       : message.elapsedSeconds !== undefined
         ? ["Progress", `  用时 ${formatSubagentDuration(message.elapsedSeconds)} · ${message.status}`]
-        : undefined;
-    const usageLine =
-      message.runTokensUsed !== undefined && message.runTokensMax !== undefined
-        ? `  run ${formatSubagentTokens(message.runTokensUsed)} / ${formatSubagentTokens(message.runTokensMax)}${message.warnRunTokens ? " ⚠ 超警戒线" : ""}${message.treeTokensUsed !== undefined && message.treeTokensMax !== undefined ? ` · tree ${formatSubagentTokens(message.treeTokensUsed)} / ${formatSubagentTokens(message.treeTokensMax)}${message.warnTreeTokens ? " ⚠ 超警戒线" : ""}` : ""}`
         : undefined;
     const bodyWidth = Math.max(1, width - 2);
     const body = [
@@ -596,13 +596,6 @@ export function renderTranscriptMessage(
       ...wrapTextWithAnsi(message.task, bodyWidth).slice(0, 2),
       ...(progress
         ? [theme.focus(progress[0] as string), theme.focus(truncateToWidth(progress[1] as string, bodyWidth, "…"))]
-        : []),
-      ...(usageLine
-        ? [
-            message.warnRunTokens || message.warnTreeTokens
-              ? theme.warning(truncateToWidth(usageLine, bodyWidth, "…"))
-              : theme.muted(truncateToWidth(usageLine, bodyWidth, "…")),
-          ]
         : []),
       ...(message.outputPreview
         ? [theme.muted(truncateToWidth(message.outputPreview, bodyWidth, "…"))]
@@ -665,12 +658,6 @@ function renderOfficialAssistant(
   ]);
   component.updateContent(toOfficialAssistantMessage(message.text), message.streaming ?? false);
   return postprocessMarkdownLines(normalizeOfficialAssistantLines(component.render(width)), width, theme);
-}
-
-function formatSubagentTokens(value: number): string {
-  if (value < 1_000) return String(Math.max(0, Math.round(value)));
-  if (value < 10_000) return `${(value / 1_000).toFixed(1)}K`;
-  return `${Math.round(value / 1_000)}K`;
 }
 
 /** C19 P0-5：秒数格式化为人类可读时长。 */

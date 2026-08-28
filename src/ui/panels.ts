@@ -14,7 +14,7 @@ import {
 } from "../domain/commands.js";
 import { FX } from "../domain/defaults.js";
 import { effortLabel } from "../domain/effort.js";
-import { formatLocalDate, formatLocalTimestamp } from "../domain/local-time.js";
+import { formatLocalDate, formatLocalTime, formatLocalTimestamp } from "../domain/local-time.js";
 import type {
   AppSettings,
   EffortLevel,
@@ -65,6 +65,8 @@ import {
 } from "./interactions.js";
 import { formatContextUsage } from "./status.js";
 import type { VspiTheme } from "./theme.js";
+
+const AGENT_TIMEZONE = "Asia/Shanghai";
 
 export type PanelKind =
   | "plan"
@@ -2539,11 +2541,11 @@ export class PanelController {
         ).map((line) => theme.muted(line)),
         ...(selected.status === "running"
           ? wrapTextWithAnsi(
-              `current ${selected.currentTool ?? "thinking"} · turn ${selected.usage.turns + 1} · elapsed ${agentElapsed(selected)}`,
+              `current ${selected.currentTool ?? "thinking"} · turn ${selected.usage.turns + 1}${selected.lastActivityAt ? ` · active ${formatLocalTime(selected.lastActivityAt, AGENT_TIMEZONE) ?? "--:--:--"}` : ""} · elapsed ${agentElapsed(selected)}`,
               width,
             ).map((line) => theme.focus(line))
           : wrapTextWithAnsi(
-              `elapsed ${agentElapsed(selected)} · finished ${selected.finishedAt?.slice(11, 19) ?? "—"}`,
+              `elapsed ${agentElapsed(selected)} · finished ${selected.finishedAt ? (formatLocalTime(selected.finishedAt, AGENT_TIMEZONE) ?? "—") : "—"}`,
               width,
             ).map((line) => theme.muted(line))),
       );
@@ -2573,7 +2575,10 @@ export class PanelController {
         ...(selected.tools.length ? selected.tools.map((tool) => `  ${tool}`) : ["  none"]),
         theme.bold("Timeline"),
         ...selected.timeline.flatMap((event) =>
-          wrapTextWithAnsi(`  ${event.at.slice(11, 19)} ${event.kind} · ${event.summary}`, width),
+          wrapTextWithAnsi(
+            `  ${formatLocalTime(event.at, AGENT_TIMEZONE) ?? "--:--:--"} ${event.kind} · ${event.summary}`,
+            width,
+          ),
         ),
       );
       return lines.map((line) => padLine(line, width));

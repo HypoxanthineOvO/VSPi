@@ -147,7 +147,7 @@ describe("M1 Pi-native policy tool integration", () => {
     expect(classifyBash("rm -rf build")).toMatchObject({ category: "destructive", risk: "high" });
   });
 
-  it("selects exactly one root shell per platform and no child shell on Windows", async () => {
+  it("selects the native Host shell for root and child agents", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "vspi-platform-tools-"));
     const tools = createPolicyToolOverrides({
       workspace,
@@ -161,10 +161,14 @@ describe("M1 Pi-native policy tool integration", () => {
       (tool) => tool.name,
     );
     expect(windowsChildTools).not.toContain("bash");
-    expect(windowsChildTools).not.toContain("powershell");
+    expect(windowsChildTools).toContain("powershell");
     expect(platformRootToolNames("linux")).toContain("bash");
     expect(platformRootToolNames("win32")).toContain("powershell");
-    expect(platformChildToolNames(["read", "bash", "edit"], "win32")).toEqual(["read", "edit"]);
+    expect(platformChildToolNames(["read", "bash", "powershell", "edit"], "win32")).toEqual([
+      "read",
+      "powershell",
+      "edit",
+    ]);
     expect(platformChildToolNames(["read", "bash", "powershell"], "linux")).toEqual(["read", "bash"]);
     expect(platformShellPrompt("win32")).toContain("Windows");
   });

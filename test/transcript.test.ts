@@ -654,15 +654,19 @@ describe("transcript rendering", () => {
       treeTokensMax: 500_000,
       warnTreeTokens: false,
       elapsedSeconds: 62,
+      lastActivityAt: "2026-08-27T04:15:10.672Z",
     };
     const full = stripAnsi(renderTranscriptMessage(message, 160, plainTheme()).join("\n"));
     expect(full).toContain("frontend");
     expect(full).toContain("preferred kimi/k2");
     expect(full).toContain("lane main");
     expect(full).toContain("fallback quota_exhausted");
-    expect(full).toContain("run 2.6K / 120K");
-    expect(full).toContain("tree 5.0K / 500K");
+    // 2026-08-28：卡片不再渲染预算警戒线；用量细节移至 /agents 面板详情。
+    expect(full).not.toContain("run 2.6K / 120K");
+    expect(full).not.toContain("tree 5.0K / 500K");
     expect(full).toContain("用时 1m02s");
+    const running = stripAnsi(renderTranscriptMessage({ ...message, status: "running" }, 160, plainTheme()).join("\n"));
+    expect(running).toContain("活动于 12:15:10");
     for (const width of [40, 80, 120]) {
       expect(renderTranscriptMessage(message, width, plainTheme()).every((line) => visibleWidth(line) <= width)).toBe(
         true,
