@@ -4,13 +4,17 @@ import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
-import { parseVspiRelease } from "./release-contract.mjs";
+import { parseGitHubVspiRelease } from "./release-contract.mjs";
 
-const PROJECT_ORIGIN = "https://gitlab.vsplab.cn";
-const PROJECT_PATH = "heyx/vspi";
+const RELEASE_DOWNLOAD_ORIGIN = "https://github.com";
+const RELEASE_ASSET_ORIGINS = new Set([
+  "https://github-releases.githubusercontent.com",
+  "https://objects.githubusercontent.com",
+  "https://release-assets.githubusercontent.com",
+]);
 const MAX_PACKAGE_BYTES = 64 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
-export const RELEASE_API_URL = `${PROJECT_ORIGIN}/api/v4/projects/${encodeURIComponent(PROJECT_PATH)}/releases/permalink/latest`;
+export const RELEASE_API_URL = "https://api.github.com/repos/HypoxanthineOvO/VSPi/releases/latest";
 
 export interface SelfUpdateResult {
   status: "up-to-date" | "updated";
@@ -54,25 +58,68 @@ export function compareVersions(left: string, right: string): number {
   return 0;
 }
 
-function trustedUrl(value: string): URL {
+function trustedApiUrl(value: string): URL {
   const url = new URL(value);
-  if (url.origin !== PROJECT_ORIGIN) throw new Error("VSPi 更新地址不受信任");
+  if (url.href !== RELEASE_API_URL) throw new Error("VSPi 更新 API 地址不受信任");
   return url;
 }
 
-async function fetchChecked(fetchImpl: typeof globalThis.fetch, value: string, timeoutMs: number): Promise<Response> {
-  let url = trustedUrl(value);
+function httpsUrl(value: string): URL {
+  const url = new URL(value);
+  if (url.protocol !== "https:") throw new Error("VSPi 更新地址必须使用 HTTPS");
+  if (url.username || url.password) throw new Error("VSPi 更新地址不受信任");
+  return url;
+}
+
+function trustedDownloadUrl(value: string): URL {
+  const url = httpsUrl(value);
+  if (url.origin !== RELEASE_DOWNLOAD_ORIGIN && !RELEASE_ASSET_ORIGINS.has(url.origin))
+    throw new Error("VSPi 更新地址不受信任");
+  return url;
+}
+
+function trustedRedirectUrl(value: string): URL {
+  const url = httpsUrl(value);
+  if (!RELEASE_ASSET_ORIGINS.has(url.origin)) throw new Error("VSPi 更新重定向地址不受信任");
+  return url;
+}
+
+function githubApiError(response: Response, url: URL): Error {
+  if (response.status === 404) return new Error("GitHub 上未找到 VSPi Release");
+  const remaining = response.headers.get("x-ratelimit-remaining");
+  const retryAfter = response.headers.get("retry-after");
+  if (response.status === 429 || (response.status === 403 && (remaining === "0" || retryAfter))) {
+    return new Error(`GitHub API 请求频率受限${retryAfter ? `，请在 ${retryAfter} 秒后重试` : "，请稍后重试"}`);
+  }
+  return new Error(`请求 ${url.href} 失败：HTTP ${response.status}`);
+}
+
+async function fetchGitHubRelease(fetchImpl: typeof globalThis.fetch, value: string): Promise<Response> {
+  const url = trustedApiUrl(value);
+  const response = await fetchImpl(url, {
+    headers: { Accept: "application/vnd.github+json", "User-Agent": "VSPi-Updater" },
+    signal: AbortSignal.timeout(15_000),
+    redirect: "manual",
+  });
+  if (response.status >= 300 && response.status < 400) throw new Error("GitHub Release API 不允许重定向");
+  if (!response.ok) throw githubApiError(response, url);
+  if (response.url) trustedApiUrl(response.url);
+  return response;
+}
+
+async function fetchPackage(fetchImpl: typeof globalThis.fetch, value: string): Promise<Response> {
+  let url = trustedDownloadUrl(value);
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
-    const response = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs), redirect: "manual" });
+    const response = await fetchImpl(url, { signal: AbortSignal.timeout(60_000), redirect: "manual" });
     if (response.status < 300 || response.status >= 400) {
       if (!response.ok) throw new Error(`请求 ${url.href} 失败：HTTP ${response.status}`);
-      if (response.url) trustedUrl(response.url);
+      if (response.url && response.url !== url.href) throw new Error("VSPi 更新最终地址不受信任");
       return response;
     }
     const location = response.headers.get("location");
     if (!location) throw new Error("VSPi 更新重定向缺少 Location");
     if (redirects === MAX_REDIRECTS) throw new Error("VSPi 更新重定向次数过多");
-    url = trustedUrl(new URL(location, url).href);
+    url = trustedRedirectUrl(new URL(location, url).href);
   }
   throw new Error("VSPi 更新重定向次数过多");
 }
@@ -179,8 +226,8 @@ export async function updateVspi(currentVersion: string, options: SelfUpdateOpti
   const fetchImpl = options.fetch ?? globalThis.fetch;
   if (!fetchImpl) throw new Error("当前 Node.js 不支持 fetch，无法检查更新");
 
-  const releaseResponse = await fetchChecked(fetchImpl, options.releaseApiUrl ?? RELEASE_API_URL, 15_000);
-  const release = parseVspiRelease(await releaseResponse.json());
+  const releaseResponse = await fetchGitHubRelease(fetchImpl, options.releaseApiUrl ?? RELEASE_API_URL);
+  const release = parseGitHubVspiRelease(await releaseResponse.json());
   if (compareVersions(release.version, currentVersion) <= 0) {
     return { status: "up-to-date", currentVersion, latestVersion: release.version };
   }
@@ -188,7 +235,7 @@ export async function updateVspi(currentVersion: string, options: SelfUpdateOpti
   const directory = await mkdtemp(join(options.temporaryRoot ?? tmpdir(), "vspi-update-"));
   const tarballPath = join(directory, `vspi-${release.version}.tgz`);
   try {
-    const packageResponse = await fetchChecked(fetchImpl, release.downloadUrl, 60_000);
+    const packageResponse = await fetchPackage(fetchImpl, release.downloadUrl);
     const declaredSize = Number(packageResponse.headers.get("content-length"));
     if (Number.isFinite(declaredSize) && declaredSize > MAX_PACKAGE_BYTES)
       throw new Error("VSPi 更新包超过 64 MiB 上限");

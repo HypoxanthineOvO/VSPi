@@ -1,52 +1,11 @@
 stages:
   - test
-  - release
 
 gitlab-release-contract:
   stage: test
   image: node:24.15.0
   script:
+    - node --check scripts/github-release-producer.mjs
     - node --check scripts/gitlab-release-producer.mjs
     - node --check scripts/gitlab-release-producer.test.mjs
     - node --test scripts/gitlab-release-producer.test.mjs
-
-gitlab-release-preflight:
-  stage: test
-  image: node:24.15.0
-  rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-    - when: never
-  script:
-    - node scripts/gitlab-release-producer.mjs --preflight
-
-vspi-release:
-  stage: release
-  image: node:24.15.0
-  rules:
-    - if: '$CI_COMMIT_TAG == "v2.0.0"'
-    - when: never
-  before_script:
-    - corepack enable
-    - corepack prepare pnpm@10.33.0 --activate
-    - pnpm install --frozen-lockfile
-  script:
-    - pnpm lint
-    - pnpm sherif
-    - node scripts/check-nix-workspace.mjs
-    - pnpm --filter @moonshot-ai/agent-core-v2 test
-    - pnpm --filter @moonshot-ai/agent-core-v2 typecheck
-    - pnpm --filter @moonshot-ai/agent-core-v2 lint:imports
-    - pnpm --filter @moonshot-ai/klient test
-    - pnpm --filter @moonshot-ai/klient typecheck
-    - pnpm --filter @moonshot-ai/kap-server test
-    - pnpm --filter @moonshot-ai/kap-server typecheck
-    - pnpm --filter @vsp/vsp-runtime test
-    - pnpm --filter @vsp/vsp-runtime typecheck
-    - pnpm --filter vspi test
-    - pnpm --filter vspi typecheck
-    - pnpm --filter vspi package:pack
-    - pnpm --filter vspi package:verify "$CI_PROJECT_DIR/apps/vspi/.tmp/package-artifacts/vspi-2.0.0.tgz"
-    - node scripts/gitlab-release-producer.mjs "$CI_PROJECT_DIR/apps/vspi/.tmp/package-artifacts/vspi-2.0.0.tgz" "$CI_PROJECT_DIR/vspi-release-metadata.json"
-  artifacts:
-    paths:
-      - vspi-release-metadata.json

@@ -1,7 +1,7 @@
-export interface ParsedVspiRelease {
+export interface ParsedGitHubVspiRelease {
   version: string;
   checksum: string;
   downloadUrl: string;
 }
 
-export function parseVspiRelease(value: unknown): ParsedVspiRelease;
+export function parseGitHubVspiRelease(value: unknown): ParsedGitHubVspiRelease;

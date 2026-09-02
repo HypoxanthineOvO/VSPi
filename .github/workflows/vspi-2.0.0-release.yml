@@ -1,0 +1,76 @@
+name: VSPi 2.0.0 Release
+
+on:
+  push:
+    tags:
+      - v2.0.0
+
+concurrency:
+  group: vspi-2.0.0-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish GitHub release and mirror to GitLab
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run release quality gates
+        run: |
+          pnpm lint
+          pnpm sherif
+          node scripts/check-nix-workspace.mjs
+          pnpm --filter @moonshot-ai/agent-core-v2 test
+          pnpm --filter @moonshot-ai/agent-core-v2 typecheck
+          pnpm --filter @moonshot-ai/agent-core-v2 lint:imports
+          pnpm --filter @moonshot-ai/klient test
+          pnpm --filter @moonshot-ai/klient typecheck
+          pnpm --filter @moonshot-ai/kap-server test
+          pnpm --filter @moonshot-ai/kap-server typecheck
+          pnpm --filter @vsp/vsp-runtime test
+          pnpm --filter @vsp/vsp-runtime typecheck
+          pnpm --filter vspi test
+          pnpm --filter vspi typecheck
+
+      - name: Build and verify the staging tarball once
+        run: |
+          pnpm --filter vspi package:pack
+          pnpm --filter vspi package:verify "$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/vspi-2.0.0.tgz"
+          cp "$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/vspi-2.0.0.tgz" "$RUNNER_TEMP/vspi-latest.tgz"
+          cmp "$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/vspi-2.0.0.tgz" "$RUNNER_TEMP/vspi-latest.tgz"
+          sha256sum "$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/vspi-2.0.0.tgz" "$RUNNER_TEMP/vspi-latest.tgz"
+
+      - name: Publish the GitHub release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          node scripts/github-release-producer.mjs
+          "$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/vspi-2.0.0.tgz"
+          "$RUNNER_TEMP/vspi-latest.tgz"
+          "$RUNNER_TEMP/vspi-github-release.json"
+
+      - name: Mirror the published GitHub asset to GitLab
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLAB_TOKEN: ${{ secrets.VSPI_GITLAB_TOKEN }}
+          GITLAB_API_URL: https://gitlab.vsplab.cn/api/v4
+          GITLAB_PROJECT_ID: ${{ vars.VSPI_GITLAB_PROJECT_ID }}
+          GITLAB_PROJECT_URL: https://gitlab.vsplab.cn/heyx/vspi
+        run: node scripts/gitlab-release-producer.mjs "$RUNNER_TEMP/vspi-release-metadata.json"
