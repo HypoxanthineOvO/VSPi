@@ -12,6 +12,10 @@ import {
 } from "@vsp/vsp-runtime";
 
 import { dispatchCliCommand } from "./cli-command.js";
+import {
+	daemonEnvironment,
+	parseDaemonHomeDir,
+} from "./daemon-environment.js";
 import { dispatchExecCommand } from "./exec.js";
 import { resolveSessionStartupMode } from "./v1/backend/klient-backend.js";
 import { runVspiTui } from "./v1/run.js";
@@ -36,9 +40,9 @@ const identity = {
 };
 
 async function main(): Promise<void> {
-	assertSupportedNodeVersion();
 	const args = process.argv.slice(2);
 	if (await dispatchCliCommand(args)) return;
+	assertSupportedNodeVersion();
 	if (await dispatchExecCommand(args, { connect: ensureConnection })) return;
 	if (args[0] === "daemon") {
 		await daemonCommand(args.slice(1));
@@ -76,12 +80,13 @@ async function main(): Promise<void> {
 }
 
 async function daemonCommand(args: readonly string[]): Promise<void> {
+	const homeDir = parseDaemonHomeDir(args);
 	switch (args[0] ?? "status") {
 		case "serve":
-			await serveDaemon();
+			await serveDaemon(homeDir);
 			return;
 		case "start": {
-			const connection = await ensureConnection();
+			const connection = await ensureConnection(homeDir);
 			process.stdout.write(
 				`VSP runtime started at pid ${String(connection.state.pid)}\n`,
 			);
@@ -89,15 +94,15 @@ async function daemonCommand(args: readonly string[]): Promise<void> {
 			return;
 		}
 		case "status": {
-			const state = await inspectRuntime();
+			const state = await inspectRuntime(homeDir);
 			if (state === undefined) {
 				process.stdout.write("VSP runtime is stopped\n");
 				return;
 			}
 			let connection: RuntimeConnection | undefined;
 			try {
-				connection = await connectRuntime();
-				const expected = await expectedRuntimeIdentity();
+				connection = await connectRuntime(homeDir);
+				const expected = await expectedRuntimeIdentity(homeDir);
 				assertCompatibleConnection(
 					expected,
 					await readRuntimeIdentity(expected.homeDir),
@@ -117,24 +122,28 @@ async function daemonCommand(args: readonly string[]): Promise<void> {
 			return;
 		}
 		case "stop": {
-			const stopped = await stopRuntime();
+			const stopped = await stopRuntime(homeDir);
 			process.stdout.write(
 				stopped ? "VSP runtime stopped\n" : "VSP runtime is already stopped\n",
 			);
 			return;
 		}
 		case "logs":
-			process.stdout.write(`${resolveRuntimePaths().logPath}\n`);
+			process.stdout.write(`${resolveRuntimePaths(homeDir).logPath}\n`);
 			return;
 		default:
 			throw new Error("Usage: vspi daemon [start|status|stop|logs]");
 	}
 }
 
-async function serveDaemon(): Promise<void> {
+async function serveDaemon(homeDir?: string): Promise<void> {
 	configurePackagedRuntimeWorkers(import.meta.url);
-	const expected = await expectedRuntimeIdentity();
-	const daemon = await startRuntimeDaemon({ hostIdentity: identity });
+	const expected = await expectedRuntimeIdentity(homeDir);
+	const daemon = await startRuntimeDaemon({
+		homeDir: expected.homeDir,
+		hostIdentity: identity,
+		env: daemonEnvironment(process.env),
+	});
 	try {
 		await writeRuntimeIdentity(expected, daemon.state.pid);
 	} catch (error) {
@@ -161,8 +170,8 @@ async function serveDaemon(): Promise<void> {
 	});
 }
 
-async function ensureConnection(): Promise<RuntimeConnection> {
-	const expected = await expectedRuntimeIdentity();
+async function ensureConnection(homeDir?: string): Promise<RuntimeConnection> {
+	const expected = await expectedRuntimeIdentity(homeDir);
 	const running = await inspectRuntime(expected.homeDir);
 	if (running !== undefined) {
 		const metadata =
@@ -173,8 +182,8 @@ async function ensureConnection(): Promise<RuntimeConnection> {
 	}
 	const connection = await ensureRuntime({
 		homeDir: expected.homeDir,
-		spawn: ({ homeDir, logPath }) => {
-			mkdirSync(resolveRuntimePaths(homeDir).serverDir, {
+		spawn: ({ homeDir: runtimeHomeDir, logPath }) => {
+			mkdirSync(resolveRuntimePaths(runtimeHomeDir).serverDir, {
 				recursive: true,
 				mode: 0o700,
 			});
@@ -183,11 +192,18 @@ async function ensureConnection(): Promise<RuntimeConnection> {
 				const entry = import.meta.filename;
 				const child = spawn(
 					process.execPath,
-					[...process.execArgv, entry, "daemon", "serve"],
+					[
+						...process.execArgv,
+						entry,
+						"daemon",
+						"serve",
+						"--home-dir",
+						runtimeHomeDir,
+					],
 					{
 						detached: true,
 						stdio: ["ignore", logFd, logFd],
-						env: { ...process.env, VSPI_HOME: homeDir },
+						env: daemonEnvironment(process.env),
 					},
 				);
 				child.unref();
@@ -210,18 +226,27 @@ async function ensureConnection(): Promise<RuntimeConnection> {
 	}
 }
 
-let expectedRuntimeIdentityPromise:
-	| Promise<ExpectedRuntimeIdentity>
-	| undefined;
+const expectedRuntimeIdentities = new Map<
+	string,
+	Promise<ExpectedRuntimeIdentity>
+>();
 
-function expectedRuntimeIdentity(): Promise<ExpectedRuntimeIdentity> {
-	expectedRuntimeIdentityPromise ??= createExpectedRuntimeIdentity({
-		entryPath: import.meta.filename,
-		productName: identity.productName,
-		version: identity.version,
-		platform: identity.platform,
-	});
-	return expectedRuntimeIdentityPromise;
+function expectedRuntimeIdentity(
+	homeDir?: string,
+): Promise<ExpectedRuntimeIdentity> {
+	const resolvedHomeDir = resolveRuntimePaths(homeDir).homeDir;
+	let expected = expectedRuntimeIdentities.get(resolvedHomeDir);
+	if (expected === undefined) {
+		expected = createExpectedRuntimeIdentity({
+			entryPath: import.meta.filename,
+			homeDir: resolvedHomeDir,
+			productName: identity.productName,
+			version: identity.version,
+			platform: identity.platform,
+		});
+		expectedRuntimeIdentities.set(resolvedHomeDir, expected);
+	}
+	return expected;
 }
 
 async function waitForRuntimeIdentity(
