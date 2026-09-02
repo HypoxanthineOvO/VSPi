@@ -433,6 +433,7 @@ export interface ChatBackend {
 	): Promise<void>;
 	stopAgentTask?(taskId: string): Promise<void>;
 	detachAgentTask?(taskId: string): Promise<void>;
+	detachForegroundTasks?(): Promise<number>;
 	isProjectTrusted?(): boolean;
 	runProviderProbe?(
 		providerId: string,

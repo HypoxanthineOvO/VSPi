@@ -419,6 +419,63 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(detachForegroundTask).toHaveBeenCalledOnce();
 	});
 
+	it("prefers live foreground detach and reports the detached count", async () => {
+		const detachForegroundTasks = vi.fn(async () => 2);
+		const detachAgentTask = vi.fn();
+		const cancel = vi.fn();
+		const showNotice = vi.fn();
+		const app = Object.assign(Object.create(VspiApp.prototype), {
+			backend: { cancel, detachForegroundTasks, detachAgentTask },
+			showNotice,
+		}) as { detachForegroundTask(): Promise<void> };
+
+		await app.detachForegroundTask();
+
+		expect(detachForegroundTasks).toHaveBeenCalledOnce();
+		expect(detachAgentTask).not.toHaveBeenCalled();
+		expect(cancel).not.toHaveBeenCalled();
+		expect(showNotice).toHaveBeenCalledWith("已转入后台 2 个任务", "success");
+	});
+
+	it("keeps queued steer in the dock until consuming", () => {
+		const queued = {
+			id: "queued-steer",
+			role: "user",
+			kind: "text",
+			text: "Inspect changes",
+			delivery: "steer",
+		} satisfies TranscriptMessage;
+		const app = Object.assign(Object.create(VspiApp.prototype), {
+			queuedMessages: new Map([[queued.id, queued]]),
+			queuedPresentations: new Map(),
+			messages: [
+				{ id: "user-1", role: "user", kind: "text", text: "Earlier" },
+			],
+			options: { settings: { reducedMotion: false } },
+			queuedAnimationTick: 0,
+			syncActivityPresentation: vi.fn(),
+			requestRender: vi.fn(),
+		}) as {
+			queuedMessages: Map<string, TranscriptMessage>;
+			queuedPresentations: Map<string, { phase: string; startedTick: number }>;
+			messages: TranscriptMessage[];
+			queueMessagePresentation(id: string): void;
+			settleQueuedMessage(id: string): void;
+		};
+
+		app.queueMessagePresentation(queued.id);
+		expect(app.messages.map((message) => message.id)).toEqual(["user-1"]);
+		expect(app.queuedPresentations.get(queued.id)?.phase).toBe("stable");
+
+		app.settleQueuedMessage(queued.id);
+		expect(app.messages.map((message) => message.id)).toEqual([
+			"user-1",
+			"queued-steer",
+		]);
+		expect(app.queuedMessages.has(queued.id)).toBe(false);
+		expect(app.queuedPresentations.get(queued.id)?.phase).toBe("settling");
+	});
+
 	it("detaches the newest foreground task without cancelling it", async () => {
 		const detachAgentTask = vi.fn(async () => undefined);
 		const cancel = vi.fn();

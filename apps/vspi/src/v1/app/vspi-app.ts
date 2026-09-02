@@ -343,6 +343,10 @@ export class VspiApp implements Component, Focusable {
 		string,
 		{ phase: QueuedMessagePresentation["phase"]; startedTick: number }
 	>();
+	private queuedMessages = new Map<
+		string,
+		Extract<TranscriptMessage, { kind: "text" }>
+	>();
 	private queuedAnimationTick = 0;
 	private workingFrame = 0;
 	private workingStartedAt: number | undefined;
@@ -1362,7 +1366,10 @@ export class VspiApp implements Component, Focusable {
 				: [];
 		const queuedMessages = questionActive
 			? []
-			: this.messages.filter(isQueuedTranscriptMessage).map((message) => {
+			: [
+					...(this.queuedMessages?.values() ?? []),
+					...this.messages.filter(isQueuedTranscriptMessage),
+				].map((message) => {
 					const state = this.queuedPresentations.get(message.id);
 					return renderQueuedMessage(message, width, this.theme, {
 						phase: state?.phase ?? "stable",
@@ -1850,15 +1857,18 @@ export class VspiApp implements Component, Focusable {
 				? "followUp"
 				: "steer"
 			: undefined;
-		this.messages.push({
+		const message: Extract<TranscriptMessage, { kind: "text" }> = {
 			id: messageId,
 			role: "user",
 			kind: "text",
 			text,
 			attachments,
 			...(delivery ? { delivery } : {}),
-		});
-		if (delivery !== undefined) this.queueMessagePresentation(messageId);
+		};
+		if (delivery !== undefined) {
+			this.queuedMessages.set(messageId, message);
+			this.queueMessagePresentation(messageId);
+		} else this.messages.push(message);
 		this.composer.setText("");
 		this.requestRender();
 		if (queuedDuringWork) {
@@ -1874,18 +1884,16 @@ export class VspiApp implements Component, Focusable {
 					// The backend was already idle despite the app's busy view: it started a new prompt.
 					// Reconcile presentation with the backend's authoritative decision instead of leaving
 					// the message stuck in the queued lane forever.
+					this.promoteQueuedMessage(messageId);
 					const settled = this.messages.find(
-						(message) => message.id === messageId,
+						(candidate) => candidate.id === messageId,
 					);
 					if (settled?.kind === "text") delete settled.delivery;
 					this.queuedPresentations.delete(messageId);
 				} else {
 					const mode = result?.delivery ?? delivery;
-					const queuedMessage = this.messages.find(
-						(message) => message.id === messageId,
-					);
-					if (queuedMessage?.kind === "text" && mode)
-						queuedMessage.delivery = mode;
+					const queuedMessage = this.queuedMessages.get(messageId);
+					if (queuedMessage && mode) queuedMessage.delivery = mode;
 					this.showNotice(
 						mode === "followUp"
 							? "已加入 Follow-up，将在当前任务完成后继续"
@@ -1894,6 +1902,7 @@ export class VspiApp implements Component, Focusable {
 					);
 				}
 			} catch (error) {
+				this.queuedMessages.delete(messageId);
 				this.messages = this.messages.filter(
 					(message) => message.id !== messageId,
 				);
@@ -1936,10 +1945,18 @@ export class VspiApp implements Component, Focusable {
 				// (agent_end precedes Pi's final settle). Adopt the backend's authoritative decision:
 				// present the message in the queued lane so its lifecycle matches what the model sees.
 				const queuedMessage = this.messages.find(
-					(message) => message.id === messageId,
+					(candidate) => candidate.id === messageId,
 				);
-				if (queuedMessage?.kind === "text")
+				if (
+					queuedMessage?.kind === "text" &&
+					isQueuedTranscriptMessage(queuedMessage)
+				) {
+					this.messages = this.messages.filter(
+						(candidate) => candidate.id !== messageId,
+					);
 					queuedMessage.delivery = result.delivery ?? "steer";
+					this.queuedMessages.set(messageId, queuedMessage);
+				}
 				this.queueMessagePresentation(messageId);
 				this.composer.editor.addToHistory(text);
 				this.showNotice(
@@ -2184,22 +2201,32 @@ export class VspiApp implements Component, Focusable {
 	}
 
 	private async detachForegroundTask(): Promise<void> {
-		if (!this.backend.detachAgentTask) {
-			this.showNotice("当前后端不支持转入后台", "error");
-			return;
-		}
-		const task = [
-			...this.taskSnapshot.agents,
-			...this.taskSnapshot.processes,
-			...this.taskSnapshot.questions,
-		]
-			.filter((item) => item.status === "running" && item.detached !== true)
-			.toSorted((left, right) => right.startedAt - left.startedAt)[0];
-		if (!task) {
-			this.showNotice("当前没有可转入后台的前台任务", "info");
-			return;
-		}
 		try {
+			if (this.backend.detachForegroundTasks) {
+				const count = await this.backend.detachForegroundTasks();
+				this.showNotice(
+					count > 0
+						? `已转入后台 ${String(count)} 个任务`
+						: "当前没有可转入后台的前台任务",
+					count > 0 ? "success" : "info",
+				);
+				return;
+			}
+			if (!this.backend.detachAgentTask) {
+				this.showNotice("当前后端不支持转入后台", "error");
+				return;
+			}
+			const task = [
+				...this.taskSnapshot.agents,
+				...this.taskSnapshot.processes,
+				...this.taskSnapshot.questions,
+			]
+				.filter((item) => item.status === "running" && item.detached !== true)
+				.toSorted((left, right) => right.startedAt - left.startedAt)[0];
+			if (!task) {
+				this.showNotice("当前没有可转入后台的前台任务", "info");
+				return;
+			}
 			await this.backend.detachAgentTask(task.taskId);
 			this.showNotice("已转入后台", "success");
 		} catch (error) {
@@ -2213,13 +2240,21 @@ export class VspiApp implements Component, Focusable {
 	private queueMessagePresentation(messageId: string): void {
 		if (this.queuedPresentations.has(messageId)) return;
 		this.queuedPresentations.set(messageId, {
-			phase: this.activityReducedMotion() ? "stable" : "entering",
+			phase: "stable",
 			startedTick: this.queuedAnimationTick,
 		});
 		this.syncActivityPresentation();
 	}
 
+	private promoteQueuedMessage(messageId: string): void {
+		const queued = this.queuedMessages.get(messageId);
+		if (!queued) return;
+		this.queuedMessages.delete(messageId);
+		this.messages.push(queued);
+	}
+
 	private settleQueuedMessage(messageId: string): void {
+		this.promoteQueuedMessage(messageId);
 		const index = this.messages.findIndex(
 			(candidate) => candidate.id === messageId,
 		);
@@ -4252,9 +4287,11 @@ export class VspiApp implements Component, Focusable {
 
 	private applyHandoffProjection(projection: SessionHandoffProjection): void {
 		if (projection.kind === "snapshot-start") {
-			this.handoffSnapshotQueued = this.messages.filter(
-				isQueuedTranscriptMessage,
-			);
+			this.handoffSnapshotQueued = [
+				...(this.queuedMessages?.values() ?? []),
+				...this.messages.filter(isQueuedTranscriptMessage),
+			];
+			this.queuedMessages?.clear();
 			this.queuedPresentations.clear();
 			this.compaction = undefined;
 			this.committedMessageCount = 0;
@@ -4268,9 +4305,15 @@ export class VspiApp implements Component, Focusable {
 				...this.messages.filter(isQueuedTranscriptMessage),
 			];
 			const seen = new Set(this.messages.map((message) => message.id));
-			this.messages.push(...queued.filter((message) => !seen.has(message.id)));
+			for (const message of queued) {
+				if (!seen.has(message.id) && isQueuedTranscriptMessage(message))
+					this.queuedMessages.set(message.id, message);
+			}
+			this.messages = this.messages.filter(
+				(message) => !isQueuedTranscriptMessage(message),
+			);
 			this.handoffSnapshotQueued = [];
-			for (const message of this.messages.filter(isQueuedTranscriptMessage))
+			for (const message of this.queuedMessages.values())
 				this.queueMessagePresentation(message.id);
 			this.modelLabel = projection.modelLabel;
 			this.refreshModelPresentation();
@@ -5140,6 +5183,7 @@ export class VspiApp implements Component, Focusable {
 		this.panels.setGoalSnapshot(undefined, this.backend.modelLabel);
 		this.queueState = { steering: 0, followUp: 0 };
 		this.queuedPresentations.clear();
+		this.queuedMessages?.clear();
 		this.queuedAnimationTick = 0;
 		this.compaction = undefined;
 		this.runActive = false;
@@ -5201,16 +5245,14 @@ export class VspiApp implements Component, Focusable {
 		];
 		const consumedMessageIds = new Set<string>();
 		for (const queued of queuedMessages) {
-			const message = this.messages.find(
+			const message = [
+				...this.queuedMessages.values(),
+				...this.messages.filter(isQueuedTranscriptMessage),
+			].find(
 				(candidate) =>
-					candidate.kind === "text" &&
-					candidate.role === "user" &&
-					(candidate.delivery === "steer" ||
-						candidate.delivery === "followUp") &&
-					!consumedMessageIds.has(candidate.id) &&
-					queued === candidate.text,
+					!consumedMessageIds.has(candidate.id) && queued === candidate.text,
 			);
-			if (message?.kind === "text") {
+			if (message !== undefined) {
 				consumedMessageIds.add(message.id);
 				restoredAttachments.push(...(message.attachments ?? []));
 			}
@@ -5218,6 +5260,8 @@ export class VspiApp implements Component, Focusable {
 		this.messages = this.messages.filter(
 			(message) => !consumedMessageIds.has(message.id),
 		);
+		for (const messageId of consumedMessageIds)
+			this.queuedMessages.delete(messageId);
 		for (const messageId of consumedMessageIds)
 			this.queuedPresentations.delete(messageId);
 		const attachments = restoredAttachments.filter(

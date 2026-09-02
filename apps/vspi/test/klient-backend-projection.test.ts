@@ -779,6 +779,89 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		expect(stopTask).not.toHaveBeenCalled();
 	});
 
+	it("detaches every live foreground task from a real task query", async () => {
+		const getTasks = vi.fn().mockResolvedValueOnce([
+			{
+				kind: "agent",
+				taskId: "agent-1",
+				description: "foreground agent",
+				status: "running",
+				detached: false,
+				startedAt: 1,
+				endedAt: null,
+			},
+			{
+				kind: "process",
+				taskId: "process-detached",
+				description: "background process",
+				status: "running",
+				detached: true,
+				startedAt: 2,
+				endedAt: null,
+				command: "sleep 1",
+				pid: 1,
+				exitCode: null,
+			},
+			{
+				kind: "question",
+				taskId: "question-done",
+				description: "done question",
+				status: "completed",
+				detached: false,
+				startedAt: 3,
+				endedAt: 4,
+				questionCount: 1,
+			},
+		]).mockResolvedValueOnce([]);
+		const detachTask = vi.fn(async () => undefined);
+		const stopTask = vi.fn();
+		const backend = new KlientChatBackend(
+			{} as RuntimeConnection,
+			"/workspace",
+			"new",
+		);
+		Object.assign(backend, { agent: { getTasks, detachTask, stopTask } });
+
+		await expect(backend.detachForegroundTasks()).resolves.toBe(1);
+
+		expect(getTasks).toHaveBeenNthCalledWith(1, {
+			activeOnly: true,
+			limit: 100,
+		});
+		expect(getTasks).toHaveBeenNthCalledWith(2, {
+			activeOnly: false,
+			limit: 100,
+		});
+		expect(detachTask).toHaveBeenCalledOnce();
+		expect(detachTask).toHaveBeenCalledWith({ taskId: "agent-1" });
+		expect(stopTask).not.toHaveBeenCalled();
+	});
+
+	it("does not report a detach after a task operation fails", async () => {
+		const error = new Error("detach failed");
+		const getTasks = vi.fn().mockResolvedValue([
+			{
+				kind: "agent",
+				taskId: "agent-1",
+				description: "foreground agent",
+				status: "running",
+				detached: false,
+				startedAt: 1,
+				endedAt: null,
+			},
+		]);
+		const detachTask = vi.fn().mockRejectedValue(error);
+		const backend = new KlientChatBackend(
+			{} as RuntimeConnection,
+			"/workspace",
+			"new",
+		);
+		Object.assign(backend, { agent: { getTasks, detachTask } });
+
+		await expect(backend.detachForegroundTasks()).rejects.toBe(error);
+		expect(detachTask).toHaveBeenCalledWith({ taskId: "agent-1" });
+	});
+
 	it("preserves compact boolean semantics and forwards custom instructions", async () => {
 		const compact = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
 		const backend = new KlientChatBackend(

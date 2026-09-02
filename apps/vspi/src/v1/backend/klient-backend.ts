@@ -602,6 +602,21 @@ export class KlientChatBackend implements ChatBackend {
 		return this.requireAgent().detachTask({ taskId });
 	}
 
+	async detachForegroundTasks(): Promise<number> {
+		const agent = this.requireAgent();
+		const tasks = await agent.getTasks({ activeOnly: true, limit: 100 });
+		const foreground = tasks.filter(
+			(task) => task.status === "running" && task.detached !== true,
+		);
+		let detached = 0;
+		for (const task of foreground) {
+			await agent.detachTask({ taskId: task.taskId });
+			detached += 1;
+		}
+		if (detached > 0) await this.refreshTasks(true);
+		return detached;
+	}
+
 	isProjectTrusted(): boolean {
 		return true;
 	}
@@ -1287,13 +1302,14 @@ export class KlientChatBackend implements ChatBackend {
 		});
 	}
 
-	private async refreshTasks(): Promise<void> {
+	private async refreshTasks(strict = false): Promise<void> {
 		const agent = this.agent;
 		if (agent === undefined) return;
 		let tasks: readonly AgentTaskInfo[];
 		try {
 			tasks = await agent.getTasks({ activeOnly: false, limit: 100 });
-		} catch {
+		} catch (error) {
+			if (strict) throw error;
 			return;
 		}
 		const previous = this.tasks;
