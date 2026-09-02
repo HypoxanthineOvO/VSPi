@@ -88,9 +88,12 @@ export async function migrateLegacyVspiProviders(
   for (const [providerId, legacy] of legacyProviders) {
     if (hiddenLegacyProvider(providerId)) continue;
     const existingProvider = record(providers[providerId]);
-    const provider = existingProvider ?? toProviderConfig(legacy, legacyCredentials.get(providerId), options.env, diagnostics, providerId);
+    const legacyProvider = toProviderConfig(legacy, legacyCredentials.get(providerId), options.env, diagnostics, providerId);
+    const provider = existingProvider === undefined
+      ? legacyProvider
+      : mergeProviderConfig(existingProvider, legacyProvider);
     if (provider === undefined) continue;
-    if (existingProvider === undefined) {
+    if (existingProvider === undefined || provider !== existingProvider) {
       providers[providerId] = provider;
       providerCount += 1;
     }
@@ -101,7 +104,8 @@ export async function migrateLegacyVspiProviders(
         continue;
       }
       const alias = `${providerId}/${modelId}`;
-      if (models[alias] !== undefined) continue;
+      const existingModel = record(models[alias]);
+      if (existingModel !== undefined && Object.keys(existingModel).length > 0) continue;
       const model = toModelConfig(providerId, legacyModel, legacy, diagnostics, alias);
       if (model === undefined) continue;
       models[alias] = model;
@@ -238,6 +242,24 @@ function toProviderConfig(
   });
 }
 
+function mergeProviderConfig(
+  existing: Record<string, unknown>,
+  legacy: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (legacy === undefined) return existing;
+  const merged = { ...existing };
+  let changed = false;
+  if (protocolFor(existing['type']) === undefined && protocolFor(legacy['type']) !== undefined) {
+    merged['type'] = legacy['type'];
+    changed = true;
+  }
+  if (nonBlankString(existing['base_url']) === undefined && nonBlankString(legacy['base_url']) !== undefined) {
+    merged['base_url'] = legacy['base_url'];
+    changed = true;
+  }
+  return changed ? merged : existing;
+}
+
 function toModelConfig(
   providerId: string,
   model: LegacyModel,
@@ -272,6 +294,7 @@ function toModelConfig(
 function protocolFor(value: unknown): Protocol | undefined {
   const normalized = typeof value === 'string' ? value.trim().toLowerCase().replaceAll(' ', '-') : '';
   switch (normalized) {
+    case 'openai-completions':
     case 'openai': return 'openai';
     case 'openai-responses':
     case 'openai-response':
@@ -356,6 +379,10 @@ function compact(value: Record<string, unknown>): Record<string, unknown> {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function nonBlankString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
 function positiveInteger(value: unknown): number | undefined {

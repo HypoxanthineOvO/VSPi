@@ -204,6 +204,116 @@ describe('pre-bootstrap config migration', () => {
     expect((await stat(backupPath)).mode & 0o777).toBe(0o600);
   });
 
+  it('fills an existing provider and missing aliases without replacing target configuration', async () => {
+    const { root, homeDir, agentDir } = await fixture();
+    await writeFile(join(homeDir, 'config.toml'), [
+      '[providers.vsplab]',
+      'type = ""',
+      'base_url = ""',
+      'api_key = "target-key"',
+      '',
+      '[providers.vsplab.custom_headers]',
+      'Authorization = "target-header"',
+      '',
+      '[models."vsplab/glm-5.3"]',
+      'provider = "vsplab"',
+      'model = "target-glm-5.3"',
+      'protocol = "anthropic"',
+      'display_name = "Target GLM 5.3"',
+      'max_context_size = 64000',
+      '',
+    ].join('\n'));
+    const legacyProvider = {
+      api: 'openai-completions',
+      baseUrl: 'https://vsplab.example/v1',
+      apiKey: 'legacy-key',
+      headers: { Authorization: 'legacy-header', 'X-Legacy': 'legacy-value' },
+      models: [
+        { id: 'glm-5.3', name: 'Legacy GLM 5.3', contextWindow: 200_000 },
+        { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash', contextWindow: 128_000 },
+      ],
+    };
+    await writeLegacy(agentDir, { providers: { vsplab: legacyProvider } });
+
+    const first = await migrateRuntimeConfig({
+      homeDir,
+      osHomeDir: root,
+      agentDir,
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const paths = resolveRuntimePaths(homeDir);
+    const firstConfigText = await readFile(paths.configPath, 'utf8');
+    const firstConfig = parse(firstConfigText) as Record<string, unknown>;
+    const firstProviders = firstConfig['providers'] as Record<string, Record<string, unknown>>;
+    const firstModels = firstConfig['models'] as Record<string, Record<string, unknown>>;
+    const firstMarkerText = await readFile(paths.configMigrationMarkerPath, 'utf8');
+    const firstMarker = JSON.parse(firstMarkerText) as Record<string, unknown>;
+
+    expect(first.status).toBe('migrated');
+    expect(firstProviders['vsplab']).toEqual({
+      type: 'openai',
+      base_url: 'https://vsplab.example/v1',
+      api_key: 'target-key',
+      custom_headers: { Authorization: 'target-header' },
+    });
+    expect(firstModels['vsplab/glm-5.3']).toEqual({
+      provider: 'vsplab',
+      model: 'target-glm-5.3',
+      protocol: 'anthropic',
+      display_name: 'Target GLM 5.3',
+      max_context_size: 64_000,
+    });
+    expect(firstModels['vsplab/glm-5.3-flash']).toMatchObject({
+      provider: 'vsplab',
+      model: 'glm-5.3-flash',
+      protocol: 'openai',
+      display_name: 'GLM 5.3 Flash',
+      max_context_size: 128_000,
+    });
+    expect(firstModels['glm-5.3-flash']).toBeUndefined();
+
+    const unchanged = await migrateRuntimeConfig({
+      homeDir,
+      osHomeDir: root,
+      agentDir,
+      now: () => new Date('2027-01-01T00:00:00.000Z'),
+    });
+    expect(unchanged.status).toBe('unchanged');
+    expect(await readFile(paths.configPath, 'utf8')).toBe(firstConfigText);
+    expect(await readFile(paths.configMigrationMarkerPath, 'utf8')).toBe(firstMarkerText);
+
+    await writeLegacy(agentDir, {
+      providers: {
+        vsplab: {
+          ...legacyProvider,
+          models: [...legacyProvider.models, { id: 'glm-5.3-air', contextWindow: 96_000 }],
+        },
+      },
+    });
+    const sourceChanged = await migrateRuntimeConfig({
+      homeDir,
+      osHomeDir: root,
+      agentDir,
+      now: () => new Date('2028-01-01T00:00:00.000Z'),
+    });
+    const changedConfig = parse(await readFile(paths.configPath, 'utf8')) as Record<string, unknown>;
+    const changedProviders = changedConfig['providers'] as Record<string, Record<string, unknown>>;
+    const changedModels = changedConfig['models'] as Record<string, Record<string, unknown>>;
+    const changedMarker = JSON.parse(await readFile(paths.configMigrationMarkerPath, 'utf8')) as Record<string, unknown>;
+
+    expect(sourceChanged.status).toBe('migrated');
+    expect(changedMarker['sourceFingerprint']).not.toBe(firstMarker['sourceFingerprint']);
+    expect(changedProviders['vsplab']).toEqual(firstProviders['vsplab']);
+    expect(changedModels['vsplab/glm-5.3']).toEqual(firstModels['vsplab/glm-5.3']);
+    expect(changedModels['vsplab/glm-5.3-flash']).toEqual(firstModels['vsplab/glm-5.3-flash']);
+    expect(changedModels['vsplab/glm-5.3-air']).toMatchObject({
+      provider: 'vsplab',
+      model: 'glm-5.3-air',
+      protocol: 'openai',
+      max_context_size: 96_000,
+    });
+  });
+
   it('is idempotent when source and target fingerprints are unchanged', async () => {
     const { root, homeDir, agentDir } = await fixture();
     await writeLegacy(agentDir, { providers: { relay: { api: 'openai', models: [{ id: 'safe' }] } } });
