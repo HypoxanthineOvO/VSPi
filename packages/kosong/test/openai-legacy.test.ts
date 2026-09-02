@@ -1507,6 +1507,138 @@ describe('OpenAILegacyChatProvider', () => {
       expect(messages[0]).not.toHaveProperty('reasoning_content');
     });
 
+    it('normalizes thinking tags in a non-stream response', async () => {
+      const provider = new OpenAILegacyChatProvider({
+        model: 'gpt-4.1',
+        apiKey: 'test-key',
+        stream: false,
+      });
+
+      (provider as any)._client.chat.completions.create = vi.fn().mockResolvedValue({
+        id: 'chatcmpl-test123',
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: 'before <thinking>first</thinking> middle <thinking>second</thinking> after',
+            },
+            finish_reason: 'stop',
+          },
+        ],
+      });
+      const stream = await provider.generate('', [], []);
+      const parts: StreamedMessagePart[] = [];
+      for await (const part of stream) parts.push(part);
+
+      expect(parts).toEqual([
+        { type: 'text', text: 'before ' },
+        { type: 'think', think: 'first' },
+        { type: 'text', text: ' middle ' },
+        { type: 'think', think: 'second' },
+        { type: 'text', text: ' after' },
+      ]);
+    });
+
+    it('normalizes thinking tags across stream chunks and flushes an unclosed opening tag', async () => {
+      const provider = new OpenAILegacyChatProvider({
+        model: 'gpt-4.1',
+        apiKey: 'test-key',
+        stream: true,
+      });
+
+      async function* mockedStream(): AsyncIterable<Record<string, unknown>> {
+        yield { id: 'c1', choices: [{ index: 0, delta: { content: 'before <thi' } }] };
+        yield { id: 'c1', choices: [{ index: 0, delta: { content: 'nking>first</think' } }] };
+        yield { id: 'c1', choices: [{ index: 0, delta: { content: 'ing> middle <thinking>second</thinking> after' } }] };
+        yield { id: 'c1', choices: [{ index: 0, delta: { content: ' <thinking>unfinished' } }] };
+      }
+
+      (provider as any)._client.chat.completions.create = vi
+        .fn()
+        .mockResolvedValue(mockedStream());
+
+      const callbackParts: StreamedMessagePart[] = [];
+      const result = await generate(provider, '', [], [], {
+        onMessagePart(part) {
+          callbackParts.push(part);
+        },
+      });
+
+      expect(callbackParts).toEqual([
+        { type: 'text', text: 'before ' },
+        { type: 'think', think: 'first' },
+        { type: 'text', text: ' middle ' },
+        { type: 'think', think: 'second' },
+        { type: 'text', text: ' after' },
+        { type: 'text', text: ' ' },
+        { type: 'think', think: 'unfinished' },
+      ]);
+      expect(result.message.content).toEqual([
+        { type: 'text', text: 'before ' },
+        { type: 'think', think: 'first' },
+        { type: 'text', text: ' middle ' },
+        { type: 'think', think: 'second' },
+        { type: 'text', text: ' after ' },
+        { type: 'think', think: 'unfinished' },
+      ]);
+    });
+
+    it('keeps an incomplete candidate tag as text and preserves it in the final message', async () => {
+      const provider = new OpenAILegacyChatProvider({
+        model: 'gpt-4.1',
+        apiKey: 'test-key',
+        stream: true,
+      });
+
+      async function* mockedStream(): AsyncIterable<Record<string, unknown>> {
+        yield { id: 'c1', choices: [{ index: 0, delta: { content: 'answer <think' } }] };
+        yield { id: 'c1', choices: [{ index: 0, delta: {} }] };
+      }
+
+      (provider as any)._client.chat.completions.create = vi
+        .fn()
+        .mockResolvedValue(mockedStream());
+
+      const callbackParts: StreamedMessagePart[] = [];
+      const result = await generate(provider, '', [], [], {
+        onMessagePart(part) {
+          callbackParts.push(part);
+        },
+      });
+
+      expect(callbackParts).toEqual([
+        { type: 'text', text: 'answer ' },
+        { type: 'text', text: '<think' },
+      ]);
+      expect(result.message.content).toEqual([{ type: 'text', text: 'answer <think' }]);
+    });
+
+    it('keeps an incomplete closing candidate tag as text', async () => {
+      const provider = new OpenAILegacyChatProvider({
+        model: 'gpt-4.1',
+        apiKey: 'test-key',
+        stream: true,
+      });
+
+      async function* mockedStream(): AsyncIterable<Record<string, unknown>> {
+        yield { id: 'c1', choices: [{ index: 0, delta: { content: '<thinking>hidden</think' } }] };
+      }
+
+      (provider as any)._client.chat.completions.create = vi
+        .fn()
+        .mockResolvedValue(mockedStream());
+
+      const stream = await provider.generate('', [], []);
+      const parts: StreamedMessagePart[] = [];
+      for await (const part of stream) parts.push(part);
+
+      expect(parts).toEqual([
+        { type: 'think', think: 'hidden' },
+        { type: 'text', text: '</think' },
+      ]);
+    });
+
     it('yields ThinkPart from streaming response even without explicit reasoningKey', async () => {
       const provider = new OpenAILegacyChatProvider({
         model: 'deepseek-reasoner',

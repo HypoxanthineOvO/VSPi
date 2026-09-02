@@ -59,6 +59,63 @@ const OPENAI_CHAT_TOOL_CALL_ID_POLICY: ToolCallIdPolicy = {
   maxLength: 64,
 };
 
+class ThinkingTagParser {
+  private _buffer = '';
+  private _thinking = false;
+
+  push(content: string): StreamedMessagePart[] {
+    this._buffer += content;
+    return this._drain(false);
+  }
+
+  flush(): StreamedMessagePart[] {
+    return this._drain(true);
+  }
+
+  private _drain(atEnd: boolean): StreamedMessagePart[] {
+    const parts: StreamedMessagePart[] = [];
+
+    while (this._buffer.length > 0) {
+      const tag = this._thinking ? '</thinking>' : '<thinking>';
+      const tagIndex = this._buffer.indexOf(tag);
+      if (tagIndex >= 0) {
+        this._emit(parts, this._buffer.slice(0, tagIndex));
+        this._buffer = this._buffer.slice(tagIndex + tag.length);
+        this._thinking = !this._thinking;
+        continue;
+      }
+
+      if (atEnd) {
+        parts.push({ type: 'text', text: this._buffer });
+        this._buffer = '';
+        break;
+      }
+
+      let keepLength = 0;
+      const maxLength = Math.min(this._buffer.length, tag.length - 1);
+      for (let length = maxLength; length > 0; length -= 1) {
+        if (tag.startsWith(this._buffer.slice(-length))) {
+          keepLength = length;
+          break;
+        }
+      }
+      this._emit(parts, this._buffer.slice(0, this._buffer.length - keepLength));
+      this._buffer = keepLength === 0 ? '' : this._buffer.slice(-keepLength);
+      break;
+    }
+
+    return parts;
+  }
+
+  private _emit(parts: StreamedMessagePart[], value: string): void {
+    if (value.length > 0) {
+      parts.push(
+        this._thinking ? { type: 'think', think: value } : { type: 'text', text: value },
+      );
+    }
+  }
+}
+
 function responseFormatToOpenAI(format: ResponseFormat): Record<string, unknown> {
   if (format.type === 'json_object') {
     return { type: 'json_object' };
@@ -400,7 +457,13 @@ export class OpenAILegacyStreamedMessage implements StreamedMessage {
     }
 
     if (message.content) {
-      yield { type: 'text', text: message.content } satisfies StreamedMessagePart;
+      const parser = new ThinkingTagParser();
+      for (const part of parser.push(message.content)) {
+        yield part;
+      }
+      for (const part of parser.flush()) {
+        yield part;
+      }
     }
 
     if (message.tool_calls) {
@@ -421,6 +484,7 @@ export class OpenAILegacyStreamedMessage implements StreamedMessage {
     reasoningKeyDialect: ReasoningKeyDialect,
   ): AsyncGenerator<StreamedMessagePart> {
     const bufferedToolCalls = new Map<number | string, BufferedChatCompletionToolCall>();
+    const thinkingTagParser = new ThinkingTagParser();
 
     try {
       for await (const chunk of response) {
@@ -456,7 +520,9 @@ export class OpenAILegacyStreamedMessage implements StreamedMessage {
 
         // text content
         if (delta.content) {
-          yield { type: 'text', text: delta.content } satisfies StreamedMessagePart;
+          for (const part of thinkingTagParser.push(delta.content)) {
+            yield part;
+          }
         }
 
         // tool calls — preserve `index` on every yielded part so the generate
@@ -466,6 +532,9 @@ export class OpenAILegacyStreamedMessage implements StreamedMessage {
             yield part;
           }
         }
+      }
+      for (const part of thinkingTagParser.flush()) {
+        yield part;
       }
     } catch (error: unknown) {
       throw convertOpenAIError(error);
