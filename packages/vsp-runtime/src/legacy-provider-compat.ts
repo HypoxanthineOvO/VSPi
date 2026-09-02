@@ -113,6 +113,34 @@ export async function migrateLegacyVspiProviders(
     }
   }
 
+  const vspLabGptModels = new Set([
+    'vsplab/gpt-5.2',
+    'vsplab/gpt-5.2-pro',
+    'vsplab/gpt-5.4',
+    'vsplab/gpt-5.4-mini',
+    'vsplab/gpt-5.5',
+    'vsplab/gpt-5.6-luna',
+    'vsplab/gpt-5.6-sol',
+    'vsplab/gpt-5.6-terra',
+  ]);
+  for (const alias of vspLabGptModels) {
+    const model = record(models[alias]);
+    if (model === undefined || stringValue(model['provider']) !== 'vsplab') continue;
+    const oldContextSize = model['max_context_size'];
+    const repaired = {
+      ...model,
+      max_context_size:
+        oldContextSize === 128_000 || oldContextSize === 1_050_000
+          ? 1_000_000
+          : oldContextSize,
+      max_output_size: positiveInteger(model['max_output_size']) ?? 128_000,
+    };
+    if (repaired['max_context_size'] === model['max_context_size'] && repaired['max_output_size'] === model['max_output_size']) continue;
+    models[alias] = repaired;
+    modelCount += 1;
+    diagnostics.push(`model ${alias}: repaired GPT context and output limits`);
+  }
+
   if (Object.keys(providers).length > 0) config['providers'] = providers;
   else delete config['providers'];
   if (Object.keys(models).length > 0) config['models'] = models;

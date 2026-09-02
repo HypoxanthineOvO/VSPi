@@ -314,6 +314,69 @@ describe('pre-bootstrap config migration', () => {
     });
   });
 
+  it('repairs known VSPLab GPT limits without overriding unrelated models', async () => {
+    const { root, homeDir, agentDir } = await fixture();
+    const aliases = [
+      'vsplab/gpt-5.2',
+      'vsplab/gpt-5.2-pro',
+      'vsplab/gpt-5.4',
+      'vsplab/gpt-5.4-mini',
+      'vsplab/gpt-5.5',
+      'vsplab/gpt-5.6-luna',
+      'vsplab/gpt-5.6-sol',
+      'vsplab/gpt-5.6-terra',
+    ];
+    await writeFile(join(homeDir, 'config.toml'), [
+      ...aliases.flatMap((alias) => [
+        `[models."${alias}"]`,
+        'provider = "vsplab"',
+        `model = "${alias.slice('vsplab/'.length)}"`,
+        'protocol = "openai_responses"',
+        `max_context_size = ${alias === 'vsplab/gpt-5.6-luna' ? '1050000' : '128000'}`,
+        '',
+      ]),
+      '[models."vsplab/gpt-custom"]',
+      'provider = "vsplab"',
+      'model = "gpt-custom"',
+      'protocol = "openai_responses"',
+      'max_context_size = 900000',
+      'max_output_size = 64000',
+      '',
+      '[models."relay/gpt-5.6-sol"]',
+      'provider = "relay"',
+      'model = "gpt-5.6-sol"',
+      'protocol = "openai_responses"',
+      'max_context_size = 128000',
+      '',
+    ].join('\n'));
+
+    const first = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
+    const paths = resolveRuntimePaths(homeDir);
+    const firstConfigText = await readFile(paths.configPath, 'utf8');
+    const config = parse(firstConfigText) as Record<string, unknown>;
+    const models = config['models'] as Record<string, Record<string, unknown>>;
+
+    expect(first.status).toBe('migrated');
+    for (const alias of aliases) {
+      expect(models[alias]).toMatchObject({
+        max_context_size: 1_000_000,
+        max_output_size: 128_000,
+      });
+    }
+    expect(models['vsplab/gpt-custom']).toMatchObject({
+      max_context_size: 900_000,
+      max_output_size: 64_000,
+    });
+    expect(models['relay/gpt-5.6-sol']).toMatchObject({
+      max_context_size: 128_000,
+    });
+    expect(models['relay/gpt-5.6-sol']?.['max_output_size']).toBeUndefined();
+
+    const unchanged = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
+    expect(unchanged.status).toBe('unchanged');
+    expect(await readFile(paths.configPath, 'utf8')).toBe(firstConfigText);
+  });
+
   it('is idempotent when source and target fingerprints are unchanged', async () => {
     const { root, homeDir, agentDir } = await fixture();
     await writeLegacy(agentDir, { providers: { relay: { api: 'openai', models: [{ id: 'safe' }] } } });
