@@ -407,6 +407,62 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(stopAgentTask).not.toHaveBeenCalled();
 	});
 
+	it("handles Ctrl+B before the active surface consumes editor input", () => {
+		const detachForegroundTask = vi.fn();
+		const app = Object.assign(Object.create(VspiApp.prototype), {
+			fullscreenRenderRevision: 0,
+			detachForegroundTask,
+		}) as { handleInput(data: string): void };
+
+		app.handleInput("\u0002");
+
+		expect(detachForegroundTask).toHaveBeenCalledOnce();
+	});
+
+	it("detaches the newest foreground task without cancelling it", async () => {
+		const detachAgentTask = vi.fn(async () => undefined);
+		const cancel = vi.fn();
+		const showNotice = vi.fn();
+		const app = Object.assign(Object.create(VspiApp.prototype), {
+			backend: { cancel, detachAgentTask },
+			showNotice,
+			taskSnapshot: {
+				agents: [
+					{
+						kind: "agent",
+						taskId: "agent-older",
+						description: "agent",
+						status: "running",
+						detached: false,
+						startedAt: 100,
+						endedAt: null,
+					},
+				],
+				processes: [
+					{
+						kind: "process",
+						taskId: "process-newer",
+						description: "process",
+						status: "running",
+						detached: false,
+						startedAt: 200,
+						endedAt: null,
+						command: "pnpm test",
+						pid: 42,
+						exitCode: null,
+					},
+				],
+				questions: [],
+			},
+		}) as { detachForegroundTask(): Promise<void> };
+
+		await app.detachForegroundTask();
+
+		expect(detachAgentTask).toHaveBeenCalledWith("process-newer");
+		expect(cancel).not.toHaveBeenCalled();
+		expect(showNotice).toHaveBeenCalledWith("已转入后台", "success");
+	});
+
 	it("fills the available width when a user message is rendered", () => {
 		const messages: TranscriptMessage[] = [
 			{ id: "user-1", role: "user", kind: "text", text: "检查当前改动" },

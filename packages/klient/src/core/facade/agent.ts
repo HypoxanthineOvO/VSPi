@@ -93,6 +93,7 @@ export interface AgentFacade {
   cancelPlan(input?: { id?: string }): Promise<void>;
   getTasks(input?: { activeOnly?: boolean; limit?: number }): Promise<readonly AgentTaskInfo[]>;
   stopTask(input: { taskId: string; reason?: string }): Promise<void>;
+  detachTask(input: { taskId: string }): Promise<void>;
   getTaskOutput(input: { taskId: string; tail?: number }): Promise<string>;
   getCronTasks(): Promise<readonly AgentCronTask[]>;
   createCronTask(input: { cron: string; prompt: string; recurring?: boolean }): Promise<AgentCronTask>;
@@ -181,6 +182,8 @@ export function createAgentFacade(call: ScopedCaller, scope: ScopeRef): AgentFac
       }
       await call(scope, 'agentTaskService', 'stop', [input.taskId, input.reason]);
     },
+    detachTask: (input) =>
+      call(scope, 'agentTaskService', 'detach', [input.taskId]).then(() => undefined),
     getTaskOutput: (input) =>
       call(scope, 'agentTaskService', 'readOutput', [input.taskId, input.tail]) as Promise<string>,
     getCronTasks: () =>

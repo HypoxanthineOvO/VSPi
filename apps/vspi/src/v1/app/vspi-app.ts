@@ -947,6 +947,10 @@ export class VspiApp implements Component, Focusable {
 
 	handleInput(data: string): void {
 		this.fullscreenRenderRevision += 1;
+		if (matchesKey(data, Key.ctrl("b"))) {
+			void this.detachForegroundTask();
+			return;
+		}
 		if (
 			this.notice &&
 			!this.notice.progress &&
@@ -2177,6 +2181,33 @@ export class VspiApp implements Component, Focusable {
 
 	private activityActive(): boolean {
 		return this.compactionActive() || this.workingActive();
+	}
+
+	private async detachForegroundTask(): Promise<void> {
+		if (!this.backend.detachAgentTask) {
+			this.showNotice("当前后端不支持转入后台", "error");
+			return;
+		}
+		const task = [
+			...this.taskSnapshot.agents,
+			...this.taskSnapshot.processes,
+			...this.taskSnapshot.questions,
+		]
+			.filter((item) => item.status === "running" && item.detached !== true)
+			.toSorted((left, right) => right.startedAt - left.startedAt)[0];
+		if (!task) {
+			this.showNotice("当前没有可转入后台的前台任务", "info");
+			return;
+		}
+		try {
+			await this.backend.detachAgentTask(task.taskId);
+			this.showNotice("已转入后台", "success");
+		} catch (error) {
+			this.showNotice(
+				error instanceof Error ? error.message : "任务转入后台失败",
+				"error",
+			);
+		}
 	}
 
 	private queueMessagePresentation(messageId: string): void {

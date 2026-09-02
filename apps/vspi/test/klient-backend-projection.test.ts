@@ -739,6 +739,22 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		).toBeNull();
 	});
 
+	it("forwards task detach without stopping the task", async () => {
+		const detachTask = vi.fn(async () => undefined);
+		const stopTask = vi.fn();
+		const backend = new KlientChatBackend(
+			{} as RuntimeConnection,
+			"/workspace",
+			"new",
+		);
+		Object.assign(backend, { agent: { detachTask, stopTask } });
+
+		await backend.detachAgentTask("task-1");
+
+		expect(detachTask).toHaveBeenCalledWith({ taskId: "task-1" });
+		expect(stopTask).not.toHaveBeenCalled();
+	});
+
 	it("preserves compact boolean semantics and forwards custom instructions", async () => {
 		const compact = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
 		const backend = new KlientChatBackend(

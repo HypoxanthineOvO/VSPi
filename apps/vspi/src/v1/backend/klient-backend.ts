@@ -599,6 +599,10 @@ export class KlientChatBackend implements ChatBackend {
 		return this.requireAgent().stopTask({ taskId, reason: "Stopped by user" });
 	}
 
+	detachAgentTask(taskId: string): Promise<void> {
+		return this.requireAgent().detachTask({ taskId });
+	}
+
 	isProjectTrusted(): boolean {
 		return true;
 	}
