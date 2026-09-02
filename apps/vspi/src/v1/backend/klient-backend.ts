@@ -345,14 +345,7 @@ export class KlientChatBackend implements ChatBackend {
 			providers.map((provider) => [provider.id, provider.type]),
 		);
 		return models
-			.filter(
-				(model) =>
-					selectableProviders.has(model.provider) &&
-					this.modelAvailable(
-						model.provider,
-						displayModelId(model.provider, model.model),
-					),
-			)
+			.filter((model) => selectableProviders.has(model.provider))
 			.map((model) => ({
 				id: displayModelId(model.provider, model.model),
 				provider: model.provider,
@@ -432,12 +425,20 @@ export class KlientChatBackend implements ChatBackend {
 		provider: string,
 		id: string,
 	): Promise<ModelSelectionResult> {
-		const models = await this.connection.klient.global.kosong.listModels();
-		const alias = resolveModelAlias(models, provider, id);
-		await this.queryApiKeyProviderAvailability(provider);
-		if (!this.modelAvailable(provider, id)) {
-			throw new Error(`Provider ${provider} 当前账号组不支持模型 ${id}`);
+		const [models, providers] = await Promise.all([
+			this.connection.klient.global.kosong.listModels(),
+			this.connection.klient.global.kosong.listProviders(),
+		]);
+		const selectedProvider = providers.find(
+			(candidate) => candidate.id === provider,
+		);
+		if (
+			selectedProvider?.status !== "connected" ||
+			hiddenLegacyProvider(provider)
+		) {
+			throw new Error(`Provider ${provider} 当前不可用`);
 		}
+		const alias = resolveModelAlias(models, provider, id);
 		const selected =
 			await this.connection.klient.global.kosong.setDefaultModel(alias);
 		await this.requireAgent().setModel(alias);
@@ -447,11 +448,9 @@ export class KlientChatBackend implements ChatBackend {
 			selected.model.capabilities ?? [],
 			selected.model.display_name,
 		);
-		const providers =
-			await this.connection.klient.global.kosong.listProviders();
 		const effort = catalogEffortCapability(selected.model.thinking, {
 			identity: selected.model.provider,
-			type: providers.find((candidate) => candidate.id === provider)?.type,
+			type: selectedProvider.type,
 		});
 		await this.normalizeCurrentEffort({
 			efforts: effort.options,
@@ -911,15 +910,6 @@ export class KlientChatBackend implements ChatBackend {
 		} catch {
 			return undefined;
 		}
-	}
-
-	private modelAvailable(providerId: string, modelId: string): boolean {
-		const availability = this.providerAvailability.get(providerId);
-		return (
-			availability === undefined ||
-			availability.expiresAt <= Date.now() ||
-			providerModelAvailable(availability.modelIds, providerId, modelId)
-		);
 	}
 
 	private subscribeGlobalCatalog(): void {

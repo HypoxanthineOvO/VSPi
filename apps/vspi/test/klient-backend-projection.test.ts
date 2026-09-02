@@ -334,47 +334,71 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		}
 	});
 
-	it("intersects configured models with successful provider availability queries", async () => {
+	it("keeps locally configured models selectable when availability omits them", async () => {
 		vi.stubGlobal(
 			"fetch",
 			vi.fn().mockResolvedValue(new Response("{}", { status: 200 })),
 		);
+		const omitted = model("acme", "omitted");
 		const models = [
 			model("acme", "available"),
-			model("acme", "unavailable"),
+			omitted,
 			model("other", "untouched"),
 			model("custom-gemini-via-legacybridge-32efcb06", "gemini-3.6-flash"),
 		];
+		const providers = [
+			provider("acme"),
+			{
+				...provider("other"),
+				status: "unconfigured" as const,
+				has_api_key: false,
+			},
+			provider("custom-gemini-via-legacybridge-32efcb06"),
+		];
 		const queryAvailableModels = vi.fn().mockResolvedValue({
 			providerId: "acme",
-			modelIds: ["acme/available", "other/unavailable"],
+			modelIds: ["acme/available"],
 		});
+		const setDefaultModel = vi.fn().mockResolvedValue({
+			default_model: omitted.model,
+			model: omitted,
+		});
+		const setModel = vi.fn().mockResolvedValue(undefined);
 		const connection = {
 			klient: {
 				global: {
 					kosong: {
 						listModels: vi.fn().mockResolvedValue(models),
-						listProviders: vi.fn().mockResolvedValue([
-							provider("acme"),
-							{
-								...provider("other"),
-								status: "unconfigured",
-								has_api_key: false,
-							},
-							provider("custom-gemini-via-legacybridge-32efcb06"),
-						]),
+						listProviders: vi.fn().mockResolvedValue(providers),
 						queryAvailableModels,
+						setDefaultModel,
 					},
 				},
 			},
 		} as unknown as RuntimeConnection;
 		const backend = new KlientChatBackend(connection, "/workspace", "new");
+		Object.assign(backend, {
+			agent: {
+				setModel,
+				setThinking: vi.fn().mockResolvedValue(undefined),
+				getThinking: vi.fn().mockResolvedValue("off"),
+			},
+		});
 
 		await expect(backend.getModelOptions()).resolves.toMatchObject([
 			{ provider: "acme", id: "available" },
+			{ provider: "acme", id: "omitted" },
 		]);
+		await expect(backend.selectModel("acme", "omitted")).resolves.toMatchObject({
+			modelId: "omitted",
+		});
+		await expect(
+			backend.selectModel("other", "untouched"),
+		).rejects.toThrow("Provider other 当前不可用");
 		expect(queryAvailableModels).toHaveBeenCalledTimes(1);
 		expect(queryAvailableModels).toHaveBeenCalledWith("acme");
+		expect(setDefaultModel).toHaveBeenCalledWith("acme/omitted");
+		expect(setModel).toHaveBeenCalledWith("acme/omitted");
 	});
 
 	it("shows managed OAuth models without probing API-key availability", async () => {
