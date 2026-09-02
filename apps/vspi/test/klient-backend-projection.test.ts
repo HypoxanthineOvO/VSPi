@@ -278,7 +278,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		const models = [model("acme", "unavailable"), model("acme", "available")];
 		const queryAvailableModels = vi.fn().mockResolvedValue({
 			providerId: "acme",
-			modelIds: ["available"],
+			modelIds: ["acme/available"],
 		});
 		const setDefaultModel = vi.fn(async (alias: string) => ({
 			default_model: alias,
@@ -347,7 +347,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		];
 		const queryAvailableModels = vi.fn().mockResolvedValue({
 			providerId: "acme",
-			modelIds: ["available"],
+			modelIds: ["acme/available", "other/unavailable"],
 		});
 		const connection = {
 			klient: {

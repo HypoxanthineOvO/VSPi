@@ -856,12 +856,16 @@ export class KlientChatBackend implements ChatBackend {
 		const availability = await this.queryApiKeyProviderAvailability(provider);
 		if (availability === undefined) return alias;
 		const raw = alias.slice(provider.length + 1);
-		if (availability.has(raw)) return alias;
+		if (providerModelAvailable(availability, provider, raw)) return alias;
 		const models = await this.connection.klient.global.kosong.listModels();
 		const fallback = models.find(
 			(model) =>
 				model.provider === provider &&
-				availability.has(displayModelId(model.provider, model.model)),
+				providerModelAvailable(
+					availability,
+					model.provider,
+					displayModelId(model.provider, model.model),
+				),
 		);
 		return fallback === undefined
 			? alias
@@ -914,7 +918,7 @@ export class KlientChatBackend implements ChatBackend {
 		return (
 			availability === undefined ||
 			availability.expiresAt <= Date.now() ||
-			availability.modelIds.has(modelId)
+			providerModelAvailable(availability.modelIds, providerId, modelId)
 		);
 	}
 
@@ -1570,6 +1574,18 @@ function resolveModelAlias(
 function displayModelId(provider: string, alias: string): string {
 	const prefix = `${provider}/`;
 	return alias.startsWith(prefix) ? alias.slice(prefix.length) : alias;
+}
+
+function providerModelAvailable(
+	availability: ReadonlySet<string>,
+	provider: string,
+	modelId: string,
+): boolean {
+	const alias = `${provider}/${modelId}`;
+	return (
+		availability.has(alias) ||
+		(!modelId.includes("/") && availability.has(modelId))
+	);
 }
 
 const MODEL_WORDS: Readonly<Record<string, string>> = {
