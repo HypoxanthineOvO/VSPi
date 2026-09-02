@@ -12,12 +12,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { type RunningServer, startServer } from '../src/start';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
+import { isolateTestWorkspaceSync } from './helpers/workspace';
 
 let home: string;
 let server: RunningServer | undefined;
 
 beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), 'kimi-server-v2-files-'));
+  home = isolateTestWorkspaceSync(mkdtempSync(join(tmpdir(), 'kimi-server-v2-files-')));
 });
 
 afterEach(async () => {

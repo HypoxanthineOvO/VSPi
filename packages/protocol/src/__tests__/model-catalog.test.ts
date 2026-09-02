@@ -35,6 +35,28 @@ describe('model catalog schemas', () => {
     expect(modelCatalogItemSchema.parse(model)).toEqual(model);
   });
 
+  it('round-trips provider pricing including zero and context tiers', () => {
+    const priced = {
+      ...model,
+      pricing: {
+        input_usd_per_million: 0,
+        output_usd_per_million: 0.66,
+        cache_read_usd_per_million: 0.007,
+        context_tiers: [{
+          context_tokens_above: 272_000,
+          input_usd_per_million: 0.44,
+          output_usd_per_million: 1.32,
+        }],
+      },
+    };
+
+    expect(modelCatalogItemSchema.parse(priced)).toEqual(priced);
+    expect(modelCatalogItemSchema.safeParse({
+      ...priced,
+      pricing: { input_usd_per_million: -1, output_usd_per_million: 1 },
+    }).success).toBe(false);
+  });
+
   it('rejects invalid model context sizes', () => {
     expect(
       modelCatalogItemSchema.safeParse({ ...model, max_context_size: 0 }).success,

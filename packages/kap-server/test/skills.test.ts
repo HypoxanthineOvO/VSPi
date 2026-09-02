@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type RunningServer, startServer } from '../src/start';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
 import { authHeaders } from './helpers/auth';
+import { isolateTestWorkspace } from './helpers/workspace';
 
 interface Envelope<T> {
   code: number;
@@ -38,7 +39,7 @@ describe('server-v2 /api/v1 skills', () => {
   let base: string;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'kimi-server-v2-skills-'));
+    home = await isolateTestWorkspace(await mkdtemp(join(tmpdir(), 'kimi-server-v2-skills-')));
     server = await startServer({ hostIdentity: TEST_HOST_IDENTITY, host: '127.0.0.1', port: 0, homeDir: home, logLevel: 'silent' });
     base = `http://127.0.0.1:${server.port}`;
   });
@@ -100,7 +101,7 @@ describe('server-v2 /api/v1 skills', () => {
       `workspace-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     );
     await mkdir(dir, { recursive: true });
-    return dir;
+    return isolateTestWorkspace(dir);
   }
 
   async function seedProjectSkill(root: string, name: string): Promise<void> {

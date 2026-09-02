@@ -27,9 +27,18 @@ export const refreshProviderModelsResponseSchema = z.object({
   failed: z.array(z.object({ provider: z.string(), reason: z.string() })),
 });
 
+export const queryAvailableModelsResponseSchema = z.object({
+  providerId: z.string().min(1),
+  modelIds: z.array(z.string().min(1)),
+});
+
 export const providerDiscoveryContract = {
   refreshProviderModels: {
     input: z.tuple([refreshProviderModelsOptionsSchema.optional()]),
     output: refreshProviderModelsResponseSchema,
+  },
+  queryAvailableModels: {
+    input: z.tuple([z.string().min(1)]),
+    output: queryAvailableModelsResponseSchema,
   },
 } satisfies ServiceContract;

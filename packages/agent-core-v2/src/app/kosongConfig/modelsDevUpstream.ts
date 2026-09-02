@@ -182,13 +182,27 @@ export function toModelsDevProviderItem(
 export function modelsDevModelToRecord(providerId: string, model: ModelsDevModel): ModelRecord {
   const caps = capabilityToStrings(model.capability);
   const capabilities =
-    model.alwaysThinking === true
+    model.thinking.availability === 'always'
       ? caps?.map((cap) => (cap === 'thinking' ? 'always_thinking' : cap))
       : caps;
   const record: ModelRecord = {
     provider: providerId,
     model: model.id,
     maxContextSize: model.capability.max_context_tokens,
+    thinking: {
+      ...model.thinking,
+      controls: [...model.thinking.controls],
+      efforts: model.thinking.efforts === undefined ? undefined : [...model.thinking.efforts],
+      providerEfforts:
+        model.thinking.providerEfforts === undefined
+          ? undefined
+          : Object.fromEntries(
+              Object.entries(model.thinking.providerEfforts).map(([provider, efforts]) => [
+                provider,
+                [...efforts],
+              ]),
+            ),
+    },
   };
   if (model.capability.max_input_tokens !== undefined) {
     record.maxInputSize = model.capability.max_input_tokens;
@@ -201,5 +215,11 @@ export function modelsDevModelToRecord(providerId: string, model: ModelsDevModel
   if (model.offEffort !== undefined) record.offEffort = model.offEffort;
   if (model.protocol !== undefined) record.protocol = model.protocol;
   if (model.baseUrl !== undefined) record.baseUrl = model.baseUrl;
+  if (model.pricing !== undefined) {
+    record.pricing = {
+      ...model.pricing,
+      contextTiers: model.pricing.contextTiers?.map((tier) => ({ ...tier })),
+    };
+  }
   return record;
 }

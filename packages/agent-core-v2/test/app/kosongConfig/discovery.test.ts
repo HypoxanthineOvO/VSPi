@@ -122,6 +122,195 @@ const staticSections: Record<string, unknown> = {
   defaultModel: 's1',
 };
 
+describe('queryAvailableModels', () => {
+  it.each([
+    ['openai', 'static'],
+    ['openai', 'discover'],
+    ['openai_responses', 'static'],
+  ] as const)('queries %s/%s providers without changing config', async (type, modelSource) => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get('authorization')).toBe('Bearer YOUR_API_KEY');
+      expect(headers.get('x-custom')).toBe('custom-value');
+      expect(init?.method).toBe('GET');
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      return new Response(JSON.stringify({ data: [{ id: 'model-a' }, { id: 'model-b', object: 'model' }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = {
+      type,
+      modelSource,
+      baseUrl: 'https://api.example.test/v1/',
+      apiKey: 'YOUR_API_KEY',
+      customHeaders: { 'X-Custom': 'custom-value', Authorization: 'Bearer wrong' },
+    } satisfies ProviderConfig;
+    const models = {
+      'model-a': { provider: 'available', model: 'model-a', maxContextSize: 1000 },
+      'model-b': { provider: 'available', model: 'model-b', maxContextSize: 1000 },
+    } satisfies Record<string, ModelRecord>;
+    const { host, config, discovery } = await createHost({
+      providers: { available: provider },
+      models,
+    });
+    try {
+      await expect(discovery.queryAvailableModels('available')).resolves.toEqual({
+        providerId: 'available',
+        modelIds: ['model-a', 'model-b'],
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://api.example.test/v1/models',
+        expect.objectContaining({ method: 'GET' }),
+      );
+      expect(config.get('providers')).toEqual({ available: provider });
+    } finally {
+      host.dispose();
+    }
+  });
+
+  it('maps wire ids to provider-isolated catalog aliases', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            data: [{ id: 'shared-wire' }, { id: 'equal-id' }, { id: 'unknown-wire' }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+    const { host, discovery } = await createHost({
+      providers: {
+        target: {
+          type: 'openai',
+          baseUrl: 'https://target.example.test/v1',
+          apiKey: 'YOUR_API_KEY',
+        },
+        other: {
+          type: 'openai',
+          baseUrl: 'https://other.example.test/v1',
+          apiKey: 'YOUR_API_KEY',
+        },
+      },
+      defaultProvider: 'target',
+      models: {
+        'target/primary': { provider: 'target', model: 'shared-wire', maxContextSize: 1000 },
+        'target/duplicate': { providerId: 'target', name: 'shared-wire', maxContextSize: 1000 },
+        'other/same-wire': { provider: 'other', model: 'shared-wire', maxContextSize: 1000 },
+        'equal-id': { provider: 'target', model: 'equal-id', maxContextSize: 1000 },
+        'default-owned': { model: 'shared-wire', maxContextSize: 1000 },
+      } satisfies Record<string, ModelRecord>,
+    });
+    try {
+      await expect(discovery.queryAvailableModels('target')).resolves.toEqual({
+        providerId: 'target',
+        modelIds: [
+          'target/primary',
+          'target/duplicate',
+          'equal-id',
+          'default-owned',
+        ],
+      });
+    } finally {
+      host.dispose();
+    }
+  });
+
+  it('does not assign providerless flat models by matching base URL', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ data: [{ id: 'shared-wire' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ),
+    );
+    const { host, discovery } = await createHost({
+      providers: {
+        target: {
+          type: 'openai',
+          baseUrl: 'https://target.example.test/v1',
+          apiKey: 'YOUR_API_KEY',
+        },
+      },
+      models: {
+        'target/explicit': { provider: 'target', model: 'shared-wire', maxContextSize: 1000 },
+        'flat-model': {
+          baseUrl: 'https://target.example.test/v1',
+          protocol: 'openai',
+          model: 'shared-wire',
+          maxContextSize: 1000,
+        },
+      } satisfies Record<string, ModelRecord>,
+    });
+    try {
+      await expect(discovery.queryAvailableModels('target')).resolves.toEqual({
+        providerId: 'target',
+        modelIds: ['target/explicit'],
+      });
+    } finally {
+      host.dispose();
+    }
+  });
+
+  it('rejects unsupported providers and missing credentials without network I/O', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const { host, discovery } = await createHost({
+      providers: {
+        dynamic: { type: 'anthropic', modelSource: 'discover', baseUrl: 'https://api.example.test/v1', apiKey: 'YOUR_API_KEY' },
+        missing: { type: 'openai_responses', modelSource: 'static', baseUrl: 'https://api.example.test/v1' },
+      },
+      models: {},
+    });
+    try {
+      await expect(discovery.queryAvailableModels('dynamic')).rejects.toSatisfy(
+        (error) => isError2(error) && error.code === 'validation.failed',
+      );
+      await expect(discovery.queryAvailableModels('missing')).rejects.toSatisfy(
+        (error) => isError2(error) && error.code === 'validation.failed',
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      host.dispose();
+    }
+  });
+
+  it('rejects HTTP failures and malformed responses without exposing credentials', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('denied', { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ name: 'missing-id' }] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { host, discovery } = await createHost({
+      providers: {
+        available: {
+          type: 'openai',
+          modelSource: 'static',
+          baseUrl: 'https://api.example.test/v1',
+          apiKey: 'SECRET_API_KEY',
+        },
+      },
+      models: {},
+    });
+    try {
+      for (const expected of ['HTTP 401', 'invalid model availability response']) {
+        await expect(discovery.queryAvailableModels('available')).rejects.toSatisfy(
+          (error) => isError2(error) &&
+            error.code === 'modelsDev.catalog_unavailable' &&
+            error.message.includes(expected) &&
+            !error.message.includes('SECRET_API_KEY'),
+        );
+      }
+    } finally {
+      host.dispose();
+    }
+  });
+});
+
 describe('refreshProviderModels modelSource short-circuit', () => {
   it('answers scoped refreshes of static providers with unchanged and no I/O', async () => {
     const fetchMock = vi.fn();

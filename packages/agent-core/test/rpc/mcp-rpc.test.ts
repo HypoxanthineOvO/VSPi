@@ -78,7 +78,7 @@ async function makeCore(seed?: (home: string) => Promise<void>): Promise<CoreFix
   const home = join(tmp, 'home');
   const workDir = join(tmp, 'work');
   await mkdir(home, { recursive: true });
-  await mkdir(workDir, { recursive: true });
+  await mkdir(join(workDir, '.git'), { recursive: true });
   await writeFile(join(home, 'config.toml'), baseModelConfig());
   await seed?.(home);
 

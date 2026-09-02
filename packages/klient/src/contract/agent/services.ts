@@ -83,7 +83,15 @@ export const agentShellCommandContract = {
   cancel: { input: z.tuple([z.string()]), output: noResult },
 } satisfies ServiceContract;
 
+export const bindAgentProfileInputSchema = z.object({
+  profile: z.string(),
+  model: z.string().optional(),
+  thinking: z.string().optional(),
+  strictThinking: z.boolean().optional(),
+});
+
 export const agentProfileContract = {
+  bind: { input: z.tuple([bindAgentProfileInputSchema]), output: noResult },
   getModel: { input: z.tuple([]), output: z.string() },
   setModel: { input: z.tuple([z.string()]), output: setModelResultSchema },
   setThinking: { input: z.tuple([z.string()]), output: noResult },
@@ -122,6 +130,7 @@ export const fullCompactionInputSchema = z.object({
 
 export const agentFullCompactionContract = {
   begin: { input: z.tuple([fullCompactionInputSchema]), output: z.boolean() },
+  cancel: { input: z.tuple([]), output: noResult },
 } satisfies ServiceContract;
 
 export const agentTaskContract = {
@@ -138,4 +147,23 @@ export const agentTaskContract = {
     input: z.tuple([z.string(), z.number().optional()]),
     output: z.string(),
   },
+} satisfies ServiceContract;
+
+export const agentCronTaskSchema = z.object({
+  id: z.string(),
+  cron: z.string(),
+  prompt: z.string(),
+  createdAt: z.number(),
+  recurring: z.boolean().optional(),
+  lastFiredAt: z.number().optional(),
+  tags: z.record(z.string(), z.string()).optional(),
+});
+
+export const agentCronContract = {
+  list: { input: z.tuple([]), output: z.array(agentCronTaskSchema) },
+  create: {
+    input: z.tuple([agentCronTaskSchema.omit({ id: true, createdAt: true })]),
+    output: agentCronTaskSchema,
+  },
+  delete: { input: z.tuple([z.string()]), output: z.boolean() },
 } satisfies ServiceContract;

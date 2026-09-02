@@ -4,7 +4,11 @@ import { Disposable } from '#/_base/di/lifecycle';
 import { LifecycleScope } from '#/app/scopes';
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
 import { Error2 } from '#/_base/errors/errors';
-import type { ModelCapability } from '#/kosong/contract/capability';
+import {
+  normalizeThinkingCapability,
+  thinkingEffortsForProvider,
+  type ModelCapability,
+} from '#/kosong/contract/capability';
 import type { ProviderRequestAuth } from '#/kosong/contract/provider';
 import type { TokenUsage } from '#/kosong/contract/usage';
 import {
@@ -339,8 +343,7 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
     if (providerOptions !== undefined) {
       attributeProviderOptions(trace, providerOptions, providerConfig?.env);
     }
-    const declared = new Set((model.capabilities ?? []).map((c) => c.trim().toLowerCase()));
-
+    const thinking = normalizeThinkingCapability(model.thinking);
     trace.capture(TRACE.hostHeaders, this.hostRequestHeaders.headers);
     trace.capture(TRACE.thirdPartyHeaders, this.hostRequestHeaders.thirdPartyHeaders);
     trace.capture(TRACE.identitySlug, this.hostRequestHeaders.identitySlug);
@@ -356,14 +359,15 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
         this.hostRequestHeaders,
       ),
       capabilities,
+      thinking,
       maxContextSize: model.maxContextSize,
       maxInputSize: model.maxInputSize,
       maxOutputSize: model.maxOutputSize,
       displayName: model.displayName,
       reasoningKey: model.reasoningKey,
       supportEfforts: model.supportEfforts,
-      defaultEffort: model.defaultEffort,
-      alwaysThinking: declared.has('always_thinking'),
+      defaultEffort: thinking.defaultEffort,
+      alwaysThinking: thinking.availability === 'always',
       providerType,
       providerName,
       authProvider,
@@ -513,12 +517,17 @@ function buildProtocolProviderOptions(
   const options: MutableProtocolProviderOptions = {};
 
   switch (protocol) {
-    case 'anthropic':
+    case 'anthropic': {
       if (model.maxOutputSize !== undefined) options.defaultMaxTokens = model.maxOutputSize;
-      if (model.supportEfforts !== undefined) options.supportEfforts = model.supportEfforts;
+      const supportEfforts = thinkingEffortsForProvider(
+        normalizeThinkingCapability(model.thinking),
+        provider?.type,
+      );
+      if (supportEfforts.length > 0) options.supportEfforts = supportEfforts;
       if (model.adaptiveThinking !== undefined) options.adaptiveThinking = model.adaptiveThinking;
       if (model.betaApi !== undefined) options.betaApi = model.betaApi;
       break;
+    }
     case 'openai': {
       const reasoningKey = nonEmpty(model.reasoningKey);
       if (reasoningKey !== undefined) options.reasoningKey = reasoningKey;

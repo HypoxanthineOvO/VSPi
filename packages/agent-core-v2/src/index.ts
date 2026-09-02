@@ -444,6 +444,7 @@ import '#/features/cron/configSection';
 export * from '#/features/cron/cronTask';
 export * from '#/features/cron/configSection';
 export * from '#/features/cron/cronAgentRuntime';
+export * from '#/features/cron/cronView';
 export * from '#/features/cron/cronOps';
 import '#/features/cron/cronFeature';
 export * from '#/features/cron/tools/cron-create/cron-create';

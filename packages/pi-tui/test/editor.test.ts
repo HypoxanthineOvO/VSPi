@@ -1,4 +1,7 @@
 import assert from "node:assert";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it, mock } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { type AutocompleteProvider, CombinedAutocompleteProvider } from "../src/autocomplete.ts";
@@ -2531,6 +2534,23 @@ describe("Editor component", () => {
 			editor.handleInput("\t");
 			assert.strictEqual(editor.getText(), "readme.md");
 			assert.strictEqual(editor.isShowingAutocomplete(), false);
+		});
+
+		it("auto-triggers CombinedAutocompleteProvider for @ paths", async () => {
+			const baseDir = mkdtempSync(join(tmpdir(), "pi-editor-autocomplete-"));
+			try {
+				writeFileSync(join(baseDir, "example.ts"), "export {};\n");
+				const editor = new Editor(createTestTUI(), defaultEditorTheme);
+				editor.setAutocompleteProvider(new CombinedAutocompleteProvider([], baseDir));
+
+				editor.handleInput("@");
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				await flushAutocomplete();
+
+				assert.strictEqual(editor.isShowingAutocomplete(), true);
+			} finally {
+				rmSync(baseDir, { recursive: true, force: true });
+			}
 		});
 
 		it("debounces @ autocomplete while typing", async () => {

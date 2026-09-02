@@ -25,13 +25,14 @@
  * rather than a full cartesian product.
  */
 
+import assert from 'node:assert/strict';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { bootstrap, logSeed, resolveLoggingConfig } from '@moonshot-ai/agent-core-v2';
 
@@ -40,7 +41,8 @@ import type { ContentPart } from '@moonshot-ai/agent-core-v2/kosong/contract/mes
 import { IModelService } from '@moonshot-ai/agent-core-v2/kosong/model/model';
 
 import type { Klient } from '../../src/index.js';
-import type { AgentHandle } from '../../src/core/klient.js';
+import type { IDisposable } from '../../src/core/channel.js';
+import type { AgentHandle, SessionHandle } from '../../src/core/klient.js';
 import type { KlientEvents } from '../../src/core/events/hub.js';
 import { KlientValidationError } from '../../src/core/validation.js';
 import { createKlient as createMemoryKlient } from '../../src/transports/memory/index.js';
@@ -69,15 +71,47 @@ function onceEvent<TPayloadMap extends object, E extends keyof TPayloadMap & str
   timeoutMs = 60_000,
 ): Promise<TPayloadMap[E]> {
   return new Promise((resolve, reject) => {
+    let sub: IDisposable | undefined;
     const timer = setTimeout(() => {
-      sub.dispose();
+      sub?.dispose();
       reject(new Error(`timed out waiting for event ${name}`));
     }, timeoutMs);
-    const sub = events.on(name, (payload) => {
+    sub = events.on(name, (payload) => {
       clearTimeout(timer);
-      sub.dispose();
+      sub?.dispose();
       resolve(payload);
     });
+  });
+}
+
+function promptSettled(
+  events: AgentHandle['events'],
+  start: () => Promise<unknown>,
+  timeoutMs = 60_000,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let completed: IDisposable | undefined;
+    let aborted: IDisposable | undefined;
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      completed?.dispose();
+      aborted?.dispose();
+    };
+    const finish = (error?: unknown): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    const timer = setTimeout(
+      () => finish(new Error('timed out waiting for prompt.completed or prompt.aborted')),
+      timeoutMs,
+    );
+    completed = events.on('prompt.completed', () => finish());
+    aborted = events.on('prompt.aborted', () => finish());
+    void start().catch(finish);
   });
 }
 
@@ -297,6 +331,7 @@ const sockets = new Set<import('node:net').Socket>();
 beforeAll(async () => {
   homeDir = await mkdtemp(join(tmpdir(), 'klient-matrix-home-'));
   workRoot = await mkdtemp(join(tmpdir(), 'klient-matrix-work-'));
+  await mkdir(join(workRoot, '.git'));
   ({ app } = bootstrap({ homeDir, clientIdentity: TEST_CLIENT_IDENTITY }, [
     ...logSeed(resolveLoggingConfig({ homeDir, env: process.env })),
   ]));
@@ -428,49 +463,81 @@ interface CollectedEvent {
 }
 
 interface CaseContext {
+  readonly session: SessionHandle;
   readonly agent: AgentHandle;
+  readonly listeners: readonly IDisposable[];
   readonly events: CollectedEvent[];
   readonly workDir: string;
   eventNames(): readonly string[];
   payloads(name: string): Record<string, unknown>[];
+  dispose(): Promise<void>;
 }
 
-async function newCase(modelId: string, label: string): Promise<CaseContext> {
-  const workDir = join(workRoot, label);
-  await mkdir(workDir, { recursive: true });
-  const session = await klient.global.sessions.create({ workDir });
-  const agent = klient.session(session.id).agent('main');
-  await agent.setModel(modelId);
+const activeCases = new Set<CaseContext>();
 
-  const events: CollectedEvent[] = [];
-  const record =
-    (name: string) =>
-    (payload: Record<string, unknown>): void => {
-      events.push({ name, payload });
+async function newCase(modelId: string, _label: string): Promise<CaseContext> {
+  const workDir = workRoot;
+  const meta = await klient.global.sessions.create({ workDir });
+  const session = klient.session(meta.id);
+  try {
+    const agent = session.agent('main');
+    await agent.setModel(modelId);
+
+    const events: CollectedEvent[] = [];
+    const record =
+      (name: string) =>
+      (payload: Record<string, unknown>): void => {
+        events.push({ name, payload });
+      };
+    const listeners = [
+      agent.events.on('turn.started', record('turn.started')),
+      agent.events.on('turn.ended', record('turn.ended')),
+      agent.events.on('error', record('error')),
+      agent.events.on('prompt.completed', record('prompt.completed')),
+      agent.events.on('prompt.aborted', record('prompt.aborted')),
+    ];
+    let disposed = false;
+
+    const ctx: CaseContext = {
+      session,
+      agent,
+      listeners,
+      events,
+      workDir,
+      eventNames: () => events.map((event) => event.name),
+      payloads: (name) =>
+        events.filter((event) => event.name === name).map((event) => event.payload),
+      dispose: async () => {
+        if (disposed) return;
+        disposed = true;
+        try {
+          for (const listener of listeners) listener.dispose();
+        } finally {
+          try {
+            await session.close();
+          } finally {
+            activeCases.delete(ctx);
+          }
+        }
+      },
     };
-  agent.events.on('turn.started', record('turn.started'));
-  agent.events.on('turn.ended', record('turn.ended'));
-  agent.events.on('error', record('error'));
-  agent.events.on('prompt.completed', record('prompt.completed'));
-  agent.events.on('prompt.aborted', record('prompt.aborted'));
-
-  return {
-    agent,
-    events,
-    workDir,
-    eventNames: () => events.map((event) => event.name),
-    payloads: (name) => events.filter((event) => event.name === name).map((event) => event.payload),
-  };
+    activeCases.add(ctx);
+    return ctx;
+  } catch (error) {
+    await session.close();
+    throw error;
+  }
 }
 
 async function promptAndWait(ctx: CaseContext, input: readonly ContentPart[]): Promise<void> {
-  const settled = Promise.race([
-    onceEvent(ctx.agent.events, 'prompt.completed', 60_000),
-    onceEvent(ctx.agent.events, 'prompt.aborted', 60_000),
-  ]);
-  await ctx.agent.prompt({ input });
-  await settled;
+  await promptSettled(ctx.agent.events, () => ctx.agent.prompt({ input }));
 }
+
+afterEach(async () => {
+  await Promise.all([...activeCases].map((ctx) => ctx.dispose()));
+  assert.equal(activeCases.size, 0);
+  assert.equal((await klient.global.workspaces.list()).length, 1);
+});
 
 /** Chat-completions messages array of the n-th captured request. */
 function openAiMessages(callIndex: number): Record<string, unknown>[] {
@@ -557,16 +624,20 @@ describe('image blocks with invalid data', () => {
     ] as const;
     for (const { label, model, reply } of cases) {
       const ctx = await newCase(model, label);
-      resetMock(queueScript(reply));
-      await promptAndWait(ctx, [
-        { type: 'text', text: 'what is this?' },
-        { type: 'image_url', imageUrl: { url: IMAGE_BAD_MIME_URL } },
-      ]);
-      expect(requests, label).toHaveLength(1);
-      const wireText = JSON.stringify(requests[0]?.json);
-      expect(wireText, label).toContain('unsupported image format image/bmp');
-      expect(wireText, label).not.toContain('image/bmp;base64');
-      expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
+      try {
+        resetMock(queueScript(reply));
+        await promptAndWait(ctx, [
+          { type: 'text', text: 'what is this?' },
+          { type: 'image_url', imageUrl: { url: IMAGE_BAD_MIME_URL } },
+        ]);
+        expect(requests, label).toHaveLength(1);
+        const wireText = JSON.stringify(requests[0]?.json);
+        expect(wireText, label).toContain('unsupported image format image/bmp');
+        expect(wireText, label).not.toContain('image/bmp;base64');
+        expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
+      } finally {
+        await ctx.dispose();
+      }
     }
   }, 60_000);
 
@@ -717,19 +788,23 @@ describe('daemon file references (kimi-file://)', () => {
         expiresInSec: 3600,
       });
       const ctx = await newCase(model, label);
-      resetMock(queueScript(reply));
-      await promptAndWait(ctx, [
-        { type: 'image_url', imageUrl: { url: `kimi-file://${meta.id}` } },
-        { type: 'text', text: 'what is this?' },
-      ]);
-      expect(requests, label).toHaveLength(1);
-      expect(JSON.stringify(requests[0]?.json), label).not.toContain('kimi-file://');
-      const content = openAiMessages(0).at(-1)?.['content'] as unknown[];
-      const imagePart = content.find(
-        (part) => (part as { type?: string }).type === 'image_url',
-      ) as { image_url?: { url?: string } } | undefined;
-      expect(imagePart?.image_url?.url ?? '', label).toMatch(/^data:image\/png;base64,/);
-      expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
+      try {
+        resetMock(queueScript(reply));
+        await promptAndWait(ctx, [
+          { type: 'image_url', imageUrl: { url: `kimi-file://${meta.id}` } },
+          { type: 'text', text: 'what is this?' },
+        ]);
+        expect(requests, label).toHaveLength(1);
+        expect(JSON.stringify(requests[0]?.json), label).not.toContain('kimi-file://');
+        const content = openAiMessages(0).at(-1)?.['content'] as unknown[];
+        const imagePart = content.find(
+          (part) => (part as { type?: string }).type === 'image_url',
+        ) as { image_url?: { url?: string } } | undefined;
+        expect(imagePart?.image_url?.url ?? '', label).toMatch(/^data:image\/png;base64,/);
+        expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
+      } finally {
+        await ctx.dispose();
+      }
     }
   }, 60_000);
 });
@@ -805,14 +880,18 @@ describe('video blocks', () => {
 
     for (const { label, model, reply, assertBody } of cases) {
       const ctx = await newCase(model, label);
-      resetMock(queueScript(reply));
-      await promptAndWait(ctx, [
-        { type: 'text', text: 'describe this clip' },
-        { type: 'video_url', videoUrl: { url: VIDEO_HTTP_URL } },
-      ]);
-      expect(requests, label).toHaveLength(1);
-      assertBody(requests[0]?.json);
-      expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
+      try {
+        resetMock(queueScript(reply));
+        await promptAndWait(ctx, [
+          { type: 'text', text: 'describe this clip' },
+          { type: 'video_url', videoUrl: { url: VIDEO_HTTP_URL } },
+        ]);
+        expect(requests, label).toHaveLength(1);
+        assertBody(requests[0]?.json);
+        expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
+      } finally {
+        await ctx.dispose();
+      }
     }
   }, 60_000);
 
@@ -969,19 +1048,23 @@ describe('tool exchange structure', () => {
       label: string,
     ): Promise<Record<string, unknown>[]> => {
       const ctx = await newCase(model, label);
-      await writeFile(join(ctx.workDir, 'pixel.png'), Buffer.from(PNG_1X1_BASE64, 'base64'));
-      resetMock(
-        queueScript(
-          {
-            kind: 'sse',
-            lines: openAiToolCallSse('call_media_1', 'ReadMediaFile', '{"path":"pixel.png"}'),
-          },
-          OK_OPENAI,
-        ),
-      );
-      await promptAndWait(ctx, [{ type: 'text', text: 'look at pixel.png' }]);
-      expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
-      return openAiMessages(1);
+      try {
+        await writeFile(join(ctx.workDir, 'pixel.png'), Buffer.from(PNG_1X1_BASE64, 'base64'));
+        resetMock(
+          queueScript(
+            {
+              kind: 'sse',
+              lines: openAiToolCallSse('call_media_1', 'ReadMediaFile', '{"path":"pixel.png"}'),
+            },
+            OK_OPENAI,
+          ),
+        );
+        await promptAndWait(ctx, [{ type: 'text', text: 'look at pixel.png' }]);
+        expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
+        return openAiMessages(1);
+      } finally {
+        await ctx.dispose();
+      }
     };
 
     // Plain openai: the base's extract_text fallback flattens the tool result
@@ -1011,35 +1094,36 @@ describe('tool exchange structure', () => {
 
   it('tool call ids are sanitized (64-char, safe charset) consistently across call and result', async () => {
     const nastyId = `call/bad id#${'x'.repeat(80)}`;
-    const runIdCase = async (model: string, label: string): Promise<Record<string, unknown>[]> => {
-      const ctx = await newCase(model, label);
-      resetMock(
-        queueScript(
-          {
-            kind: 'sse',
-            lines: openAiToolCallSse(nastyId, 'definitely_not_a_real_tool', '{}'),
-          },
-          OK_OPENAI,
-        ),
-      );
-      await promptAndWait(ctx, [{ type: 'text', text: 'use the tool' }]);
-      expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
-      return openAiMessages(1);
-    };
 
     for (const [model, label] of [
       [M_OPENAI, 'tool-id-openai'],
       [M_KIMI, 'tool-id-kimi'],
     ] as const) {
-      const messages = await runIdCase(model, label);
-      const assistant = messages.find((message) => message['tool_calls'] !== undefined);
-      const wireId = (assistant?.['tool_calls'] as { id: string }[])[0]?.id;
-      expect(wireId, label).toBeDefined();
-      expect(wireId!.length, label).toBeLessThanOrEqual(64);
-      expect(wireId, label).toMatch(/^[a-zA-Z0-9_-]+$/);
-      const toolMessage = messages.find((message) => message['role'] === 'tool');
-      // Normalization rewrites call and result with the SAME mapping.
-      expect(toolMessage?.['tool_call_id'], label).toBe(wireId);
+      const ctx = await newCase(model, label);
+      try {
+        resetMock(
+          queueScript(
+            {
+              kind: 'sse',
+              lines: openAiToolCallSse(nastyId, 'definitely_not_a_real_tool', '{}'),
+            },
+            OK_OPENAI,
+          ),
+        );
+        await promptAndWait(ctx, [{ type: 'text', text: 'use the tool' }]);
+        expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
+        const messages = openAiMessages(1);
+        const assistant = messages.find((message) => message['tool_calls'] !== undefined);
+        const wireId = (assistant?.['tool_calls'] as { id: string }[])[0]?.id;
+        expect(wireId, label).toBeDefined();
+        expect(wireId!.length, label).toBeLessThanOrEqual(64);
+        expect(wireId, label).toMatch(/^[a-zA-Z0-9_-]+$/);
+        const toolMessage = messages.find((message) => message['role'] === 'tool');
+        // Normalization rewrites call and result with the SAME mapping.
+        expect(toolMessage?.['tool_call_id'], label).toBe(wireId);
+      } finally {
+        await ctx.dispose();
+      }
     }
   }, 60_000);
 

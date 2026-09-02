@@ -17,6 +17,10 @@ import { IAgentMediaResolverService } from '#/agent/media/mediaResolver';
 import { ISessionUsageService } from '#/session/usage/sessionUsage';
 import { IConfigService } from '#/app/config/config';
 import {
+  normalizeThinkingCapability,
+  thinkingEffortsForProvider,
+} from '#/kosong/contract/capability';
+import {
   APIContextOverflowError,
   APIRequestTooLargeError,
   APIStatusError,
@@ -561,8 +565,16 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
     let code: string;
     let message: string;
     let knownEfforts: string | undefined;
-    const supportEfforts = request.model.supportEfforts?.filter((value) => value.length > 0);
-    if (supportEfforts === undefined || supportEfforts.length === 0) return;
+    const supportEfforts = thinkingEffortsForProvider(
+      normalizeThinkingCapability(request.model.thinking, {
+        thinking: request.model.capabilities.thinking,
+        alwaysThinking: request.model.alwaysThinking,
+        supportEfforts: request.model.supportEfforts,
+        defaultEffort: request.model.defaultEffort,
+      }),
+      request.model.providerType,
+    );
+    if (supportEfforts.length === 0) return;
     if (supportEfforts.includes(effort)) return;
     code = 'anthropic-thinking-effort-not-listed';
     knownEfforts = supportEfforts.join(',');

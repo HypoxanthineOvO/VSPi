@@ -23,6 +23,8 @@ export interface ServeKlientIpcOptions {
   readonly socketPath: string;
   /** Optional token; when set, the client's `hello` must carry the same token. */
   readonly token?: string;
+  /** Optional host metadata returned only after a successful authenticated hello. */
+  readonly handshakeData?: unknown;
 }
 
 export interface KlientIpcHost {
@@ -107,6 +109,7 @@ export async function serveKlientIpc(options: ServeKlientIpcOptions): Promise<Kl
             return;
           }
           helloDone = true;
+          send({ type: 'hello_result', id: 'hello', data: options.handshakeData });
           return;
         }
         case 'call': {

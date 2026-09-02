@@ -985,7 +985,16 @@ describe('AgentTaskService', () => {
     const reminder = await backgroundTaskReminder();
     expect(reminder).toContain('The conversation was compacted');
     expect(reminder).toContain(
-      'gone — but the tasks are still running from before. Do not start duplicates. Use TaskList to list them, TaskOutput for a non-blocking status/output snapshot',
+      'gone — but the tasks are still running from before. Do not start duplicates. The list below preserves their task IDs',
+    );
+    expect(reminder).toContain(
+      'default to ending this turn and let that notification resume the work',
+    );
+    expect(reminder).toContain(
+      'Do not use WaitFor merely because the next step depends on a result, no other work remains, or you want to continue in this turn.',
+    );
+    expect(reminder).toContain(
+      'Use it only when preserving an uninterruptible atomic operation requires the result and that operation must continue in this same turn.',
     );
     expect(reminder).toContain('active_background_tasks: 1');
     expect(reminder).toContain(taskId);

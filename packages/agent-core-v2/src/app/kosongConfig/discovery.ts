@@ -43,12 +43,21 @@ export interface RefreshProviderModelsOptions {
   readonly providerId?: string;
 }
 
+export const catalogModelAliasIdSchema = z.string().min(1);
+
+export const queryAvailableModelsResponseSchema = z.object({
+  providerId: z.string().min(1),
+  modelIds: z.array(catalogModelAliasIdSchema),
+});
+export type QueryAvailableModelsResponse = z.infer<typeof queryAvailableModelsResponseSchema>;
+
 export interface IProviderDiscoveryService {
   readonly _serviceBrand: undefined;
 
   refreshProviderModels(
     options?: RefreshProviderModelsOptions,
   ): Promise<RefreshProviderModelsResponse>;
+  queryAvailableModels(providerId: string): Promise<QueryAvailableModelsResponse>;
 }
 
 export const IProviderDiscoveryService: ServiceIdentifier<IProviderDiscoveryService> =

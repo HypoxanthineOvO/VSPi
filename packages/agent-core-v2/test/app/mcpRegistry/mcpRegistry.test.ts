@@ -73,7 +73,13 @@ describe('McpRegistryService', () => {
             return pluginEntries;
           },
         });
-        reg.defineInstance(IHostFileSystem, new HostFileSystem());
+        const hostFs = new HostFileSystem();
+        const isolatedHostFs = Object.create(hostFs) as HostFileSystem;
+        isolatedHostFs.stat = async (path) => {
+          if (path === join(tmpdir(), '.git')) throw new Error(`missing: ${path}`);
+          return hostFs.stat(path);
+        };
+        reg.defineInstance(IHostFileSystem, isolatedHostFs);
         reg.definePartialInstance(IAtomicDocumentStore, {
           get: async <T>(_scope: string, key: string) => {
             if (!trusted || (trustedKey !== undefined && key !== encodeWorkDirKey(trustedKey))) {

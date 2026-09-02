@@ -99,8 +99,7 @@ describe('acp-server skills / available commands', () => {
   /**
    * Boot with the scripted LLM and a project skill fixture at
    * `<cwd>/.kimi-code/skills/acp-fixture/SKILL.md` (the engine's project
-   * skill discovery root; the temp cwd has no `.git`, so it IS the project
-   * root).
+   * skill discovery root; the temp cwd has its own `.git` boundary).
    */
   async function bootWithFixtureSkill(): Promise<TestClient> {
     homeDir = await mkdtemp(join(tmpdir(), 'acp-skills-turn-'));

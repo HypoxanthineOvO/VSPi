@@ -63,7 +63,9 @@ export class IpcChannel implements KlientChannel {
     string,
     { handler: (data: unknown) => void; onError?: (error: Error) => void }
   >();
-  private readonly ready: Promise<void>;
+  private readonly ready: Promise<unknown>;
+  private resolveReady!: (data: unknown) => void;
+  private rejectReady!: (error: Error) => void;
   private closed = false;
   private seq = 0;
   private readonly idPrefix = `i${Date.now().toString(36)}`;
@@ -71,19 +73,13 @@ export class IpcChannel implements KlientChannel {
   constructor(options: IpcChannelOptions) {
     this.callTimeoutMs = options.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
     this.socket = createConnection(options.socketPath);
-    this.ready = new Promise<void>((resolve, reject) => {
-      const onError = (error: Error): void => {
-        reject(error);
-      };
-      this.socket.once('error', onError);
-      this.socket.once('connect', () => {
-        // The host sends `ready` immediately; answer with the handshake.
-        this.send({ type: 'hello', token: options.token });
-        this.socket.off('error', onError);
-        resolve();
-      });
+    this.ready = new Promise<unknown>((resolve, reject) => {
+      this.resolveReady = resolve;
+      this.rejectReady = reject;
     });
-    // The promise is consumed lazily by call/listen; never let it reject unhandled.
+    this.socket.once('connect', () => {
+      this.send({ type: 'hello', token: options.token });
+    });
     this.ready.catch(() => {});
 
     this.socket.on('data', (chunk) => {
@@ -93,7 +89,9 @@ export class IpcChannel implements KlientChannel {
     });
     this.socket.on('close', () => {
       this.closed = true;
-      this.failAll(new Error('ipc closed'));
+      const error = new Error('ipc closed');
+      this.rejectReady(error);
+      this.failAll(error);
       this.listens.clear();
     });
     this.socket.on('error', () => {
@@ -293,10 +291,16 @@ export class IpcChannel implements KlientChannel {
     };
   }
 
+  handshake(): Promise<unknown> {
+    return this.ready;
+  }
+
   close(): Promise<void> {
     if (this.closed) return Promise.resolve();
     this.closed = true;
-    this.failAll(new Error('ipc closed'));
+    const error = new Error('ipc closed');
+    this.rejectReady(error);
+    this.failAll(error);
     this.listens.clear();
     this.socket.end();
     return Promise.resolve();
@@ -314,6 +318,9 @@ export class IpcChannel implements KlientChannel {
     switch (frame.type) {
       case 'ready':
         return;
+      case 'hello_result':
+        this.resolveReady(frame.data);
+        return;
       case 'result': {
         const p = this.take(id);
         p?.resolve(frame.data);
@@ -324,6 +331,10 @@ export class IpcChannel implements KlientChannel {
           typeof frame.code === 'number' ? frame.code : 50001,
           frame.msg ?? 'error',
         );
+        if (id === 'hello') {
+          this.rejectReady(error);
+          return;
+        }
         const p = this.take(id);
         if (p !== undefined) {
           p.reject(error);

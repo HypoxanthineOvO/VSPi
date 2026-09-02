@@ -66,6 +66,20 @@ const SUMMARY = {
 };
 
 describe('facade routing', () => {
+  it('routes provider availability queries through provider discovery', async () => {
+    const channel = new FakeChannel();
+    const klient = createKlientFromChannel(channel);
+    channel.result = { providerId: 'acme', modelIds: ['model-a'] };
+
+    await expect(klient.global.kosong.queryAvailableModels('acme')).resolves.toEqual({
+      providerId: 'acme',
+      modelIds: ['model-a'],
+    });
+    expect(channel.calls).toEqual([
+      { scope: {}, service: 'providerDiscovery', method: 'queryAvailableModels', args: ['acme'] },
+    ]);
+  });
+
   it('reshapes single-object params into positional wire args', async () => {
     const channel = new FakeChannel();
     const klient = createKlientFromChannel(channel);
@@ -186,9 +200,27 @@ describe('agent profile routing', () => {
     const klient = createKlientFromChannel(channel);
     const agent = klient.session('s1').agent('main');
 
-    channel.result = undefined; // void output
-    await agent.setThinking('on');
+    channel.result = undefined;
+    await agent.bindProfile({
+      profile: 'agent',
+      model: 'provider/model',
+      thinking: 'high',
+      strictThinking: true,
+    });
     expect(channel.calls[0]).toEqual({
+      scope: { sessionId: 's1', agentId: 'main' },
+      service: 'agentProfileService',
+      method: 'bind',
+      args: [{
+        profile: 'agent',
+        model: 'provider/model',
+        thinking: 'high',
+        strictThinking: true,
+      }],
+    });
+
+    await agent.setThinking('on');
+    expect(channel.calls[1]).toEqual({
       scope: { sessionId: 's1', agentId: 'main' },
       service: 'agentProfileService',
       method: 'setThinking',
@@ -197,12 +229,36 @@ describe('agent profile routing', () => {
 
     channel.result = 'high';
     await expect(agent.getThinking()).resolves.toBe('high');
-    expect(channel.calls[1]).toEqual({
+    expect(channel.calls[2]).toEqual({
       scope: { sessionId: 's1', agentId: 'main' },
       service: 'agentProfileService',
       method: 'getEffectiveThinkingLevel',
       args: [],
     });
+  });
+});
+
+describe('agent cron routing', () => {
+  it('routes cron reads and mutations through the agent scope', async () => {
+    const channel = new FakeChannel();
+    const agent = createKlientFromChannel(channel).session('s1').agent('main');
+    const task = { id: 'cron-1', cron: '42 0 30 8 *', prompt: 'run', recurring: false, createdAt: 1 };
+    channel.result = [task];
+    await expect(agent.getCronTasks()).resolves.toEqual([task]);
+    channel.result = task;
+    await expect(agent.createCronTask({ cron: task.cron, prompt: task.prompt, recurring: false })).resolves.toEqual(task);
+    channel.result = true;
+    await expect(agent.deleteCronTask(task.id)).resolves.toBe(true);
+    expect(channel.calls).toEqual([
+      { scope: { sessionId: 's1', agentId: 'main' }, service: 'agentCronViewService', method: 'list', args: [] },
+      {
+        scope: { sessionId: 's1', agentId: 'main' },
+        service: 'agentCronViewService',
+        method: 'create',
+        args: [{ cron: task.cron, prompt: task.prompt, recurring: false }],
+      },
+      { scope: { sessionId: 's1', agentId: 'main' }, service: 'agentCronViewService', method: 'delete', args: ['cron-1'] },
+    ]);
   });
 });
 
@@ -310,7 +366,7 @@ describe('session skills routing', () => {
     channel.results.set('agentPromptService.submitSteer', { turn_id: 1 });
     channel.results.set('agentCommandService.list', []);
     await agent.prompt({ input: [{ type: 'text', text: 'hi' }] });
-    await agent.steer({ input: [{ type: 'text', text: 'steer' }] });
+    await agent.steer({ input: [{ type: 'text', text: 'steer' }], promptId: 'steer-1' });
     await agent.cancel({ turnId: 2 });
     await agent.cancel();
     await agent.setPermission('yolo');
@@ -329,7 +385,7 @@ describe('session skills routing', () => {
         scope,
         service: 'agentPromptService',
         method: 'submitSteer',
-        args: [{ input: [{ type: 'text', text: 'steer' }] }],
+        args: [{ input: [{ type: 'text', text: 'steer' }], promptId: 'steer-1' }],
       },
       { scope, service: 'agentLoopService', method: 'cancelFromUser', args: [2] },
       { scope, service: 'agentLoopService', method: 'cancelFromUser', args: [] },
@@ -400,6 +456,15 @@ describe('agent mcp / compaction routing', () => {
       service: 'agentFullCompactionService',
       method: 'begin',
       args: [{ source: 'manual', instruction: 'keep the plan' }],
+    });
+
+    channel.result = undefined;
+    await agent.cancelCompaction();
+    expect(channel.calls[2]).toEqual({
+      scope: { sessionId: 's1', agentId: 'main' },
+      service: 'agentFullCompactionService',
+      method: 'cancel',
+      args: [],
     });
   });
 });
@@ -609,6 +674,9 @@ describe('event hub', () => {
       blocked: [] as unknown[],
       cancelled: [] as unknown[],
       completed: [] as unknown[],
+      submitted: [] as unknown[],
+      queued: [] as unknown[],
+      steered: [] as unknown[],
     };
     const errors: Error[] = [];
     agent.events.onError((error) => {
@@ -621,6 +689,9 @@ describe('event hub', () => {
     agent.events.on('compaction.blocked', (event) => seen.blocked.push(event));
     agent.events.on('compaction.cancelled', (event) => seen.cancelled.push(event));
     agent.events.on('compaction.completed', (event) => seen.completed.push(event));
+    agent.events.on('prompt.submitted', (event) => seen.submitted.push(event));
+    agent.events.on('prompt.queued', (event) => seen.queued.push(event));
+    agent.events.on('prompt.steered', (event) => seen.steered.push(event));
 
     // All six registrations share one `events` stream subscription bound to
     // the agent scope.
@@ -642,12 +713,31 @@ describe('event hub', () => {
       type: 'compaction.completed',
       result: { summary: 's', compactedCount: 3, tokensBefore: 100, tokensAfter: 40 },
     };
+    const submitted = {
+      type: 'prompt.submitted',
+      promptId: 'p2',
+      userMessageId: 'p2',
+      status: 'queued',
+      content: [{ type: 'text', text: 'next' }],
+      createdAt: '2026-08-30T00:00:00.000Z',
+    };
+    const queued = { type: 'prompt.queued', promptId: 'p2', content: submitted.content, queueLength: 1 };
+    const steered = {
+      type: 'prompt.steered',
+      activePromptId: 'p1',
+      promptIds: ['p2'],
+      content: submitted.content,
+      steeredAt: '2026-08-30T00:00:01.000Z',
+    };
     channel.emit(0, delta);
     channel.emit(0, progress);
     channel.emit(0, started);
     channel.emit(0, blocked);
     channel.emit(0, cancelled);
     channel.emit(0, completed);
+    channel.emit(0, submitted);
+    channel.emit(0, queued);
+    channel.emit(0, steered);
     channel.emit(0, { type: 'tool.progress', turnId: 1, toolCallId: 'tc1' }); // missing update
     channel.emit(0, { type: 'unregistered.type', turnId: 1 });
     await tick();
@@ -658,6 +748,9 @@ describe('event hub', () => {
     expect(seen.blocked).toEqual([blocked]);
     expect(seen.cancelled).toEqual([cancelled]);
     expect(seen.completed).toEqual([completed]);
+    expect(seen.submitted).toEqual([submitted]);
+    expect(seen.queued).toEqual([queued]);
+    expect(seen.steered).toEqual([steered]);
     expect(errors).toHaveLength(1);
     expect(errors[0]).toBeInstanceOf(KlientValidationError);
   });

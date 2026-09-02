@@ -7,6 +7,8 @@ import { ICronDeleteTool } from '#/features/cron/tools/cron-delete/cron-delete';
 import { CronDeleteTool } from '#/features/cron/tools/cron-delete/cronDeleteTool';
 import { ICronListTool } from '#/features/cron/tools/cron-list/cron-list';
 import { CronListTool } from '#/features/cron/tools/cron-list/cronListTool';
+import { IAgentCronViewService } from '#/features/cron/cronView';
+import { AgentCronViewService } from '#/features/cron/cronViewService';
 
 export class CronFeature extends Feature {
   static override readonly name = 'cron';
@@ -14,6 +16,7 @@ export class CronFeature extends Feature {
   constructor() {
     super();
     this.contributeAgentRuntime(cronAgentRuntimeProvider);
+    this.contributeAgentService(IAgentCronViewService, AgentCronViewService);
     this.contributeTool(ICronCreateTool, CronCreateTool, { name: 'CronCreate', domain: 'cron' });
     this.contributeTool(ICronListTool, CronListTool, { name: 'CronList', domain: 'cron' });
     this.contributeTool(ICronDeleteTool, CronDeleteTool, { name: 'CronDelete', domain: 'cron' });

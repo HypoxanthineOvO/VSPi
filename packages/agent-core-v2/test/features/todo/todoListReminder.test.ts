@@ -53,7 +53,7 @@ function priorTodoReminder(): ContextMessage {
 
 describe('todoListStaleReminder', () => {
   it('skips reminder injection when TodoList is not active', async () => {
-    const history = Array.from({ length: 10 }, () => assistantMessage());
+    const history = Array.from({ length: 3 }, () => assistantMessage());
     const result = todoListStaleReminder({
       history,
       todos: [{ title: 'Investigate todo reminder', status: 'in_progress' }],
@@ -68,7 +68,7 @@ describe('todoListStaleReminder', () => {
       { title: 'Read current TodoList implementation', status: 'in_progress' },
       { title: 'Add reminder injector tests', status: 'pending' },
     ];
-    const history = [todoListWrite(todos), ...Array.from({ length: 10 }, () => assistantMessage())];
+    const history = [todoListWrite(todos), ...Array.from({ length: 3 }, () => assistantMessage())];
     const result = todoListStaleReminder({ history, todos, active: true });
 
     expect(result).toContain('Current todo list:');
@@ -78,7 +78,7 @@ describe('todoListStaleReminder', () => {
 
   it('does not inject before the assistant-turn threshold', async () => {
     const todos: TodoItem[] = [{ title: 'Read code', status: 'in_progress' }];
-    const history = [todoListWrite(todos), ...Array.from({ length: 9 }, () => assistantMessage())];
+    const history = [todoListWrite(todos), ...Array.from({ length: 2 }, () => assistantMessage())];
     const result = todoListStaleReminder({ history, todos, active: true });
 
     expect(result).toBeUndefined();
@@ -88,9 +88,9 @@ describe('todoListStaleReminder', () => {
     const todos: TodoItem[] = [{ title: 'Read code', status: 'in_progress' }];
     const history = [
       todoListWrite(todos),
-      ...Array.from({ length: 10 }, () => assistantMessage()),
+      ...Array.from({ length: 3 }, () => assistantMessage()),
       priorTodoReminder(),
-      ...Array.from({ length: 9 }, () => assistantMessage()),
+      ...Array.from({ length: 2 }, () => assistantMessage()),
     ];
     const result = todoListStaleReminder({ history, todos, active: true });
 

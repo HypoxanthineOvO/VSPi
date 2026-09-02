@@ -12,6 +12,7 @@ export const MANAGED_KIMI_MODEL_FIELDS: ReadonlySet<string> = new Set([
   'adaptiveThinking',
   'supportEfforts',
   'defaultEffort',
+  'pricing',
 ]);
 
 export const CUSTOM_REGISTRY_MODEL_FIELDS: ReadonlySet<string> = new Set([

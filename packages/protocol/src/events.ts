@@ -391,6 +391,7 @@ export interface AgentTaskInfo extends TaskInfoBase {
   readonly kind: 'agent';
   readonly agentId?: string;
   readonly subagentType?: string;
+  readonly parentToolCallId?: string;
   /** Display-normalized bound model alias (populated by the v2 engine). */
   readonly model?: string;
   /** The subagent's effective thinking effort at spawn (v2 engine). */
@@ -1454,6 +1455,7 @@ export const agentTaskInfoSchema = taskInfoBaseSchema.extend({
   kind: z.literal('agent'),
   agentId: z.string().optional(),
   subagentType: z.string().optional(),
+  parentToolCallId: z.string().optional(),
   model: z.string().optional(),
   thinkingEffort: z.string().optional(),
 }) satisfies z.ZodType<AgentTaskInfo>;

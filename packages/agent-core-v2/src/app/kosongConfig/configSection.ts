@@ -159,6 +159,14 @@ const ModelBaseSchema = z.object({
   maxInputSize: z.number().int().min(1).optional(),
   maxOutputSize: z.number().int().min(1).optional(),
   capabilities: z.array(z.string()).optional(),
+  thinking: z.object({
+    availability: z.enum(['none', 'always', 'dynamic']).optional(),
+    canDisable: z.boolean().optional(),
+    controls: z.array(z.enum(['toggle', 'effort', 'budget'])).optional(),
+    efforts: z.array(z.string()).optional(),
+    providerEfforts: z.record(z.string(), z.array(z.string())).optional(),
+    defaultEffort: z.string().optional(),
+  }).optional(),
   displayName: z.string().optional(),
   reasoningKey: z.string().optional(),
   adaptiveThinking: z.boolean().optional(),
@@ -166,6 +174,17 @@ const ModelBaseSchema = z.object({
   supportEfforts: z.array(z.string()).optional(),
   defaultEffort: z.string().optional(),
   offEffort: z.string().optional(),
+  pricing: z.object({
+    inputUsdPerMillion: z.number().nonnegative(),
+    outputUsdPerMillion: z.number().nonnegative(),
+    cacheReadUsdPerMillion: z.number().nonnegative().optional(),
+    cacheWriteUsdPerMillion: z.number().nonnegative().optional(),
+    contextTiers: z.array(z.object({
+      contextTokensAbove: z.number().int().positive(),
+      inputUsdPerMillion: z.number().nonnegative(),
+      outputUsdPerMillion: z.number().nonnegative(),
+    })).optional(),
+  }).optional(),
 });
 
 export const ModelOverrideSchema = ModelBaseSchema.omit({
@@ -179,6 +198,7 @@ export const ModelOverrideSchema = ModelBaseSchema.omit({
   provider: true,
   model: true,
   betaApi: true,
+  pricing: true,
 }).partial();
 
 export const ModelRecordSchema = ModelBaseSchema.extend({

@@ -182,7 +182,7 @@ micro_compaction = false
     const homeDir = join(tmp, 'home');
     const workDir = join(tmp, 'work');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await writeFile(
       join(homeDir, 'config.toml'),
       `${baseModelConfig()}
@@ -233,7 +233,7 @@ micro_compaction = false
     const homeDir = join(tmp, 'home');
     const workDir = join(tmp, 'work');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
     vi.stubEnv('KIMI_CODE_EXPERIMENTAL_SECONDARY_MODEL', '1');
 
@@ -311,7 +311,7 @@ micro_compaction = false
     const homeDir = join(tmp, 'home');
     const workDir = join(tmp, 'work');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await writeFile(
       join(homeDir, 'config.toml'),
       `
@@ -375,7 +375,7 @@ custom_headers = { "X-Test" = "1" }
     const homeDir = join(tmp, 'home');
     const workDir = join(tmp, 'work');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), '');
     vi.stubEnv('KIMI_WEB_SEARCH_BASE_URL', 'https://search-env.example/v1');
     vi.stubEnv('KIMI_WEB_SEARCH_API_KEY', 'env-search-key');
@@ -426,7 +426,7 @@ custom_headers = { "X-Test" = "1" }
     const homeDir = join(tmp, 'home');
     const workDir = join(tmp, 'work');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await writeFile(
       join(homeDir, 'config.toml'),
       `
@@ -476,7 +476,7 @@ custom_headers = { "X-Config-Secret" = "secret-value" }
     const homeDir = join(tmp, 'home');
     const workDir = join(tmp, 'work');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await writeFile(
       join(homeDir, 'config.toml'),
       `default_model = "default-mock"
@@ -514,7 +514,7 @@ max_context_size = 100000
     const workDir = join(tmp, 'work');
     const extraDir = join(workDir, 'extra');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await mkdir(extraDir, { recursive: true });
     await mkdir(join(workDir, '.kimi-code'), { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
@@ -553,7 +553,7 @@ max_context_size = 100000
     const workDir = join(tmp, 'work');
     const extraDir = join(workDir, 'extra');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await mkdir(extraDir, { recursive: true });
     await mkdir(join(workDir, '.kimi-code'), { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
@@ -588,7 +588,7 @@ max_context_size = 100000
     const workDir = join(tmp, 'work');
     const extraDir = join(workDir, 'extra');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await mkdir(extraDir, { recursive: true });
     await mkdir(join(workDir, '.kimi-code'), { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
@@ -629,7 +629,7 @@ max_context_size = 100000
     const localDir = join(workDir, 'local');
     const callerDir = join(workDir, 'caller');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await mkdir(localDir, { recursive: true });
     await mkdir(callerDir, { recursive: true });
     await mkdir(join(workDir, '.kimi-code'), { recursive: true });
@@ -673,7 +673,7 @@ max_context_size = 100000
     const workDir = join(tmp, 'work');
     const sharedDir = join(workDir, 'shared');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await mkdir(sharedDir, { recursive: true });
     await mkdir(join(workDir, '.kimi-code'), { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
@@ -709,7 +709,7 @@ max_context_size = 100000
     const localDir = join(workDir, 'shared');
     const callerDir = join(workDir, 'other');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await mkdir(localDir, { recursive: true });
     await mkdir(callerDir, { recursive: true });
     await mkdir(join(workDir, '.kimi-code'), { recursive: true });
@@ -776,7 +776,7 @@ max_context_size = 100000
     const workDir = join(tmp, 'work');
     const extraDir = join(workDir, 'extra');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await mkdir(extraDir, { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
 
@@ -829,7 +829,7 @@ max_context_size = 100000
     const workDir = join(tmp, 'work');
     const extraDir = join(workDir, 'extra');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await mkdir(extraDir, { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
 
@@ -874,7 +874,7 @@ max_context_size = 100000
     const workDir = join(tmp, 'work');
     const extraDir = join(workDir, 'extra');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await mkdir(extraDir, { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
 
@@ -931,7 +931,7 @@ max_context_size = 100000
     const homeDir = join(tmp, 'home');
     const workDir = join(tmp, 'work');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
 
     const [coreRpc, sdkRpc] = createRPC<CoreAPI, SDKAPI>();
@@ -964,7 +964,7 @@ max_context_size = 100000
     const homeDir = join(tmp, 'home');
     const workDir = join(tmp, 'work');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
 
     const [coreRpc, sdkRpc] = createRPC<CoreAPI, SDKAPI>();
@@ -1001,7 +1001,7 @@ max_context_size = 100000
     const workDir = join(tmp, 'work');
     const configPath = join(homeDir, 'config.toml');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await writeFile(configPath, baseModelConfig());
 
     const [coreRpc, sdkRpc] = createRPC<CoreAPI, SDKAPI>();
@@ -1043,7 +1043,7 @@ base_url = "https://search.example.test/v1"
     const homeDir = join(tmp, 'home');
     const workDir = join(tmp, 'work');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
 
     const [coreRpc, sdkRpc] = createRPC<CoreAPI, SDKAPI>();
@@ -1076,7 +1076,7 @@ base_url = "https://search.example.test/v1"
     const workDir = join(tmp, 'work');
     const pluginRoot = join(tmp, 'plugin');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
     await writeSessionStartPlugin(pluginRoot, 'OLD BODY');
 
@@ -1134,7 +1134,7 @@ base_url = "https://search.example.test/v1"
     const workDir = join(tmp, 'work');
     const pluginRoot = join(tmp, 'plugin');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
     await writeSessionStartPlugin(pluginRoot, 'BODY');
 
@@ -1182,7 +1182,7 @@ base_url = "https://search.example.test/v1"
     const workDir = join(tmp, 'work');
     const pluginRoot = join(tmp, 'plugin');
     await mkdir(join(homeDir, 'agents'), { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await mkdir(join(pluginRoot, 'agents'), { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
     await writeFile(
@@ -1230,7 +1230,7 @@ base_url = "https://search.example.test/v1"
     const workDir = join(tmp, 'work');
     const pluginRoot = join(tmp, 'plugin');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await mkdir(join(pluginRoot, 'agents'), { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
     await writeFile(
@@ -1273,7 +1273,7 @@ base_url = "https://search.example.test/v1"
     const workDir = join(tmp, 'work');
     const pluginRoot = join(tmp, 'plugin');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
     await writeSessionStartPlugin(pluginRoot, 'BODY');
 
@@ -1304,7 +1304,7 @@ base_url = "https://search.example.test/v1"
     const workDir = join(tmp, 'work');
     const pluginRoot = join(tmp, 'plugin');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
     await mkdir(pluginRoot, { recursive: true });
     await writeFile(
@@ -1341,7 +1341,7 @@ base_url = "https://search.example.test/v1"
     const homeDir = join(tmp, 'home');
     const workDir = join(tmp, 'work');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), baseModelConfig());
 
     const [coreRpc, sdkRpc] = createRPC<CoreAPI, SDKAPI>();
@@ -1407,7 +1407,7 @@ describe('KimiCore print-mode defaults', () => {
     const homeDir = join(tmp, 'home');
     const workDir = join(tmp, 'work');
     await mkdir(homeDir, { recursive: true });
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await writeFile(join(homeDir, 'config.toml'), configToml);
     return { homeDir, workDir };
   }

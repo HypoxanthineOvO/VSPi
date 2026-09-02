@@ -139,7 +139,7 @@ describe('findUpwardRoot', () => {
       const child = nodePath.join(root, 'src', 'pkg');
       await mkdir(child, { recursive: true });
 
-      const found = await findUpwardRoot(child, '.git', hasMarker);
+      const found = await findUpwardRoot(child, '.git', noMarker);
 
       expect(found).toBe(child.replaceAll('\\', '/'));
     });

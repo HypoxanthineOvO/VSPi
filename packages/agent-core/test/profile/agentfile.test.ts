@@ -663,6 +663,7 @@ describe('Session agentfile wiring', () => {
     const sessionDir = await makeTempDir();
     const brandHome = await makeTempDir();
     const osHome = await makeTempDir();
+    await mkdir(join(workDir, '.git'), { recursive: true });
     await mkdir(join(workDir, '.kimi-code', 'agents'), { recursive: true });
     await writeFile(
       join(workDir, '.kimi-code', 'agents', 'reviewer.md'),

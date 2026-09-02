@@ -55,9 +55,10 @@ describe('WorkspaceMcpConfigService', () => {
   let trustFlips: Emitter<WorkspaceTrustChange>;
   let changes: McpServersChange[];
 
-  beforeEach(() => {
+  beforeEach(async () => {
     cwd = mkdtempSync(join(tmpdir(), 'kimi-workspace-mcp-config-cwd-'));
     homeDir = mkdtempSync(join(tmpdir(), 'kimi-workspace-mcp-config-home-'));
+    await mkdir(join(cwd, '.git'));
     disposables = new DisposableStore();
     watchFires = new Map();
     pluginServers = {};

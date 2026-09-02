@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type RunningServer, startServer } from '../src/start';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
 import { authHeaders } from './helpers/auth';
+import { isolateTestWorkspace } from './helpers/workspace';
 
 interface Envelope<T> {
   code: number;
@@ -42,7 +43,7 @@ describe('server-v2 /api/v1 tools + mcp', () => {
   let base: string;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'kimi-server-v2-tools-'));
+    home = await isolateTestWorkspace(await mkdtemp(join(tmpdir(), 'kimi-server-v2-tools-')));
     const modelCatalog: IModelCatalog = {
       _serviceBrand: undefined,
       get: () => {

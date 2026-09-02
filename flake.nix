@@ -79,7 +79,9 @@
         ./packages/telemetry
         ./packages/transcript
         ./packages/tree-sitter-bash
+        ./packages/vsp-runtime
         ./apps/kimi-code
+        ./apps/vspi
         ./apps/vscode
         ./apps/kimi-inspect
         ./apps/vis
@@ -106,7 +108,9 @@
         "@moonshot-ai/kimi-telemetry"
         "@moonshot-ai/transcript"
         "@moonshot-ai/tree-sitter-bash"
+        "@vsp/vsp-runtime"
         "@moonshot-ai/kimi-code"
+        "vspi"
         "kimi-code"
         "@moonshot-ai/kimi-inspect"
         "@moonshot-ai/vis"

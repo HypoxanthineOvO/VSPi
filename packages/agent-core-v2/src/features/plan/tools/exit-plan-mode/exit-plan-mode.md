@@ -15,11 +15,11 @@ List specific, verifiable steps grounded in the actual codebase — real files, 
 If your plan offers multiple alternative approaches, pass them via the `options` parameter so the user can choose which one to execute — see the `options` parameter for the format, count, and reserved labels. In yolo and manual modes the user sees all options alongside the host's Reject and Revise controls.
 
 ## Before Using
-- In auto permission mode, do NOT use AskUserQuestion; make the best decision from available context.
 - In auto permission mode, this tool exits plan mode without asking the user.
 - In yolo and manual modes, this tool still presents the plan to the user for approval.
-- If auto permission mode is not active and you have unresolved questions, use AskUserQuestion first.
-- If auto permission mode is not active and you have multiple approaches and haven't narrowed down yet, consider using AskUserQuestion first to let the user choose, then write a plan for the chosen approach only.
+- If you have unresolved requirements, preferences, or scope questions, use AskUserQuestion first regardless of permission mode.
+- If you have multiple materially different approaches and have not narrowed them down, consider using AskUserQuestion first to let the user choose, then write a plan for the chosen approach only.
+- Never use AskUserQuestion for tool permission or approval decisions.
 - Once your plan is finalized, use THIS tool to request approval.
 - Do NOT use AskUserQuestion to ask "Is this plan OK?" or "Should I proceed?" - that is exactly what ExitPlanMode does.
 - If rejected, revise based on feedback and call ExitPlanMode again.

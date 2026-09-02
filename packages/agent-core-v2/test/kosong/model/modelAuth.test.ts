@@ -108,6 +108,7 @@ describe('effectiveModelConfig', () => {
   it('drops a defaultEffort the override effort list does not contain', () => {
     const effective = effectiveModelConfig({
       model: 'm',
+      capabilities: ['thinking'],
       supportEfforts: ['low', 'high'],
       defaultEffort: 'high',
       overrides: { supportEfforts: ['low'] },

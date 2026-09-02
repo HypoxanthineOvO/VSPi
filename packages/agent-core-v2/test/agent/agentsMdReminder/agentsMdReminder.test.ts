@@ -790,7 +790,13 @@ describe('agentsMdReminder probing boundaries', () => {
   });
 
   it('probes only the immediate directory outside any project', async () => {
-    const h = createHarness();
+    const hostFs = new HostFileSystem();
+    const noMarkerFs = Object.create(hostFs) as HostFileSystem;
+    noMarkerFs.stat = async (path) => {
+      if (path.endsWith('/.git')) throw new Error(`missing: ${path}`);
+      return hostFs.stat(path);
+    };
+    const h = createHarness({ hostFs: noMarkerFs });
     const outside = await mkdtemp(join(tmpdir(), 'kimi-reminder-outside-'));
     const outerAgentsMd = await writeAgentsMd(outside, 'outer instructions');
     const leaf = join(outside, 'leaf');

@@ -69,6 +69,7 @@ export const promptWithSkillsResultSchema = z.object({
 /** Same shape as `SteerPayload` in the engine. */
 export const steerPayloadSchema = z.object({
   input: z.array(promptPartSchema),
+  promptId: z.string().optional(),
 });
 
 /** Same shape as `SkillActivationInput`'s wire subset in the engine. */
@@ -209,8 +210,11 @@ export const agentTaskInfoSchema = z.discriminatedUnion('kind', [
     kind: z.literal('agent'),
     agentId: z.string().optional(),
     subagentType: z.string().optional(),
+    parentToolCallId: z.string().optional(),
     model: z.string().optional(),
     thinkingEffort: z.string().optional(),
+    codename: z.string().optional(),
+    taskTitle: z.string().optional(),
     ...taskInfoBaseFields,
   }),
   z.object({

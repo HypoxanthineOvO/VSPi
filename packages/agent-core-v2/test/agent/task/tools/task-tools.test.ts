@@ -777,6 +777,31 @@ describe('WaitForTool', () => {
         task_id: { type: 'string' },
       },
     });
+    expect(tool.description).toContain(
+      'Default to ending the current turn and letting that notification resume the work.',
+    );
+    expect(tool.description).toContain(
+      '"My next step depends on the result", "I have no other work", and "I want to continue in the same turn" do not qualify.',
+    );
+    expect(tool.description).toContain(
+      'Use WaitFor only when preserving an uninterruptible atomic operation requires the result and that operation must continue in this same turn.',
+    );
+    expect(tool.description).toContain(
+      'Do not call WaitFor again unless the same strict atomic-operation exception still applies',
+    );
+    const properties = tool.parameters['properties'] as Record<
+      string,
+      { readonly description?: string }
+    >;
+    expect(properties['timeout']?.description).toContain(
+      'wait again only if preserving an uninterruptible atomic operation still requires the result in this same turn',
+    );
+    expect(properties['timeout']?.description).toContain(
+      'otherwise end the turn for automatic notification',
+    );
+    expect(properties['task_id']?.description).toContain(
+      'under the strict same-turn atomic-operation exception',
+    );
   });
 
   it('returns error and tracks task_not_found for an unknown task_id', async () => {

@@ -273,6 +273,7 @@ export interface AutocompleteProvider {
 
 // Combined provider that handles both slash commands and file paths
 export class CombinedAutocompleteProvider implements AutocompleteProvider {
+	readonly triggerCharacters = ["@"];
 	private commands: (SlashCommand | AutocompleteItem)[];
 	private basePath: string;
 	private additionalBasePaths: string[];
@@ -302,10 +303,12 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		const atPrefix = this.extractAtPrefix(textBeforeCursor);
 		if (atPrefix) {
 			const { rawPrefix, isQuotedPrefix } = parsePathPrefix(atPrefix);
-			const suggestions = await this.getFuzzyFileSuggestions(rawPrefix, {
-				isQuotedPrefix,
-				signal: options.signal,
-			});
+			const suggestions = this.fdPath
+				? await this.getFuzzyFileSuggestions(rawPrefix, {
+						isQuotedPrefix,
+						signal: options.signal,
+					})
+				: this.getFileSuggestions(atPrefix);
 			if (suggestions.length === 0) return null;
 
 			return {

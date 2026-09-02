@@ -27,6 +27,7 @@ import { type RunningServer, startServer } from '../src/start';
 import { projectPromptSnapshot, watchPromptSettlements } from '../src/routes/prompts';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
 import { authHeaders } from './helpers/auth';
+import { isolateTestWorkspace } from './helpers/workspace';
 
 interface Envelope<T> {
   code: number;
@@ -63,6 +64,7 @@ const PROMPT_TOML = [
   'provider = "stub"',
   'model = "stub"',
   'max_context_size = 1000',
+  'capabilities = ["thinking"]',
   '',
 ].join('\n');
 
@@ -194,7 +196,7 @@ describe('server-v2 /api/v1 prompts', () => {
   let base: string;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'kimi-server-v2-prompts-'));
+    home = await isolateTestWorkspace(await mkdtemp(join(tmpdir(), 'kimi-server-v2-prompts-')));
     await writeConfigToml(home, PROMPT_TOML);
     server = await startServer({ hostIdentity: TEST_HOST_IDENTITY, host: '127.0.0.1', port: 0, homeDir: home, logLevel: 'silent' });
     base = `http://127.0.0.1:${server.port}`;

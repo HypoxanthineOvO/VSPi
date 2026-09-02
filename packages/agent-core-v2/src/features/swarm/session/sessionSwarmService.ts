@@ -5,6 +5,8 @@ import { linkAbortSignal } from '#/_base/utils/abort';
 import type { IAgentScopeHandle } from '#/_base/di/scope';
 import { IAgentProfileService } from '#/agent/profile/profile';
 import { IAgentLoopService } from '#/agent/loop/loop';
+import { IAgentTaskService } from '#/agent/task/task';
+import { SubagentTask, type SubagentHandle } from '#/agent/tools/agent/subagent-task';
 import { Event2 } from '#/app/event/event2';
 import { agentContextOf } from '#/agent/scopeContext/scopeContext';
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
@@ -116,6 +118,7 @@ export class SessionSwarmService implements ISessionSwarmService {
       plan,
       labels: subagentLabels(callerAgentId, { swarmItem: options.swarmItem }),
       prompt: options.prompt,
+      taskTitle: options.swarmItem ?? options.description,
     });
     emitAgentRunSpawned(caller, spawned.agentId, {
       profileName: plan.profileName,
@@ -179,20 +182,39 @@ export class SessionSwarmService implements ISessionSwarmService {
     options: AgentRunAttemptOptions,
   ): Promise<AgentRunAttemptHandle> {
     const agentId = child.id;
+    const controller = new AbortController();
+    const unlink = linkAbortSignal(options.signal, controller);
     const run = await this.subagents.run(agentContextOf(child), request, {
-      signal: options.signal,
+      signal: controller.signal,
       onReady: options.onReady,
     });
     const mirrored = mirrorAgentRun(caller, run, {
       profileName,
       prompt: request.kind === 'prompt' ? request.prompt : undefined,
       suppressRateLimitFailureEvent: options.suppressRateLimitFailureEvent,
-      signal: options.signal,
+      signal: controller.signal,
     });
+    const profile = child.accessor.get(IAgentProfileService);
+    const labels = (await this.agentMeta(agentId))?.labels;
+    const handle: SubagentHandle = {
+      agentId,
+      profileName,
+      parentToolCallId: options.parentToolCallId,
+      model: profile.data().modelAlias,
+      thinkingEffort: profile.getEffectiveThinkingLevel(),
+      codename: labels?.['codename'],
+      taskTitle: labels?.['taskTitle'],
+      completion: mirrored.then((result) => ({ result: result.summary, usage: result.usage })),
+    };
+    caller.accessor.get(IAgentTaskService).registerTask(
+      new SubagentTask(handle, options.description, controller),
+      { signal: options.signal },
+    );
+    void handle.completion.finally(unlink).catch(() => undefined);
     return {
       agentId,
       profileName,
-      completion: mirrored.then((r) => ({ result: r.summary, usage: r.usage })),
+      completion: handle.completion,
     };
   }
 

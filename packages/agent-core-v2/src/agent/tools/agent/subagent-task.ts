@@ -18,6 +18,8 @@ export type SubagentHandle = {
   readonly parentToolCallId?: string;
   readonly model?: string;
   readonly thinkingEffort?: string;
+  readonly codename?: string;
+  readonly taskTitle?: string;
   readonly completion: Promise<SubagentCompletion>;
 };
 
@@ -28,6 +30,8 @@ export interface SubagentTaskInfo extends AgentTaskInfoBase {
   readonly parentToolCallId?: string;
   readonly model?: string;
   readonly thinkingEffort?: string;
+  readonly codename?: string;
+  readonly taskTitle?: string;
 }
 
 declare module '#/agent/task/types' {
@@ -77,10 +81,13 @@ export class SubagentTask implements AgentTask {
   readonly parentToolCallId?: string;
   readonly model?: string;
   readonly thinkingEffort?: string;
+  readonly codename?: string;
+  readonly taskTitle?: string;
+  readonly description: string;
 
   constructor(
     private readonly handle: SubagentHandle,
-    readonly description: string,
+    description: string,
     private readonly abortController: AbortController,
   ) {
     this.agentId = handle.agentId;
@@ -88,6 +95,11 @@ export class SubagentTask implements AgentTask {
     this.parentToolCallId = handle.parentToolCallId;
     this.model = handle.model;
     this.thinkingEffort = handle.thinkingEffort;
+    this.codename = handle.codename;
+    this.taskTitle = handle.taskTitle;
+    this.description = this.codename !== undefined && this.taskTitle !== undefined
+      ? `${this.codename} · ${this.taskTitle}`
+      : description;
   }
 
   async start(sink: AgentTaskSink): Promise<void> {
@@ -124,6 +136,8 @@ export class SubagentTask implements AgentTask {
       parentToolCallId: this.parentToolCallId,
       model: this.model,
       thinkingEffort: this.thinkingEffort,
+      codename: this.codename,
+      taskTitle: this.taskTitle,
     };
   }
 }

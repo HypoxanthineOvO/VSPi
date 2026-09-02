@@ -1,4 +1,4 @@
-import type { ModelCapability } from '#/kosong/contract/capability';
+import type { ModelCapability, ThinkingCapability } from '#/kosong/contract/capability';
 
 import type { OAuthRef } from '../provider/provider';
 
@@ -32,6 +32,8 @@ export interface ThinkingDefaults {
 }
 
 export interface ModelThinkingMetadata {
+  readonly thinking?: ThinkingCapability;
+  readonly providerType?: string;
   readonly capabilities?: ModelCapability | readonly string[];
   readonly adaptiveThinking?: boolean;
   readonly alwaysThinking?: boolean;

@@ -19,6 +19,7 @@ import type { IAgentProfileService } from '@moonshot-ai/agent-core-v2/agent/prof
 import type { IAgentShellCommandService } from '@moonshot-ai/agent-core-v2/agent/shellCommand/shellCommand';
 import type { SkillRuntime } from '@moonshot-ai/agent-core-v2/features/skill/skillAgentRuntime';
 import type { IAgentTaskService } from '@moonshot-ai/agent-core-v2/agent/task/task';
+import type { IAgentCronViewService } from '@moonshot-ai/agent-core-v2/features/cron/cronView';
 import type { ISessionUsageService } from '@moonshot-ai/agent-core-v2/session/usage/sessionUsage';
 import type { ContentPart } from '@moonshot-ai/agent-core-v2/kosong/contract/message';
 import type { PermissionMode } from '@moonshot-ai/agent-core-v2/agent/permissionPolicy/types';
@@ -32,6 +33,7 @@ export type PromptLaunchResult = Awaited<ReturnType<IAgentPromptService['submit'
 export type PromptWithSkillsInput = Parameters<SkillRuntime['promptWithSkills']>[0];
 export type PromptWithSkillsResult = Awaited<ReturnType<SkillRuntime['promptWithSkills']>>;
 export type ShellCommandResult = Awaited<ReturnType<IAgentShellCommandService['run']>>;
+export type BindProfileInput = Parameters<IAgentProfileService['bind']>[0];
 export type SetModelResult = Awaited<ReturnType<IAgentProfileService['setModel']>>;
 export type ThinkingLevel = ReturnType<IAgentProfileService['getEffectiveThinkingLevel']>;
 export type UsageStatus = Awaited<ReturnType<ISessionUsageService['status']>>;
@@ -44,6 +46,7 @@ export type RuntimeBinding = ReturnType<IAgentRuntimeBindingService['get']>;
 export type PlanData = Awaited<ReturnType<IAgentPlanService['status']>>;
 export type AgentTaskInfo = Awaited<ReturnType<IAgentTaskService['list']>>[number];
 export type McpServerEntry = ReturnType<IAgentMcpService['list']>[number];
+export type AgentCronTask = ReturnType<IAgentCronViewService['list']>[number];
 
 export interface AgentFacade {
   prompt(input: {
@@ -61,7 +64,7 @@ export interface AgentFacade {
    * `queued` when the submission queued behind a running turn.
    */
   promptWithSkills(input: PromptWithSkillsInput): Promise<PromptWithSkillsResult>;
-  steer(input: { input: readonly ContentPart[] }): Promise<PromptLaunchResult>;
+  steer(input: { input: readonly ContentPart[]; promptId?: string }): Promise<PromptLaunchResult>;
   /**
    * Activate a skill as a user-slash activation: the engine renders the skill
    * prompt and drives it as a normal turn (same settlement/event flow as
@@ -72,6 +75,7 @@ export interface AgentFacade {
   cancel(input?: { turnId?: number }): Promise<void>;
   runShellCommand(input: { command: string; commandId?: string }): Promise<ShellCommandResult>;
   cancelShellCommand(input: { commandId: string }): Promise<void>;
+  bindProfile(input: BindProfileInput): Promise<void>;
   getModel(): Promise<string>;
   setModel(model: string): Promise<SetModelResult>;
   getThinking(): Promise<ThinkingLevel>;
@@ -90,6 +94,9 @@ export interface AgentFacade {
   getTasks(input?: { activeOnly?: boolean; limit?: number }): Promise<readonly AgentTaskInfo[]>;
   stopTask(input: { taskId: string; reason?: string }): Promise<void>;
   getTaskOutput(input: { taskId: string; tail?: number }): Promise<string>;
+  getCronTasks(): Promise<readonly AgentCronTask[]>;
+  createCronTask(input: { cron: string; prompt: string; recurring?: boolean }): Promise<AgentCronTask>;
+  deleteCronTask(id: string): Promise<boolean>;
   /**
    * Session-merged MCP server entries (workspace set + ephemeral session
    * overlay). This is a live snapshot, so entries may still be pending while
@@ -102,6 +109,7 @@ export interface AgentFacade {
    * Throws when there is nothing to compact or a turn is active.
    */
   compact(input?: { instruction?: string }): Promise<boolean>;
+  cancelCompaction(): Promise<void>;
 }
 
 export function createAgentFacade(call: ScopedCaller, scope: ScopeRef): AgentFacade {
@@ -122,6 +130,8 @@ export function createAgentFacade(call: ScopedCaller, scope: ScopeRef): AgentFac
       call(scope, 'agentShellCommandService', 'run', [input]) as Promise<ShellCommandResult>,
     cancelShellCommand: (input) =>
       call(scope, 'agentShellCommandService', 'cancel', [input.commandId]) as Promise<void>,
+    bindProfile: (input) =>
+      call(scope, 'agentProfileService', 'bind', [input]) as Promise<void>,
     getModel: () => call(scope, 'agentProfileService', 'getModel', []) as Promise<string>,
     setModel: (model) =>
       call(scope, 'agentProfileService', 'setModel', [model]) as Promise<SetModelResult>,
@@ -173,11 +183,19 @@ export function createAgentFacade(call: ScopedCaller, scope: ScopeRef): AgentFac
     },
     getTaskOutput: (input) =>
       call(scope, 'agentTaskService', 'readOutput', [input.taskId, input.tail]) as Promise<string>,
+    getCronTasks: () =>
+      call(scope, 'agentCronViewService', 'list', []) as Promise<readonly AgentCronTask[]>,
+    createCronTask: (input) =>
+      call(scope, 'agentCronViewService', 'create', [input]) as Promise<AgentCronTask>,
+    deleteCronTask: (id) =>
+      call(scope, 'agentCronViewService', 'delete', [id]) as Promise<boolean>,
     getMcpServers: () =>
       call(scope, 'agentMcpService', 'list', []) as Promise<readonly McpServerEntry[]>,
     compact: (input) =>
       call(scope, 'agentFullCompactionService', 'begin', [
         { source: 'manual', instruction: input?.instruction },
       ]) as Promise<boolean>,
+    cancelCompaction: () =>
+      call(scope, 'agentFullCompactionService', 'cancel', []) as Promise<void>,
   };
 }

@@ -10,6 +10,7 @@ import type { KlientContract } from './types.js';
 import { agentActivityViewContract } from './agent/activity.js';
 import {
   agentCommandContract,
+  agentCronContract,
   agentContextMemoryContract,
   agentFullCompactionContract,
   agentLoopContract,
@@ -91,6 +92,7 @@ export const globalContract: KlientContract = {
   agentTaskService: agentTaskContract,
   agentMcpService: agentMcpContract,
   agentFullCompactionService: agentFullCompactionContract,
+  agentCronViewService: agentCronContract,
 };
 
 export type { KlientContract, ProcedureContract, ServiceContract, StreamingProcedureContract } from './types.js';

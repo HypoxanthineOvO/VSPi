@@ -49,6 +49,18 @@ const modelBaseSchema = z.object({
   betaApi: z.boolean().optional(),
   supportEfforts: z.array(z.string()).optional(),
   defaultEffort: z.string().optional(),
+  offEffort: z.string().optional(),
+  pricing: z.object({
+    inputUsdPerMillion: z.number().nonnegative(),
+    outputUsdPerMillion: z.number().nonnegative(),
+    cacheReadUsdPerMillion: z.number().nonnegative().optional(),
+    cacheWriteUsdPerMillion: z.number().nonnegative().optional(),
+    contextTiers: z.array(z.object({
+      contextTokensAbove: z.number().int().positive(),
+      inputUsdPerMillion: z.number().nonnegative(),
+      outputUsdPerMillion: z.number().nonnegative(),
+    })).optional(),
+  }).optional(),
 });
 
 const modelOverrideSchema = modelBaseSchema
@@ -63,6 +75,7 @@ const modelOverrideSchema = modelBaseSchema
     provider: true,
     model: true,
     betaApi: true,
+    pricing: true,
   })
   .partial();
 

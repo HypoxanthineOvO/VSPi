@@ -13,13 +13,13 @@ export const WaitForInputSchema = z.object({
     .positive()
     .max(WAIT_FOR_MAX_TIMEOUT_S)
     .describe(
-      `Maximum time to wait, in seconds (1-${String(WAIT_FOR_MAX_TIMEOUT_S)}). A timeout is not an error: the tool returns the tasks that are still running, and you can call it again to keep waiting.`,
+      `Maximum time to wait, in seconds (1-${String(WAIT_FOR_MAX_TIMEOUT_S)}). A timeout is not an error. After one, wait again only if preserving an uninterruptible atomic operation still requires the result in this same turn; otherwise end the turn for automatic notification.`,
     ),
   task_id: z
     .string()
     .optional()
     .describe(
-      'The background task ID to wait for. When omitted, the wait ends as soon as any background task that was running at call time finishes.',
+      'The background task ID to wait for under the strict same-turn atomic-operation exception. When omitted, the wait ends as soon as any background task that was running at call time finishes.',
     ),
 });
 

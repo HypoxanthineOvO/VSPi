@@ -18,6 +18,7 @@ import { WebSocket } from 'ws';
 import { type RunningServer, startServer } from '../src/start';
 import { startConfigChangedPublisher } from '../src/services/config/configChangedPublisher';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
+import { isolateTestWorkspace } from './helpers/workspace';
 import { authedFetch, bearerToken } from './helpers/auth';
 
 interface Envelope<T> {
@@ -33,7 +34,7 @@ describe('server-v2 /api/v1/config', () => {
   let base: string;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'kimi-server-v2-config-'));
+    home = await isolateTestWorkspace(await mkdtemp(join(tmpdir(), 'kimi-server-v2-config-')));
   });
 
   afterEach(async () => {

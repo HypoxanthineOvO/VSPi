@@ -2,7 +2,11 @@ import { parseKimiCodeCustomHeaders } from '@moonshot-ai/kimi-code-oauth';
 
 import { BugIndicatingError } from '#/_base/errors/errors';
 
-import type { ModelCapability } from '#/kosong/contract/capability';
+import {
+  normalizeThinkingCapability,
+  type ModelCapability,
+  type ThinkingCapability,
+} from '#/kosong/contract/capability';
 import type { InspectionSource, ResolutionTrace } from '#/kosong/contract/inspection';
 import type { Protocol, ProtocolProviderOptions } from '#/kosong/protocol/protocol';
 
@@ -28,6 +32,7 @@ export interface InspectedResolvedModel {
   readonly aliases: readonly string[];
   readonly auth: InspectedAuth;
   readonly capabilities: ModelCapability;
+  readonly thinking: ThinkingCapability;
   readonly maxContextSize: number;
   readonly maxInputSize?: number;
   readonly maxOutputSize?: number;
@@ -164,7 +169,7 @@ export function attributeEffectiveFields(
       continue;
     }
     const profileTouched =
-      (key === 'capabilities' || key === 'supportEfforts' || key === 'defaultEffort') &&
+      (key === 'capabilities' || key === 'thinking' || key === 'supportEfforts' || key === 'defaultEffort') &&
       profileDetail !== undefined &&
       JSON.stringify(before) !== JSON.stringify(after);
     if (profileTouched) {
@@ -221,6 +226,7 @@ interface ResolvedModelLike {
   readonly name: string;
   readonly aliases: readonly string[];
   readonly capabilities: ModelCapability;
+  readonly thinking?: ThinkingCapability;
   readonly maxContextSize: number;
   readonly maxInputSize?: number;
   readonly maxOutputSize?: number;
@@ -280,6 +286,7 @@ export function assembleModelInspection(args: {
     'maxOutputSize',
     'displayName',
     'reasoningKey',
+    'thinking',
     'supportEfforts',
     'defaultEffort',
     'aliases',
@@ -294,7 +301,7 @@ export function assembleModelInspection(args: {
   );
   sources.set('resolved.alwaysThinking', {
     kind: 'synthesized',
-    detail: "derived from the declared capabilities ('always_thinking' present)",
+    detail: "derived from resolved.thinking.availability === 'always'",
   });
   sources.set(
     'resolved.providerType',
@@ -385,6 +392,7 @@ export function assembleModelInspection(args: {
       aliases: model.aliases,
       auth,
       capabilities: model.capabilities,
+      thinking: normalizeThinkingCapability(model.thinking),
       maxContextSize: model.maxContextSize,
       maxInputSize: model.maxInputSize,
       maxOutputSize: model.maxOutputSize,

@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type RunningServer, startServer } from '../src/start';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
 import { authHeaders } from './helpers/auth';
+import { isolateTestWorkspace } from './helpers/workspace';
 
 class FakeTerminalProcess implements TerminalProcess {
   private readonly dataListeners = new Set<(data: string) => void>();
@@ -94,7 +95,9 @@ describe('server-v2 /api/v1/sessions/{sid}/terminals', () => {
     spawnOptions.length = 0;
     processes.length = 0;
     home = await mkdtemp(join(tmpdir(), 'kimi-server-v2-term-home-'));
-    work = await mkdtemp(join(tmpdir(), 'kimi-server-v2-term-work-'));
+    work = await isolateTestWorkspace(
+      await mkdtemp(join(tmpdir(), 'kimi-server-v2-term-work-')),
+    );
     await writeFile(
       join(home, 'config.toml'),
       [
@@ -176,8 +179,12 @@ describe('server-v2 /api/v1/sessions/{sid}/terminals', () => {
   });
 
   it('creates terminals for multiple sessions using each session workspace cwd', async () => {
-    const rootA = await mkdtemp(join(tmpdir(), 'kimi-server-v2-term-a-'));
-    const rootB = await mkdtemp(join(tmpdir(), 'kimi-server-v2-term-b-'));
+    const rootA = await isolateTestWorkspace(
+      await mkdtemp(join(tmpdir(), 'kimi-server-v2-term-a-')),
+    );
+    const rootB = await isolateTestWorkspace(
+      await mkdtemp(join(tmpdir(), 'kimi-server-v2-term-b-')),
+    );
     try {
       const sidA = await createSession(rootA);
       const sidB = await createSession(rootB);

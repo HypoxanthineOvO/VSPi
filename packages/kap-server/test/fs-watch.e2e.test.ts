@@ -8,6 +8,7 @@ import { WebSocket, type RawData } from 'ws';
 
 import { startServer, type RunningServer } from '../src/start';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
+import { isolateTestWorkspaceSync } from './helpers/workspace';
 
 let tmpDir: string;
 let bridgeHome: string;
@@ -19,6 +20,7 @@ beforeEach(() => {
   bridgeHome = mkdtempSync(join(tmpdir(), 'kap-fswatch-home-'));
   workspace = join(tmpDir, 'workspace');
   mkdirSync(workspace, { recursive: true });
+  isolateTestWorkspaceSync(workspace);
   mkdirSync(join(workspace, 'src'), { recursive: true });
   mkdirSync(join(workspace, 'docs'), { recursive: true });
 });

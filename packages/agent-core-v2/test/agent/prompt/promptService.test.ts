@@ -13,7 +13,15 @@ import { IAgentFullCompactionService } from '#/agent/fullCompaction/fullCompacti
 import { IAgentLoopService } from '#/agent/loop/loop';
 import { TurnSteer } from '#/agent/loop/turnOps';
 import { IAgentPromptService } from '#/agent/prompt/prompt';
-import { AgentPromptService, PromptQueued, PromptStarted, PromptSteered, PromptSubmitted } from '#/agent/prompt/promptService';
+import {
+  AgentPromptService,
+  PromptAborted,
+  PromptCompleted,
+  PromptQueued,
+  PromptStarted,
+  PromptSteered,
+  PromptSubmitted,
+} from '#/agent/prompt/promptService';
 import { IAgentScopeContext, makeAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 import { wrapSystemReminder } from '#/features/reminder/systemReminder';
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
@@ -201,6 +209,48 @@ describe('AgentPromptService', () => {
     const handles = await prompt.steer([two.id, one.id]);
     expect(handles.map((item) => item.id)).toEqual([one.id, two.id]);
     loop.drainNextBatch(context);
+  });
+
+  it('preserves a caller-provided prompt id for submitted steers', async () => {
+    const { prompt, eventBus } = harness();
+    const submitted: string[] = [];
+    eventBus.subscribe(PromptSubmitted, (event) => submitted.push(event.promptId));
+    const active = await prompt.enqueue({ id: 'active', message: message('active') });
+    await active.launched;
+
+    await prompt.submitSteer({
+      input: [{ type: 'text', text: 'steer' }],
+      promptId: 'steer-prompt',
+    });
+
+    expect(submitted).toEqual(['active', 'steer-prompt']);
+  });
+
+  it.each([
+    {
+      result: { type: 'completed', steps: 1, truncated: false } as const,
+      event: 'completed' as const,
+    },
+    {
+      result: { type: 'cancelled', steps: 0, reason: new Error('cancelled') } as const,
+      event: 'aborted' as const,
+    },
+  ])('publishes prompt.$event for each steered child when the active prompt settles', async ({ result, event }) => {
+    const { prompt, loop, eventBus } = harness({ manualTurnResult: true });
+    const completed: string[] = [];
+    const aborted: string[] = [];
+    eventBus.subscribe(PromptCompleted, (item) => completed.push(item.promptId));
+    eventBus.subscribe(PromptAborted, (item) => aborted.push(item.promptId));
+    const active = await prompt.enqueue({ id: 'active', message: message('active') });
+    await active.launched;
+    const child = await prompt.enqueue({ id: 'child', message: message('child') });
+    await prompt.steer([child.id]);
+
+    loop.settleActive(result);
+    await active.completion;
+
+    expect(event === 'completed' ? completed : aborted).toEqual(['child', 'active']);
+    expect(event === 'completed' ? aborted : completed).toEqual([]);
   });
 
   it('publishes turn.steer at materialize time without altering the wire payload shape', async () => {

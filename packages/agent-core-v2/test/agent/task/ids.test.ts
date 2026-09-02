@@ -31,6 +31,8 @@ function agentTask(
   const handle: SubagentHandle = {
     agentId: 'agent-child',
     profileName: 'coder',
+    codename: '图灵',
+    taskTitle: description,
     completion,
   };
   return new SubagentTask(
@@ -102,7 +104,13 @@ describe('background task id format', () => {
     );
 
     expect(id).toMatch(/^agent-[0-9a-z]{8}$/);
-    expect(background.getTask(id)).toMatchObject({ taskId: id, kind: 'agent' });
+    expect(background.getTask(id)).toMatchObject({
+      taskId: id,
+      kind: 'agent',
+      codename: '图灵',
+      taskTitle: 'agent task',
+      description: '图灵 · agent task',
+    });
     resolveCompletion({ result: 'done' });
     await background.wait(id);
   });

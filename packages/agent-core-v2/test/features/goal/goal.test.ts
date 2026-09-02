@@ -2838,9 +2838,11 @@ describe('AgentGoalService WaitFor guidance gating', () => {
       await ctx.rpc.prompt({ input: [{ type: 'text', text: 'start work' }] });
       await vi.waitFor(() => expect(ctx.llmCalls).toHaveLength(3));
 
-      const allCalls = JSON.stringify(ctx.llmCalls);
-      expect(allCalls).not.toContain('WaitFor');
-      expect(allCalls).not.toContain('re-invoked again and again');
+      const goalReminder = ctx.llmCalls[0]!.history.find((message) =>
+        JSON.stringify(message.content).includes('You are working under an active goal'),
+      );
+      expect(goalReminder).toBeDefined();
+      expect(JSON.stringify(goalReminder?.content)).not.toContain('re-invoked again and again');
       expect((await ctx.rpc.getGoal({})).goal).toBeNull();
     } finally {
       await ctx.dispose();

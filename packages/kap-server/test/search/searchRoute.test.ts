@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type RunningServer, startServer } from '../../src/start';
 import { TEST_HOST_IDENTITY } from '../helpers/hostIdentity';
 import { authedFetch } from '../helpers/auth';
+import { isolateTestWorkspace } from '../helpers/workspace';
 
 interface Envelope<T> {
   code: number;
@@ -64,7 +65,7 @@ describe('server-v2 /api/v1/search', () => {
   let base: string;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'kimi-server-v2-search-'));
+    home = await isolateTestWorkspace(await mkdtemp(join(tmpdir(), 'kimi-server-v2-search-')));
     const sessionDir = join(home, 'sessions', WS, 's1', 'agents', 'main');
     await mkdir(sessionDir, { recursive: true });
     await writeFile(
@@ -214,8 +215,11 @@ describe('server-v2 session routes with the global search DB unavailable', () =>
   let base: string;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'kimi-server-v2-search-down-'));
-    await writeFile(join(home, 'search-index'), 'not a minidb directory', 'utf8');
+    home = await isolateTestWorkspace(
+      await mkdtemp(join(tmpdir(), 'kimi-server-v2-search-down-')),
+    );
+    await mkdir(join(home, 'search-index'), { recursive: true });
+    await writeFile(join(home, 'search-index', 'db.snapshot'), 'not a snapshot {{{', 'utf8');
   });
 
   afterEach(async () => {
@@ -277,15 +281,29 @@ describe('server-v2 session routes with the global search DB unavailable', () =>
     expect(messages.code).toBe(0);
 
     const probe = await stat(join(home as string, 'search-index'));
-    expect(probe.isFile()).toBe(true);
+    expect(probe.isDirectory()).toBe(true);
   });
 
-  it('only the full-text search request reports the index outage', { timeout: 30_000 }, async () => {
+  it('recovers a corrupt index for search while preserving session routes', { timeout: 30_000 }, async () => {
     await boot();
     const created = await postJson<{ id: string }>('/api/v1/sessions', {
       metadata: { cwd: home },
     });
     expect(created.code).toBe(0);
+
+    const search = await postJson<SearchPageWire>('/api/v1/search', { query: 'anything' });
+    expect(search.code).toBe(0);
+    expect(search.data.items).toEqual([]);
+    expect(search.data.index_state.state).toBe('building');
+
+    const list = await getJson<{ items: unknown[] }>('/api/v1/sessions');
+    expect(list.code).toBe(0);
+  });
+
+  it('reports 50001 when the search index path is not recoverable', { timeout: 30_000 }, async () => {
+    await rm(join(home as string, 'search-index'), { recursive: true, force: true });
+    await writeFile(join(home as string, 'search-index'), 'not a minidb directory', 'utf8');
+    await boot();
 
     await expect
       .poll(
@@ -296,8 +314,5 @@ describe('server-v2 session routes with the global search DB unavailable', () =>
     const search = await postJson<SearchPageWire>('/api/v1/search', { query: 'anything' });
     expect(search.code).toBe(50001);
     expect(search.msg).toContain('search index failed to open');
-
-    const list = await getJson<{ items: unknown[] }>('/api/v1/sessions');
-    expect(list.code).toBe(0);
   });
 });

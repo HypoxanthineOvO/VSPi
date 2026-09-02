@@ -2,7 +2,12 @@ import { Disposable } from '#/_base/di/lifecycle';
 import { LifecycleScope } from '#/app/scopes';
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
 import { defineState } from '#/state/state';
-import { UNKNOWN_CAPABILITY, type ModelCapability } from '#/kosong/contract/capability';
+import {
+  UNKNOWN_CAPABILITY,
+  normalizeThinkingCapability,
+  thinkingEffortsForProvider,
+  type ModelCapability,
+} from '#/kosong/contract/capability';
 import { type SamplingOptions, type ThinkingEffort } from '#/kosong/contract/provider';
 import { IModelCatalog, type Model } from '#/kosong/model/catalog';
 import { type ModelOverrides } from '#/kosong/model/model.types';
@@ -371,8 +376,16 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
   ): void {
     const normalized = normalizeRequestedThinkingEffort(requested);
     if (normalized === undefined || this.supportsThinkingEffort(normalized, model)) return;
-    const efforts = model?.supportEfforts ?? [];
-    const supported = efforts.length === 0 ? 'off' : ['off', ...efforts].join(', ');
+    const efforts =
+      model === undefined ? [] : thinkingEffortsForProvider(this.modelThinking(model), model.providerType);
+    const supported =
+      efforts.length === 0
+        ? model?.thinking?.canDisable === true
+          ? 'off, on'
+          : 'on'
+        : [model?.thinking?.canDisable === true ? 'off' : undefined, ...efforts]
+            .filter((value): value is string => value !== undefined)
+            .join(', ');
     throw new ProfileError(
       ProfileErrors.codes.MODEL_CONFIG_INVALID,
       `Thinking effort "${requested}" is not supported by model "${modelAlias}". Supported efforts: ${supported}.`,
@@ -446,7 +459,7 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
       modelAlias,
       modelCapabilities: model.capabilities,
       maxOutputSize: model.maxOutputSize,
-      alwaysThinking: model.alwaysThinking || undefined,
+      alwaysThinking: this.modelThinking(model).availability === 'always' || undefined,
       thinkingLevel: this.resolveThinkingState(model).effective,
       reservedContextSize: loopControl?.reservedContextSize,
       compactionTriggerRatio: loopControl?.compactionTriggerRatio,
@@ -568,8 +581,8 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
       let code: string;
       let message: string;
       let knownEfforts = '';
-      const efforts = model.supportEfforts?.filter((value) => value.length > 0);
-      if (efforts === undefined || efforts.length === 0 || efforts.includes(effort)) return;
+      const efforts = thinkingEffortsForProvider(this.modelThinking(model), model.providerType);
+      if (efforts.length === 0 || efforts.includes(effort)) return;
       knownEfforts = efforts.join(',');
       code = 'anthropic-thinking-effort-not-listed';
       message = `Thinking effort "${effort}" is not listed for model "${model.name}" (known: ${efforts.join(', ')}). The configured value will be sent unchanged to the Anthropic-compatible backend.`;
@@ -691,7 +704,17 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
   }
 
   private get alwaysThinkingModel(): boolean {
-    return this.tryResolveRawModel()?.alwaysThinking === true;
+    const model = this.tryResolveRawModel();
+    return model !== undefined && this.modelThinking(model).availability === 'always';
+  }
+
+  private modelThinking(model: Model) {
+    return normalizeThinkingCapability(model.thinking, {
+      thinking: model.capabilities?.thinking,
+      alwaysThinking: model.alwaysThinking,
+      supportEfforts: model.supportEfforts,
+      defaultEffort: model.defaultEffort,
+    });
   }
 
   private tryResolveRawModel(): Model | undefined {

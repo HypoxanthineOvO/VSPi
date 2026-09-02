@@ -1,7 +1,10 @@
-import type { ModelCapability } from '#/kosong/contract/capability';
+import {
+  normalizeThinkingCapability,
+  type ModelCapability,
+  type ThinkingCapability,
+  type ThinkingControl,
+} from '#/kosong/contract/capability';
 import type { ProviderType } from '#/kosong/provider/provider';
-
-import { wireHasProtocolThinkingDisable } from '#/kosong/model/thinking';
 
 export interface ModelsDevModelEntry {
   readonly id?: string;
@@ -15,6 +18,17 @@ export interface ModelsDevModelEntry {
   readonly provider?: ModelsDevModelProviderOverride;
   readonly dynamically_loaded_tools?: boolean;
   readonly interleaved?: boolean | { readonly field?: string };
+  readonly cost?: {
+    readonly input: number;
+    readonly output: number;
+    readonly cache_read?: number;
+    readonly cache_write?: number;
+    readonly tiers?: readonly {
+      readonly input: number;
+      readonly output: number;
+      readonly tier: { readonly type: string; readonly size: number };
+    }[];
+  };
   readonly modalities?: {
     readonly input?: readonly string[];
     readonly output?: readonly string[];
@@ -24,6 +38,8 @@ export interface ModelsDevModelEntry {
 export interface ModelsDevReasoningOption {
   readonly type?: string;
   readonly values?: unknown;
+  readonly min?: unknown;
+  readonly max?: unknown;
 }
 
 export interface ModelsDevModelProviderOverride {
@@ -48,11 +64,23 @@ export interface ModelsDevModel {
   readonly name?: string;
   readonly maxOutputSize?: number;
   readonly reasoningKey?: string;
+  readonly thinking: ThinkingCapability;
   readonly supportEfforts?: readonly string[];
   readonly offEffort?: string;
   readonly alwaysThinking?: boolean;
   readonly protocol?: 'anthropic';
   readonly baseUrl?: string;
+  readonly pricing?: {
+    readonly inputUsdPerMillion: number;
+    readonly outputUsdPerMillion: number;
+    readonly cacheReadUsdPerMillion?: number;
+    readonly cacheWriteUsdPerMillion?: number;
+    readonly contextTiers?: readonly {
+      readonly contextTokensAbove: number;
+      readonly inputUsdPerMillion: number;
+      readonly outputUsdPerMillion: number;
+    }[];
+  };
   readonly capability: ModelCapability;
 }
 
@@ -193,7 +221,7 @@ export function modelsDevModelToCapability(model: ModelsDevModelEntry): ModelsDe
   if (!isUsableChatModel(model)) return undefined;
   const inputs = model.modalities?.input ?? [];
   const output = model.limit?.output;
-  const thinking = modelsDevThinkingOptions(model.reasoning_options);
+  const thinking = modelsDevThinkingOptions(model.reasoning_options, model.reasoning);
   const input = model.limit?.input;
   const maxInputTokens =
     typeof input === 'number' && Number.isInteger(input) && input > 0
@@ -204,15 +232,16 @@ export function modelsDevModelToCapability(model: ModelsDevModelEntry): ModelsDe
     name: typeof model.name === 'string' && model.name.length > 0 ? model.name : undefined,
     maxOutputSize: typeof output === 'number' && output > 0 ? output : undefined,
     reasoningKey: modelsDevReasoningKey(model.interleaved),
-    supportEfforts: thinking.efforts,
+    thinking: thinking.capability,
+    supportEfforts: thinking.capability.efforts,
     offEffort: thinking.offEffort,
-    alwaysThinking: thinking.alwaysThinking,
+    alwaysThinking: thinking.capability.availability === 'always' || undefined,
+    pricing: modelsDevPricing(model.cost),
     capability: {
       image_in: inputs.includes('image'),
       video_in: inputs.includes('video'),
       audio_in: inputs.includes('audio'),
-      thinking:
-        Boolean(model.reasoning) || thinking.efforts !== undefined || thinking.hasToggle,
+      thinking: thinking.capability.availability !== 'none',
       tool_use: model.tool_call ?? true,
       max_context_tokens: context,
       max_input_tokens: maxInputTokens,
@@ -221,37 +250,116 @@ export function modelsDevModelToCapability(model: ModelsDevModelEntry): ModelsDe
   };
 }
 
-function modelsDevThinkingOptions(options: ModelsDevModelEntry['reasoning_options']): {
-  readonly efforts: readonly string[] | undefined;
-  readonly offEffort: string | undefined;
-  readonly hasToggle: boolean;
-  readonly alwaysThinking: boolean | undefined;
-} {
-  if (!Array.isArray(options)) {
-    return { efforts: undefined, offEffort: undefined, hasToggle: false, alwaysThinking: undefined };
+function modelsDevPricing(cost: ModelsDevModelEntry['cost']): ModelsDevModel['pricing'] {
+  if (
+    cost === undefined
+    || !Number.isFinite(cost.input)
+    || cost.input < 0
+    || !Number.isFinite(cost.output)
+    || cost.output < 0
+  ) {
+    return undefined;
   }
-  let efforts: readonly string[] | undefined;
+  const validOptional = (value: number | undefined): number | undefined =>
+    value !== undefined && Number.isFinite(value) && value >= 0 ? value : undefined;
+  const contextTiers = cost.tiers?.flatMap((tier) =>
+    tier.tier.type === 'context'
+    && Number.isInteger(tier.tier.size)
+    && tier.tier.size > 0
+    && Number.isFinite(tier.input)
+    && tier.input >= 0
+    && Number.isFinite(tier.output)
+    && tier.output >= 0
+      ? [{
+          contextTokensAbove: tier.tier.size,
+          inputUsdPerMillion: tier.input,
+          outputUsdPerMillion: tier.output,
+        }]
+      : [],
+  );
+  return {
+    inputUsdPerMillion: cost.input,
+    outputUsdPerMillion: cost.output,
+    cacheReadUsdPerMillion: validOptional(cost.cache_read),
+    cacheWriteUsdPerMillion: validOptional(cost.cache_write),
+    contextTiers: contextTiers?.length ? contextTiers : undefined,
+  };
+}
+
+function modelsDevThinkingOptions(
+  options: ModelsDevModelEntry['reasoning_options'],
+  reasoning: boolean | undefined,
+): {
+  readonly capability: ThinkingCapability;
+  readonly offEffort: string | undefined;
+} {
+  const controls: ThinkingControl[] = [];
+  const efforts: string[] = [];
   let offEffort: string | undefined;
-  let hasToggle = false;
-  for (const option of options) {
-    if (option?.type === 'toggle') {
-      hasToggle = true;
+  let canDisable = false;
+  let uncertain = false;
+  for (const option of Array.isArray(options) ? options : []) {
+    const type = option?.type?.trim().toLowerCase();
+    if (type === 'toggle') {
+      controls.push('toggle');
+      canDisable = true;
       continue;
     }
-    if (option?.type !== 'effort' || !Array.isArray(option.values)) continue;
-    const hasNullTier = (option.values as unknown[]).some((value) => value === null);
-    const levels = (option.values as unknown[]).filter(
-      (value: unknown): value is string => typeof value === 'string' && value.length > 0,
-    );
-    const off = levels.find((value) => value.toLowerCase() === 'none');
-    if (off !== undefined) offEffort = off;
-    else if (hasNullTier) offEffort = 'none';
-    const selectable = levels.filter((value) => value.toLowerCase() !== 'none');
-    if (selectable.length > 0) efforts = selectable;
+    if (type === 'budget' || type === 'budget_tokens') {
+      controls.push('budget');
+      continue;
+    }
+    if (type !== 'effort') {
+      uncertain = true;
+      continue;
+    }
+    if (!Array.isArray(option.values)) {
+      uncertain = true;
+      continue;
+    }
+    const values = option.values as unknown[];
+    for (const value of values) {
+      if (value === null) {
+        offEffort ??= 'none';
+        canDisable = true;
+        continue;
+      }
+      if (typeof value !== 'string') {
+        uncertain = true;
+        continue;
+      }
+      const normalized = value.trim();
+      if (normalized.length === 0) {
+        uncertain = true;
+        continue;
+      }
+      const lower = normalized.toLowerCase();
+      if (lower === 'off' || lower === 'none' || lower === 'null') {
+        offEffort ??= lower === 'off' ? normalized : lower === 'null' ? 'none' : normalized;
+        canDisable = true;
+      } else {
+        efforts.push(normalized);
+      }
+    }
+    if (efforts.length > 0) controls.push('effort');
   }
-  const alwaysThinking =
-    efforts !== undefined && offEffort === undefined && !hasToggle ? true : undefined;
-  return { efforts, offEffort, hasToggle, alwaysThinking };
+  const supportsThinking =
+    reasoning === true || controls.length > 0 || efforts.length > 0 || offEffort !== undefined;
+  const availability =
+    !supportsThinking
+      ? 'none'
+      : efforts.length > 0 && !canDisable && !uncertain
+        ? 'always'
+        : 'dynamic';
+  return {
+    capability: normalizeThinkingCapability({
+      availability,
+      canDisable: availability === 'dynamic' && canDisable,
+      controls,
+      efforts,
+    }),
+    offEffort,
+  };
 }
 
 function modelsDevReasoningKey(interleaved: ModelsDevModelEntry['interleaved']): string | undefined {
@@ -264,15 +372,7 @@ export function modelsDevProviderModels(entry: ModelsDevProviderEntry): ModelsDe
   const providerWire = resolveModelsDevWire(entry);
   return Object.values(entry.models ?? {})
     .map((raw) => applyModelProviderOverride(modelsDevModelToCapability(raw), raw, entry, providerWire))
-    .filter((model): model is ModelsDevModel => model !== undefined)
-    .map((model) => {
-      const protocol = model.protocol ?? providerWire;
-      if (model.alwaysThinking === true && wireHasProtocolThinkingDisable(protocol)) {
-        const { alwaysThinking: _dropped, ...rest } = model;
-        return rest as ModelsDevModel;
-      }
-      return model;
-    });
+    .filter((model): model is ModelsDevModel => model !== undefined);
 }
 
 function applyModelProviderOverride(

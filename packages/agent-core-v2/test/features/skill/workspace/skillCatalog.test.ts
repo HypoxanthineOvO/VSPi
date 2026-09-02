@@ -220,6 +220,7 @@ async function withSkillCatalogWorkspace(
 ): Promise<void> {
   const workDir = await mkdtemp(join(tmpdir(), 'skill-catalog-'));
   const skillRoot = join(workDir, '.kimi-code', 'skills');
+  await mkdir(join(workDir, '.git'));
   await mkdir(skillRoot, { recursive: true });
   try {
     await run({ workDir, skillRoot: await realpath(skillRoot) });
@@ -909,92 +910,95 @@ describe('WorkspaceSkillCatalogService', () => {
     }
   });
 
-  it('rescans the workspace-root source when a project skill file changes on disk', async () => {
-    const workDir = await mkdtemp(join(tmpdir(), 'skill-watch-'));
-    const host = createScopedTestHost([
-      stubPair(IFlagService, stubFlag(true)),
-      stubPair(IBootstrapService, bootstrapStub),
-      stubPair(IConfigService, configStub()),
-      stubPair(IPluginService, pluginStub()),
-      stubPair(ILogService, stubLog()),
-      stubPair(ISkillDiscovery, new FileSkillDiscovery(stubLog())),
-      stubPair(IHostFsWatchService, new HostFsWatchService()),
-    ]);
-    const workspace = host.child('program', 'w1', [
-      stubPair(IWorkspaceContext, workspaceContextStub(workDir)),
-    ]);
+  it('keeps watch reload inside the fixture project boundary', async () => {
+    await withSkillCatalogWorkspace(async ({ workDir, skillRoot }) => {
+      const host = createScopedTestHost([
+        stubPair(IFlagService, stubFlag(true)),
+        stubPair(IBootstrapService, bootstrapStub),
+        stubPair(IConfigService, configStub()),
+        stubPair(IPluginService, pluginStub()),
+        stubPair(ILogService, stubLog()),
+        stubPair(ISkillDiscovery, new FileSkillDiscovery(stubLog())),
+        stubPair(IHostFsWatchService, new HostFsWatchService()),
+      ]);
+      const workspace = host.child('program', 'w1', [
+        stubPair(IWorkspaceContext, workspaceContextStub(workDir)),
+      ]);
 
-    try {
-      const catalog = workspace.accessor.get(IWorkspaceSkillCatalog);
-      await catalog.load();
-      expect(catalog.catalog.getSkill('watched-skill')).toBeUndefined();
+      try {
+        const catalog = workspace.accessor.get(IWorkspaceSkillCatalog);
+        await catalog.load();
+        expect(catalog.catalog.getSkillRoots()).toEqual([skillRoot]);
+        expect(catalog.catalog.getSkill('watched-skill')).toBeUndefined();
 
-      const refreshed = new Promise<string>((resolvePromise) => {
-        const d = catalog.onDidChange((sourceId) => {
-          d.dispose();
-          resolvePromise(sourceId);
+        const refreshed = new Promise<string>((resolvePromise) => {
+          const d = catalog.onDidChange((sourceId) => {
+            d.dispose();
+            resolvePromise(sourceId);
+          });
         });
-      });
-      const timedOut = new Promise<never>((_resolve, reject) => {
-        setTimeout(() => reject(new Error('watch-driven refresh timed out')), 10000);
-      });
-      await mkdir(join(workDir, '.agents', 'skills', 'watched-skill'), { recursive: true });
-      await writeFile(
-        join(workDir, '.agents', 'skills', 'watched-skill', 'SKILL.md'),
-        '---\nname: watched-skill\ndescription: from watch\n---\nbody',
-        'utf8',
-      );
+        const timedOut = new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error('watch-driven refresh timed out')), 10000);
+        });
+        const skillDir = join(skillRoot, 'watched-skill');
+        await mkdir(skillDir);
+        await writeFile(
+          join(skillDir, 'SKILL.md'),
+          '---\nname: watched-skill\ndescription: from watch\n---\nbody',
+          'utf8',
+        );
 
-      await expect(Promise.race([refreshed, timedOut])).resolves.toBe('workspace');
-      expect(catalog.catalog.getSkill('watched-skill')?.description).toBe('from watch');
-    } finally {
-      host.dispose();
-      await rm(workDir, { recursive: true, force: true });
-    }
+        await expect(Promise.race([refreshed, timedOut])).resolves.toBe('workspace');
+        expect(catalog.catalog.getSkill('watched-skill')?.description).toBe('from watch');
+        expect(catalog.catalog.getSkillRoots()).toEqual([skillRoot]);
+      } finally {
+        host.dispose();
+      }
+    });
   }, 15000);
 
   it('prunes terminal skill payloads from the workspace watch after discovery', async () => {
-    const workDir = await mkdtemp(join(tmpdir(), 'skill-watch-plan-'));
-    const skillDir = join(workDir, '.agents', 'skills', 'demo');
-    const runtimeFile = join(skillDir, 'runtime', '0.py');
-    await mkdir(join(skillDir, 'runtime'), { recursive: true });
-    await writeFile(
-      join(skillDir, 'SKILL.md'),
-      '---\nname: demo\ndescription: demo\n---\nbody',
-      'utf8',
-    );
-    await writeFile(runtimeFile, 'x', 'utf8');
-    const watchedSkillDir = await realpath(skillDir);
-    const watchedRuntimeFile = await realpath(runtimeFile);
-    let ignored: ((path: string) => boolean) | undefined;
-    const host = createScopedTestHost([
-      stubPair(IFlagService, stubFlag(true)),
-      stubPair(IBootstrapService, bootstrapStub),
-      stubPair(IConfigService, configStub()),
-      stubPair(IPluginService, pluginStub()),
-      stubPair(ILogService, stubLog()),
-      stubPair(ISkillDiscovery, new FileSkillDiscovery(stubLog())),
-      stubPair(
-        IHostFsWatchService,
-        fsWatchStub((options) => {
-          ignored = options?.ignored;
-        }),
-      ),
-    ]);
-    const workspace = host.child('program', 'w1', [
-      stubPair(IWorkspaceContext, workspaceContextStub(workDir)),
-    ]);
+    await withSkillCatalogWorkspace(async ({ workDir }) => {
+      const skillDir = join(workDir, '.agents', 'skills', 'demo');
+      const runtimeFile = join(skillDir, 'runtime', '0.py');
+      await mkdir(join(skillDir, 'runtime'), { recursive: true });
+      await writeFile(
+        join(skillDir, 'SKILL.md'),
+        '---\nname: demo\ndescription: demo\n---\nbody',
+        'utf8',
+      );
+      await writeFile(runtimeFile, 'x', 'utf8');
+      const watchedSkillDir = await realpath(skillDir);
+      const watchedRuntimeFile = await realpath(runtimeFile);
+      let ignored: ((path: string) => boolean) | undefined;
+      const host = createScopedTestHost([
+        stubPair(IFlagService, stubFlag(true)),
+        stubPair(IBootstrapService, bootstrapStub),
+        stubPair(IConfigService, configStub()),
+        stubPair(IPluginService, pluginStub()),
+        stubPair(ILogService, stubLog()),
+        stubPair(ISkillDiscovery, new FileSkillDiscovery(stubLog())),
+        stubPair(
+          IHostFsWatchService,
+          fsWatchStub((options) => {
+            ignored = options?.ignored;
+          }),
+        ),
+      ]);
+      const workspace = host.child('program', 'w1', [
+        stubPair(IWorkspaceContext, workspaceContextStub(workDir)),
+      ]);
 
-    try {
-      const catalog = workspace.accessor.get(IWorkspaceSkillCatalog);
-      await catalog.load();
+      try {
+        const catalog = workspace.accessor.get(IWorkspaceSkillCatalog);
+        await catalog.load();
 
-      expect(ignored?.(join(watchedSkillDir, 'SKILL.md'))).toBe(false);
-      expect(ignored?.(watchedRuntimeFile)).toBe(true);
-    } finally {
-      host.dispose();
-      await rm(workDir, { recursive: true, force: true });
-    }
+        expect(ignored?.(join(watchedSkillDir, 'SKILL.md'))).toBe(false);
+        expect(ignored?.(watchedRuntimeFile)).toBe(true);
+      } finally {
+        host.dispose();
+      }
+    });
   });
 
   it('reloadSources re-pulls named sources and fires only their ids', async () => {
@@ -1062,38 +1066,38 @@ describe('WorkspaceSkillCatalogService', () => {
   });
 
   it('rescans when a skill under a dot directory appears on disk', async () => {
-    const workDir = await mkdtemp(join(tmpdir(), 'skill-watch-dot-'));
-    const host = createScopedTestHost([
-      stubPair(IFlagService, stubFlag(true)),
-      stubPair(IBootstrapService, bootstrapStub),
-      stubPair(IConfigService, configStub()),
-      stubPair(IPluginService, pluginStub()),
-      stubPair(ILogService, stubLog()),
-      stubPair(ISkillDiscovery, new FileSkillDiscovery(stubLog())),
-      stubPair(IHostFsWatchService, new HostFsWatchService()),
-    ]);
-    const workspace = host.child('program', 'w1', [
-      stubPair(IWorkspaceContext, workspaceContextStub(workDir)),
-    ]);
+    await withSkillCatalogWorkspace(async ({ workDir }) => {
+      const host = createScopedTestHost([
+        stubPair(IFlagService, stubFlag(true)),
+        stubPair(IBootstrapService, bootstrapStub),
+        stubPair(IConfigService, configStub()),
+        stubPair(IPluginService, pluginStub()),
+        stubPair(ILogService, stubLog()),
+        stubPair(ISkillDiscovery, new FileSkillDiscovery(stubLog())),
+        stubPair(IHostFsWatchService, new HostFsWatchService()),
+      ]);
+      const workspace = host.child('program', 'w1', [
+        stubPair(IWorkspaceContext, workspaceContextStub(workDir)),
+      ]);
 
-    try {
-      const catalog = workspace.accessor.get(IWorkspaceSkillCatalog);
-      await catalog.load();
-      expect(catalog.catalog.getSkill('dot-skill')).toBeUndefined();
+      try {
+        const catalog = workspace.accessor.get(IWorkspaceSkillCatalog);
+        await catalog.load();
+        expect(catalog.catalog.getSkill('dot-skill')).toBeUndefined();
 
-      await mkdir(join(workDir, '.agents', 'skills', '.dot-skill'), { recursive: true });
-      const refreshed = waitForEvents(catalog.onDidChange, 1);
-      await writeFile(
-        join(workDir, '.agents', 'skills', '.dot-skill', 'SKILL.md'),
-        '---\nname: dot-skill\ndescription: under dot dir\n---\nbody',
-        'utf8',
-      );
+        await mkdir(join(workDir, '.agents', 'skills', '.dot-skill'), { recursive: true });
+        const refreshed = waitForEvents(catalog.onDidChange, 1);
+        await writeFile(
+          join(workDir, '.agents', 'skills', '.dot-skill', 'SKILL.md'),
+          '---\nname: dot-skill\ndescription: under dot dir\n---\nbody',
+          'utf8',
+        );
 
-      await refreshed;
-      expect(catalog.catalog.getSkill('dot-skill')?.description).toBe('under dot dir');
-    } finally {
-      host.dispose();
-      await rm(workDir, { recursive: true, force: true });
-    }
+        await refreshed;
+        expect(catalog.catalog.getSkill('dot-skill')?.description).toBe('under dot dir');
+      } finally {
+        host.dispose();
+      }
+    });
   }, 15000);
 });

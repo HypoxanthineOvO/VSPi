@@ -144,6 +144,12 @@ describe('ConfigState model capabilities', () => {
           model: 'kimi-for-coding',
           maxContextSize: 1_000_000,
           capabilities: ['thinking'],
+          thinking: {
+            availability: 'dynamic',
+            canDisable: true,
+            controls: ['toggle', 'effort'],
+            efforts: ['low', 'high'],
+          },
           supportEfforts: ['low', 'high'],
         },
       },
@@ -292,6 +298,12 @@ describe('ConfigState thinking clamp for always-thinking models', () => {
           model: 'kimi-deep-coder',
           maxContextSize: 128_000,
           capabilities: ['thinking', 'always_thinking', 'tool_use'],
+          thinking: {
+            availability: 'always',
+            canDisable: false,
+            controls: ['effort'],
+            efforts: ['low', 'high', 'max'],
+          },
           supportEfforts: ['low', 'high', 'max'],
         },
         'kimi-code/toggle': {
@@ -299,12 +311,24 @@ describe('ConfigState thinking clamp for always-thinking models', () => {
           model: 'kimi-for-coding',
           maxContextSize: 128_000,
           capabilities: ['thinking'],
+          thinking: {
+            availability: 'dynamic',
+            canDisable: true,
+            controls: ['toggle'],
+          },
         },
         'kimi-code/custom': {
           provider: 'kimi',
           model: 'kimi-custom-coder',
           maxContextSize: 128_000,
           capabilities: ['thinking'],
+          thinking: {
+            availability: 'dynamic',
+            canDisable: true,
+            controls: ['toggle', 'effort'],
+            efforts: ['low', 'medium', 'max'],
+            defaultEffort: 'max',
+          },
           supportEfforts: ['low', 'medium', 'max'],
           defaultEffort: 'max',
         },
@@ -313,6 +337,13 @@ describe('ConfigState thinking clamp for always-thinking models', () => {
           model: 'kimi-ultra',
           maxContextSize: 128_000,
           capabilities: ['thinking'],
+          thinking: {
+            availability: 'dynamic',
+            canDisable: true,
+            controls: ['toggle', 'effort'],
+            efforts: ['low', 'high', 'ultra'],
+            defaultEffort: 'ultra',
+          },
           supportEfforts: ['low', 'high', 'ultra'],
           defaultEffort: 'ultra',
         },
@@ -322,6 +353,13 @@ describe('ConfigState thinking clamp for always-thinking models', () => {
           model: 'compatible-model',
           maxContextSize: 128_000,
           capabilities: ['thinking', 'always_thinking'],
+          thinking: {
+            availability: 'always',
+            canDisable: false,
+            controls: ['effort'],
+            efforts: ['max'],
+            defaultEffort: 'max',
+          },
           supportEfforts: ['max'],
           defaultEffort: 'max',
         } as TestProtocolModelConfig,
@@ -450,12 +488,12 @@ describe('ConfigState thinking clamp for always-thinking models', () => {
     });
   });
 
-  it('clamps off to the model default for always-on models, on any transport', () => {
+  it('rejects off for always-on models, on any transport', () => {
     profile.update({ modelAlias: 'kimi-code/compatible', thinkingLevel: 'max' });
 
     expect(() => {
       profile.setThinking('off');
-    }).not.toThrow();
+    }).toThrow(/not supported by model/);
     expect(profile.data().thinkingLevel).toBe('max');
   });
 });
@@ -477,6 +515,11 @@ describe('ConfigState.provider applies global KIMI_MODEL_* request config', () =
           model: 'kimi-code',
           maxContextSize: 128_000,
           capabilities: ['thinking'],
+          thinking: {
+            availability: 'dynamic',
+            canDisable: true,
+            controls: ['toggle'],
+          },
         },
         'kimi-code-anthropic': {
           provider: 'kimi',
@@ -484,6 +527,12 @@ describe('ConfigState.provider applies global KIMI_MODEL_* request config', () =
           model: 'kimi-code-anthropic',
           maxContextSize: 128_000,
           capabilities: ['thinking'],
+          thinking: {
+            availability: 'dynamic',
+            canDisable: true,
+            controls: ['toggle', 'effort'],
+            efforts: ['low', 'high'],
+          },
           supportEfforts: ['low', 'high'],
         } as TestProtocolModelConfig,
       },

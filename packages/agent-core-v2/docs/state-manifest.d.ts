@@ -1374,6 +1374,8 @@ export interface AgentStateSnapshot {
     readonly parentToolCallId?: string;
     readonly model?: string;
     readonly thinkingEffort?: string;
+    readonly codename?: string;
+    readonly taskTitle?: string;
     readonly taskId: string;
     readonly description: string;
     readonly status: /* AgentTaskStatus — packages/agent-core-v2/src/agent/task/types.ts */ 'completed' | 'failed' | 'running' | 'timed_out' | 'killed' | 'lost';
@@ -1425,6 +1427,8 @@ export interface AgentStateSnapshot {
     readonly parentToolCallId?: string;
     readonly model?: string;
     readonly thinkingEffort?: string;
+    readonly codename?: string;
+    readonly taskTitle?: string;
     readonly taskId: string;
     readonly description: string;
     readonly status: /* AgentTaskStatus — packages/agent-core-v2/src/agent/task/types.ts */ 'completed' | 'failed' | 'running' | 'timed_out' | 'killed' | 'lost';

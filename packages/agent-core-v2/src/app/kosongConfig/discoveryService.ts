@@ -5,16 +5,19 @@ import {
   type RefreshProviderHost,
   type RefreshResult,
 } from '@moonshot-ai/kimi-code-oauth';
-import { LifecycleScope } from '#/app/scopes';
+import { z } from 'zod';
+import { CoreErrors } from '#/_base/errors/codes';
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
 import { Error2 } from '#/_base/errors/errors';
+import { LifecycleScope } from '#/app/scopes';
 import { IOAuthService } from '#/app/auth/auth';
 import { AuthErrors } from '#/app/auth/errors';
 import { IAgentIdentity } from '#/app/agentIdentity/agentIdentity';
 import { IConfigService } from '#/app/config/config';
 import { IEventService } from '#/app/event/event';
 import { ModelCatalogErrors } from '#/kosong/model/errors';
-import { type ModelRecord } from '#/kosong/model/model';
+import { IModelService, type ModelRecord } from '#/kosong/model/model';
+import { effectiveModelConfig } from '#/kosong/model/modelAuth';
 import {
   IProviderService,
   type ModelSource,
@@ -29,9 +32,11 @@ import {
   PROVIDERS_SECTION,
   THINKING_SECTION,
 } from './configSection';
+import { ModelsDevImportErrors } from './errors';
 import {
   IProviderDiscoveryService,
   ModelCatalogChanged,
+  type QueryAvailableModelsResponse,
   type RefreshProviderModelsOptions,
   type RefreshProviderModelsResponse,
 } from './discovery';
@@ -44,6 +49,10 @@ interface StaticExclusion {
 }
 
 const EMPTY_EXCLUSION: StaticExclusion = { providers: {}, models: {} };
+const availableModelsResponseSchema = z.object({
+  data: z.array(z.object({ id: z.string().min(1) }).passthrough()),
+}).passthrough();
+const AVAILABILITY_TIMEOUT_MS = 10_000;
 
 export class ProviderDiscoveryService implements IProviderDiscoveryService {
   declare readonly _serviceBrand: undefined;
@@ -52,6 +61,7 @@ export class ProviderDiscoveryService implements IProviderDiscoveryService {
 
   constructor(
     @IProviderService private readonly providerService: IProviderService,
+    @IModelService private readonly modelService: IModelService,
     @IConfigService private readonly config: IConfigService,
     @IOAuthService private readonly oauth: IOAuthService,
     @IEventService private readonly events: IEventService,
@@ -67,6 +77,80 @@ export class ProviderDiscoveryService implements IProviderDiscoveryService {
       () => undefined,
     );
     return run;
+  }
+
+  async queryAvailableModels(providerId: string): Promise<QueryAvailableModelsResponse> {
+    await this.config.reload();
+    const provider = this.providerService.get(providerId);
+    if (provider === undefined) {
+      throw new Error2(
+        ModelCatalogErrors.codes.PROVIDER_NOT_FOUND,
+        `provider ${providerId} does not exist`,
+      );
+    }
+    if (provider.type !== 'openai' && provider.type !== 'openai_responses') {
+      throw new Error2(
+        CoreErrors.codes.VALIDATION_FAILED,
+        `provider ${providerId} does not support model availability queries`,
+      );
+    }
+    const baseUrl = provider.baseUrl?.trim();
+    const apiKey = provider.apiKey?.trim();
+    if (baseUrl === undefined || baseUrl.length === 0 || apiKey === undefined || apiKey.length === 0) {
+      throw new Error2(
+        CoreErrors.codes.VALIDATION_FAILED,
+        `provider ${providerId} requires a base URL and API key`,
+      );
+    }
+    const headers = new Headers(provider.customHeaders);
+    headers.set('Authorization', `Bearer ${apiKey}`);
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl.replace(/\/+$/, '')}/models`, {
+        method: 'GET',
+        headers,
+        signal: AbortSignal.timeout(AVAILABILITY_TIMEOUT_MS),
+      });
+    } catch {
+      throw new Error2(
+        ModelsDevImportErrors.codes.CATALOG_UNAVAILABLE,
+        `provider ${providerId} model availability request failed`,
+      );
+    }
+    if (!response.ok) {
+      throw new Error2(
+        ModelsDevImportErrors.codes.CATALOG_UNAVAILABLE,
+        `provider ${providerId} model availability request failed with HTTP ${response.status}`,
+        { details: { provider_id: providerId, status: response.status } },
+      );
+    }
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new Error2(
+        ModelsDevImportErrors.codes.CATALOG_UNAVAILABLE,
+        `provider ${providerId} returned an invalid model availability response`,
+      );
+    }
+    const parsed = availableModelsResponseSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error2(
+        ModelsDevImportErrors.codes.CATALOG_UNAVAILABLE,
+        `provider ${providerId} returned an invalid model availability response`,
+      );
+    }
+    const availableWireIds = new Set(parsed.data.data.map((model) => model.id));
+    const defaultProvider = this.providerService.getDefaultProvider();
+    const modelIds = Object.entries(this.modelService.list())
+      .filter(([, record]) => {
+        const effective = effectiveModelConfig(record);
+        const owner = effective.providerId ?? effective.provider ?? defaultProvider;
+        const wireId = effective.name ?? effective.model;
+        return owner === providerId && wireId !== undefined && availableWireIds.has(wireId);
+      })
+      .map(([modelId]) => modelId);
+    return { providerId, modelIds };
   }
 
   private async doRefreshProviderModels(

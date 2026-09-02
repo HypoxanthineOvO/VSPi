@@ -1,3 +1,5 @@
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { PassThrough, Readable, Writable } from 'node:stream';
 
 import { ndJsonStream } from '@agentclientprotocol/sdk';
@@ -47,6 +49,7 @@ export async function createTestClient(opts: {
   extraSeeds?: RunAcpServerOptions['extraSeeds'];
   slashCommands?: RunAcpServerOptions['slashCommands'];
 }): Promise<TestClient> {
+  await mkdir(join(opts.homeDir, '.git'), { recursive: true });
   const toAgent = new PassThrough();
   const toClient = new PassThrough();
   const stream = ndJsonStream(Writable.toWeb(toClient), Readable.toWeb(toAgent));

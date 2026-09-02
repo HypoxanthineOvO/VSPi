@@ -35,7 +35,7 @@ describe('HarnessAPI session skills', () => {
     tmp = await mkdtemp(join(tmpdir(), 'kimi-core-skills-'));
     homeDir = join(tmp, 'home');
     workDir = join(tmp, 'work');
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
   });
 
   afterEach(async () => {

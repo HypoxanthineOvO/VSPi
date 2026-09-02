@@ -330,6 +330,78 @@ describe('AgentProfileService.bind', () => {
     expect(svc.data().profileName).toBe(DEFAULT_AGENT_PROFILE_NAME);
   });
 
+  it.each([
+    ['none', { availability: 'none', canDisable: false, controls: [] }, 'on'],
+    ['always', { availability: 'always', canDisable: false, controls: ['effort'], efforts: ['low'] }, 'off'],
+    ['dynamic non-disable', { availability: 'dynamic', canDisable: false, controls: ['effort'], efforts: ['low'] }, 'off'],
+  ] as const)('rejects %s capability violations through bind', async (_name, thinking, effort) => {
+    ctx = createTestAgent(
+      {
+        initialConfig: {
+          providers: {
+            kimi: { type: 'kimi', apiKey: 'test-key', baseUrl: 'https://api.example.test/v1' },
+          },
+          models: {
+            model: {
+              provider: 'kimi',
+              model: 'test-model',
+              maxContextSize: 1000,
+              thinking: {
+                ...thinking,
+                controls: [...thinking.controls],
+                efforts: 'efforts' in thinking ? [...thinking.efforts] : undefined,
+              },
+            },
+          },
+        },
+      },
+      hostEnvironmentServices(homeDir),
+    );
+    const svc = ctx.get(IAgentProfileService);
+
+    await expect(
+      svc.bind({
+        profile: DEFAULT_AGENT_PROFILE_NAME,
+        model: 'model',
+        thinking: effort,
+        strictThinking: true,
+      }),
+    ).rejects.toThrow(/not supported by model/);
+    expect(svc.data().profileName).toBeUndefined();
+  });
+
+  it('rejects disabling an always-thinking model through setThinking', async () => {
+    ctx = createTestAgent(
+      {
+        initialConfig: {
+          providers: {
+            kimi: { type: 'kimi', apiKey: 'test-key', baseUrl: 'https://api.example.test/v1' },
+          },
+          models: {
+            model: {
+              provider: 'kimi',
+              model: 'test-model',
+              maxContextSize: 1000,
+              thinking: {
+                availability: 'always',
+                canDisable: false,
+                controls: ['effort'],
+                efforts: ['low'],
+                defaultEffort: 'low',
+              },
+            },
+          },
+        },
+      },
+      hostEnvironmentServices(homeDir),
+    );
+    const svc = ctx.get(IAgentProfileService);
+    await svc.bind({ profile: DEFAULT_AGENT_PROFILE_NAME, model: 'model' });
+
+    expect(() => svc.setThinking('off')).toThrow(/not supported by model/);
+    expect(svc.data().thinkingLevel).toBe('low');
+  });
+
   it('rejects an unsupported thinking effort atomically before first bind', async () => {
     ctx = createTestAgent(
       {
@@ -398,7 +470,7 @@ describe('AgentProfileService.bind', () => {
     expect(svc.data().thinkingLevel).toBe('high');
   });
 
-  it('keeps the persisted thinking effort on a same-name rebind', async () => {
+  it('does not treat legacy thinking support as an implicit off toggle', async () => {
     ctx = createTestAgent(hostEnvironmentServices(homeDir));
     ctx.configure({
       modelCapabilities: {
@@ -412,10 +484,10 @@ describe('AgentProfileService.bind', () => {
     });
     const svc = ctx.get(IAgentProfileService);
     await svc.bind({ profile: DEFAULT_AGENT_PROFILE_NAME, model: MOCK_MODEL, thinking: 'off' });
-    expect(svc.data().thinkingLevel).toBe('off');
+    expect(svc.data().thinkingLevel).toBe('on');
 
     await svc.bind({ profile: DEFAULT_AGENT_PROFILE_NAME, model: MOCK_MODEL });
-    expect(svc.data().thinkingLevel).toBe('off');
+    expect(svc.data().thinkingLevel).toBe('on');
   });
 });
 

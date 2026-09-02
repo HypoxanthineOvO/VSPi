@@ -289,18 +289,10 @@ export class SearchWorkerHost {
     if (configured.configured) {
       return { url: pathToFileURL(configured.path), execArgv: [] };
     }
-    const source = new URL('./entry.ts', import.meta.url);
+    const source = new URL('./register-dev-hooks.mjs', import.meta.url);
     try {
-      if (fsSync.statSync(source).isFile()) {
-        return {
-          url: source,
-          execArgv: [
-            '--experimental-transform-types',
-            '--disable-warning=ExperimentalWarning',
-            '--import',
-            new URL('./register-dev-hooks.mjs', import.meta.url).href,
-          ],
-        };
+      if (fsSync.statSync(new URL('./entry.ts', import.meta.url)).isFile()) {
+        return { url: source, execArgv: [] };
       }
     } catch {
     }

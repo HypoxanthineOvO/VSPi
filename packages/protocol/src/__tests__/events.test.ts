@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 
 import {
   agentEventSchema,
+  agentTaskInfoSchema,
   assistantDeltaEventSchema,
   eventSchema,
   shellCompletedEventSchema,
@@ -96,6 +97,20 @@ describe('events / display re-exports', () => {
         taskId: 'task-1',
       }).success,
     ).toBe(true);
+  });
+
+  it('preserves an agent task parent tool call id', () => {
+    const task = {
+      kind: 'agent' as const,
+      taskId: 'agent-1',
+      description: 'Child task',
+      status: 'running' as const,
+      startedAt: 1,
+      endedAt: null,
+      parentToolCallId: 'call-agent-1',
+    };
+
+    expect(agentTaskInfoSchema.parse(task)).toEqual(task);
   });
 
   it('rejects unknown event types through the full agent event union', () => {

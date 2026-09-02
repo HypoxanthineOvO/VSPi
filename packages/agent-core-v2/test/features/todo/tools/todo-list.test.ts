@@ -21,7 +21,7 @@ function makeTodo(initial: readonly TodoItem[] = []): {
     runtime: {
       get: () => todos,
       replace: async (next) => {
-        todos = next.map((todo) => ({ title: todo.title, status: todo.status }));
+        todos = next.map((todo) => ({ ...todo }));
       },
       clear: async () => { todos = []; },
       onDidChange: () => ({ dispose: () => {} }),
@@ -99,9 +99,47 @@ describe('TodoListTool', () => {
     );
     expect(result.output).toContain('exactly one task in_progress');
     expect(getTodos()).toEqual([
-      { title: 'first', status: 'pending' },
-      { title: 'second', status: 'in_progress' },
+      { title: 'first', status: 'pending', depth: 0, group: false },
+      { title: 'second', status: 'in_progress', depth: 0, group: false },
     ]);
+  });
+
+  it('write mode flattens a two-level list and derives the parent status', async () => {
+    const { tool, getTodos } = makeTool();
+
+    const result = await executeTool(tool, {
+      turnId: 1,
+      toolCallId: 'call_1',
+      args: {
+        todos: [
+          {
+            title: 'Implement Todo',
+            children: [
+              { title: 'Extend schema', status: 'done' },
+              { title: 'Connect Plan UI', status: 'in_progress' },
+            ],
+          },
+        ],
+      },
+      signal,
+    });
+
+    expect(result.output).toContain('[in_progress] Implement Todo');
+    expect(result.output).toContain('    [done] Extend schema');
+    expect(getTodos()).toEqual([
+      { title: 'Implement Todo', status: 'in_progress', depth: 0, group: true },
+      { title: 'Extend schema', status: 'done', depth: 1, group: false },
+      { title: 'Connect Plan UI', status: 'in_progress', depth: 1, group: false },
+    ]);
+  });
+
+  it('rejects a list with more than one active leaf', () => {
+    expect(TodoListInputSchema.safeParse({
+      todos: [
+        { title: 'First', status: 'in_progress' },
+        { title: 'Second', status: 'in_progress' },
+      ],
+    }).success).toBe(false);
   });
 
   it('renders a done todo with a marker matching the status enum value', async () => {

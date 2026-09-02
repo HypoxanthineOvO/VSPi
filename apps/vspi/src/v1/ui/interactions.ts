@@ -1,0 +1,1005 @@
+import { decodeKittyPrintable, Key, type KeyId, matchesKey } from "@moonshot-ai/pi-tui";
+
+export type InteractionSurface = "panel" | "composer" | "inspect";
+
+export interface InteractionState {
+  hasItems?: boolean;
+  commandAvailable?: boolean;
+  narrowModel?: boolean;
+  busy?: boolean;
+  hasMessages?: boolean;
+  composerEmpty?: boolean;
+  commandCompletable?: boolean;
+  hasErrorDetails?: boolean;
+  selectedAttachment?: boolean;
+  cancellable?: boolean;
+  retryable?: boolean;
+  expandable?: boolean;
+  inspectDepth?: "node" | "tool";
+  providerEditing?: boolean;
+  providerActionMenu?: boolean;
+  providerField?: 0 | 1 | 2;
+  providerTextPresent?: boolean;
+  policyYolo?: boolean;
+  questionMode?: "choice" | "ranking" | "freeText" | "review";
+  approvalReasonEditing?: boolean;
+  skillAdding?: boolean;
+  skillViewing?: boolean;
+  narrowSkill?: boolean;
+  skillAddHasText?: boolean;
+  skillCanEnable?: boolean;
+  skillCanDisable?: boolean;
+  skillCanUpdate?: boolean;
+  skillCanRemove?: boolean;
+  agentDetail?: boolean;
+}
+
+export interface InteractionDefinition {
+  id: string;
+  surface: InteractionSurface;
+  context: string;
+  keys: readonly string[];
+  matches: (input: string, state?: unknown) => boolean;
+  handler: string;
+  hint: (state?: unknown) => string | undefined;
+}
+
+type StatePredicate = (state: InteractionState) => boolean;
+type HintFactory = (state: InteractionState) => string | undefined;
+
+function stateOf(state: unknown): InteractionState {
+  return state && typeof state === "object" ? (state as InteractionState) : {};
+}
+
+function keyAction(input: {
+  id: string;
+  surface: InteractionSurface;
+  context: string;
+  keys: readonly string[];
+  keyValues: readonly KeyId[];
+  handler: string;
+  enabled?: StatePredicate;
+  hint?: string | HintFactory;
+}): InteractionDefinition {
+  const enabled = input.enabled ?? (() => true);
+  return {
+    id: input.id,
+    surface: input.surface,
+    context: input.context,
+    keys: input.keys,
+    matches: (value, state) => enabled(stateOf(state)) && input.keyValues.some((key) => matchesKey(value, key)),
+    handler: input.handler,
+    hint: (state) => {
+      const current = stateOf(state);
+      if (!enabled(current)) return undefined;
+      return typeof input.hint === "function" ? input.hint(current) : input.hint;
+    },
+  };
+}
+
+function inputAction(input: {
+  id: string;
+  surface: InteractionSurface;
+  context: string;
+  keys: readonly string[];
+  handler: string;
+  matcher: (value: string) => boolean;
+  enabled?: StatePredicate;
+  hint?: string | HintFactory;
+}): InteractionDefinition {
+  const enabled = input.enabled ?? (() => true);
+  return {
+    id: input.id,
+    surface: input.surface,
+    context: input.context,
+    keys: input.keys,
+    matches: (value, state) => enabled(stateOf(state)) && input.matcher(value),
+    handler: input.handler,
+    hint: (state) => {
+      const current = stateOf(state);
+      if (!enabled(current)) return undefined;
+      return typeof input.hint === "function" ? input.hint(current) : input.hint;
+    },
+  };
+}
+
+const hasItems: StatePredicate = (state) => state.hasItems === true;
+const printable = (value: string): boolean => {
+  if (value.length === 0) return false;
+  if (decodeKittyPrintable(value)) return true;
+  return !Array.from(value).some((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code < 32 || code === 127;
+  });
+};
+
+const EDITING_KEYS: readonly KeyId[] = [
+  Key.backspace,
+  Key.delete,
+  Key.left,
+  Key.right,
+  Key.up,
+  Key.down,
+  Key.home,
+  Key.end,
+  Key.pageUp,
+  Key.pageDown,
+  Key.ctrl("a"),
+  Key.ctrl("b"),
+  Key.ctrl("d"),
+  Key.ctrl("e"),
+  Key.ctrl("f"),
+  Key.ctrl("h"),
+  Key.ctrl("k"),
+  Key.ctrl("u"),
+  Key.ctrl("w"),
+  Key.ctrl("y"),
+  Key.ctrl("z"),
+  Key.alt("b"),
+  Key.alt("f"),
+  Key.alt("backspace"),
+];
+
+const QUESTION_KEYS: readonly KeyId[] = [
+  Key.tab,
+  Key.enter,
+  Key.shift("s"),
+  Key.left,
+  Key.right,
+  Key.up,
+  Key.down,
+  Key.ctrl(Key.up),
+  Key.ctrl(Key.down),
+  Key.alt(Key.up),
+  Key.alt(Key.down),
+  Key.pageUp,
+  Key.pageDown,
+  Key.space,
+];
+
+const matchesAnyKey = (value: string, keys: readonly KeyId[]): boolean => keys.some((key) => matchesKey(value, key));
+
+const editingInput = (value: string): boolean =>
+  printable(value) || value.startsWith("\u001b[200~") || matchesAnyKey(value, EDITING_KEYS);
+
+const actions: InteractionDefinition[] = [
+  keyAction({
+    id: "panel.plan.move",
+    surface: "panel",
+    context: "plan",
+    keys: ["Up", "Down"],
+    keyValues: [Key.up, Key.down],
+    handler: "moveSelection",
+    enabled: hasItems,
+    hint: "↑↓ 选择",
+  }),
+  keyAction({
+    id: "panel.plan.fold",
+    surface: "panel",
+    context: "plan",
+    keys: ["Left", "Right", "Enter"],
+    keyValues: [Key.left, Key.right, Key.enter],
+    handler: "togglePlanItem",
+    enabled: hasItems,
+    hint: "← 收起  → 展开  Enter 操作",
+  }),
+  keyAction({
+    id: "panel.plan.focus",
+    surface: "panel",
+    context: "plan",
+    keys: ["Shift+Tab"],
+    keyValues: [Key.shift("tab")],
+    handler: "cycleWorkspaceFocus",
+    hint: "Shift+Tab 下一个区域",
+  }),
+  keyAction({
+    id: "panel.commands.move",
+    surface: "panel",
+    context: "commands",
+    keys: ["Up", "Down"],
+    keyValues: [Key.up, Key.down],
+    handler: "moveSelection",
+    enabled: hasItems,
+    hint: "↑↓ 选择",
+  }),
+  keyAction({
+    id: "panel.commands.complete",
+    surface: "panel",
+    context: "commands",
+    keys: ["Tab"],
+    keyValues: [Key.tab],
+    handler: "completeCommand",
+    hint: "Tab 补全",
+  }),
+  keyAction({
+    id: "panel.commands.activate",
+    surface: "panel",
+    context: "commands",
+    keys: ["Enter"],
+    keyValues: [Key.enter],
+    handler: "activateCommand",
+    enabled: hasItems,
+    hint: (state) => (state.commandAvailable === false ? "Enter 查看不可用原因" : "Enter 执行"),
+  }),
+  keyAction({
+    id: "panel.commands.close",
+    surface: "panel",
+    context: "commands",
+    keys: ["Escape"],
+    keyValues: [Key.escape],
+    handler: "closePanel",
+    hint: "Esc 关闭",
+  }),
+  keyAction({
+    id: "panel.sessions.move",
+    surface: "panel",
+    context: "sessions",
+    keys: ["Up", "Down"],
+    keyValues: [Key.up, Key.down],
+    handler: "moveSelection",
+    enabled: hasItems,
+    hint: "↑↓ 选择",
+  }),
+  keyAction({
+    id: "panel.sessions.open",
+    surface: "panel",
+    context: "sessions",
+    keys: ["Enter"],
+    keyValues: [Key.enter],
+    handler: "openSession",
+    enabled: hasItems,
+    hint: "Enter 打开",
+  }),
+  keyAction({
+    id: "panel.sessions.fork",
+    surface: "panel",
+    context: "sessions",
+    keys: ["Shift+F"],
+    keyValues: [Key.shift("f")],
+    handler: "forkSession",
+    enabled: hasItems,
+    hint: "Shift+F 创建分支",
+  }),
+  keyAction({
+    id: "panel.sessions.close",
+    surface: "panel",
+    context: "sessions",
+    keys: ["Escape"],
+    keyValues: [Key.escape],
+    handler: "closePanel",
+    hint: "Esc 返回",
+  }),
+  keyAction({
+    id: "panel.external-import.move",
+    surface: "panel",
+    context: "externalImport",
+    keys: ["Up", "Down"],
+    keyValues: [Key.up, Key.down],
+    handler: "moveSelection",
+    enabled: hasItems,
+    hint: "↑↓ 选择",
+  }),
+  keyAction({
+    id: "panel.external-import.source",
+    surface: "panel",
+    context: "externalImport",
+    keys: ["Tab"],
+    keyValues: [Key.tab],
+    handler: "switchImportSource",
+    hint: "Tab 切换来源",
+  }),
+  inputAction({
+    id: "panel.external-import.search",
+    surface: "panel",
+    context: "externalImport",
+    keys: ["Text", "Editing keys"],
+    handler: "editImportSearch",
+    matcher: editingInput,
+    hint: "输入搜索",
+  }),
+  keyAction({
+    id: "panel.external-import.open",
+    surface: "panel",
+    context: "externalImport",
+    keys: ["Enter"],
+    keyValues: [Key.enter],
+    handler: "importExternalSession",
+    enabled: hasItems,
+    hint: "Enter 预览并导入",
+  }),
+  keyAction({
+    id: "panel.external-import.close",
+    surface: "panel",
+    context: "externalImport",
+    keys: ["Escape"],
+    keyValues: [Key.escape],
+    handler: "closePanel",
+    hint: "Esc 关闭",
+  }),
+  inputAction({
+    id: "panel.skills.add",
+    surface: "panel",
+    context: "skills",
+    keys: ["+"],
+    handler: "openSkillAdd",
+    matcher: (value) => value === "+",
+    enabled: (state) => state.skillAdding !== true && state.skillViewing !== true,
+    hint: "+ 添加",
+  }),
+  keyAction({
+    id: "panel.skills.move",
+    surface: "panel",
+    context: "skills",
+    keys: ["Up", "Down"],
+    keyValues: [Key.up, Key.down],
+    handler: "moveSelection",
+    enabled: (state) => state.skillAdding !== true && state.skillViewing !== true && state.hasItems === true,
+    hint: "↑↓ 选择",
+  }),
+  keyAction({
+    id: "panel.skills.tab",
+    surface: "panel",
+    context: "skills",
+    keys: ["Tab"],
+    keyValues: [Key.tab],
+    handler: "switchSkillTab",
+    enabled: (state) => state.skillAdding !== true && state.skillViewing !== true,
+    hint: "Tab 切换",
+  }),
+  keyAction({
+    id: "panel.skills.add-tab",
+    surface: "panel",
+    context: "skills",
+    keys: ["Tab"],
+    keyValues: [Key.tab],
+    handler: "switchSkillAddMode",
+    enabled: (state) => state.skillAdding === true,
+    hint: "Tab 切换",
+  }),
+  keyAction({
+    id: "panel.skills.add-scope",
+    surface: "panel",
+    context: "skills",
+    keys: ["Left", "Right"],
+    keyValues: [Key.left, Key.right],
+    handler: "switchSkillScope",
+    enabled: (state) => state.skillAdding === true,
+    hint: "←→ 范围",
+  }),
+  keyAction({
+    id: "panel.skills.toggle",
+    surface: "panel",
+    context: "skills",
+    keys: ["Space"],
+    keyValues: [Key.space],
+    handler: "toggleSkill",
+    enabled: (state) =>
+      state.skillAdding !== true &&
+      state.skillViewing !== true &&
+      (state.skillCanEnable === true || state.skillCanDisable === true),
+    hint: "Space 启停",
+  }),
+  keyAction({
+    id: "panel.skills.view",
+    surface: "panel",
+    context: "skills",
+    keys: ["Enter"],
+    keyValues: [Key.enter],
+    handler: "viewSkill",
+    enabled: (state) =>
+      state.skillAdding !== true &&
+      state.skillViewing !== true &&
+      state.narrowSkill === true &&
+      state.hasItems === true,
+    hint: "Enter 查看",
+  }),
+  inputAction({
+    id: "panel.skills.update",
+    surface: "panel",
+    context: "skills",
+    keys: ["U"],
+    handler: "updateSkill",
+    matcher: (value) => value === "U",
+    enabled: (state) => state.skillAdding !== true && state.skillViewing !== true && state.skillCanUpdate === true,
+    hint: "U 更新",
+  }),
+  inputAction({
+    id: "panel.skills.remove",
+    surface: "panel",
+    context: "skills",
+    keys: ["D"],
+    handler: "removeSkill",
+    matcher: (value) => value === "D",
+    enabled: (state) => state.skillAdding !== true && state.skillViewing !== true && state.skillCanRemove === true,
+    hint: "D 移除",
+  }),
+  keyAction({
+    id: "panel.skills.add-submit",
+    surface: "panel",
+    context: "skills",
+    keys: ["Enter"],
+    keyValues: [Key.enter],
+    handler: "submitSkillAdd",
+    enabled: (state) => state.skillAdding === true && state.skillAddHasText === true,
+    hint: "Enter 提交",
+  }),
+  inputAction({
+    id: "panel.skills.text",
+    surface: "panel",
+    context: "skills",
+    keys: ["Text", "Editing keys"],
+    handler: "editSkillText",
+    matcher: editingInput,
+    enabled: (state) => state.skillViewing !== true,
+    hint: (state) => (state.skillAdding === true ? "输入文字" : "输入搜索"),
+  }),
+  keyAction({
+    id: "panel.skills.close",
+    surface: "panel",
+    context: "skills",
+    keys: ["Escape"],
+    keyValues: [Key.escape],
+    handler: "closeSkillPanel",
+    hint: (state) => (state.skillAdding === true || state.skillViewing === true ? "Esc 返回" : "Esc 关闭"),
+  }),
+  ...(["models", "settings", "theme", "policy", "effort", "approval", "tools", "cron"] as const).map((context) =>
+    keyAction({
+      id: `panel.${context}.move`,
+      surface: "panel",
+      context,
+      keys: ["Up", "Down"],
+      keyValues: [Key.up, Key.down],
+      handler: "moveSelection",
+      hint: "↑↓ 选择",
+    }),
+  ),
+  keyAction({
+    id: "panel.agents.move",
+    surface: "panel",
+    context: "agents",
+    keys: ["Up", "Down", "PageUp", "PageDown"],
+    keyValues: [Key.up, Key.down, Key.pageUp, Key.pageDown],
+    handler: "moveAgent",
+    hint: (state) =>
+      state.agentDetail === true ? "↑↓/PgUp/PgDn 滚动" : "↑↓ 选择  Tab 筛选",
+  }),
+  keyAction({
+    id: "panel.agents.switch",
+    surface: "panel",
+    context: "agents",
+    keys: ["Left", "Right"],
+    keyValues: [Key.left, Key.right],
+    handler: "switchAgent",
+    enabled: (state) => state.agentDetail === true,
+    hint: "←→ 切换 Agent",
+  }),
+  keyAction({
+    id: "panel.tasks.move",
+    surface: "panel",
+    context: "tasks",
+    keys: ["Up", "Down"],
+    keyValues: [Key.up, Key.down],
+    handler: "moveTask",
+    hint: "↑↓ 选择",
+  }),
+  keyAction({
+    id: "panel.agents.open",
+    surface: "panel",
+    context: "agents",
+    keys: ["Enter"],
+    keyValues: [Key.enter],
+    handler: "openAgent",
+    enabled: (state) => state.hasItems === true && state.agentDetail !== true,
+    hint: "Enter 详情",
+  }),
+  keyAction({
+    id: "panel.models.switch",
+    surface: "panel",
+    context: "models",
+    keys: ["Tab"],
+    keyValues: [Key.tab],
+    handler: "switchModelView",
+    hint: "Tab 切换视图",
+  }),
+  keyAction({
+    id: "panel.effort.select",
+    surface: "panel",
+    context: "effort",
+    keys: ["Enter"],
+    keyValues: [Key.enter],
+    handler: "selectEffort",
+    hint: "Enter 应用",
+  }),
+  inputAction({
+    id: "panel.approval.select",
+    surface: "panel",
+    context: "approval",
+    keys: ["Enter", "Text", "Backspace"],
+    handler: "selectApproval",
+    matcher: (value) => editingInput(value) || matchesKey(value, Key.enter),
+    hint: (state) => (state.approvalReasonEditing ? "Enter 拒绝并提交理由" : "Enter 选择"),
+  }),
+  keyAction({
+    id: "panel.models.detail",
+    surface: "panel",
+    context: "models",
+    keys: ["Left", "Right"],
+    keyValues: [Key.left, Key.right],
+    handler: "showModelDetail",
+    enabled: (state) => state.narrowModel === true,
+    hint: "←→ 详情",
+  }),
+  keyAction({
+    id: "panel.models.select",
+    surface: "panel",
+    context: "models",
+    keys: ["Enter"],
+    keyValues: [Key.enter],
+    handler: "selectModel",
+    hint: "Enter 确认",
+  }),
+  keyAction({
+    id: "panel.policy.select",
+    surface: "panel",
+    context: "policy",
+    keys: ["Enter"],
+    keyValues: [Key.enter],
+    handler: "selectPolicy",
+    hint: (state) => (stateOf(state).policyYolo === true ? "Enter 确认 YOLO" : "Enter 切换"),
+  }),
+  inputAction({
+    id: "panel.models.search",
+    surface: "panel",
+    context: "models",
+    keys: ["Text", "Editing keys"],
+    handler: "editModelSearch",
+    matcher: editingInput,
+  }),
+  keyAction({
+    id: "panel.providers.list-move",
+    surface: "panel",
+    context: "providers",
+    keys: ["Up", "Down"],
+    keyValues: [Key.up, Key.down],
+    handler: "moveSelection",
+    enabled: (state) => state.providerEditing !== true,
+    hint: "↑↓ 选择",
+  }),
+  keyAction({
+    id: "panel.providers.activate",
+    surface: "panel",
+    context: "providers",
+    keys: ["Enter"],
+    keyValues: [Key.enter],
+    handler: "activateProvider",
+    enabled: (state) => state.providerEditing !== true,
+    hint: (state) => (state.providerActionMenu === true ? "Enter 选择操作" : "Enter 打开操作"),
+  }),
+  keyAction({
+    id: "panel.providers.edit-up",
+    surface: "panel",
+    context: "providers",
+    keys: ["Up"],
+    keyValues: [Key.up],
+    handler: "moveSelection",
+    enabled: (state) => state.providerEditing === true && state.providerField !== 0,
+    hint: "↑ 上一项",
+  }),
+  keyAction({
+    id: "panel.providers.edit-down",
+    surface: "panel",
+    context: "providers",
+    keys: ["Down"],
+    keyValues: [Key.down],
+    handler: "moveSelection",
+    enabled: (state) => state.providerEditing === true && state.providerField !== 2,
+    hint: "↓ 下一项",
+  }),
+  inputAction({
+    id: "panel.providers.edit-text",
+    surface: "panel",
+    context: "providers",
+    keys: ["Text", "Editing keys"],
+    handler: "editProvider",
+    matcher: editingInput,
+    enabled: (state) => state.providerEditing === true && state.providerField !== 2,
+    hint: "输入文字",
+  }),
+  keyAction({
+    id: "panel.providers.edit-backspace",
+    surface: "panel",
+    context: "providers",
+    keys: ["Backspace"],
+    keyValues: [Key.backspace],
+    handler: "editProvider",
+    enabled: (state) =>
+      state.providerEditing === true && state.providerField !== 2 && state.providerTextPresent === true,
+    hint: "Backspace 删除",
+  }),
+  keyAction({
+    id: "panel.providers.edit-protocol",
+    surface: "panel",
+    context: "providers",
+    keys: ["Left", "Right"],
+    keyValues: [Key.left, Key.right],
+    handler: "editProviderProtocol",
+    enabled: (state) => state.providerEditing === true && state.providerField === 2,
+    hint: "←→ 切换协议",
+  }),
+  keyAction({
+    id: "panel.providers.save",
+    surface: "panel",
+    context: "providers",
+    keys: ["Ctrl+S"],
+    keyValues: [Key.ctrl("s")],
+    handler: "saveProvider",
+    enabled: (state) => state.providerEditing === true,
+    hint: "Ctrl+S 保存",
+  }),
+  keyAction({
+    id: "panel.providers.close",
+    surface: "panel",
+    context: "providers",
+    keys: ["Escape"],
+    keyValues: [Key.escape],
+    handler: "closePanel",
+    hint: (state) => (state.providerEditing === true ? "Esc 取消" : "Esc 关闭"),
+  }),
+  keyAction({
+    id: "panel.settings.scope",
+    surface: "panel",
+    context: "settings",
+    keys: ["Tab", "Left", "Right"],
+    keyValues: [Key.tab, Key.left, Key.right],
+    handler: "switchSettingsScope",
+    hint: "Tab 切换范围",
+  }),
+  keyAction({
+    id: "panel.settings.edit",
+    surface: "panel",
+    context: "settings",
+    keys: ["Enter", "Space"],
+    keyValues: [Key.enter, Key.space],
+    handler: "editSetting",
+    hint: "Enter 修改",
+  }),
+  keyAction({
+    id: "panel.settings.apply",
+    surface: "panel",
+    context: "settings",
+    keys: ["Ctrl+S"],
+    keyValues: [Key.ctrl("s")],
+    handler: "applySettings",
+    hint: "Ctrl+S 应用",
+  }),
+  keyAction({
+    id: "panel.theme.select",
+    surface: "panel",
+    context: "theme",
+    keys: ["Enter"],
+    keyValues: [Key.enter],
+    handler: "selectTheme",
+    hint: "Enter 确认",
+  }),
+  inputAction({
+    id: "panel.question.answer",
+    surface: "panel",
+    context: "question",
+    keys: [
+      "Tab",
+      "Enter",
+      "Shift+S",
+      "Left",
+      "Right",
+      "Up",
+      "Down",
+      "Ctrl+Up",
+      "Ctrl+Down",
+      "Alt+Up",
+      "Alt+Down",
+      "PageUp",
+      "PageDown",
+      "Space",
+      "Text",
+    ],
+    handler: "answerQuestion",
+    matcher: (value) => editingInput(value) || matchesAnyKey(value, QUESTION_KEYS),
+    hint: (state) => {
+      if (state.questionMode === "review") return "Enter 提交  Esc 返回  ↑↓/PgUp/PgDn 滚动";
+      if (state.questionMode === "freeText") return "Enter 确认  ←→ 移动光标";
+      if (state.questionMode === "ranking") return "↑↓ 选择  Ctrl/Alt+↑↓ 重排  Enter 确认  ←→ 切题  Shift+S 跳过";
+      return "↑↓ 选择  Space 多选  Tab 直接回答  Enter 确认  ←→ 切题  Shift+S 跳过";
+    },
+  }),
+  ...(
+    [
+      "models",
+      "settings",
+      "usage",
+      "theme",
+      "question",
+      "approval",
+      "effort",
+      "policy",
+      "tools",
+      "cron",
+      "goal",
+      "prompt",
+    ] as const
+  ).map((context) =>
+    keyAction({
+      id: `panel.${context}.close`,
+      surface: "panel",
+      context,
+      keys: ["Escape"],
+      keyValues: [Key.escape],
+      handler: "closePanel",
+      hint: "Esc 关闭",
+    }),
+  ),
+  keyAction({
+    id: "panel.agents.close",
+    surface: "panel",
+    context: "agents",
+    keys: ["Escape"],
+    keyValues: [Key.escape],
+    handler: "closePanel",
+    hint: (state) => (state.agentDetail === true ? "Esc 返回" : "Esc 关闭"),
+  }),
+  keyAction({
+    id: "panel.tasks.close",
+    surface: "panel",
+    context: "tasks",
+    keys: ["Escape"],
+    keyValues: [Key.escape],
+    handler: "closePanel",
+    hint: "Esc 关闭",
+  }),
+  keyAction({
+    id: "composer.cancel",
+    surface: "composer",
+    context: "main",
+    keys: ["Ctrl+C"],
+    keyValues: [Key.ctrl("c")],
+    handler: "cancelOrExit",
+  }),
+  keyAction({
+    id: "composer.interrupt",
+    surface: "composer",
+    context: "main",
+    keys: ["Escape"],
+    keyValues: [Key.escape],
+    handler: "interruptGeneration",
+    enabled: (state) => state.busy === true,
+  }),
+  keyAction({
+    id: "composer.paste-image",
+    surface: "composer",
+    context: "main",
+    keys: ["Ctrl+V", "Alt+V"],
+    keyValues: [Key.ctrl("v"), Key.alt("v")],
+    handler: "pasteAttachment",
+  }),
+  keyAction({
+    id: "composer.follow-up",
+    surface: "composer",
+    context: "main",
+    keys: ["Alt+Enter"],
+    keyValues: [Key.alt("enter")],
+    handler: "submitFollowUp",
+  }),
+  keyAction({
+    id: "composer.error-details",
+    surface: "composer",
+    context: "main",
+    keys: ["Ctrl+O"],
+    keyValues: [Key.ctrl("o")],
+    handler: "openErrorDetails",
+    enabled: (state) => state.hasErrorDetails === true,
+  }),
+  keyAction({
+    id: "composer.inspect",
+    surface: "composer",
+    context: "main",
+    keys: ["Tab"],
+    keyValues: [Key.tab],
+    handler: "enterInspect",
+    enabled: (state) => state.composerEmpty === true && state.hasMessages === true,
+  }),
+  keyAction({
+    id: "composer.command-complete",
+    surface: "composer",
+    context: "main",
+    keys: ["Tab"],
+    keyValues: [Key.tab],
+    handler: "completeCommand",
+    enabled: (state) => state.commandCompletable === true,
+  }),
+  keyAction({
+    id: "composer.plan-focus",
+    surface: "composer",
+    context: "main",
+    keys: ["Shift+Tab"],
+    keyValues: [Key.shift("tab")],
+    handler: "cycleWorkspaceFocus",
+    hint: "Shift+Tab 下一个区域",
+  }),
+  inputAction({
+    id: "composer.edit",
+    surface: "composer",
+    context: "main",
+    keys: ["Text", "Editing keys"],
+    handler: "editComposer",
+    matcher: (value) => editingInput(value) || matchesAnyKey(value, [Key.tab, Key.enter, Key.shift("enter")]),
+  }),
+  keyAction({
+    id: "composer.attachment-left",
+    surface: "composer",
+    context: "attachment",
+    keys: ["Left"],
+    keyValues: [Key.left],
+    handler: "moveAttachmentLeft",
+  }),
+  keyAction({
+    id: "composer.attachment-right",
+    surface: "composer",
+    context: "attachment",
+    keys: ["Right"],
+    keyValues: [Key.right],
+    handler: "moveAttachmentRight",
+  }),
+  keyAction({
+    id: "composer.attachment-remove",
+    surface: "composer",
+    context: "attachment",
+    keys: ["Backspace", "Delete"],
+    keyValues: [Key.backspace, Key.delete],
+    handler: "removeAttachment",
+  }),
+  keyAction({
+    id: "composer.attachment-rename",
+    surface: "composer",
+    context: "attachment",
+    keys: ["F2"],
+    keyValues: [Key.f2],
+    handler: "renameAttachment",
+  }),
+  keyAction({
+    id: "composer.attachment-preview",
+    surface: "composer",
+    context: "attachment",
+    keys: ["F3"],
+    keyValues: [Key.f3],
+    handler: "previewAttachment",
+  }),
+  keyAction({
+    id: "composer.attachment-save",
+    surface: "composer",
+    context: "attachment",
+    keys: ["F4"],
+    keyValues: [Key.f4],
+    handler: "saveAttachment",
+  }),
+  keyAction({
+    id: "composer.preview-close",
+    surface: "composer",
+    context: "preview",
+    keys: ["Escape"],
+    keyValues: [Key.escape],
+    handler: "closePreview",
+  }),
+  keyAction({
+    id: "composer.rename-cancel",
+    surface: "composer",
+    context: "rename",
+    keys: ["Escape"],
+    keyValues: [Key.escape],
+    handler: "cancelRename",
+  }),
+  keyAction({
+    id: "composer.rename-delete",
+    surface: "composer",
+    context: "rename",
+    keys: ["Backspace"],
+    keyValues: [Key.backspace],
+    handler: "deleteRenameCharacter",
+  }),
+  keyAction({
+    id: "composer.rename-commit",
+    surface: "composer",
+    context: "rename",
+    keys: ["Enter"],
+    keyValues: [Key.enter],
+    handler: "commitRename",
+  }),
+  inputAction({
+    id: "composer.rename-edit",
+    surface: "composer",
+    context: "rename",
+    keys: ["Text", "Editing keys"],
+    handler: "editRename",
+    matcher: editingInput,
+  }),
+  keyAction({
+    id: "inspect.close",
+    surface: "inspect",
+    context: "transcript",
+    keys: ["Escape"],
+    keyValues: [Key.escape],
+    handler: "closeInspect",
+    hint: "Esc 返回输入",
+  }),
+  keyAction({
+    id: "inspect.focus",
+    surface: "inspect",
+    context: "transcript",
+    keys: ["Shift+Tab"],
+    keyValues: [Key.shift("tab")],
+    handler: "cycleWorkspaceFocus",
+    hint: "Shift+Tab 进入 Plan",
+  }),
+  keyAction({
+    id: "inspect.move",
+    surface: "inspect",
+    context: "transcript",
+    keys: ["Up", "Down", "PageUp", "PageDown"],
+    keyValues: [Key.up, Key.down, Key.pageUp, Key.pageDown],
+    handler: "moveInspect",
+    enabled: hasItems,
+    hint: "↑↓/PgUp/PgDn 浏览",
+  }),
+  keyAction({
+    id: "inspect.toggle",
+    surface: "inspect",
+    context: "transcript",
+    keys: ["Left", "Right", "Enter"],
+    keyValues: [Key.left, Key.right, Key.enter],
+    handler: "toggleInspectItem",
+    enabled: (state) => state.hasItems === true && state.expandable !== false,
+    hint: (state) => (state.inspectDepth === "tool" ? "Enter/→ 展开  ← 收回/返回" : "Enter/→ 进入/展开  ← 收回"),
+  }),
+];
+
+export const INTERACTION_REGISTRY = {
+  schemaVersion: "1" as const,
+  actions,
+};
+
+export function matchingInteraction(
+  surface: InteractionSurface,
+  context: string,
+  input: string,
+  state: InteractionState = {},
+): InteractionDefinition | undefined {
+  return INTERACTION_REGISTRY.actions.find(
+    (action) => action.surface === surface && action.context === context && action.matches(input, state),
+  );
+}
+
+export function matchesInteraction(
+  surface: InteractionSurface,
+  context: string,
+  handler: string,
+  input: string,
+  state: InteractionState = {},
+): boolean {
+  return INTERACTION_REGISTRY.actions.some(
+    (action) =>
+      action.surface === surface &&
+      action.context === context &&
+      action.handler === handler &&
+      action.matches(input, state),
+  );
+}
+
+export function renderInteractionHint(
+  surface: InteractionSurface,
+  context: string,
+  state: InteractionState = {},
+): string {
+  const fragments = INTERACTION_REGISTRY.actions
+    .filter((action) => action.surface === surface && action.context === context)
+    .map((action) => action.hint(state))
+    .filter((hint): hint is string => Boolean(hint));
+  return [...new Set(fragments)].join("  ");
+}

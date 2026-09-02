@@ -13,6 +13,7 @@ import { IAgentPermissionModeService } from '#/agent/permissionMode/permissionMo
 import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 import { IAgentProfileService, type ProfileData } from '#/agent/profile/profile';
 import { IAgentLoopService } from '#/agent/loop/loop';
+import { IAgentTaskService } from '#/agent/task/task';
 import { IAgentUserToolService } from '#/agent/userTool/userTool';
 import { IEventBus } from '#/app/event/eventBus';
 import type { Event2 } from '#/app/event/event2';
@@ -876,6 +877,7 @@ describe('SessionSwarmService metadata compatibility', () => {
   let spawnAgent: ReturnType<typeof vi.fn>;
   let runAgent: ReturnType<typeof vi.fn>;
   let eventBus: IEventBus;
+  let registerTask: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     disposables = new DisposableStore();
@@ -884,10 +886,13 @@ describe('SessionSwarmService metadata compatibility', () => {
     handles = new Map();
     eventBus = eventBusStub();
     lifecycle = lifecycleStub(handles, eventBus);
-    subagents = subagentStub(handles, lifecycle, eventBus);
+    subagents = subagentStub(handles, lifecycle, eventBus, agents);
     spawnAgent = subagents.spawn as ReturnType<typeof vi.fn>;
     runAgent = subagents.run as ReturnType<typeof vi.fn>;
-    handles.set('main', agentHandle('main', lifecycle, eventBus));
+    registerTask = vi.fn(() => 'agent-swarm-task');
+    handles.set('main', agentHandle('main', lifecycle, eventBus, {}, new Map([
+      [IAgentTaskService, { _serviceBrand: undefined, registerTask } as unknown as IAgentTaskService],
+    ])));
 
     ix.stub(IAgentLifecycleService, lifecycle);
     ix.stub(ISessionSubagentService, subagents);
@@ -996,12 +1001,30 @@ describe('SessionSwarmService metadata compatibility', () => {
         result: 'child summary',
       },
     ]);
+    expect(registerTask).toHaveBeenCalledOnce();
+    const task = registerTask.mock.calls[0]?.[0];
+    expect(task.toInfo({
+      taskId: 'agent-swarm-task',
+      description: task.description,
+      status: 'running',
+      startedAt: 1,
+      endedAt: null,
+    })).toMatchObject({
+      kind: 'agent',
+      agentId: 'agent-new',
+      model: 'kimi-test',
+      parentToolCallId: 'call_swarm',
+      codename: '图灵',
+      taskTitle: 'src/a.ts',
+      description: '图灵 · src/a.ts',
+    });
 
     expect(spawnAgent).toHaveBeenCalledWith({
       callerAgentId: 'main',
       plan: { profileName: 'coder', model: 'kimi-test', thinking: 'medium', fork: false },
       labels: { parentAgentId: 'main', swarmItem: 'src/a.ts' },
       prompt: 'Review the file',
+      taskTitle: 'src/a.ts',
     });
   });
 
@@ -1286,6 +1309,7 @@ function subagentStub(
   handles: Map<string, IAgentScopeHandle>,
   lifecycle: IAgentLifecycleService,
   eventBus: IEventBus,
+  agents: Record<string, AgentMeta>,
 ): ISessionSubagentService {
   return {
     _serviceBrand: undefined,
@@ -1307,11 +1331,20 @@ function subagentStub(
         modelAlias: opts.plan.model,
       });
       handles.set('agent-new', handle);
+      agents['agent-new'] = {
+        labels: {
+          ...opts.labels,
+          codename: '图灵',
+          taskTitle: opts.taskTitle ?? opts.prompt,
+        },
+      };
       return {
         agentId: 'agent-new',
         profileName: opts.plan.profileName,
         model: opts.plan.model,
         promptText: opts.prompt,
+        codename: '图灵',
+        taskTitle: opts.taskTitle ?? opts.prompt,
       };
     }),
     notifyAgentTaskStopped: () => {},
@@ -1363,6 +1396,12 @@ function agentHandle(
           } as unknown as IAgentRuntimeBindingService;
         }
         if (serviceId === IAgentPermissionModeService) return permissionMode;
+        if (serviceId === IAgentTaskService) {
+          return {
+            _serviceBrand: undefined,
+            registerTask: vi.fn(() => 'agent-test-task'),
+          } as unknown as IAgentTaskService;
+        }
         if (serviceId === IAgentLoopService) {
           return {
             _serviceBrand: undefined,

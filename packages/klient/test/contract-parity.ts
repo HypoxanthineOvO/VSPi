@@ -225,6 +225,7 @@ import {
   approvalResponseSchema,
 } from '../src/contract/session/approval.js';
 import {
+  bindAgentProfileInputSchema,
   fullCompactionInputSchema,
   mcpServerEntrySchema,
 } from '../src/contract/agent/services.js';
@@ -278,8 +279,10 @@ import {
   modelCatalogItemSchema,
   providerCatalogItemSchema,
   setDefaultModelResponseSchema,
+  thinkingCapabilitySchema,
 } from '../src/contract/global/catalog.js';
 import {
+  queryAvailableModelsResponseSchema,
   refreshProviderModelsOptionsSchema,
   refreshProviderModelsResponseSchema,
 } from '../src/contract/global/providerDiscovery.js';
@@ -435,6 +438,14 @@ type RefreshProviderModelsOptions = NonNullable<
 type RefreshProviderModelsResponse = Awaited<
   ReturnType<IProviderDiscoveryService['refreshProviderModels']>
 >;
+type QueryAvailableModelsResponse = Awaited<
+  ReturnType<IProviderDiscoveryService['queryAvailableModels']>
+>;
+type ThinkingCapabilityWire = ModelCatalogItem['thinking'];
+const _thinkingCapability: AssertWire<
+  typeof thinkingCapabilitySchema,
+  ThinkingCapabilityWire
+> = true;
 const _modelCatalogItem: AssertWire<typeof modelCatalogItemSchema, ModelCatalogItem> = true;
 const _providerCatalogItem: AssertWire<typeof providerCatalogItemSchema, ProviderCatalogItem> =
   true;
@@ -449,6 +460,10 @@ const _refreshProviderModelsOptions: AssertWire<
 const _refreshProviderModelsResponse: AssertWire<
   typeof refreshProviderModelsResponseSchema,
   RefreshProviderModelsResponse
+> = true;
+const _queryAvailableModelsResponse: AssertWire<
+  typeof queryAvailableModelsResponseSchema,
+  QueryAvailableModelsResponse
 > = true;
 
 // models.ts
@@ -685,6 +700,11 @@ const _shellCommandResult: AssertWire<typeof shellCommandResultSchema, ShellComm
 const _cancelShellCommandPayload: AssertWire<
   typeof cancelShellCommandPayloadSchema,
   CancelShellCommandPayload
+> = true;
+type BindAgentProfileInput = Parameters<IAgentProfileService['bind']>[0];
+const _bindAgentProfileInput: AssertWire<
+  typeof bindAgentProfileInputSchema,
+  BindAgentProfileInput
 > = true;
 const _setModelPayload: AssertWire<typeof setModelPayloadSchema, SetModelPayload> = true;
 const _setModelResult: AssertWire<typeof setModelResultSchema, SetModelResult> = true;

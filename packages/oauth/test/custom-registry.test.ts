@@ -61,6 +61,48 @@ const KOKUB_SOURCE: CustomRegistrySource = {
 };
 
 describe('fetchCustomRegistry', () => {
+  it('preserves provider-specific model pricing and context tiers', async () => {
+    const base = makeKokubResponseBody();
+    const provider = base['registry_chat-completions']!;
+    const body: Record<string, CustomRegistryProviderEntry> = {
+      ...base,
+      'registry_chat-completions': {
+        ...provider,
+        models: {
+          ...provider.models,
+          'gpt-5.5': {
+            ...provider.models['gpt-5.5']!,
+            cost: {
+              input: 0.22,
+              output: 0.66,
+              cache_read: 0.007,
+              tiers: [{ input: 0.44, output: 1.32, tier: { type: 'context', size: 272_000 } }],
+            },
+          },
+        },
+      },
+    };
+    const result = await fetchCustomRegistry(KOKUB_SOURCE, {
+      fetchImpl: vi.fn(async () => makeJsonResponse(body)) as unknown as typeof fetch,
+    });
+    const config: ManagedKimiConfigShape = { providers: {}, models: {} };
+
+    applyCustomRegistryProvider(config, result['registry_chat-completions']!, KOKUB_SOURCE);
+
+    expect(config.models?.['registry_chat-completions/gpt-5.5']).toMatchObject({
+      pricing: {
+        inputUsdPerMillion: 0.22,
+        outputUsdPerMillion: 0.66,
+        cacheReadUsdPerMillion: 0.007,
+        contextTiers: [{
+          contextTokensAbove: 272_000,
+          inputUsdPerMillion: 0.44,
+          outputUsdPerMillion: 1.32,
+        }],
+      },
+    });
+  });
+
   it('parses a kokub-shaped 200 response into three providers', async () => {
     const fetchMock = vi.fn(async () => makeJsonResponse(makeKokubResponseBody()));
 

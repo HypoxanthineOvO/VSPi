@@ -12,6 +12,7 @@ import {
 import { type RunningServer, startServer } from '../src/start';
 import { authHeaders } from './helpers/auth';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
+import { isolateTestWorkspace } from './helpers/workspace';
 
 interface Envelope<T> {
   code: number;
@@ -29,7 +30,7 @@ describe('local/local on-disk layout (byte compatibility)', () => {
 
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), 'kimi-layout-home-'));
-    workDir = await mkdtemp(join(tmpdir(), 'kimi-layout-work-'));
+    workDir = await isolateTestWorkspace(await mkdtemp(join(tmpdir(), 'kimi-layout-work-')));
     homes.push(home, workDir);
     server = await startServer({
       host: '127.0.0.1',

@@ -11,14 +11,35 @@ import { z } from 'zod';
 
 import type { ServiceContract, StreamingProcedureContract } from '../types.js';
 
+export const thinkingCapabilitySchema = z.object({
+  availability: z.enum(['none', 'always', 'dynamic']),
+  can_disable: z.boolean(),
+  controls: z.array(z.enum(['toggle', 'effort', 'budget'])),
+  efforts: z.array(z.string()).optional(),
+  provider_efforts: z.record(z.string(), z.array(z.string())).optional(),
+  default_effort: z.string().optional(),
+});
+
 export const modelCatalogItemSchema = z.object({
   provider: z.string(),
   model: z.string(),
   display_name: z.string().optional(),
   max_context_size: z.number(),
   capabilities: z.array(z.string()).optional(),
+  thinking: thinkingCapabilitySchema,
   support_efforts: z.array(z.string()).optional(),
   default_effort: z.string().optional(),
+  pricing: z.object({
+    input_usd_per_million: z.number().nonnegative(),
+    output_usd_per_million: z.number().nonnegative(),
+    cache_read_usd_per_million: z.number().nonnegative().optional(),
+    cache_write_usd_per_million: z.number().nonnegative().optional(),
+    context_tiers: z.array(z.object({
+      context_tokens_above: z.number().int().positive(),
+      input_usd_per_million: z.number().nonnegative(),
+      output_usd_per_million: z.number().nonnegative(),
+    })).optional(),
+  }).optional(),
 });
 
 export const providerCatalogStatusSchema = z.enum(['connected', 'error', 'unconfigured']);

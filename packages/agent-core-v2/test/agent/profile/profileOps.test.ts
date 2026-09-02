@@ -89,6 +89,13 @@ function createTestModel(
       max_context_tokens: 1000,
     },
     maxContextSize: 1000,
+    thinking: {
+      availability: 'dynamic',
+      canDisable: true,
+      controls: providerType === 'kimi' ? ['toggle', 'effort'] : ['toggle'],
+      efforts: providerType === 'kimi' ? ['low', 'medium', 'high', 'max'] : undefined,
+      defaultEffort: providerType === 'kimi' ? 'high' : undefined,
+    },
     supportEfforts: providerType === 'kimi' ? ['low', 'medium', 'high', 'max'] : undefined,
     defaultEffort: providerType === 'kimi' ? 'high' : undefined,
     alwaysThinking: false,

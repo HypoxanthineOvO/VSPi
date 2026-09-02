@@ -26,10 +26,12 @@ import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle'
 import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 import { ISessionAgentProfileCatalog } from '#/session/sessionAgentProfileCatalog/sessionAgentProfileCatalog';
 import { ISessionContext } from '#/session/sessionContext/sessionContext';
+import { ISessionMetadata, type AgentMeta } from '#/session/sessionMetadata/sessionMetadata';
 import { SECONDARY_MODEL_SECTION } from '#/session/subagent/configSection';
 import { SECONDARY_MODEL_FLAG_ID } from '#/session/subagent/flag';
 import { ISessionSubagentService } from '#/session/subagent/subagent';
 import { SessionSubagentService } from '#/session/subagent/subagentService';
+import { selectSubagentIdentity, taskTitle } from '#/session/subagent/codename';
 import {
   FORK_CONTEXT_NOTICE,
   type SpawnedSubagent,
@@ -62,6 +64,7 @@ describe('SessionSubagentService planSpawn and spawn', () => {
   let callerUserTools: IAgentUserToolService;
   let createdUserTools: IAgentUserToolService;
   let lease: RuntimeLease;
+  let agentMetadata: Record<string, AgentMeta>;
 
   function userToolsStub(): IAgentUserToolService {
     return {
@@ -161,6 +164,7 @@ describe('SessionSubagentService planSpawn and spawn', () => {
       dispose: () => {},
     };
     createdHandles = new Map();
+    agentMetadata = {};
     createAgent = vi.fn(async (input: { readonly agentId?: string } = {}) => {
       const agentId = input.agentId ?? 'agent-child';
       createdHandles.set(agentId, createdHandle(agentId));
@@ -178,7 +182,12 @@ describe('SessionSubagentService planSpawn and spawn', () => {
       onDidClose: Event.None,
       create: createAgent,
       fork: forkAgent,
-      get: (agentId: string) => (agentId === CALLER_ID ? stubAgentContext(CALLER_ID, 1) : undefined),
+      get: (agentId: string) =>
+        agentId === CALLER_ID
+          ? stubAgentContext(CALLER_ID, 1)
+          : createdHandles.has(agentId)
+            ? stubAgentContext(agentId, 1)
+            : undefined,
       handleOf: (agentId: string) =>
         agentId === CALLER_ID ? caller : createdHandles.get(agentId),
       list: () => [stubAgentContext(CALLER_ID, 1)],
@@ -208,7 +217,26 @@ describe('SessionSubagentService planSpawn and spawn', () => {
         return { id: alias, ...modelMeta.get(alias) } as Model;
       },
     } as unknown as IModelCatalog);
-    ix.stub(ISessionContext, { _serviceBrand: undefined, cwd: '/repo' } as unknown as ISessionContext);
+    ix.stub(ISessionContext, {
+      _serviceBrand: undefined,
+      sessionId: 'session-alpha',
+      cwd: '/repo',
+    } as unknown as ISessionContext);
+    ix.stub(ISessionMetadata, {
+      _serviceBrand: undefined,
+      ready: Promise.resolve(),
+      onDidChangeMetadata: Event.None,
+      read: async () => ({
+        id: 'session-alpha',
+        createdAt: 0,
+        updatedAt: 0,
+        archived: false,
+        agents: agentMetadata,
+      }),
+      registerAgent: async (agentId: string, meta: AgentMeta) => {
+        agentMetadata[agentId] = meta;
+      },
+    } as unknown as ISessionMetadata);
     ix.stub(ILogService, stubLog());
   });
 
@@ -567,6 +595,12 @@ describe('SessionSubagentService planSpawn and spawn', () => {
       profileName: 'coder',
       model: 'provider/fast',
       promptText: 'FIXED-PREFIX\n\nReview the file',
+      codename: expect.any(String),
+      taskTitle: 'Review the file',
+    });
+    expect(agentMetadata['agent-child']?.labels).toMatchObject({
+      codename: spawned.codename,
+      taskTitle: 'Review the file',
     });
   });
 
@@ -612,6 +646,8 @@ describe('SessionSubagentService planSpawn and spawn', () => {
       profileName: 'orchestrator',
       model: 'main-model',
       promptText: `${FORK_CONTEXT_NOTICE}\n\nContinue the analysis`,
+      codename: expect.any(String),
+      taskTitle: 'Continue the analysis',
     });
   });
 
@@ -669,5 +705,84 @@ describe('SessionSubagentService planSpawn and spawn', () => {
 
     expect(createAgent).not.toHaveBeenCalled();
     expect(forkAgent).not.toHaveBeenCalled();
+  });
+
+  it('selects a stable role-aware identity and avoids an already used codename', () => {
+    const first = selectSubagentIdentity({
+      sessionId: 'session-alpha',
+      agentId: 'agent-7',
+      profileName: 'coder',
+      taskText: '调试 GPU 并行性能',
+    });
+    const repeated = selectSubagentIdentity({
+      sessionId: 'session-alpha',
+      agentId: 'agent-7',
+      profileName: 'coder',
+      taskText: '调试 GPU 并行性能',
+    });
+    const unique = selectSubagentIdentity({
+      sessionId: 'session-alpha',
+      agentId: 'agent-7',
+      profileName: 'coder',
+      taskText: '调试 GPU 并行性能',
+      usedCodenames: new Set([first.codename]),
+    });
+
+    expect(repeated).toEqual(first);
+    expect(unique.codename).not.toBe(first.codename);
+    expect(first.taskTitle).toBe('调试 GPU 并行性能');
+  });
+
+  it('uses the weighted coder pool while preserving keyword priority', () => {
+    const ai = new Set([
+      '梁文锋', '李飞飞', '辛顿', '杨立昆', '杨植麟', '唐杰',
+      '闫俊杰', '姚顺雨', '罗福莉', '奥特曼', '达里奥', '陈天奇',
+    ]);
+    const systems = new Set([
+      '黄仁勋', '苏姿丰', '张忠谋', '图灵', '香农', '诺伊斯', '摩尔',
+      '布兰克', '格里尼奇', '霍尔尼', '克莱纳', '拉斯特', '罗伯茨',
+    ]);
+    const product = new Set([
+      '乔布斯', '库克', '马化腾', '张小龙', '张一鸣', '雷军', '王兴',
+      '丁磊', '李彦宏', '周鸿祎', '盖茨', '扎克伯格', '贝索斯', '马斯克',
+    ]);
+    let aiCount = 0;
+    let weightedCount = 0;
+    for (let index = 0; index < 10_000; index += 1) {
+      const codename = selectSubagentIdentity({
+        sessionId: 'session-alpha',
+        agentId: `coder-${String(index)}`,
+        profileName: 'coder',
+        taskText: 'implement code',
+      }).codename;
+      if (codename === '特朗普') continue;
+      weightedCount += 1;
+      if (ai.has(codename)) aiCount += 1;
+    }
+    expect(aiCount / weightedCount).toBeGreaterThan(0.63);
+    expect(aiCount / weightedCount).toBeLessThan(0.67);
+    expect(product.has(selectSubagentIdentity({ sessionId: 's', agentId: 'ui', profileName: 'coder', taskText: 'render UI' }).codename)).toBe(true);
+    expect(systems.has(selectSubagentIdentity({ sessionId: 's', agentId: 'system', profileName: 'coder', taskText: 'optimize GPU kernel' }).codename)).toBe(true);
+    expect(ai.has(selectSubagentIdentity({ sessionId: 's', agentId: 'ai', profileName: 'coder', taskText: 'research LLM context' }).codename)).toBe(true);
+  });
+
+  it('keeps the Trump easter egg close to two percent', () => {
+    let special = 0;
+    for (let index = 0; index < 10_000; index += 1) {
+      const identity = selectSubagentIdentity({
+        sessionId: 'session-alpha',
+        agentId: `agent-${String(index)}`,
+        profileName: 'coder',
+        taskText: 'test',
+      });
+      if (identity.codename === '特朗普') special += 1;
+    }
+    expect(special).toBeGreaterThanOrEqual(150);
+    expect(special).toBeLessThanOrEqual(250);
+  });
+
+  it('normalizes and truncates task titles', () => {
+    expect(taskTitle('  **Review**   the renderer  ')).toBe('Review the renderer');
+    expect(Array.from(taskTitle('x'.repeat(80)))).toHaveLength(36);
   });
 });

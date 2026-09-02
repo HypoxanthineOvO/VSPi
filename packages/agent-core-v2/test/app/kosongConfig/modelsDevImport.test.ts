@@ -2,9 +2,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createScopedTestHost } from '#/_base/di/test';
 import { Error2, isError2 } from '#/_base/errors/errors';
+import { ILogService } from '#/_base/log/log';
 import { DEFAULT_IDENTITY_SLUG, IAgentIdentity } from '#/app/agentIdentity/agentIdentity';
 import { IBootstrapService } from '#/app/bootstrap/bootstrap';
 import { IConfigService } from '#/app/config/config';
+import {
+  modelsDevModelToCapability,
+  modelsDevProviderModels,
+} from '#/app/kosongConfig/modelsDev';
 import {
   resetModelsDevUpstreamForTest,
   setModelsDevUpstreamForTest,
@@ -12,13 +17,28 @@ import {
 import { MODELS_SECTION, PROVIDERS_SECTION } from '#/app/kosongConfig/configSection';
 import { ModelsDevImportErrors } from '#/app/kosongConfig/errors';
 import { IKosongConfigService } from '#/app/kosongConfig/kosongConfig';
+import '#/app/kosongConfig/kosongConfigService';
 import { IModelsDevImportService } from '#/app/kosongConfig/modelsDevImport';
 import '#/app/kosongConfig/modelsDevImportService';
 import { IModelCatalog, type ProviderCatalogItem } from '#/kosong/model/catalog';
-import type { ModelsSection } from '#/kosong/model/model';
-import type { ProvidersSection } from '#/kosong/provider/provider';
+import '#/kosong/model/catalogService';
+import { IHostRequestHeaders } from '#/kosong/model/hostRequestHeaders';
+import { IModelService, type ModelsSection } from '#/kosong/model/model';
+import '#/kosong/model/modelService';
+import { IModelOAuthTokens } from '#/kosong/model/modelOAuth';
+import { IProviderService, type ProvidersSection } from '#/kosong/provider/provider';
+import '#/kosong/provider/providerService';
+import '#/kosong/provider/bases/anthropic/index';
+import '#/kosong/provider/bases/google-genai/index';
+import '#/kosong/provider/bases/openai/index';
+import '#/kosong/provider/protocolAdapterRegistry';
+import '#/kosong/provider/providers/kimi/kimi.contrib';
+import '#/kosong/provider/providers/standard.contrib';
 
-import { StubConfigService } from '../../kosong/stubs';
+import {
+  StubConfigService,
+  stubModelOAuthTokens,
+} from '../../kosong/stubs';
 import { stubBootstrap } from '../bootstrap/stubs';
 import { stubAgentIdentity } from '../agentIdentity/stubs';
 
@@ -38,6 +58,12 @@ const CATALOG = {
         id: 'gpt-4.1',
         name: 'GPT-4.1',
         limit: { context: 1047576, output: 32768 },
+        cost: {
+          input: 2,
+          output: 8,
+          cache_read: 0.2,
+          tiers: [{ input: 4, output: 12, tier: { type: 'context', size: 272_000 } }],
+        },
         tool_call: true,
         modalities: { input: ['text', 'image'], output: ['text'] },
       },
@@ -117,6 +143,20 @@ function stubKosongConfig(): IKosongConfigService {
   return { _serviceBrand: undefined, ready: Promise.resolve() } as IKosongConfigService;
 }
 
+function stubLogService(): ILogService {
+  return {
+    _serviceBrand: undefined,
+    level: 'off',
+    setLevel: () => {},
+    flush: async () => {},
+    error: () => {},
+    warn: () => {},
+    info: () => {},
+    debug: () => {},
+    child: () => stubLogService(),
+  };
+}
+
 function stubModelCatalog(): IModelCatalog {
   return {
     _serviceBrand: undefined,
@@ -149,6 +189,27 @@ function createHost(
   return { config, imports: host.app.accessor.get(IModelsDevImportService) };
 }
 
+function createIntegratedHost(): {
+  host: ReturnType<typeof createScopedTestHost>;
+  imports: IModelsDevImportService;
+  catalog: IModelCatalog;
+} {
+  const config = new StubConfigService({ providers: {}, models: {} });
+  const host = createScopedTestHost([
+    [IConfigService, config],
+    [IBootstrapService, stubBootstrap('/home', {}, { requestHeaders: HOST_HEADERS })],
+    [IAgentIdentity, stubAgentIdentity({ hostRequestHeaders: HOST_HEADERS })],
+    [ILogService, stubLogService()],
+    [IModelOAuthTokens, stubModelOAuthTokens()],
+    [IHostRequestHeaders, { _serviceBrand: undefined, headers: HOST_HEADERS, thirdPartyHeaders: HOST_HEADERS }],
+  ]);
+  host.app.accessor.get(IProviderService);
+  host.app.accessor.get(IModelService);
+  host.app.accessor.get(IKosongConfigService);
+  const catalog = host.app.accessor.get(IModelCatalog);
+  return { host, imports: host.app.accessor.get(IModelsDevImportService), catalog };
+}
+
 async function expectError2(promise: Promise<unknown>, code: string): Promise<Error2> {
   const err = await promise.then(
     () => {
@@ -160,6 +221,72 @@ async function expectError2(promise: Promise<unknown>, code: string): Promise<Er
   expect((err as Error2).code).toBe(code);
   return err as Error2;
 }
+
+describe('models.dev thinking capability', () => {
+  it('parses toggle, effort, budget, and off encodings together', () => {
+    const model = modelsDevModelToCapability({
+      id: 'reasoner',
+      reasoning: true,
+      reasoning_options: [
+        { type: 'toggle' },
+        { type: 'effort', values: [null, 'off', 'low', 'high'] },
+        { type: 'budget_tokens', min: 1024, max: 32768 },
+      ],
+      limit: { context: 1000 },
+    });
+
+    expect(model?.thinking).toEqual({
+      availability: 'dynamic',
+      canDisable: true,
+      controls: ['toggle', 'effort', 'budget'],
+      efforts: ['low', 'high'],
+      providerEfforts: undefined,
+      defaultEffort: undefined,
+    });
+    expect(model?.offEffort).toBe('none');
+  });
+
+  it('preserves explicit always-thinking model facts on wires that can encode off', () => {
+    for (const type of ['anthropic', 'kimi'] as const) {
+      const [model] = modelsDevProviderModels({
+        id: type,
+        type,
+        models: {
+          reasoner: {
+            id: 'reasoner',
+            reasoning: true,
+            reasoning_options: [{ type: 'effort', values: ['low', 'high'] }],
+            limit: { context: 1000 },
+          },
+        },
+      });
+      expect(model?.thinking).toMatchObject({
+        availability: 'always',
+        canDisable: false,
+        controls: ['effort'],
+      });
+      expect(model?.alwaysThinking).toBe(true);
+    }
+  });
+
+  it('uses conservative fallback for malformed and unknown options', () => {
+    const model = modelsDevModelToCapability({
+      id: 'future-reasoner',
+      reasoning: true,
+      reasoning_options: [
+        { type: 'effort', values: ['low', 42] },
+        { type: 'future_control', values: ['opaque'] },
+      ],
+      limit: { context: 1000 },
+    });
+
+    expect(model?.thinking.availability).toBe('dynamic');
+    expect(model?.thinking.canDisable).toBe(false);
+    expect(model?.thinking.controls).toEqual(['effort']);
+    expect(model?.thinking.efforts).toEqual(['low']);
+    expect(model?.alwaysThinking).toBeUndefined();
+  });
+});
 
 describe('IModelsDevImportService', () => {
   afterEach(() => {
@@ -204,6 +331,42 @@ describe('IModelsDevImportService', () => {
     expect(err.message).toContain('models.dev catalog unavailable');
   });
 
+  it('surfaces imported thinking capability through IModelCatalog', async () => {
+    setModelsDevUpstreamForTest({
+      fetchImpl: fetchJson({
+        openai: {
+          id: 'openai',
+          npm: '@ai-sdk/openai',
+          models: {
+            reasoner: {
+              id: 'reasoner',
+              reasoning: true,
+              reasoning_options: [{ type: 'effort', values: ['low', 'high'] }],
+              limit: { context: 1000 },
+            },
+          },
+        },
+      }),
+    });
+    const { host, imports, catalog } = createIntegratedHost();
+    try {
+      await imports.importModelsDevProvider({ catalogId: 'openai', apiKey: 'test-key' });
+      const model = catalog.get('openai/reasoner');
+      expect(model.thinking).toEqual({
+        availability: 'always',
+        canDisable: false,
+        controls: ['effort'],
+        efforts: ['low', 'high'],
+        providerEfforts: undefined,
+        defaultEffort: undefined,
+      });
+      expect(model.supportEfforts).toEqual(['low', 'high']);
+      expect(model.alwaysThinking).toBe(true);
+    } finally {
+      host.dispose();
+    }
+  });
+
   it('imports a catalog entry as provider + aliases without touching the default pointers', async () => {
     setModelsDevUpstreamForTest({ fetchImpl: fetchJson(CATALOG) });
     const { config, imports } = createHost({
@@ -231,6 +394,16 @@ describe('IModelsDevImportService', () => {
       provider: 'openai',
       model: 'gpt-4.1',
       maxContextSize: 1047576,
+      pricing: {
+        inputUsdPerMillion: 2,
+        outputUsdPerMillion: 8,
+        cacheReadUsdPerMillion: 0.2,
+        contextTiers: [{
+          contextTokensAbove: 272_000,
+          inputUsdPerMillion: 4,
+          outputUsdPerMillion: 12,
+        }],
+      },
     });
     expect(config.get('defaultProvider')).toBe('kimi');
     expect(config.get('defaultModel')).toBe('k2');

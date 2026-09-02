@@ -8,6 +8,17 @@ export const modelCatalogItemSchema = z.object({
   capabilities: z.array(z.string()).optional(),
   support_efforts: z.array(z.string()).optional(),
   default_effort: z.string().optional(),
+  pricing: z.object({
+    input_usd_per_million: z.number().nonnegative(),
+    output_usd_per_million: z.number().nonnegative(),
+    cache_read_usd_per_million: z.number().nonnegative().optional(),
+    cache_write_usd_per_million: z.number().nonnegative().optional(),
+    context_tiers: z.array(z.object({
+      context_tokens_above: z.number().int().positive(),
+      input_usd_per_million: z.number().nonnegative(),
+      output_usd_per_million: z.number().nonnegative(),
+    })).optional(),
+  }).optional(),
 });
 export type ModelCatalogItem = z.infer<typeof modelCatalogItemSchema>;
 

@@ -45,7 +45,7 @@ export const SubagentToolInputSchema = z.preprocess(
       .boolean()
       .optional()
       .describe(
-        'If true, return immediately without waiting for completion. Prefer false unless the task can run independently and there is a clear benefit to not waiting.',
+        'Whether to run the subagent in the background. Defaults to true when background execution is available, otherwise false. Set false to wait for completion. Explicit true is rejected when background execution is unavailable.',
       ),
     fork: z
       .boolean()

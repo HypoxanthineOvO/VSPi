@@ -33,6 +33,22 @@ export interface FakeModelConfigOptions {
   readonly altDefaultEffort?: string;
 }
 
+const thinkingToml = (
+  modelId: string,
+  enabled: boolean,
+  efforts: readonly string[] | undefined,
+  defaultEffort: string | undefined,
+): string => {
+  if (!enabled) return '';
+  const controls = efforts === undefined ? ['toggle'] : ['toggle', 'effort'];
+  return `
+[models.${modelId}.thinking]
+availability = "dynamic"
+canDisable = true
+controls = [${controls.map((control) => `"${control}"`).join(', ')}]
+${efforts === undefined ? '' : `efforts = [${efforts.map((effort) => `"${effort}"`).join(', ')}]\n`}${defaultEffort === undefined ? '' : `defaultEffort = "${defaultEffort}"\n`}`;
+};
+
 const configToml = (options?: FakeModelConfigOptions): string => {
   const thinking = options?.thinking === true;
   const efforts = options?.supportEfforts;
@@ -48,13 +64,14 @@ protocol = "openai"
 baseUrl = "http://localhost"
 apiKey = "test-token"
 maxContextSize = 8192
-${thinking ? 'capabilities = ["thinking"]\n' : ''}${efforts !== undefined ? `supportEfforts = [${efforts.map((e) => `"${e}"`).join(', ')}]\n` : ''}${defaultEffort !== undefined ? `defaultEffort = "${defaultEffort}"\n` : ''}[models.${FAKE_MODEL_ALT_ID}]
+${thinkingToml(FAKE_MODEL_ID, thinking, efforts, defaultEffort)}
+[models.${FAKE_MODEL_ALT_ID}]
 name = "fake-model-alt"
 protocol = "openai"
 baseUrl = "http://localhost"
 apiKey = "test-token"
 maxContextSize = 8192
-${altThinking ? 'capabilities = ["thinking"]\n' : ''}${altEfforts !== undefined ? `supportEfforts = [${altEfforts.map((e) => `"${e}"`).join(', ')}]\n` : ''}${altDefaultEffort !== undefined ? `defaultEffort = "${altDefaultEffort}"\n` : ''}`;
+${thinkingToml(FAKE_MODEL_ALT_ID, altThinking, altEfforts, altDefaultEffort)}`;
 };
 
 /**

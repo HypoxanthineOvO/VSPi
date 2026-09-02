@@ -27,6 +27,7 @@ import { IFlagService } from '#/app/flag/flag';
 import { IModelCatalog, type Model } from '#/kosong/model/catalog';
 import { ILogService } from '#/_base/log/log';
 import { ISessionContext } from '#/session/sessionContext/sessionContext';
+import { ISessionMetadata } from '#/session/sessionMetadata/sessionMetadata';
 import { RuntimeWorkspaceView } from '#/runtime/runtimeWorkspaceView';
 import { createHooks } from '#/hooks';
 import { IAgentLifecycleService, MAIN_AGENT_ID } from '#/session/agentLifecycle/agentLifecycle';
@@ -54,6 +55,7 @@ import {
   type SubagentSpawnPlan,
   type SubagentSpawnPlanInput,
 } from './spawn';
+import { selectSubagentIdentity } from './codename';
 
 export class SessionSubagentService extends Service implements ISessionSubagentService {
   declare readonly _serviceBrand: undefined;
@@ -62,6 +64,7 @@ export class SessionSubagentService extends Service implements ISessionSubagentS
   private readonly onDidStopAgentTaskEmitter = this._register(
     new Emitter<AgentTaskStopHookContext>(),
   );
+  private readonly reservedCodenames = new Set<string>();
 
   get onDidStopAgentTask() {
     return this.onDidStopAgentTaskEmitter.event;
@@ -74,6 +77,7 @@ export class SessionSubagentService extends Service implements ISessionSubagentS
     @IFlagService private readonly flags: IFlagService,
     @IModelCatalog private readonly modelCatalog: IModelCatalog,
     @ISessionContext private readonly sessionContext: ISessionContext,
+    @ISessionMetadata private readonly sessionMetadata: ISessionMetadata,
     @ILogService private readonly log: ILogService,
   ) {
     super();
@@ -198,11 +202,17 @@ export class SessionSubagentService extends Service implements ISessionSubagentS
       const promptText = plan.fork
         ? `${FORK_CONTEXT_NOTICE}\n\n${opts.prompt}`
         : await this.applyPromptPrefix(plan.profileName, opts.prompt, lease!.runtime);
+      const identity = await this.assignIdentity(
+        created.id,
+        plan.profileName,
+        opts.taskTitle ?? opts.prompt,
+      );
       return {
         agentId: created.id,
         profileName: plan.profileName,
         model: plan.model,
         promptText,
+        ...identity,
       };
     } finally {
       lease?.dispose();
@@ -228,6 +238,43 @@ export class SessionSubagentService extends Service implements ISessionSubagentS
       process: runtime.process!,
       log: this.log,
     });
+  }
+
+  private async assignIdentity(
+    agentId: string,
+    profileName: string,
+    taskText: string,
+  ): Promise<{ readonly codename: string; readonly taskTitle: string }> {
+    const metadata = await this.sessionMetadata.read();
+    const existing = metadata.agents?.[agentId];
+    const existingCodename = existing?.labels?.['codename'];
+    const existingTaskTitle = existing?.labels?.['taskTitle'];
+    if (existingCodename !== undefined && existingTaskTitle !== undefined) {
+      return { codename: existingCodename, taskTitle: existingTaskTitle };
+    }
+    const used = new Set(this.reservedCodenames);
+    for (const [id, meta] of Object.entries(metadata.agents ?? {})) {
+      if (id === agentId || this.agentLifecycle.get(id) === undefined) continue;
+      const codename = meta.labels?.['codename'];
+      if (codename !== undefined) used.add(codename);
+    }
+    const identity = selectSubagentIdentity({
+      sessionId: this.sessionContext.sessionId,
+      agentId,
+      profileName,
+      taskText,
+      usedCodenames: used,
+    });
+    this.reservedCodenames.add(identity.codename);
+    try {
+      await this.sessionMetadata.registerAgent(agentId, {
+        ...existing,
+        labels: { ...existing?.labels, codename: identity.codename, taskTitle: identity.taskTitle },
+      });
+    } finally {
+      this.reservedCodenames.delete(identity.codename);
+    }
+    return identity;
   }
 
   private requireCaller(agentId: string): IAgentScopeHandle {

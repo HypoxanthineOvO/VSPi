@@ -5,6 +5,8 @@ export type TodoStatus = 'pending' | 'in_progress' | 'done';
 export interface TodoItem {
   readonly title: string;
   readonly status: TodoStatus;
+  readonly depth?: 0 | 1;
+  readonly group?: boolean;
 }
 
 export function readTodoItems(raw: unknown): readonly TodoItem[] {
@@ -12,6 +14,8 @@ export function readTodoItems(raw: unknown): readonly TodoItem[] {
   return raw.filter(isTodoItem).map((todo) => ({
     title: todo.title,
     status: todo.status,
+    ...(todo.depth === 0 || todo.depth === 1 ? { depth: todo.depth } : {}),
+    ...(typeof todo.group === 'boolean' ? { group: todo.group } : {}),
   }));
 }
 
@@ -31,7 +35,8 @@ export function renderTodoList(todos: readonly TodoItem[], title = 'Current todo
   }
   const lines = todos.map((t) => {
     const marker = statusMarker(t.status);
-    return `  ${marker} ${t.title}`;
+    const indent = t.depth === 1 ? '    ' : '  ';
+    return `${indent}${marker} ${t.title}`;
   });
   return [title, ...lines].join('\n');
 }

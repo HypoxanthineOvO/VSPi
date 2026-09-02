@@ -36,6 +36,7 @@ import { encodeWorkDirKey } from '@moonshot-ai/agent-core-v2/_base/utils/workdir
 import { type RunningServer, startServer } from '../src/start';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
 import { authHeaders } from './helpers/auth';
+import { isolateTestWorkspace } from './helpers/workspace';
 
 interface Envelope<T> {
   code: number;
@@ -84,7 +85,9 @@ describe('server-v2 /api/v1/sessions', () => {
   let base: string;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'kimi-server-v2-sessions-'));
+    home = await isolateTestWorkspace(
+      await mkdtemp(join(tmpdir(), 'kimi-server-v2-sessions-')),
+    );
     server = await startServer({
       hostIdentity: TEST_HOST_IDENTITY,
       host: '127.0.0.1',
@@ -1579,7 +1582,7 @@ describe('server-v2 /api/v1/sessions status context window', () => {
   let base: string;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'kimi-server-v2-status-'));
+    home = await isolateTestWorkspace(await mkdtemp(join(tmpdir(), 'kimi-server-v2-status-')));
     await writeFile(
       join(home, 'config.toml'),
       [
@@ -1686,7 +1689,9 @@ describe('server-v2 /api/v1/sessions (minidb read model)', () => {
 
   beforeEach(async () => {
     process.env[READ_MODEL_ENV] = '1';
-    home = await mkdtemp(join(tmpdir(), 'kimi-server-v2-sessions-rm-'));
+    home = await isolateTestWorkspace(
+      await mkdtemp(join(tmpdir(), 'kimi-server-v2-sessions-rm-')),
+    );
     await writeFile(join(home, 'config.toml'), READ_MODEL_CONFIG, 'utf8');
     server = await startServer({
       hostIdentity: TEST_HOST_IDENTITY,

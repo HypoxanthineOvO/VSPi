@@ -440,6 +440,7 @@ describe('server-v2 /api/v1 catalog browse + import endpoints', () => {
       max_context_size: 128000,
       capabilities: ['tool_use'],
       display_name: 'GPT-4o mini',
+      thinking: { availability: 'none', canDisable: false, controls: [] },
     });
   });
 

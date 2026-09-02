@@ -309,6 +309,14 @@ describe('AgentLLMRequesterService Anthropic effort diagnostics', () => {
   it('warns and sends when the effort is not listed by the model', async () => {
     const calls = { value: 0 };
     const requester = createRequester(calls, null);
+    Object.defineProperty(requester.model, 'thinking', {
+      value: {
+        availability: 'always',
+        canDisable: false,
+        controls: ['effort'],
+        efforts: ['max'],
+      },
+    });
     Object.defineProperty(requester.model, 'supportEfforts', { value: ['max'] });
     const { service, events } = createService(requester, undefined, { thinkingLevel: 'high' });
 

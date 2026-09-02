@@ -138,20 +138,46 @@ export function defineKlientConformance(
       }
     });
 
-    it('session skills.list returns the workspace skills as summaries', async () => {
+    it('session skills load and watch reload stay inside the fixture project boundary', async () => {
       const workDir = await mkdtemp(join(tmpdir(), 'klient-conf-skills-'));
+      const skillDir = join(workDir, '.kimi-code', 'skills', 'conf-skill');
+      const skillFile = join(skillDir, 'SKILL.md');
       try {
-        await mkdir(join(workDir, '.kimi-code', 'skills', 'conf-skill'), { recursive: true });
+        await mkdir(join(workDir, '.git'));
+        await mkdir(skillDir, { recursive: true });
         await writeFile(
-          join(workDir, '.kimi-code', 'skills', 'conf-skill', 'SKILL.md'),
+          skillFile,
           '---\nname: conf-skill\ndescription: conformance fixture skill\n---\n\n# Conf\n',
         );
         const created = await target.klient.global.sessions.create({ workDir });
         try {
-          const skills = await target.klient.session(created.id).skills.list();
+          const session = target.klient.session(created.id);
+          const skills = await session.skills.list();
           expect(skills.find((skill) => skill.name === 'conf-skill')).toMatchObject({
             name: 'conf-skill',
             description: 'conformance fixture skill',
+            path: skillFile,
+            source: 'project',
+          });
+
+          const reloaded = new Promise<string>((resolve) => {
+            const subscription = session.events.on('skills.changed', (sourceId) => {
+              if (sourceId === 'workspace') {
+                subscription.dispose();
+                resolve(sourceId);
+              }
+            });
+          });
+          await session.skills.list();
+          await writeFile(
+            skillFile,
+            '---\nname: conf-skill\ndescription: reloaded fixture skill\n---\n\n# Conf\n',
+          );
+
+          await expect(reloaded).resolves.toBe('workspace');
+          expect((await session.skills.list()).find((skill) => skill.name === 'conf-skill')).toMatchObject({
+            description: 'reloaded fixture skill',
+            path: skillFile,
             source: 'project',
           });
         } finally {
@@ -310,6 +336,91 @@ export function defineKlientConformance(
       } finally {
         await kosong.removeProvider(id);
         sub.dispose();
+      }
+    });
+
+    it('catalog thinking and profile binding round-trip through every transport', async () => {
+      const config = target.klient.global.config;
+      const beforeProviders = await config.inspect<Record<string, unknown>>('providers');
+      const beforeModels = await config.inspect<Record<string, unknown>>('models');
+      const beforeDefaultModel = await config.inspect<string>('defaultModel');
+      const providerId = 'conf-thinking-provider';
+      const modelId = 'conf-thinking-model';
+      await config.replaceSections({
+        sections: {
+          providers: {
+            ...beforeProviders.userValue,
+            [providerId]: {
+              type: 'openai',
+              baseUrl: 'http://127.0.0.1:1',
+              apiKey: 'conf-key',
+            },
+          },
+          models: {
+            ...beforeModels.userValue,
+            [modelId]: {
+              provider: providerId,
+              model: 'upstream-thinking-model',
+              maxContextSize: 16_384,
+              thinking: {
+                availability: 'dynamic',
+                canDisable: true,
+                controls: ['toggle', 'effort'],
+                efforts: ['low', 'high'],
+                providerEfforts: { openai: ['high'] },
+                defaultEffort: 'high',
+              },
+            },
+          },
+          defaultModel: modelId,
+        },
+      });
+
+      try {
+        const model = (await target.klient.global.kosong.listModels()).find(
+          (item) => item.model === modelId,
+        );
+        expect(model).toMatchObject({
+          provider: providerId,
+          model: modelId,
+          max_context_size: 16_384,
+          thinking: {
+            availability: 'dynamic',
+            can_disable: true,
+            controls: ['toggle', 'effort'],
+            efforts: ['low', 'high'],
+            provider_efforts: { openai: ['high'] },
+            default_effort: 'high',
+          },
+          support_efforts: ['high'],
+          default_effort: 'high',
+        });
+
+        const created = await target.klient.global.sessions.create({
+          workDir: process.cwd(),
+          title: 'conformance profile binding',
+        });
+        try {
+          const agent = target.klient.session(created.id).agent('main');
+          await agent.bindProfile({
+            profile: 'agent',
+            model: modelId,
+            thinking: 'high',
+            strictThinking: true,
+          });
+          expect(await agent.getModel()).toBe(modelId);
+          expect(await agent.getThinking()).toBe('high');
+        } finally {
+          await target.klient.session(created.id).close();
+        }
+      } finally {
+        await config.replaceSections({
+          sections: {
+            providers: beforeProviders.userValue,
+            models: beforeModels.userValue,
+            defaultModel: beforeDefaultModel.userValue,
+          },
+        });
       }
     });
 

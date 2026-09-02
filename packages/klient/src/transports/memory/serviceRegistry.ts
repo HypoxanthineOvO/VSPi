@@ -46,6 +46,7 @@ import { IAgentTaskService } from '@moonshot-ai/agent-core-v2/agent/task/task';
 import { ISessionUsageService } from '@moonshot-ai/agent-core-v2/session/usage/sessionUsage';
 import { IAgentMcpService } from '@moonshot-ai/agent-core-v2/agent/mcp/mcp';
 import { IAgentFullCompactionService } from '@moonshot-ai/agent-core-v2/agent/fullCompaction/fullCompaction';
+import { IAgentCronViewService } from '@moonshot-ai/agent-core-v2/features/cron/cronView';
 import { IMcpManagementService } from '@moonshot-ai/agent-core-v2/app/mcpManagement/mcpManagement';
 
 /** Wire service name (decorator id string) → token. */
@@ -87,6 +88,7 @@ export const serviceTokens: Readonly<Record<string, ServiceIdentifier<unknown>>>
   agentTaskService: IAgentTaskService,
   agentMcpService: IAgentMcpService,
   agentFullCompactionService: IAgentFullCompactionService,
+  agentCronViewService: IAgentCronViewService,
   mcpManagementService: IMcpManagementService,
 };
 

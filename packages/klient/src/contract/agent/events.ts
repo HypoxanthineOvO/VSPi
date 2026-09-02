@@ -131,6 +131,33 @@ export const promptAbortedEventSchema = z.object({
   abortedAt: z.string(),
 });
 
+export const promptSubmittedEventSchema = z.object({
+  type: z.literal('prompt.submitted'),
+  time: z.number().optional(),
+  promptId: z.string(),
+  userMessageId: z.string(),
+  status: z.enum(['running', 'queued', 'blocked']),
+  content: z.array(z.unknown()),
+  createdAt: z.string(),
+});
+
+export const promptQueuedEventSchema = z.object({
+  type: z.literal('prompt.queued'),
+  time: z.number().optional(),
+  promptId: z.string(),
+  content: z.array(z.unknown()),
+  queueLength: z.number(),
+});
+
+export const promptSteeredEventSchema = z.object({
+  type: z.literal('prompt.steered'),
+  time: z.number().optional(),
+  activePromptId: z.string(),
+  promptIds: z.array(z.string()),
+  content: z.array(z.unknown()),
+  steeredAt: z.string(),
+});
+
 export const compactionStartedEventSchema = z.object({
   type: z.literal('compaction.started'),
   time: z.number().optional(),
@@ -218,6 +245,9 @@ export interface AgentEventPayloads {
   'tool.result': z.infer<typeof toolResultEventSchema>;
   'prompt.completed': z.infer<typeof promptCompletedEventSchema>;
   'prompt.aborted': z.infer<typeof promptAbortedEventSchema>;
+  'prompt.submitted': z.infer<typeof promptSubmittedEventSchema>;
+  'prompt.queued': z.infer<typeof promptQueuedEventSchema>;
+  'prompt.steered': z.infer<typeof promptSteeredEventSchema>;
   'compaction.started': z.infer<typeof compactionStartedEventSchema>;
   'compaction.blocked': z.infer<typeof compactionBlockedEventSchema>;
   'compaction.cancelled': z.infer<typeof compactionCancelledEventSchema>;
@@ -243,6 +273,9 @@ export const agentEvents = {
   'tool.result': { kind: 'stream', name: 'events', type: 'tool.result', schema: toolResultEventSchema },
   'prompt.completed': { kind: 'stream', name: 'events', type: 'prompt.completed', schema: promptCompletedEventSchema },
   'prompt.aborted': { kind: 'stream', name: 'events', type: 'prompt.aborted', schema: promptAbortedEventSchema },
+  'prompt.submitted': { kind: 'stream', name: 'events', type: 'prompt.submitted', schema: promptSubmittedEventSchema },
+  'prompt.queued': { kind: 'stream', name: 'events', type: 'prompt.queued', schema: promptQueuedEventSchema },
+  'prompt.steered': { kind: 'stream', name: 'events', type: 'prompt.steered', schema: promptSteeredEventSchema },
   'compaction.started': {
     kind: 'stream',
     name: 'events',

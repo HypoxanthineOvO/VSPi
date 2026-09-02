@@ -107,6 +107,9 @@ export type SetDefaultModelResponse = Awaited<
 export type RefreshProviderModelsOptions = NonNullable<
   Parameters<IProviderDiscoveryService['refreshProviderModels']>[0]
 >;
+export type QueryAvailableModelsResponse = Awaited<
+  ReturnType<IProviderDiscoveryService['queryAvailableModels']>
+>;
 
 /** String-literal form of the engine's `ConfigTarget` enum, so consumers never import the enum value. */
 export type ConfigTargetLiteral = `${ConfigTarget}`;
@@ -174,6 +177,7 @@ export interface GlobalKosongFacade {
   addProvider(config: AnonymousProviderInput): Promise<void>;
   removeProvider(id: string): Promise<void>;
   refreshProviders(opts?: RefreshProviderModelsOptions): Promise<RefreshProviderModelsResponse>;
+  queryAvailableModels(providerId: string): Promise<QueryAvailableModelsResponse>;
 
   // -- Model ------------------------------------------------------------
   listModels(): Promise<readonly ModelCatalogItem[]>;
@@ -499,6 +503,10 @@ export function createGlobalFacade(scoped: ScopedCaller, scopedStream: ScopedStr
         call('providerDiscovery', 'refreshProviderModels', [
           opts,
         ]) as Promise<RefreshProviderModelsResponse>,
+      queryAvailableModels: (providerId) =>
+        call('providerDiscovery', 'queryAvailableModels', [
+          providerId,
+        ]) as Promise<QueryAvailableModelsResponse>,
 
       listModels: () =>
         call('modelResolver', 'listModels', []) as Promise<readonly ModelCatalogItem[]>,

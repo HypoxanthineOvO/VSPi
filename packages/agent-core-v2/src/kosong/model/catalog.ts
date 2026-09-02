@@ -1,7 +1,12 @@
 import { z } from 'zod';
 
 import { createDecorator, type ServiceIdentifier } from '#/_base/di/instantiation';
-import type { ModelCapability } from '#/kosong/contract/capability';
+import {
+  normalizeThinkingCapability,
+  thinkingEffortsForProvider,
+  type ModelCapability,
+  type ThinkingCapability,
+} from '#/kosong/contract/capability';
 import type { ProviderRequestAuth } from '#/kosong/contract/provider';
 import type { TokenUsage } from '#/kosong/contract/usage';
 import type { Protocol, ProtocolProviderOptions } from '#/kosong/protocol/protocol';
@@ -38,6 +43,7 @@ export interface Model {
   readonly headers: Readonly<Record<string, string>>;
 
   readonly capabilities: ModelCapability;
+  readonly thinking?: ThinkingCapability;
   readonly maxContextSize: number;
   readonly maxInputSize?: number;
   readonly maxOutputSize?: number;
@@ -62,14 +68,35 @@ export interface ModelPingResult {
   readonly error?: string;
 }
 
+const thinkingCapabilityWireSchema = z.object({
+  availability: z.enum(['none', 'always', 'dynamic']),
+  can_disable: z.boolean(),
+  controls: z.array(z.enum(['toggle', 'effort', 'budget'])),
+  efforts: z.array(z.string()).optional(),
+  provider_efforts: z.record(z.string(), z.array(z.string())).optional(),
+  default_effort: z.string().optional(),
+});
+
 export const modelCatalogItemSchema = z.object({
   provider: z.string().min(1),
   model: z.string().min(1),
   display_name: z.string().min(1).optional(),
   max_context_size: z.number().int().min(1),
   capabilities: z.array(z.string()).optional(),
+  thinking: thinkingCapabilityWireSchema,
   support_efforts: z.array(z.string()).optional(),
   default_effort: z.string().optional(),
+  pricing: z.object({
+    input_usd_per_million: z.number().nonnegative(),
+    output_usd_per_million: z.number().nonnegative(),
+    cache_read_usd_per_million: z.number().nonnegative().optional(),
+    cache_write_usd_per_million: z.number().nonnegative().optional(),
+    context_tiers: z.array(z.object({
+      context_tokens_above: z.number().int().positive(),
+      input_usd_per_million: z.number().nonnegative(),
+      output_usd_per_million: z.number().nonnegative(),
+    })).optional(),
+  }).optional(),
 });
 export type ModelCatalogItem = z.infer<typeof modelCatalogItemSchema>;
 
@@ -107,14 +134,19 @@ export function toProtocolModel(
   record: ModelRecord,
   providerType?: string,
 ): ModelCatalogItem {
+  const effective = effectiveModelConfig(record, providerType ?? model.providerType);
+  const thinking = normalizeThinkingCapability(model.thinking ?? effective.thinking);
+  const efforts = thinkingEffortsForProvider(thinking, providerType ?? model.providerType);
   return {
     provider: model.providerName,
     model: model.id,
     display_name: model.displayName ?? model.name ?? model.id,
     max_context_size: model.maxContextSize,
-    capabilities: effectiveModelConfig(record, providerType ?? model.providerType).capabilities,
-    support_efforts: model.supportEfforts === undefined ? undefined : [...model.supportEfforts],
-    default_effort: model.defaultEffort,
+    capabilities: effective.capabilities,
+    thinking: toProtocolThinking(thinking),
+    support_efforts: efforts.length === 0 ? undefined : [...efforts],
+    default_effort: thinking.defaultEffort,
+    pricing: toProtocolPricing(record),
   };
 }
 
@@ -124,14 +156,52 @@ export function toProtocolModelFallback(
   providerType?: string,
 ): ModelCatalogItem {
   const effective = effectiveModelConfig(record, providerType);
+  const thinking = normalizeThinkingCapability(effective.thinking);
+  const efforts = thinkingEffortsForProvider(thinking, providerType);
   return {
     provider: effective.provider ?? '',
     model: modelId,
     display_name: effective.displayName ?? effective.model ?? modelId,
     max_context_size: effective.maxContextSize ?? 0,
     capabilities: effective.capabilities,
-    support_efforts: effective.supportEfforts,
-    default_effort: effective.defaultEffort,
+    thinking: toProtocolThinking(thinking),
+    support_efforts: efforts.length === 0 ? undefined : [...efforts],
+    default_effort: thinking.defaultEffort,
+    pricing: toProtocolPricing(record),
+  };
+}
+
+function toProtocolThinking(thinking: ThinkingCapability): z.infer<typeof thinkingCapabilityWireSchema> {
+  return {
+    availability: thinking.availability,
+    can_disable: thinking.canDisable,
+    controls: [...thinking.controls],
+    efforts: thinking.efforts === undefined ? undefined : [...thinking.efforts],
+    provider_efforts:
+      thinking.providerEfforts === undefined
+        ? undefined
+        : Object.fromEntries(
+            Object.entries(thinking.providerEfforts).map(([provider, efforts]) => [
+              provider,
+              [...efforts],
+            ]),
+          ),
+    default_effort: thinking.defaultEffort,
+  };
+}
+
+function toProtocolPricing(record: ModelRecord): ModelCatalogItem['pricing'] {
+  if (record.pricing === undefined) return undefined;
+  return {
+    input_usd_per_million: record.pricing.inputUsdPerMillion,
+    output_usd_per_million: record.pricing.outputUsdPerMillion,
+    cache_read_usd_per_million: record.pricing.cacheReadUsdPerMillion,
+    cache_write_usd_per_million: record.pricing.cacheWriteUsdPerMillion,
+    context_tiers: record.pricing.contextTiers?.map((tier) => ({
+      context_tokens_above: tier.contextTokensAbove,
+      input_usd_per_million: tier.inputUsdPerMillion,
+      output_usd_per_million: tier.outputUsdPerMillion,
+    })),
   };
 }
 

@@ -91,7 +91,7 @@ async function createRuntimeRig(extraAliases: readonly string[] = []): Promise<R
   const rootDir = await mkdtemp(join(tmpdir(), "kimi-vscode-harness-"));
   const homeDir = join(rootDir, "home");
   const workDir = join(rootDir, "workspace");
-  await Promise.all([mkdir(homeDir), mkdir(workDir)]);
+  await Promise.all([mkdir(homeDir), mkdir(join(workDir, ".git"), { recursive: true })]);
 
   const provider = await createFakeProviderHarness();
   let providerOpen = true;

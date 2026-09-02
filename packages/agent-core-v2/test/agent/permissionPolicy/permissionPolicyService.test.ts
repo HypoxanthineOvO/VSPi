@@ -119,15 +119,15 @@ describe('AgentPermissionPolicyService chain', () => {
     return svc.evaluate(policyContext(input));
   }
 
-  it('keeps auto-mode AskUserQuestion deny above default approval', async () => {
+  it('allows AskUserQuestion through the auto-mode policy', async () => {
     mode = 'auto';
 
     await expect(evaluate({
       toolName: 'AskUserQuestion',
       args: { questions: [] },
     })).resolves.toMatchObject({
-      policyName: 'auto-mode-ask-user-question-deny',
-      result: { kind: 'deny' },
+      policyName: 'auto-mode-approve',
+      result: { kind: 'approve' },
     });
   });
 

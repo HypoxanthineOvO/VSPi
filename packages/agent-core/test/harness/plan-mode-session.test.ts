@@ -31,7 +31,7 @@ describe('plan-mode bootstrap from config.defaultPlanMode', () => {
     homeDir = join(tmp, 'home');
     workDir = join(tmp, 'work');
     configPath = join(tmp, 'config.toml');
-    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, '.git'), { recursive: true });
   });
 
   afterEach(async () => {

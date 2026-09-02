@@ -945,6 +945,14 @@ describe('wire projection (pure)', () => {
         display_name: 'Kimi K2',
         max_context_size: 131072,
         capabilities: ['thinking'],
+        thinking: {
+          availability: 'dynamic',
+          can_disable: false,
+          controls: [],
+          efforts: undefined,
+          provider_efforts: undefined,
+          default_effort: undefined,
+        },
         support_efforts: undefined,
         default_effort: undefined,
       });
@@ -967,8 +975,74 @@ describe('wire projection (pure)', () => {
       display_name: 'Kimi K2',
       max_context_size: 131072,
       capabilities: ['thinking'],
+      thinking: {
+        availability: 'dynamic',
+        can_disable: false,
+        controls: [],
+        efforts: undefined,
+        provider_efforts: undefined,
+        default_effort: undefined,
+      },
       support_efforts: undefined,
       default_effort: undefined,
+    });
+  });
+
+  it('derives legacy efforts from the normalized provider-specific capability', () => {
+    const record: ModelRecord = {
+      provider: 'kimi',
+      model: 'reasoner',
+      maxContextSize: 1000,
+      thinking: {
+        availability: 'dynamic',
+        canDisable: true,
+        controls: ['toggle', 'effort'],
+        efforts: ['low', 'high'],
+        providerEfforts: { kimi: ['medium', 'max'] },
+        defaultEffort: 'max',
+      },
+    };
+
+    expect(toProtocolModelFallback('reasoner', record, 'kimi')).toMatchObject({
+      thinking: {
+        availability: 'dynamic',
+        can_disable: true,
+        controls: ['toggle', 'effort'],
+        efforts: ['low', 'high'],
+        provider_efforts: { kimi: ['medium', 'max'] },
+        default_effort: undefined,
+      },
+      support_efforts: ['medium', 'max'],
+      default_effort: undefined,
+    });
+  });
+
+  it('projects provider-specific pricing into the catalog wire shape', () => {
+    const record: ModelRecord = {
+      provider: 'example',
+      model: 'priced',
+      maxContextSize: 400_000,
+      pricing: {
+        inputUsdPerMillion: 2,
+        outputUsdPerMillion: 8,
+        contextTiers: [{
+          contextTokensAbove: 272_000,
+          inputUsdPerMillion: 4,
+          outputUsdPerMillion: 12,
+        }],
+      },
+    };
+
+    expect(toProtocolModelFallback('example/priced', record)).toMatchObject({
+      pricing: {
+        input_usd_per_million: 2,
+        output_usd_per_million: 8,
+        context_tiers: [{
+          context_tokens_above: 272_000,
+          input_usd_per_million: 4,
+          output_usd_per_million: 12,
+        }],
+      },
     });
   });
 
@@ -1018,15 +1092,28 @@ describe('ModelCatalog enumeration', () => {
     const { host, catalog } = createHost(catalogSections);
     try {
       await expect(catalog.listModels()).resolves.toEqual([
-        {
+        expect.objectContaining({
           provider: 'kimi',
           model: 'k2',
           display_name: 'Kimi K2',
           max_context_size: 131072,
           capabilities: ['thinking'],
-        },
-        { provider: 'kimi', model: 'turbo', display_name: 'Kimi Turbo', max_context_size: 32768 },
-        { provider: 'openai', model: 'gpt4o', display_name: 'gpt-4o', max_context_size: 128000 },
+          thinking: expect.objectContaining({ availability: 'dynamic', can_disable: false }),
+        }),
+        expect.objectContaining({
+          provider: 'kimi',
+          model: 'turbo',
+          display_name: 'Kimi Turbo',
+          max_context_size: 32768,
+          thinking: expect.objectContaining({ availability: 'none', can_disable: false }),
+        }),
+        expect.objectContaining({
+          provider: 'openai',
+          model: 'gpt4o',
+          display_name: 'gpt-4o',
+          max_context_size: 128000,
+          thinking: expect.objectContaining({ availability: 'none', can_disable: false }),
+        }),
       ]);
     } finally {
       host.dispose();
@@ -1216,7 +1303,13 @@ describe('ModelCatalog enumeration', () => {
     });
     try {
       await expect(catalog.listModels()).resolves.toEqual([
-        { provider: '', model: 'bad', display_name: 'Bad', max_context_size: 1000 },
+        expect.objectContaining({
+          provider: '',
+          model: 'bad',
+          display_name: 'Bad',
+          max_context_size: 1000,
+          thinking: expect.objectContaining({ availability: 'none', can_disable: false }),
+        }),
       ]);
     } finally {
       host.dispose();
@@ -1310,12 +1403,13 @@ describe('ModelCatalog setDefaultModel', () => {
     try {
       await expect(catalog.setDefaultModel('turbo')).resolves.toEqual({
         default_model: 'turbo',
-        model: {
+        model: expect.objectContaining({
           provider: 'kimi',
           model: 'turbo',
           display_name: 'Kimi Turbo',
           max_context_size: 32768,
-        },
+          thinking: expect.objectContaining({ availability: 'none', can_disable: false }),
+        }),
       });
       expect(models.getDefaultModel()).toBe('turbo');
     } finally {

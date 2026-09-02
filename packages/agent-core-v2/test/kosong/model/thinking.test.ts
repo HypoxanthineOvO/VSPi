@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import {
+  normalizeThinkingCapability,
+  thinkingEffortsForProvider,
+} from '#/kosong/contract/capability';
 import { ProtocolAdapterRegistry } from '#/kosong/provider/protocolAdapterRegistry';
 import '#/kosong/provider/providers/kimi/kimi.contrib';
 import '#/kosong/provider/providers/standard.contrib';
@@ -16,6 +20,113 @@ import {
 } from '#/kosong/model/thinking';
 
 const registry = new ProtocolAdapterRegistry();
+
+describe('normalizeThinkingCapability', () => {
+  it('normalizes controls, provider efforts, and valid defaults', () => {
+    const thinking = normalizeThinkingCapability({
+      availability: 'dynamic',
+      canDisable: true,
+      controls: ['toggle', 'effort', 'effort'],
+      efforts: [' low ', '', 'high', 'low'],
+      providerEfforts: { anthropic: ['medium', ' high '], ' ': ['ignored'] },
+      defaultEffort: 'high',
+    });
+
+    expect(thinking).toEqual({
+      availability: 'dynamic',
+      canDisable: true,
+      controls: ['toggle', 'effort'],
+      efforts: ['low', 'high'],
+      providerEfforts: { anthropic: ['medium', 'high'] },
+      defaultEffort: 'high',
+    });
+    expect(thinkingEffortsForProvider(thinking, 'anthropic')).toEqual(['medium', 'high']);
+    expect(thinkingEffortsForProvider(thinking, 'openai')).toEqual(['low', 'high']);
+  });
+
+  it('normalizes conflicting availability, disable, and control declarations', () => {
+    expect(
+      normalizeThinkingCapability({
+        availability: 'none',
+        canDisable: true,
+        controls: ['toggle', 'effort', 'budget'],
+        efforts: ['low'],
+        providerEfforts: { kimi: ['low'] },
+        defaultEffort: 'low',
+      }),
+    ).toEqual({ availability: 'none', canDisable: false, controls: [] });
+    expect(
+      normalizeThinkingCapability({
+        availability: 'always',
+        canDisable: true,
+        controls: ['toggle', 'effort'],
+        efforts: ['low', 'high'],
+        defaultEffort: 'max',
+      }),
+    ).toEqual({
+      availability: 'always',
+      canDisable: false,
+      controls: ['effort'],
+      efforts: ['low', 'high'],
+      providerEfforts: undefined,
+      defaultEffort: undefined,
+    });
+    expect(
+      normalizeThinkingCapability({
+        availability: 'dynamic',
+        canDisable: false,
+        controls: ['toggle', 'budget'],
+      }),
+    ).toEqual({
+      availability: 'dynamic',
+      canDisable: false,
+      controls: ['budget'],
+      efforts: undefined,
+      providerEfforts: undefined,
+      defaultEffort: undefined,
+    });
+  });
+
+  it('requires defaults to be valid for fallback and every provider override', () => {
+    expect(
+      normalizeThinkingCapability({
+        availability: 'dynamic',
+        controls: ['effort'],
+        efforts: ['low', 'high'],
+        providerEfforts: { kimi: ['high', 'max'], anthropic: ['high'] },
+        defaultEffort: 'high',
+      }).defaultEffort,
+    ).toBe('high');
+    expect(
+      normalizeThinkingCapability({
+        availability: 'dynamic',
+        controls: ['effort'],
+        efforts: ['low', 'high'],
+        providerEfforts: { kimi: ['medium', 'max'] },
+        defaultEffort: 'high',
+      }).defaultEffort,
+    ).toBeUndefined();
+  });
+
+  it('keeps legacy thinking conservative without an explicit off signal', () => {
+    expect(normalizeThinkingCapability(undefined, { thinking: true })).toEqual({
+      availability: 'dynamic',
+      canDisable: false,
+      controls: [],
+      efforts: undefined,
+      providerEfforts: undefined,
+      defaultEffort: undefined,
+    });
+    expect(normalizeThinkingCapability(undefined, { thinking: true, canDisable: true })).toEqual({
+      availability: 'dynamic',
+      canDisable: true,
+      controls: ['toggle'],
+      efforts: undefined,
+      providerEfforts: undefined,
+      defaultEffort: undefined,
+    });
+  });
+});
 
 describe('registry-driven vendor verdicts', () => {
   it('drivesThinkingThroughTraits: trait-driven vendors only, no string branches', () => {
@@ -46,9 +157,13 @@ describe('registry-driven vendor verdicts', () => {
 
 describe('resolveThinkingEffortForModel', () => {
   const thinkingModel = {
-    capabilities: ['thinking'],
-    supportEfforts: ['low', 'medium', 'high'],
-    defaultEffort: 'high',
+    thinking: {
+      availability: 'dynamic' as const,
+      canDisable: true,
+      controls: ['toggle' as const, 'effort' as const],
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+    },
   };
 
   it('prefers the normalized request, then config, then the model default', () => {
@@ -83,12 +198,28 @@ describe('resolveThinkingEffortForModel', () => {
     expect(resolveThinkingEffortForModel('off', undefined, thinkingModel, true)).toBe('off');
   });
 
-  it('modelSupportsThinkingEffort validates against the declared effort list', () => {
-    expect(modelSupportsThinkingEffort('high', thinkingModel, true)).toBe(true);
-    expect(modelSupportsThinkingEffort('extreme', thinkingModel, true)).toBe(false);
-    expect(modelSupportsThinkingEffort('off', thinkingModel, true)).toBe(true);
-    expect(modelSupportsThinkingEffort('extreme', thinkingModel, false)).toBe(true);
-  });
+  it.each([
+    ['none/off', 'off', { thinking: { availability: 'none', canDisable: false, controls: [] } }, true, true],
+    ['none/on', 'on', { thinking: { availability: 'none', canDisable: false, controls: [] } }, true, false],
+    ['always/off', 'off', { thinking: { availability: 'always', canDisable: false, controls: ['effort'], efforts: ['low'] } }, true, false],
+    ['always/effort', 'low', { thinking: { availability: 'always', canDisable: false, controls: ['effort'], efforts: ['low'] } }, true, true],
+    ['dynamic-disabled/off', 'off', { thinking: { availability: 'dynamic', canDisable: false, controls: ['effort'], efforts: ['low'] } }, true, false],
+    ['dynamic-enabled/off', 'off', thinkingModel, true, true],
+    ['strict-listed', 'high', thinkingModel, true, true],
+    ['strict-unlisted', 'extreme', thinkingModel, true, false],
+    ['non-strict-unlisted', 'extreme', thinkingModel, false, true],
+  ] as const)(
+    'modelSupportsThinkingEffort validates %s',
+    (_name, effort, model, strict, expected) => {
+      expect(
+        modelSupportsThinkingEffort(
+          effort,
+          model as Parameters<typeof modelSupportsThinkingEffort>[1],
+          strict,
+        ),
+      ).toBe(expected);
+    },
+  );
 
   it('declaredDefaultEffortForModel returns the declared default only when the model lists it', () => {
     expect(declaredDefaultEffortForModel(thinkingModel)).toBe('high');

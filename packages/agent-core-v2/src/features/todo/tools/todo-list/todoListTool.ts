@@ -12,6 +12,7 @@ import {
 
 import {
   ITodoListTool,
+  flattenTodoListInput,
   TodoListInputSchema,
   type TodoListInput,
 } from './todo-list';
@@ -48,10 +49,7 @@ export class TodoListTool implements ITodoListTool {
           return { isError: false, output: renderTodoList(this.todo.get()) };
         }
 
-        const next: readonly TodoItem[] = args.todos.map((todo) => ({
-          title: todo.title,
-          status: todo.status,
-        }));
+        const next: readonly TodoItem[] = flattenTodoListInput(args.todos);
         await this.todo.replace(next);
         const stored = this.todo.get();
         const output =

@@ -1,5 +1,6 @@
 import { createDecorator, type ServiceIdentifier } from '#/_base/di/instantiation';
 import type { Event, IWaitUntil } from '#/_base/event';
+import type { ThinkingCapabilityInput } from '#/kosong/contract/capability';
 import type { Protocol } from '#/kosong/protocol/protocol';
 
 import type { OAuthRef } from '../provider/provider';
@@ -9,12 +10,27 @@ export interface ModelOverride {
   maxInputSize?: number;
   maxOutputSize?: number;
   capabilities?: string[];
+  thinking?: ThinkingCapabilityInput;
   displayName?: string;
   reasoningKey?: string;
   adaptiveThinking?: boolean;
   supportEfforts?: string[];
   defaultEffort?: string;
   offEffort?: string;
+}
+
+export interface ModelPricing {
+  inputUsdPerMillion: number;
+  outputUsdPerMillion: number;
+  cacheReadUsdPerMillion?: number;
+  cacheWriteUsdPerMillion?: number;
+  contextTiers?: ModelPricingTier[];
+}
+
+export interface ModelPricingTier {
+  contextTokensAbove: number;
+  inputUsdPerMillion: number;
+  outputUsdPerMillion: number;
 }
 
 export interface ModelRecord {
@@ -35,6 +51,7 @@ export interface ModelRecord {
   maxInputSize?: number;
   maxOutputSize?: number;
   capabilities?: string[];
+  thinking?: ThinkingCapabilityInput;
   displayName?: string;
   reasoningKey?: string;
   adaptiveThinking?: boolean;
@@ -42,6 +59,7 @@ export interface ModelRecord {
   supportEfforts?: string[];
   defaultEffort?: string;
   offEffort?: string;
+  pricing?: ModelPricing;
 
   overrides?: ModelOverride;
 

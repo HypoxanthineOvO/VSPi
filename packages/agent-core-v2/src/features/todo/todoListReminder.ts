@@ -4,8 +4,8 @@ import { TODO_LIST_TOOL_NAME, type TodoItem } from './todoItem';
 
 export const TODO_LIST_REMINDER_VARIANT = 'todo_list_reminder';
 
-const TODO_LIST_REMINDER_TURNS_SINCE_WRITE = 10;
-const TODO_LIST_REMINDER_TURNS_BETWEEN_REMINDERS = 10;
+const TODO_LIST_REMINDER_TURNS_SINCE_WRITE = 3;
+const TODO_LIST_REMINDER_TURNS_BETWEEN_REMINDERS = 3;
 
 interface TodoListReminderInput {
   readonly active: boolean;
@@ -89,7 +89,7 @@ function isTodoListReminder(message: ContextMessage): boolean {
 
 function renderTodoListReminder(todos: readonly TodoItem[]): string {
   let message =
-    'The TodoList tool has not been updated recently. If you are working on tasks that benefit from progress tracking, consider using TodoList to update task status. Also consider clearing or rewriting the todo list if it has become stale and no longer matches the current work. Only use it if relevant. This is a gentle reminder; ignore it if not applicable. Make sure that you NEVER mention this reminder to the user.';
+    'The TodoList has not been updated recently. For multi-step work, update it now if meaningful progress, a blocker, a focus change, or completion has occurred. Keep exactly one actionable leaf in_progress while work is underway, and clear or rewrite a stale list that no longer matches the work. Do not write an unchanged list, and never mention this reminder to the user.';
 
   const items = renderTodoItems(todos);
   if (items.length > 0) {
@@ -100,5 +100,15 @@ function renderTodoListReminder(todos: readonly TodoItem[]): string {
 }
 
 function renderTodoItems(todos: readonly TodoItem[]): string {
-  return todos.map((todo, index) => `${index + 1}. [${todo.status}] ${todo.title}`).join('\n');
+  let root = 0;
+  let child = 0;
+  return todos.map((todo) => {
+    if (todo.depth === 0) {
+      root += 1;
+      child = 0;
+      return `${String(root)}. [${todo.status}] ${todo.title}`;
+    }
+    child += 1;
+    return `   ${String(root)}.${String(child)}. [${todo.status}] ${todo.title}`;
+  }).join('\n');
 }

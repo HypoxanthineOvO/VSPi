@@ -88,7 +88,7 @@ Only set tokens from this set — unknown keys are silently ignored at load. If 
    - **What style / mood?** e.g. warm vs cool, vivid vs muted, high vs low contrast, a named vibe ("nord", "solarized", "sunset"), or a base to start from (an existing theme, or `dark` / `light`).
    - **Any specific colors?** Whether they have exact hex values to anchor on (a brand color, a preferred `primary`, etc.).
 
-   For the discrete choices (light vs dark, a few style options), prefer **AskUserQuestion** if it is available. If you are running in **auto mode** and `AskUserQuestion` is unavailable, ask the same question as a plain-text message with clear numbered or bulleted options, and wait for the user's reply. Don't start picking colors until you at least know light-vs-dark and the rough style.
+   For the discrete choices (light vs dark, a few style options), prefer **AskUserQuestion** if it is available. If the host does not support it, ask the same question as a plain-text message with clear numbered or bulleted options, and wait for the user's reply. Don't start picking colors until you at least know light-vs-dark and the rough style.
 
 2. **Resolve the actual theme directory and current theme(s).**
    - Resolve the data root by checking `echo "$KIMI_CODE_HOME"`; if empty, use `echo "$HOME/.kimi-code"`. Use `<root>/themes` for every subsequent step.

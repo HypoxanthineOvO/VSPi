@@ -7,15 +7,25 @@ import {
   resolveThinkingEffortForModel,
 } from '#/kosong/model/thinking';
 
-const booleanModel = { capabilities: ['thinking'] };
+const booleanModel = {
+  thinking: { availability: 'dynamic' as const, canDisable: true, controls: ['toggle' as const] },
+};
 const effortModel = {
-  capabilities: ['thinking'],
-  supportEfforts: ['low', 'medium', 'high'],
+  thinking: {
+    availability: 'dynamic' as const,
+    canDisable: true,
+    controls: ['toggle' as const, 'effort' as const],
+    efforts: ['low', 'medium', 'high'],
+  },
 };
 const effortModelWithDefault = {
-  capabilities: ['thinking'],
-  supportEfforts: ['low', 'high', 'max'],
-  defaultEffort: 'max',
+  thinking: {
+    availability: 'dynamic' as const,
+    canDisable: true,
+    controls: ['toggle' as const, 'effort' as const],
+    efforts: ['low', 'high', 'max'],
+    defaultEffort: 'max',
+  },
 };
 const alwaysThinkingModel = {
   capabilities: ['thinking', 'always_thinking'],

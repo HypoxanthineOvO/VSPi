@@ -1,4 +1,8 @@
 import { Error2 } from '#/_base/errors/errors';
+import {
+  normalizeThinkingCapability,
+  thinkingEffortsForProvider,
+} from '#/kosong/contract/capability';
 import { CONFIG_INVALID_ERROR_CODE } from '#/kosong/contract/errors';
 import type { InspectionSource, ResolutionTrace } from '#/kosong/contract/inspection';
 import { ProtocolSchema, type Protocol } from '#/kosong/protocol/protocol';
@@ -84,21 +88,13 @@ export function effectiveModelConfig(
 ): ModelRecord {
   const { overrides, ...base } = model;
   const effective: ModelRecord = overrides === undefined ? model : { ...base, ...overrides };
-  if (
-    overrides?.supportEfforts !== undefined &&
-    overrides.defaultEffort === undefined &&
-    effective.defaultEffort !== undefined &&
-    !overrides.supportEfforts.includes(effective.defaultEffort)
-  ) {
-    delete effective.defaultEffort;
-  }
   const clamped =
     effective.maxInputSize !== undefined &&
     effective.maxContextSize !== undefined &&
     effective.maxInputSize > effective.maxContextSize
       ? { ...effective, maxInputSize: effective.maxContextSize }
       : effective;
-  return withAnthropicProfile(clamped, providerType);
+  return normalizeModelThinking(withAnthropicProfile(clamped, providerType), providerType);
 }
 
 function withAnthropicProfile(model: ModelRecord, providerType?: string): ModelRecord {
@@ -111,20 +107,51 @@ function withAnthropicProfile(model: ModelRecord, providerType?: string): ModelR
         ? (matchKnownAnthropicModelProfile(wireName) ?? matchUnknownClaudeProfile(wireName))
         : matchKnownAnthropicModelProfile(wireName);
   if (profile === undefined) return model;
-  const capability = profile.canDisableThinking ? 'thinking' : 'always_thinking';
-  const capabilities = model.capabilities ?? [];
-  const hasCapability = capabilities.some(
-    (candidate) => candidate.trim().toLowerCase() === capability,
-  );
   const supportEfforts =
+    model.thinking?.efforts ??
     model.supportEfforts ??
     (model.adaptiveThinking === false ? [...BUDGET_THINKING_EFFORTS] : [...profile.efforts]);
   return {
     ...model,
-    capabilities: hasCapability ? capabilities : [...capabilities, capability],
-    supportEfforts,
-    defaultEffort:
-      model.defaultEffort ?? (supportEfforts.includes('high') ? 'high' : undefined),
+    thinking: {
+      ...model.thinking,
+      availability:
+        model.thinking?.availability ?? (profile.canDisableThinking ? 'dynamic' : 'always'),
+      canDisable: model.thinking?.canDisable ?? profile.canDisableThinking,
+      controls:
+        model.thinking?.controls ??
+        (model.adaptiveThinking === false ? ['toggle', 'budget'] : ['toggle', 'effort']),
+      efforts: supportEfforts,
+      defaultEffort:
+        model.thinking?.defaultEffort ??
+        model.defaultEffort ??
+        (supportEfforts.includes('high') ? 'high' : undefined),
+    },
+  };
+}
+
+function normalizeModelThinking(model: ModelRecord, providerType?: string): ModelRecord {
+  const declared = new Set((model.capabilities ?? []).map((value) => value.trim().toLowerCase()));
+  const thinking = normalizeThinkingCapability(model.thinking, {
+    thinking: declared.has('thinking'),
+    alwaysThinking: declared.has('always_thinking'),
+    adaptiveThinking: model.adaptiveThinking,
+    canDisable: model.offEffort !== undefined,
+    supportEfforts: model.supportEfforts,
+    defaultEffort: model.defaultEffort,
+  });
+  const supportEfforts = thinkingEffortsForProvider(thinking, providerType);
+  const capabilities = [...(model.capabilities ?? [])];
+  if (thinking.availability !== 'none') {
+    const capability = thinking.availability === 'always' ? 'always_thinking' : 'thinking';
+    if (!declared.has(capability)) capabilities.push(capability);
+  }
+  return {
+    ...model,
+    capabilities: capabilities.length === 0 ? undefined : capabilities,
+    thinking,
+    supportEfforts: supportEfforts.length === 0 ? undefined : [...supportEfforts],
+    defaultEffort: thinking.defaultEffort,
   };
 }
 

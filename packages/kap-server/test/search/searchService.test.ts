@@ -2258,6 +2258,23 @@ describe('search worker host (stage 4)', () => {
     });
   }
 
+  it('starts the source worker through the dev bootstrap without transform flags', { timeout: 30_000 }, async () => {
+    let workerArgs: { url: URL; execArgv: string[] } | undefined;
+    const host = new SearchWorkerHost({
+      dir: join(home!, 'search-index'),
+      log: noopLog,
+      workerFactory: ({ url, data, execArgv }) => {
+        workerArgs = { url, execArgv };
+        return new Worker(url, { workerData: data, execArgv });
+      },
+    });
+    hosts.push(host);
+
+    await host.ensureOpen();
+    expect(workerArgs?.url.pathname).toMatch(/register-dev-hooks\.mjs$/);
+    expect(workerArgs?.execArgv).toEqual([]);
+  });
+
   it('restarts a killed worker, reaps its lock, and keeps serving', { timeout: 30_000 }, async () => {
     const s1 = summary('s1', 'crash', T1);
     await writeWire(home!, 's1', 'main', [userLine('苹果 crash', T1)]);

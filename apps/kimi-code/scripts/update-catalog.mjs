@@ -9,6 +9,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const scriptDir = import.meta.dirname;
 const outFile = resolveOutputFile(process.argv.slice(2));
@@ -22,8 +23,11 @@ const KEEP_MODEL = new Set([
   "limit",
   "tool_call",
   "reasoning",
+  "reasoning_options",
   "interleaved",
   "modalities",
+  "provider",
+  "cost",
   // Message-level tool declarations capability — kosong's
   // catalogModelToCapability reads it; stripping it here would silently
   // disable tool-select for catalog-imported aliases.
@@ -71,10 +75,7 @@ function stripProvider(provider) {
   return result;
 }
 
-async function fetchCatalog(url) {
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const raw = await res.json();
+export function stripCatalog(raw) {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new Error("invalid payload shape");
   }
@@ -83,7 +84,13 @@ async function fetchCatalog(url) {
     const p = stripProvider(v);
     if (p !== undefined && Object.keys(p).length > 0) stripped[k] = p;
   }
-  return JSON.stringify(stripped);
+  return stripped;
+}
+
+async function fetchCatalog(url) {
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return JSON.stringify(stripCatalog(await res.json()));
 }
 
 async function main() {
@@ -94,7 +101,9 @@ async function main() {
   console.log(`Wrote ${outFile} (${(json.length / 1024).toFixed(0)} KB JSON)`);
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exit(1);
-});
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exit(1);
+  });
+}

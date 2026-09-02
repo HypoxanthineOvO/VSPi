@@ -85,6 +85,15 @@
   },
   "overrides": [
     {
+      "files": ["apps/vspi/src/v1/**/*.ts"],
+      "rules": {
+        "import/extensions": "off",
+        "import/no-cycle": "off",
+        "unicorn/no-useless-spread": "off",
+        "unicorn/no-new-array": "off"
+      }
+    },
+    {
       "files": ["**/examples/**/*.ts", "**/examples/**/*.tsx"],
       "rules": {
         "eslint/no-console": "off"

@@ -26,6 +26,7 @@ import { type RunningServer, startServer } from '../src/start';
 import { mapActivityStatus } from '../src/routes/v2/sessions';
 import { authHeaders, authedFetch } from './helpers/auth';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
+import { isolateTestWorkspace } from './helpers/workspace';
 
 interface SessionWireV2 {
   id: string;
@@ -164,7 +165,9 @@ describe('server /api/v2/sessions', () => {
   beforeEach(async () => {
     gitState.calls = [];
     gitState.responses = new Map();
-    home = await mkdtemp(join(tmpdir(), 'kimi-server-v2-sessions-list-'));
+    home = await isolateTestWorkspace(
+      await mkdtemp(join(tmpdir(), 'kimi-server-v2-sessions-list-')),
+    );
     server = await startServer({
       hostIdentity: TEST_HOST_IDENTITY,
       host: '127.0.0.1',
@@ -787,7 +790,9 @@ describe('server /api/v2/sessions batch archive/restore', () => {
   let base: string;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'kimi-server-v2-sessions-batch-'));
+    home = await isolateTestWorkspace(
+      await mkdtemp(join(tmpdir(), 'kimi-server-v2-sessions-batch-')),
+    );
     server = await startServer({
       hostIdentity: TEST_HOST_IDENTITY,
       host: '127.0.0.1',

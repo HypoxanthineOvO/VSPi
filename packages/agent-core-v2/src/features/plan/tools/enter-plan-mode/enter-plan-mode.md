@@ -14,7 +14,7 @@ Use it when ANY of these conditions apply:
 Permission mode notes:
 - EnterPlanMode enters plan mode automatically without an approval prompt in all permission modes.
 - In yolo and manual modes, ExitPlanMode still presents the plan to the user for approval.
-- In auto permission mode, do not use AskUserQuestion; make the best decision from available context.
+- AskUserQuestion remains available in every permission mode for requirements, preferences, scope, and product choices. Never use it for tool permission or approval decisions.
 - In auto permission mode, ExitPlanMode exits plan mode without asking the user.
 - Use EnterPlanMode only when planning itself adds value.
 

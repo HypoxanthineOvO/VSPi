@@ -79,6 +79,10 @@ import AGENT_FORK_DESCRIPTION from './agent-fork.md?raw';
 const SUBAGENT_TOOL_PARAMETERS = toInputJsonSchema(SubagentToolInputSchema);
 const SUBAGENT_TOOL_PARAMETERS_NO_MODEL = stripSubagentModelParameter(SUBAGENT_TOOL_PARAMETERS);
 
+type BackgroundModeResolution =
+  | { readonly runInBackground: boolean; readonly backgroundAvailable: boolean }
+  | { readonly error: string };
+
 export class SubagentTool implements ISubagentTool {
   declare readonly _serviceBrand: undefined;
   readonly name: string = 'Agent';
@@ -227,6 +231,11 @@ export class SubagentTool implements ISubagentTool {
       }
     }
 
+    const backgroundMode = this.resolveBackgroundMode(args.run_in_background);
+    if ('error' in backgroundMode) {
+      return { output: backgroundMode.error, isError: true };
+    }
+
     const profileNameForDisplay =
       resumeAgentId !== undefined && resumeAgentId.length > 0
         ? this.resumeProfileName(resumeAgentId) ?? RESUMED_LABEL
@@ -234,7 +243,7 @@ export class SubagentTool implements ISubagentTool {
             (args.fork === true
               ? (this.profile.data().profileName ?? DEFAULT_PROFILE_NAME)
               : DEFAULT_PROFILE_NAME));
-    const prefix = args.run_in_background === true ? 'Launching background' : 'Launching';
+    const prefix = backgroundMode.runInBackground ? 'Launching background' : 'Launching';
     return {
       description: `${prefix} ${profileNameForDisplay} agent: ${args.description}`,
       accesses: ToolAccesses.none(),
@@ -242,11 +251,28 @@ export class SubagentTool implements ISubagentTool {
         kind: 'agent_call',
         agent_name: profileNameForDisplay,
         prompt: args.prompt,
-        background: args.run_in_background,
+        background: backgroundMode.runInBackground,
       },
       approvalRule: this.name,
       matchesRule: (ruleArgs) => matchesGlobRuleSubject(ruleArgs, profileNameForDisplay),
-      execute: (ctx) => this.execution(args, ctx),
+      execute: (ctx) =>
+        this.execution(
+          args,
+          backgroundMode.runInBackground,
+          backgroundMode.backgroundAvailable,
+          ctx,
+        ),
+    };
+  }
+
+  private resolveBackgroundMode(requested: boolean | undefined): BackgroundModeResolution {
+    const backgroundAvailable = this.canRunInBackground();
+    if (requested === true && !backgroundAvailable) {
+      return { error: BACKGROUND_AGENT_UNAVAILABLE };
+    }
+    return {
+      runInBackground: requested ?? backgroundAvailable,
+      backgroundAvailable,
     };
   }
 
@@ -277,6 +303,8 @@ export class SubagentTool implements ISubagentTool {
     let profileName: string;
     let displayModel: string | undefined;
     let promptText = args.prompt;
+    let codename: string | undefined;
+    let taskTitle: string | undefined;
     if (isResume) {
       const target = this.agentLifecycle.handleOf(resumeAgentId);
       if (target === undefined) {
@@ -289,6 +317,9 @@ export class SubagentTool implements ISubagentTool {
       const resumed = target.accessor.get(IAgentProfileService).data();
       profileName = resumed.profileName ?? RESUMED_LABEL;
       displayModel = resumed.modelAlias;
+      const labels = (await this.sessionMetadata.read()).agents?.[agentId]?.labels;
+      codename = labels?.['codename'];
+      taskTitle = labels?.['taskTitle'];
     } else {
       const plan = await this.subagents.planSpawn({
         callerAgentId: this.callerAgentId,
@@ -301,11 +332,14 @@ export class SubagentTool implements ISubagentTool {
         plan,
         labels: subagentLabels(this.callerAgentId),
         prompt: args.prompt,
+        taskTitle: args.description,
       });
       agentId = spawned.agentId;
       profileName = spawned.profileName;
       displayModel = spawned.model;
       promptText = spawned.promptText;
+      codename = spawned.codename;
+      taskTitle = spawned.taskTitle;
     }
 
     const target = this.agentLifecycle.handleOf(agentId);
@@ -332,6 +366,8 @@ export class SubagentTool implements ISubagentTool {
       thinkingEffort: this.agentLifecycle.handleOf(agentId)
         ?.accessor.get(IAgentProfileService)
         .getEffectiveThinkingLevel(),
+      codename,
+      taskTitle,
       completion: mirrored.then((r) => ({ result: r.summary, usage: r.usage })),
     };
   }
@@ -364,11 +400,12 @@ export class SubagentTool implements ISubagentTool {
 
   private async execution(
     args: SubagentToolInput,
+    runInBackground: boolean,
+    backgroundAvailable: boolean,
     { toolCallId, signal }: ExecutableToolContext,
   ): Promise<ExecutableToolResult> {
     try {
       signal.throwIfAborted();
-      const runInBackground = args.run_in_background === true;
       const requestedProfileName = args.subagent_type?.length ? args.subagent_type : undefined;
       const resumeAgentId = args.resume?.trim();
       const isResume = resumeAgentId !== undefined && resumeAgentId.length > 0;
@@ -387,10 +424,6 @@ export class SubagentTool implements ISubagentTool {
         }
       }
 
-      const allowBackground = this.canRunInBackground();
-      if (runInBackground && !allowBackground) {
-        return { output: BACKGROUND_AGENT_UNAVAILABLE, isError: true };
-      }
       const timeoutMs = resolveSubagentTimeoutMs(this.config);
 
       const controller = new AbortController();
@@ -467,14 +500,26 @@ export class SubagentTool implements ISubagentTool {
 
       if (runInBackground) {
         return {
-          output: formatBackgroundAgentResult(taskId, handle, args.description, allowBackground, false),
+          output: formatBackgroundAgentResult(
+            taskId,
+            handle,
+            args.description,
+            backgroundAvailable,
+            false,
+          ),
         };
       }
 
       const release = await this.tasks.waitForForegroundRelease(taskId);
       if (release === 'detached') {
         return {
-          output: formatBackgroundAgentResult(taskId, handle, args.description, allowBackground, true),
+          output: formatBackgroundAgentResult(
+            taskId,
+            handle,
+            args.description,
+            backgroundAvailable,
+            true,
+          ),
         };
       }
       return await this.formatForegroundResult(taskId, handle, timeoutMs);
@@ -563,7 +608,7 @@ function formatBackgroundAgentResult(
   detachedByUser: boolean,
 ): string {
   const nextStep = allowBackground
-    ? `next_step: The completion arrives automatically in a later turn — do NOT wait, poll, or call TaskOutput on it; continue with other work or hand back to the user. (If you have nothing to do until it finishes, run such tasks in the foreground next time.)`
+    ? 'next_step: The completion arrives automatically in a later turn — do NOT call WaitFor, poll, or call TaskOutput on it. Continue with independent work if any; otherwise end the current turn and let the automatic notification resume the work. If the result had to be obtained synchronously from the outset, use run_in_background=false.'
     : 'next_step: The completion arrives automatically in a later turn.';
   return [
     `task_id: ${taskId}`,

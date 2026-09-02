@@ -130,18 +130,21 @@ describe('server-v2 /api/v1 model/provider catalog', () => {
         display_name: 'Kimi K2',
         max_context_size: 131072,
         capabilities: ['thinking'],
+        thinking: { availability: 'dynamic', can_disable: false, controls: [] },
       },
       {
         provider: 'kimi',
         model: 'turbo',
         display_name: 'Kimi Turbo',
         max_context_size: 32768,
+        thinking: { availability: 'none', can_disable: false, controls: [] },
       },
       {
         provider: 'openai',
         model: 'gpt4o',
         display_name: 'gpt-4o',
         max_context_size: 128000,
+        thinking: { availability: 'none', can_disable: false, controls: [] },
       },
     ]);
   });
@@ -217,6 +220,7 @@ describe('server-v2 /api/v1 model/provider catalog', () => {
         model: 'turbo',
         display_name: 'Kimi Turbo',
         max_context_size: 32768,
+        thinking: { availability: 'none', can_disable: false, controls: [] },
       },
     });
 
@@ -288,7 +292,11 @@ describe('server-v2 /api/v1 model/provider catalog', () => {
   function discoveryStub(
     refreshProviderModels: IProviderDiscoveryServiceType['refreshProviderModels'],
   ): IProviderDiscoveryServiceType {
-    return { _serviceBrand: undefined, refreshProviderModels };
+    return {
+      _serviceBrand: undefined,
+      refreshProviderModels,
+      queryAvailableModels: async (providerId) => ({ providerId, modelIds: [] }),
+    };
   }
 
   function oauthStub(

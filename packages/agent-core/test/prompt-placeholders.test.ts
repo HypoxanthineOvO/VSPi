@@ -1,4 +1,4 @@
-import { globSync, readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'pathe';
 
 import { describe, expect, it } from 'vitest';
@@ -34,9 +34,15 @@ const STATIC_PLACEHOLDER_PROTOCOL_FILES = new Set([
   'tools/builtin/collaboration/agent-swarm.md',
 ]);
 
-const mdFiles = globSync('**/*.md', { cwd: SRC })
-  .map((file) => file.split('\\').join('/'))
-  .filter((file) => !file.endsWith('README.md'));
+function markdownFiles(dir: string, prefix = ''): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const relative = join(prefix, entry.name);
+    if (entry.isDirectory()) return markdownFiles(join(dir, entry.name), relative);
+    return entry.isFile() && entry.name.endsWith('.md') ? [relative] : [];
+  });
+}
+
+const mdFiles = markdownFiles(SRC).filter((file) => !file.endsWith('README.md'));
 
 describe('prompt placeholders', () => {
   it('discovers prompt .md files', () => {

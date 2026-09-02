@@ -15,7 +15,7 @@ import { retryBackoffDelays, sleepForRetry } from '#/_base/utils/retry';
 import { IAgentLoopService, type LoopErrorContext } from '#/agent/loop/loop';
 import { TurnStarted } from '#/agent/loop/turnEvents';
 import { TurnEnded } from '#/agent/loop/turnOps';
-import { isAbortError } from '#/_base/utils/abort';
+import { abortable, isAbortError } from '#/_base/utils/abort';
 import { IAgentProfileService, type ProfileModelContext } from '#/agent/profile/profile';
 import {
   agentContextOfScope,
@@ -496,6 +496,7 @@ export class AgentFullCompactionService extends Service implements IAgentFullCom
     this.checkAutoCompaction();
     if (this.strategy.shouldBlock(this.tokenCountWithPending())) {
       await this.block(signal, turnId);
+      signal.throwIfAborted();
     }
   }
 
@@ -536,37 +537,18 @@ export class AgentFullCompactionService extends Service implements IAgentFullCom
     const active = this._compacting;
     if (active === null) return;
     active.blockedByTurn = true;
-    this.propagateBlockingAbort(active, signal);
     void this.dispatcher.dispatch(
       new CompactionBlocked({ agentId: this.agent.agentId, turnId }),
     );
     try {
-      await active.promise;
+      await (signal === undefined ? active.promise : abortable(active.promise, signal));
     } catch (error) {
-      if (this.wasBlockingWaitAborted(active, signal, error)) return;
+      if (signal?.aborted === true) {
+        if (this._compacting === active) active.blockedByTurn = false;
+        return;
+      }
       throw error;
     }
-  }
-
-  private propagateBlockingAbort(active: ActiveCompaction, signal: AbortSignal | undefined): void {
-    signal?.addEventListener(
-      'abort',
-      () => {
-        if (this._compacting === active) active.abortController.abort();
-      },
-      { once: true },
-    );
-  }
-
-  private wasBlockingWaitAborted(
-    active: ActiveCompaction,
-    signal: AbortSignal | undefined,
-    error: unknown,
-  ): boolean {
-    return (
-      signal?.aborted === true &&
-      (active.abortController.signal.aborted || isAbortError(error))
-    );
   }
 
   private async compactionWorker(

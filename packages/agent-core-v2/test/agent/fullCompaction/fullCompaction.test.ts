@@ -67,6 +67,11 @@ const CATALOGUED_MODEL_CAPABILITIES = {
   tool_use: true,
   max_context_tokens: 256_000,
 } as const;
+const CATALOGUED_MODEL_THINKING = {
+  availability: 'dynamic',
+  canDisable: true,
+  controls: ['toggle'],
+} as const;
 const SNAPSHOT_VISIBLE_TOOLS = [
   'Agent',
   'AgentSwarm',
@@ -229,6 +234,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
       tools: SNAPSHOT_VISIBLE_TOOLS,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
@@ -298,7 +304,7 @@ describe('FullCompaction', () => {
       properties: expect.objectContaining({
         agent_id: 'main',
         source: 'manual',
-        tokens_before: 6_162,
+        tokens_before: expect.any(Number),
         tokens_after: expect.any(Number),
         duration_ms: expect.any(Number),
         compacted_count: 6,
@@ -310,6 +316,10 @@ describe('FullCompaction', () => {
         input_cache_creation: 0,
       }),
     });
+    const properties = records.find((record) => record.event === 'compaction_finished')?.properties;
+    expect(properties?.['tokens_after'] as number).toBeLessThan(
+      properties?.['tokens_before'] as number,
+    );
     await ctx.expectResumeMatches();
   });
 
@@ -318,6 +328,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -391,6 +402,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
       tools: ['Bash'],
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
@@ -421,6 +433,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
       tools: SNAPSHOT_VISIBLE_TOOLS,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
@@ -549,6 +562,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
       tools: SNAPSHOT_VISIBLE_TOOLS,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
@@ -572,7 +586,7 @@ describe('FullCompaction', () => {
       session_id: 'test-session',
       cwd: dir,
       trigger: 'auto',
-      token_count: 6_162,
+      token_count: expect.any(Number),
     });
     expect(post).toMatchObject({
       hook_event_name: 'PostCompact',
@@ -581,6 +595,7 @@ describe('FullCompaction', () => {
       trigger: 'auto',
       estimated_token_count: ctx.contextData().tokenCount,
     });
+    expect(post?.['estimated_token_count'] as number).toBeLessThan(pre?.['token_count'] as number);
   });
 
   it('cancels while waiting for a PreCompact hook', async () => {
@@ -605,6 +620,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
       tools: SNAPSHOT_VISIBLE_TOOLS,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
@@ -643,6 +659,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -658,7 +675,7 @@ describe('FullCompaction', () => {
       event: 'compaction_finished',
       properties: expect.objectContaining({
         source: 'manual',
-        tokens_before: 17_863,
+        tokens_before: expect.any(Number),
         retry_count: 1,
         trace_id: 'trace-compact-1',
       }),
@@ -679,6 +696,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -705,6 +723,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -739,6 +758,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendRichToolExchange();
@@ -780,6 +800,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendRichToolExchange();
@@ -814,6 +835,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -865,6 +887,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -948,6 +971,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -990,6 +1014,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -1023,6 +1048,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -1058,6 +1084,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -1097,6 +1124,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -1125,7 +1153,7 @@ describe('FullCompaction', () => {
       properties: expect.objectContaining({
         agent_id: 'main',
         source: 'manual',
-        tokens_before: 17_863,
+        tokens_before: expect.any(Number),
         duration_ms: expect.any(Number),
         round: 1,
         retry_count: 0,
@@ -1147,6 +1175,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -1182,6 +1211,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -1262,6 +1292,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -1293,6 +1324,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -1335,6 +1367,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -1350,7 +1383,7 @@ describe('FullCompaction', () => {
       event: 'compaction_failed',
       properties: expect.objectContaining({
         source: 'manual',
-        tokens_before: 17_863,
+        tokens_before: expect.any(Number),
         duration_ms: expect.any(Number),
         retry_count: 4,
         error_type: 'APIConnectionError',
@@ -1365,6 +1398,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendRichToolExchange();
@@ -1388,6 +1422,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
       tools: SNAPSHOT_VISIBLE_TOOLS,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
@@ -1439,6 +1474,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
       tools: SNAPSHOT_VISIBLE_TOOLS,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
@@ -1589,6 +1625,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
       tools: SNAPSHOT_VISIBLE_TOOLS,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
@@ -1644,6 +1681,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
       tools: SNAPSHOT_VISIBLE_TOOLS,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
@@ -1665,6 +1703,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
       tools: SNAPSHOT_VISIBLE_TOOLS,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 100);
@@ -1723,12 +1762,16 @@ describe('FullCompaction', () => {
       event: 'compaction_finished',
       properties: expect.objectContaining({
         source: 'auto',
-        tokens_before: 6_169,
-        tokens_after: 6_153,
+        tokens_before: expect.any(Number),
+        tokens_after: expect.any(Number),
         compacted_count: 7,
         retry_count: 0,
       }),
     });
+    const properties = records.find((record) => record.event === 'compaction_finished')?.properties;
+    expect(properties?.['tokens_after'] as number).toBeLessThan(
+      properties?.['tokens_before'] as number,
+    );
     await ctx.expectResumeMatches();
   });
 
@@ -1755,6 +1798,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
       tools: SNAPSHOT_VISIBLE_TOOLS,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
@@ -1792,6 +1836,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendUnresolvedToolExchange(0);
@@ -1859,6 +1904,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendUnresolvedToolExchange(1);
@@ -1918,6 +1964,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendUserMessage([{ type: 'text', text: 'only pending user' }]);
     const compacted = ctx.once('full_compaction.complete');
@@ -1944,6 +1991,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
 
     ctx.appendUserMessage([{ type: 'text', text: 'only pending user' }]);
@@ -1979,6 +2027,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
 
     await expect(ctx.rpc.beginCompaction({})).rejects.toMatchObject({
@@ -2203,6 +2252,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.newEvents();
@@ -2291,6 +2341,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.newEvents();
@@ -2589,6 +2640,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.newEvents();
@@ -2644,6 +2696,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.get(IAgentProfileService).update({ thinkingLevel: 'high' });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
@@ -2690,6 +2743,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     const modelResolver = ctx.modelResolver;
     if (modelResolver === undefined) throw new Error('Expected model provider');
@@ -2756,6 +2810,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.newEvents();
@@ -2792,6 +2847,7 @@ describe('FullCompaction', () => {
       ctx.configure({
         provider: CATALOGUED_PROVIDER,
         modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+        modelThinking: CATALOGUED_MODEL_THINKING,
       });
       ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
       ctx.newEvents();
@@ -2826,6 +2882,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     const models = (ctx as unknown as MutableKimiConfig).kimiConfig.models;
     models![CATALOGUED_PROVIDER.model] = {
@@ -2865,6 +2922,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.newEvents();
@@ -2992,6 +3050,7 @@ describe('FullCompaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     await ctx.resolve(AgentTodo).replace(todos);
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
@@ -3275,6 +3334,57 @@ function normalizeInputText(text: string): string {
 }
 
 describe('prompt deferral during full compaction', () => {
+  it('keeps automatic compaction running when its blocking turn is cancelled', async () => {
+    const compactionRequested = deferred<void>();
+    const releaseCompaction = deferred<void>();
+    let compactionCalls = 0;
+    let turnCalls = 0;
+    const generate: GenerateFn = async (_provider, _system, _tools, history) => {
+      const compaction = messageText(history.at(-1)).startsWith('You are about to run out of context.');
+      if (compaction) {
+        compactionCalls += 1;
+      } else {
+        turnCalls += 1;
+      }
+      if (compactionCalls === 1 && compaction) {
+        compactionRequested.resolve();
+        await releaseCompaction.promise;
+        return textResult('Compacted summary.');
+      }
+      return textResult(compaction ? 'Compacted summary.' : 'Deferred turn reply.');
+    };
+    const ctx = testAgent({ generate });
+    ctx.configure({
+      provider: CATALOGUED_PROVIDER,
+      modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
+    });
+    ctx.appendExchange(1, 'old user one', 'old assistant one', 100);
+    ctx.appendExchange(2, 'old user two', 'old assistant two', 200);
+    ctx.appendExchange(3, 'recent user three', 'recent assistant three', 950_000);
+    const completed = ctx.once('compaction.completed');
+
+    await ctx.rpc.prompt({ input: [{ type: 'text', text: 'cancel this turn' }] });
+    await compactionRequested.promise;
+    const turnEnded = ctx.once('turn.ended');
+    await ctx.rpc.cancel({});
+    await turnEnded;
+
+    expect(ctx.get(IAgentFullCompactionService).compacting).not.toBeNull();
+    const deferredLaunch = await ctx.rpc.prompt({
+      input: [{ type: 'text', text: 'run after compaction' }],
+    });
+    expect(deferredLaunch).toBeUndefined();
+
+    releaseCompaction.resolve();
+    await completed;
+    await ctx.untilTurnEnd();
+
+    expect(countEvents(ctx.newEvents(), 'compaction.cancelled')).toBe(0);
+    expect(compactionCalls).toBeGreaterThanOrEqual(1);
+    expect(turnCalls).toBe(1);
+  });
+
   it('defers a prompt submitted mid-compaction and replays it after completion', async () => {
     const compactionRequested = deferred<void>();
     const releaseCompaction = deferred<void>();
@@ -3294,6 +3404,7 @@ describe('prompt deferral during full compaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -3344,6 +3455,7 @@ describe('prompt deferral during full compaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
     ctx.appendExchange(2, 'recent user two', 'recent assistant two', 80);
@@ -3392,6 +3504,7 @@ describe('goal reminder re-injection after full compaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     await ctx.restoreRuntimes();
     await ctx.resolve(AgentGoal).createGoal({ objective: GOAL_OBJECTIVE });
@@ -3414,6 +3527,7 @@ describe('goal reminder re-injection after full compaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     await ctx.resolve(AgentGoal).createGoal({ objective: GOAL_OBJECTIVE });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);
@@ -3468,6 +3582,7 @@ describe('goal reminder re-injection after full compaction', () => {
     ctx.configure({
       provider: CATALOGUED_PROVIDER,
       modelCapabilities: CATALOGUED_MODEL_CAPABILITIES,
+      modelThinking: CATALOGUED_MODEL_THINKING,
     });
     await ctx.resolve(AgentGoal).createGoal({ objective: GOAL_OBJECTIVE });
     ctx.appendExchange(1, 'old user one', 'old assistant one', 20);

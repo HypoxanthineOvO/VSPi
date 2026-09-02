@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type RunningServer, startServer } from '../src/start';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
 import { authHeaders } from './helpers/auth';
+import { isolateTestWorkspace } from './helpers/workspace';
 
 interface Envelope<T> {
   code: number;
@@ -125,7 +126,9 @@ describe('server-v2 /api/v1/sessions/{sid}/transcript', () => {
   let seeds: ScopeSeed | undefined;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'kimi-server-v2-transcript-'));
+    home = await isolateTestWorkspace(
+      await mkdtemp(join(tmpdir(), 'kimi-server-v2-transcript-')),
+    );
     const modelCatalog: IModelCatalog = {
       _serviceBrand: undefined,
       get: () => {

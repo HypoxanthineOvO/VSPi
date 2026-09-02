@@ -103,11 +103,12 @@ describe('effectiveModelConfig', () => {
         },
         'anthropic',
       ),
-    ).toEqual({
+    ).toMatchObject({
       provider: 'custom',
       model: 'custom-anthropic-model',
       maxContextSize: 200000,
       protocol: 'anthropic',
+      thinking: { availability: 'none', canDisable: false, controls: [] },
     });
   });
 
@@ -121,7 +122,10 @@ describe('effectiveModelConfig', () => {
       adaptiveThinking: true,
     };
 
-    expect(effectiveModelConfig(model, 'kimi')).toEqual(model);
+    expect(effectiveModelConfig(model, 'kimi')).toMatchObject({
+      ...model,
+      thinking: { availability: 'always', canDisable: false, controls: [] },
+    });
   });
 
   it('does not infer the fallback profile without provider context', () => {
@@ -132,7 +136,10 @@ describe('effectiveModelConfig', () => {
       protocol: 'anthropic',
     };
 
-    expect(effectiveModelConfig(model)).toEqual(model);
+    expect(effectiveModelConfig(model)).toMatchObject({
+      ...model,
+      thinking: { availability: 'none', canDisable: false, controls: [] },
+    });
   });
 
   it('limits an adaptive_thinking=false model to budget efforts', () => {
@@ -161,7 +168,10 @@ describe('effectiveModelConfig', () => {
       maxContextSize: 200000,
     };
 
-    expect(effectiveModelConfig(model)).toEqual(model);
+    expect(effectiveModelConfig(model)).toMatchObject({
+      ...model,
+      thinking: { availability: 'none', canDisable: false, controls: [] },
+    });
   });
 
   it('marks official always-on models while preserving explicit effort metadata', () => {

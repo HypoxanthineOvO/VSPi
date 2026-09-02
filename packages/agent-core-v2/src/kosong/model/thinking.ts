@@ -1,3 +1,9 @@
+import {
+  normalizeThinkingCapability,
+  thinkingEffortsForProvider,
+  type ModelCapability,
+  type ThinkingCapability,
+} from '#/kosong/contract/capability';
 import type { ThinkingEffort } from '#/kosong/contract/provider';
 import type { IProtocolAdapterRegistry, Protocol } from '#/kosong/protocol/protocol';
 
@@ -69,46 +75,39 @@ export function resolveForcedThinkingEffort(
   return nonEmpty(forced)?.toLowerCase() as ThinkingEffort | undefined;
 }
 
-function hasCapability(
-  capabilities: ModelThinkingMetadata['capabilities'],
-  capability: string,
-): boolean {
-  if (capabilities === undefined) return false;
-  if (isCapabilityList(capabilities)) {
-    return capabilities.some((candidate) => candidate.trim().toLowerCase() === capability);
-  }
-  switch (capability) {
-    case 'thinking':
-      return capabilities.thinking;
-    case 'always_thinking':
-      return false;
-    default:
-      return false;
-  }
-}
-
-function isCapabilityList(
-  capabilities: ModelThinkingMetadata['capabilities'],
-): capabilities is readonly string[] {
-  return Array.isArray(capabilities);
-}
-
 function middleOf(values: readonly string[]): string {
   return values[Math.floor(values.length / 2)]!;
 }
 
+function normalizedThinking(
+  model: ModelThinkingMetadata | undefined,
+): ThinkingCapability | undefined {
+  if (model === undefined) return undefined;
+  if (model.thinking !== undefined) return model.thinking;
+  const capabilities = model.capabilities;
+  const declared = Array.isArray(capabilities)
+    ? new Set(capabilities.map((value) => value.trim().toLowerCase()))
+    : undefined;
+  return normalizeThinkingCapability(undefined, {
+    thinking:
+      declared?.has('thinking') === true ||
+      (!Array.isArray(capabilities) &&
+        (capabilities as ModelCapability | undefined)?.thinking === true),
+    alwaysThinking: model.alwaysThinking === true || declared?.has('always_thinking') === true,
+    adaptiveThinking: model.adaptiveThinking,
+    supportEfforts: model.supportEfforts,
+    defaultEffort: model.defaultEffort,
+  });
+}
+
 function effortsFor(model: ModelThinkingMetadata | undefined): readonly string[] {
-  return model?.supportEfforts?.map(nonEmpty).filter((v): v is string => v !== undefined) ?? [];
+  const thinking = normalizedThinking(model);
+  return thinking === undefined ? [] : thinkingEffortsForProvider(thinking, model?.providerType);
 }
 
 export function modelSupportsThinking(model: ModelThinkingMetadata | undefined): boolean {
-  if (model === undefined) return false;
-  return (
-    model.alwaysThinking === true ||
-    model.adaptiveThinking === true ||
-    hasCapability(model.capabilities, 'thinking') ||
-    hasCapability(model.capabilities, 'always_thinking')
-  );
+  const thinking = normalizedThinking(model);
+  return thinking !== undefined && thinking.availability !== 'none';
 }
 
 export function defaultThinkingEffortForModel(
@@ -117,7 +116,7 @@ export function defaultThinkingEffortForModel(
   if (model === undefined || !modelSupportsThinking(model)) return 'off';
   const efforts = effortsFor(model);
   if (efforts.length > 0) {
-    const declaredDefault = nonEmpty(model.defaultEffort);
+    const declaredDefault = nonEmpty(normalizedThinking(model)?.defaultEffort);
     return (declaredDefault !== undefined && efforts.includes(declaredDefault)
       ? declaredDefault
       : middleOf(efforts)) as ThinkingEffort;
@@ -129,7 +128,7 @@ export function declaredDefaultEffortForModel(
   model: ModelThinkingMetadata | undefined,
 ): ThinkingEffort | undefined {
   if (!modelSupportsThinking(model)) return undefined;
-  const declared = nonEmpty(model?.defaultEffort);
+  const declared = nonEmpty(normalizedThinking(model)?.defaultEffort);
   if (declared === undefined) return undefined;
   return effortsFor(model).includes(declared) ? (declared as ThinkingEffort) : undefined;
 }
@@ -139,8 +138,10 @@ export function modelSupportsThinkingEffort(
   model: ModelThinkingMetadata | undefined,
   strictValidation: boolean,
 ): boolean {
-  if (!strictValidation || effort === 'off') return true;
-  if (!modelSupportsThinking(model)) return false;
+  const thinking = normalizedThinking(model);
+  if (thinking === undefined || thinking.availability === 'none') return effort === 'off';
+  if (effort === 'off') return thinking.availability === 'dynamic' && thinking.canDisable;
+  if (!strictValidation) return true;
   const efforts = effortsFor(model);
   return efforts.length === 0 || effort === 'on' || efforts.includes(effort);
 }
@@ -150,7 +151,16 @@ function normalizeThinkingEffortForModel(
   model: ModelThinkingMetadata | undefined,
   strictValidation: boolean,
 ): ThinkingEffort {
-  if (effort === 'off' && model?.alwaysThinking !== true) return 'off';
+  const thinking = normalizedThinking(model);
+  if (
+    effort === 'off' &&
+    (thinking === undefined ||
+      thinking.availability === 'none' ||
+      (thinking.availability === 'dynamic' && thinking.canDisable))
+  ) {
+    return 'off';
+  }
+  if (effort === 'off') return defaultThinkingEffortForModel(model);
   const efforts = effortsFor(model);
   if (!strictValidation) {
     return effort === 'on' && efforts.length > 0
@@ -182,7 +192,7 @@ export function resolveThinkingEffortForModel(
     effort = configured ?? defaultThinkingEffortForModel(model);
   }
 
-  if (effort === 'off' && model?.alwaysThinking === true) {
+  if (effort === 'off' && normalizedThinking(model)?.availability === 'always') {
     effort =
       configured !== undefined && configured !== 'off'
         ? configured

@@ -112,7 +112,10 @@ import { IProtocolAdapterRegistry, type ProtocolAdapterConfig } from '#/kosong/p
 import { ProtocolAdapterRegistry } from '#/kosong/provider/protocolAdapterRegistry';
 import { hasProviderDefinition } from '#/kosong/provider/providerDefinition';
 import { summarizeSkill, type SkillCatalog } from '#/features/skill/catalog/types';
-import { type ModelCapability } from '#/kosong/contract/capability';
+import {
+  type ModelCapability,
+  type ThinkingCapabilityInput,
+} from '#/kosong/contract/capability';
 import { isToolCall, isToolCallPart, type ContentPart, type Message as KosongMessage, type StreamedMessagePart } from '#/kosong/contract/message';
 import { type ThinkingEffort } from '#/kosong/contract/provider';
 import { type Tool as KosongTool } from '#/kosong/contract/tool';
@@ -272,12 +275,22 @@ interface KimiConfig {
   readonly [domain: string]: unknown;
 }
 
+type TestThinkingCapabilityInput = Omit<
+  ThinkingCapabilityInput,
+  'controls' | 'efforts' | 'providerEfforts'
+> & {
+  readonly controls?: readonly NonNullable<ThinkingCapabilityInput['controls']>[number][];
+  readonly efforts?: readonly string[];
+  readonly providerEfforts?: Readonly<Record<string, readonly string[]>>;
+};
+
 interface ModelConfigForConfig {
   readonly provider: string;
   readonly model: string;
   readonly maxContextSize: number;
   readonly maxOutputSize?: number;
   readonly capabilities?: readonly string[];
+  readonly thinking?: TestThinkingCapabilityInput;
   readonly supportEfforts?: readonly string[];
   readonly defaultEffort?: string;
 }
@@ -434,6 +447,7 @@ interface ConfigureOptions {
   readonly tools?: readonly string[] | undefined;
   readonly provider?: TestProviderConfig | undefined;
   readonly modelCapabilities?: ModelCapability | undefined;
+  readonly modelThinking?: TestThinkingCapabilityInput | undefined;
 }
 
 export type TestAgentContext = AgentTestContext;
@@ -1609,8 +1623,9 @@ export class AgentTestContext {
     tools = [],
     provider = MOCK_PROVIDER,
     modelCapabilities,
+    modelThinking,
   }: ConfigureOptions = {}): void {
-    this.configureRuntimeModel(provider, modelCapabilities);
+    this.configureRuntimeModel(provider, modelCapabilities, modelThinking);
     const profile = this.get(IAgentProfileService);
     profile.update({
       modelAlias: provider.model,
@@ -1629,8 +1644,14 @@ export class AgentTestContext {
   configureRuntimeModel(
     provider: TestProviderConfig,
     modelCapabilities?: ModelCapability | undefined,
+    modelThinking?: TestThinkingCapabilityInput | undefined,
   ): void {
-    this.kimiConfig = configWithProvider(this.kimiConfig, provider, modelCapabilities);
+    this.kimiConfig = configWithProvider(
+      this.kimiConfig,
+      provider,
+      modelCapabilities,
+      modelThinking,
+    );
     (this.get(IModelCatalog) as ModelCatalog).notifyConfigChanged();
     const profile = this.get(IAgentProfileService);
     profile.update({ modelAlias: provider.model });
@@ -2681,6 +2702,7 @@ function configWithProvider(
   config: KimiConfig,
   provider: TestProviderConfig,
   modelCapabilities: ModelCapability | undefined,
+  modelThinking: TestThinkingCapabilityInput | undefined = undefined,
 ): KimiConfig {
   const providerName = 'test-provider';
   const maxContextSize = modelCapabilities?.max_context_tokens;
@@ -2698,6 +2720,7 @@ function configWithProvider(
         maxContextSize:
           maxContextSize === undefined || maxContextSize <= 0 ? 1_000_000 : maxContextSize,
         capabilities: capabilityNames(modelCapabilities),
+        thinking: modelThinking,
       },
     },
     defaultProvider: providerName,

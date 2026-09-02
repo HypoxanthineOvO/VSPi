@@ -40,6 +40,7 @@ import {
 import { ISessionSubagentService } from '#/session/subagent/subagent';
 import { SessionSubagentService } from '#/session/subagent/subagentService';
 import { ISessionContext } from '#/session/sessionContext/sessionContext';
+import { ISessionMetadata } from '#/session/sessionMetadata/sessionMetadata';
 import { IAgentToolApprovalService } from '#/agent/toolApproval/toolApproval';
 import { IAgentToolExecutorService } from '#/agent/toolExecutor/toolExecutor';
 import type {
@@ -264,6 +265,19 @@ function realSubagents(
     },
   } as unknown as IModelCatalog;
   const sessionContext = { _serviceBrand: undefined, cwd: '/repo' } as unknown as ISessionContext;
+  const sessionMetadata = {
+    _serviceBrand: undefined,
+    ready: Promise.resolve(),
+    onDidChangeMetadata: Event.None,
+    read: async () => ({
+      id: 'session-swarm',
+      createdAt: 0,
+      updatedAt: 0,
+      archived: false,
+      agents: {},
+    }),
+    registerAgent: async () => {},
+  } as unknown as ISessionMetadata;
   return new SessionSubagentService(
     agentLifecycle,
     catalog,
@@ -271,6 +285,7 @@ function realSubagents(
     flags,
     modelCatalog,
     sessionContext,
+    sessionMetadata,
     stubLog(),
   );
 }

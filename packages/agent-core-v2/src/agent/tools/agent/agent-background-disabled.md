@@ -1,1 +1,1 @@
-Background agent execution is disabled for this agent. Do not set `run_in_background=true` — any call that sets it is rejected before the subagent launches. Run every subagent in the foreground and wait for its result.
+Background agent execution is disabled for this agent. Omitting `run_in_background` falls back to foreground execution and waits for the result. Do not set `run_in_background=true` — any call that sets it is rejected before the subagent launches.

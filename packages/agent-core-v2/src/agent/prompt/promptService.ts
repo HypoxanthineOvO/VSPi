@@ -315,7 +315,7 @@ export class AgentPromptService implements IAgentPromptService {
   async submitSteer(payload: SteerPayload): Promise<PromptLaunchResult | undefined> {
     this.telemetry.track2('input_steer', { parts: payload.input.length });
     await this.updatePromptMetadata(promptMetadataTextFromContentParts(payload.input));
-    const queued = await this.enqueue({ message: {
+    const queued = await this.enqueue({ id: payload.promptId, message: {
       role: 'user',
       content: [...payload.input],
       toolCalls: [],
@@ -474,7 +474,11 @@ export class AgentPromptService implements IAgentPromptService {
     this.active = undefined;
     const state = result.type === 'cancelled' ? 'cancelled' : result.type === 'failed' ? 'failed' : 'completed';
     item.state = state; item.completionDeferred.resolve({ promptId: item.id, result, state });
-    for (const child of this.steered.get(item.id) ?? []) { child.state = state; child.completionDeferred.resolve({ promptId: child.id, result, state }); }
+    for (const child of this.steered.get(item.id) ?? []) {
+      child.state = state;
+      child.completionDeferred.resolve({ promptId: child.id, result, state });
+      if (state === 'cancelled') this.publishAborted(child.id); else this.publishCompleted(child.id, state);
+    }
     this.steered.delete(item.id);
     if (state === 'cancelled') this.publishAborted(item.id); else this.publishCompleted(item.id, state);
     void this.startNext();

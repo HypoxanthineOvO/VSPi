@@ -143,6 +143,7 @@ async function withFixture(run: (fixture: Fixture) => Promise<void>): Promise<vo
       make('work'),
       make('extra-agents'),
     ]);
+    await mkdir(join(workDir, '.git'));
     await run({ homeDir, osHomeDir, workDir, extraDir });
   } finally {
     await rm(root, { recursive: true, force: true });

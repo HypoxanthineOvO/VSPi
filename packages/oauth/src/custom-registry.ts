@@ -47,6 +47,17 @@ export interface CustomRegistryModelEntry {
   };
   readonly support_efforts?: readonly string[];
   readonly default_effort?: string;
+  readonly cost?: {
+    readonly input: number;
+    readonly output: number;
+    readonly cache_read?: number;
+    readonly cache_write?: number;
+    readonly tiers?: readonly {
+      readonly input: number;
+      readonly output: number;
+      readonly tier: { readonly type: string; readonly size: number };
+    }[];
+  };
 }
 
 export interface CustomRegistryProviderEntry {
@@ -112,6 +123,7 @@ function toModelEntry(value: unknown): CustomRegistryModelEntry | undefined {
     modalities?: { input?: readonly string[]; output?: readonly string[] };
     support_efforts?: readonly string[];
     default_effort?: string;
+    cost?: CustomRegistryModelEntry['cost'];
   } = { id };
 
   const name = value['name'];
@@ -135,6 +147,36 @@ function toModelEntry(value: unknown): CustomRegistryModelEntry | undefined {
 
   if (typeof value['tool_call'] === 'boolean') entry.tool_call = value['tool_call'];
   if (typeof value['reasoning'] === 'boolean') entry.reasoning = value['reasoning'];
+
+  const cost = value['cost'];
+  if (isRecord(cost)) {
+    const input = cost['input'];
+    const output = cost['output'];
+    if (typeof input === 'number' && input >= 0 && typeof output === 'number' && output >= 0) {
+      entry.cost = {
+        input,
+        output,
+        cache_read: typeof cost['cache_read'] === 'number' ? cost['cache_read'] : undefined,
+        cache_write: typeof cost['cache_write'] === 'number' ? cost['cache_write'] : undefined,
+        tiers: Array.isArray(cost['tiers'])
+          ? cost['tiers'].flatMap((rawTier) => {
+              if (!isRecord(rawTier) || !isRecord(rawTier['tier'])) return [];
+              const tier = rawTier['tier'];
+              return tier['type'] === 'context'
+                && typeof tier['size'] === 'number'
+                && typeof rawTier['input'] === 'number'
+                && typeof rawTier['output'] === 'number'
+                ? [{
+                    input: rawTier['input'],
+                    output: rawTier['output'],
+                    tier: { type: 'context', size: tier['size'] },
+                  }]
+                : [];
+            })
+          : undefined,
+      };
+    }
+  }
 
   const supportEfforts = toStringArrayOrUndefined(value['support_efforts']);
   if (supportEfforts !== undefined) entry.support_efforts = supportEfforts;
@@ -351,6 +393,17 @@ export function applyCustomRegistryProvider(
       maxContextSize,
       capabilities,
       displayName,
+      pricing: model.cost === undefined ? undefined : {
+        inputUsdPerMillion: model.cost.input,
+        outputUsdPerMillion: model.cost.output,
+        cacheReadUsdPerMillion: model.cost.cache_read,
+        cacheWriteUsdPerMillion: model.cost.cache_write,
+        contextTiers: model.cost.tiers?.map((tier) => ({
+          contextTokensAbove: tier.tier.size,
+          inputUsdPerMillion: tier.input,
+          outputUsdPerMillion: tier.output,
+        })),
+      },
       ...(model.support_efforts !== undefined ? { supportEfforts: model.support_efforts } : {}),
       ...(model.default_effort !== undefined ? { defaultEffort: model.default_effort } : {}),
     };

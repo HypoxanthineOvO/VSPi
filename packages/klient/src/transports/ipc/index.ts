@@ -17,3 +17,12 @@ export interface IpcKlientOptions extends KlientOptions, IpcChannelOptions {}
 export function createKlient(options: IpcKlientOptions): Klient {
   return createKlientFromChannel(new IpcChannel(options), options);
 }
+
+export async function probeKlientIpc(options: IpcChannelOptions): Promise<unknown> {
+  const channel = new IpcChannel(options);
+  try {
+    return await channel.handshake();
+  } finally {
+    await channel.close();
+  }
+}

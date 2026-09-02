@@ -45,10 +45,16 @@ describe('GitService', () => {
     disposables = new DisposableStore();
     const process = new HostProcessService();
     const runtime = { process } as unknown as Runtime;
+    const hostFs = new HostFileSystem();
+    const isolatedHostFs = Object.create(hostFs) as HostFileSystem;
+    isolatedHostFs.stat = async (path) => {
+      if (path === join(tmpdir(), '.git')) throw new Error(`missing: ${path}`);
+      return hostFs.stat(path);
+    };
     ix = createServices(disposables, {
       additionalServices: (reg) => {
         reg.define(IHostProcessService, HostProcessService);
-        reg.define(IHostFileSystem, HostFileSystem);
+        reg.defineInstance(IHostFileSystem, isolatedHostFs);
         reg.defineInstance(IRuntimeResolver, {
           _serviceBrand: undefined,
           inspect: () => runtime,

@@ -255,6 +255,13 @@ merge_all_available_skills = true
   # max_input_size: integer
   # max_output_size: integer
   # capabilities: string[]
+  # thinking: object
+    # availability: "none" | "always" | "dynamic"
+    # can_disable: boolean
+    # controls: "toggle" | "effort" | "budget"[]
+    # efforts: string[]
+    # provider_efforts: record<string, string[]>
+    # default_effort: string
   # display_name: string
   # reasoning_key: string
   # adaptive_thinking: boolean
@@ -262,11 +269,24 @@ merge_all_available_skills = true
   # support_efforts: string[]
   # default_effort: string
   # off_effort: string
+  # pricing: object
+    # input_usd_per_million: number
+    # output_usd_per_million: number
+    # cache_read_usd_per_million: number
+    # cache_write_usd_per_million: number
+    # context_tiers: object[]
   # overrides: object
     # max_context_size: integer
     # max_input_size: integer
     # max_output_size: integer
     # capabilities: string[]
+    # thinking: object
+      # availability: "none" | "always" | "dynamic"
+      # can_disable: boolean
+      # controls: "toggle" | "effort" | "budget"[]
+      # efforts: string[]
+      # provider_efforts: record<string, string[]>
+      # default_effort: string
     # display_name: string
     # reasoning_key: string
     # adaptive_thinking: boolean

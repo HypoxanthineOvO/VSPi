@@ -10,6 +10,7 @@ import { WebSocket, type RawData } from 'ws';
 import { type RunningServer, startServer } from '../src/start';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
 import { authHeaders, bearerToken } from './helpers/auth';
+import { isolateTestWorkspace } from './helpers/workspace';
 
 
 function sseLines(...events: readonly string[]): string {
@@ -156,10 +157,10 @@ const getTranscript = (server: RunningServer, base: string, sid: string): Promis
 const getSessionFacts = (server: RunningServer, base: string, sid: string): Promise<{ busy: boolean; pendingInteraction: string }> =>
   rest(server, base, `/api/v1/sessions/${encodeURIComponent(sid)}`);
 
-async function createSession(server: RunningServer, base: string): Promise<string> {
+async function createSession(server: RunningServer, base: string, cwd: string): Promise<string> {
   const data = await rest<{ id: string }>(server, base, '/api/v1/sessions', {
     method: 'POST',
-    body: { metadata: { cwd: '/tmp' } },
+    body: { metadata: { cwd } },
   });
   return data.id;
 }
@@ -247,7 +248,9 @@ describe('transcript contract e2e', () => {
 
   async function boot(routes: readonly LlmRoute[]): Promise<void> {
     llm = await startMockLlm(routes);
-    home = await mkdtemp(join(tmpdir(), 'kimi-transcript-contract-'));
+    home = await isolateTestWorkspace(
+      await mkdtemp(join(tmpdir(), 'kimi-transcript-contract-')),
+    );
     await writeFile(join(home, 'config.toml'), configToml(llm.port), 'utf-8');
     server = await startServer({ hostIdentity: TEST_HOST_IDENTITY, host: '127.0.0.1', port: 0, homeDir: home, logLevel: 'silent' });
     base = `http://127.0.0.1:${server.port}`;
@@ -286,7 +289,7 @@ describe('transcript contract e2e', () => {
 
   it('S1: turn lifecycle produces activity, prompts and turn frames on both channels', async () => {
     await boot([{ match: () => true, respond: () => sseText('hello world'), delayMs: 3000 }]);
-    const sid = await createSession(server!, base);
+    const sid = await createSession(server!, base, home!);
     await submitPrompt(server!, base, sid, 'say hello');
     const channel = await subscribeTranscript(server!, sid);
 
@@ -332,7 +335,7 @@ describe('transcript contract e2e', () => {
       { match: (body) => body.includes('first prompt'), respond: () => sseText('first done'), delayMs: 2500 },
       { match: () => true, respond: () => sseText('second done') },
     ]);
-    const sid = await createSession(server!, base);
+    const sid = await createSession(server!, base, home!);
     await submitPrompt(server!, base, sid, 'first prompt');
     await until('first prompt running', async () =>
       (await getTranscript(server!, base, sid)).prompts.some((p) => p.status === 'running'),
@@ -357,7 +360,7 @@ describe('transcript contract e2e', () => {
       { match: (body) => !body.includes('echo contract-hi'), respond: () => sseToolCall('call_1', 'Bash', '{"command":"echo contract-hi"}') },
       { match: () => true, respond: () => sseText('tool done') },
     ]);
-    const sid = await createSession(server!, base);
+    const sid = await createSession(server!, base, home!);
     await submitPrompt(server!, base, sid, 'run the echo', 'manual');
 
     await until('approval pending', async () => {
@@ -398,7 +401,7 @@ describe('transcript contract e2e', () => {
       { match: (body) => body.includes('bg-answer-42'), respond: () => sseText('42'), delayMs: 2500 },
       { match: () => true, respond: () => sseText('noted') },
     ]);
-    const sid = await createSession(server!, base);
+    const sid = await createSession(server!, base, home!);
     await submitPrompt(server!, base, sid, 'spawn-bg one background agent');
 
     await until('background task running', async () => {
@@ -442,7 +445,7 @@ describe('transcript contract e2e', () => {
 
   it('S5: late attach backfills liveness and the prompt queue from the live loop', async () => {
     await boot([{ match: () => true, respond: () => sseText('slow answer'), delayMs: 4000 }]);
-    const sid = await createSession(server!, base);
+    const sid = await createSession(server!, base, home!);
     await submitPrompt(server!, base, sid, 'take your time');
 
     const tx = await getTranscript(server!, base, sid);
@@ -462,7 +465,7 @@ describe('transcript contract e2e', () => {
       { match: (body) => !body.includes('echo s6'), respond: () => sseToolCall('call_s6', 'Bash', '{"command":"echo s6"}') },
       { match: () => true, respond: () => sseText('s6 done') },
     ]);
-    const sid = await createSession(server!, base);
+    const sid = await createSession(server!, base, home!);
     await submitPrompt(server!, base, sid, 'run echo for s6');
     await idle(server!, base, sid);
 

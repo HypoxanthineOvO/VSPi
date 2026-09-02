@@ -72,8 +72,10 @@ export type {
 export type {
   AgentCommandInfo,
   AgentContextData,
+  AgentCronTask,
   AgentFacade,
   AgentTaskInfo,
+  BindProfileInput,
   McpServerEntry,
   PlanData,
   PromptLaunchResult,
