@@ -135,6 +135,59 @@ export const usageStatusSchema = z.object({
   total: tokenUsageSchema.optional(),
 });
 
+export const goalStatusSchema = z.enum(['active', 'paused', 'blocked', 'complete']);
+export const goalActorSchema = z.enum(['user', 'model', 'runtime', 'system']);
+
+export const goalBudgetReportSchema = z
+  .object({
+    tokenBudget: z.number().nullable(),
+    turnBudget: z.number().nullable(),
+    wallClockBudgetMs: z.number().nullable(),
+    remainingTokens: z.number().nullable(),
+    remainingTurns: z.number().nullable(),
+    remainingWallClockMs: z.number().nullable(),
+    tokenBudgetReached: z.boolean(),
+    turnBudgetReached: z.boolean(),
+    wallClockBudgetReached: z.boolean(),
+    overBudget: z.boolean(),
+  })
+  .strict();
+
+export const goalSnapshotSchema = z
+  .object({
+    goalId: z.string(),
+    objective: z.string(),
+    completionCriterion: z.string().optional(),
+    status: goalStatusSchema,
+    turnsUsed: z.number(),
+    tokensUsed: z.number(),
+    wallClockMs: z.number(),
+    budget: goalBudgetReportSchema,
+    terminalReason: z.string().optional(),
+  })
+  .strict();
+
+export const goalToolResultSchema = z
+  .object({ goal: goalSnapshotSchema.nullable() })
+  .strict();
+
+export const goalChangeSchema = z
+  .object({
+    kind: z.enum(['lifecycle', 'completion']),
+    status: goalStatusSchema.optional(),
+    reason: z.string().optional(),
+    stats: z
+      .object({
+        turnsUsed: z.number(),
+        tokensUsed: z.number(),
+        wallClockMs: z.number(),
+      })
+      .strict()
+      .optional(),
+    actor: goalActorSchema.optional(),
+  })
+  .strict();
+
 /**
  * `AgentContextData` — `history` items are full `ContextMessage`s (deep
  * `Message` / `Tool` / `PromptOrigin` unions); mirrored as `unknown` entries.

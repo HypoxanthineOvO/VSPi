@@ -6,6 +6,8 @@ import { registerFeature } from '#/features/featureRegistry';
 import { goalAgentRuntimeProvider } from './goalAgentRuntime';
 import { IGoalDeadlineScheduler } from './goalDeadlineScheduler';
 import { GoalDeadlineSchedulerService } from './goalDeadlineSchedulerService';
+import { IAgentGoalViewService } from './goalView';
+import { AgentGoalViewService } from './goalViewService';
 import { ICreateGoalTool } from './tools/create-goal/create-goal';
 import { CreateGoalTool } from './tools/create-goal/createGoalTool';
 import { IGetGoalTool } from './tools/get-goal/get-goal';
@@ -21,6 +23,7 @@ export class GoalFeature extends Feature {
   constructor() {
     super();
     this.contributeAgentRuntime(goalAgentRuntimeProvider);
+    this.contributeAgentService(IAgentGoalViewService, AgentGoalViewService);
     this.contributeService(LifecycleScope.App, IGoalDeadlineScheduler, GoalDeadlineSchedulerService, {
       activation: ScopeActivation.OnDemand,
     });

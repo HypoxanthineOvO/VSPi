@@ -6,21 +6,10 @@ import {
   registerScopedService,
 } from '#/_base/di/scope';
 import { createScopedTestHost, stubPair } from '#/_base/di/test';
-import { IAgentLoopService } from '#/agent/loop/loop';
-import { IAgentPermissionModeService } from '#/agent/permissionMode/permissionMode';
-import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
-import { IAgentStateService } from '#/agent/state/agentState';
-import { IAgentToolApprovalService } from '#/agent/toolApproval/toolApproval';
-import { IAgentToolExecutorService } from '#/agent/toolExecutor/toolExecutor';
-import { IAgentToolPolicyService } from '#/agent/toolPolicy/toolPolicy';
-import { IAgentToolRegistryService } from '#/agent/toolRegistry/toolRegistry';
-import { IConfigService } from '#/app/config/config';
-import { IEventBus } from '#/app/event/eventBus';
+import { IAgentScopeContext, makeAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 import { IFeatureManager } from '#/app/feature/featureManager';
 import { FeatureManagerService } from '#/app/feature/featureManagerService';
-import { IFlagService } from '#/app/flag/flag';
 import { LifecycleScope } from '#/app/scopes';
-import { ITelemetryService } from '#/app/telemetry/telemetry';
 import { IFeatureAssemblyService } from '#/features/featureAssembly';
 import { FeatureAssemblyService } from '#/features/featureAssemblyService';
 import {
@@ -28,8 +17,9 @@ import {
   registerFeature,
 } from '#/features/featureRegistry';
 import { GoalFeature } from '#/features/goal/goalFeature';
-import { ISessionUsageService } from '#/session/usage/sessionUsage';
-import { IEventDispatcher } from '#/state/eventDispatcher';
+import { IAgentGoalViewService } from '#/features/goal/goalView';
+import type { GoalToolResult } from '#/features/goal/types';
+import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
 
 describe('GoalFeature', () => {
   beforeEach(() => {
@@ -71,6 +61,44 @@ describe('GoalFeature', () => {
     await host.app.instantiation.cascade.whenIdle();
     expect(manager.units().map((unit) => unit.name)).toContain('goal');
 
+    host.dispose();
+  });
+
+  it('returns the current Goal snapshot through the Agent goal view', () => {
+    const host = createScopedTestHost();
+    const agentScope = makeAgentScopeContext({ agentId: 'main', agentScope: 'agents/main' });
+    const result: GoalToolResult = {
+      goal: {
+        goalId: 'goal-1',
+        objective: 'Ship the feature',
+        status: 'paused',
+        turnsUsed: 2,
+        tokensUsed: 300,
+        wallClockMs: 4_000,
+        budget: {
+          tokenBudget: null,
+          turnBudget: null,
+          wallClockBudgetMs: null,
+          remainingTokens: null,
+          remainingTurns: null,
+          remainingWallClockMs: null,
+          tokenBudgetReached: false,
+          turnBudgetReached: false,
+          wallClockBudgetReached: false,
+          overBudget: false,
+        },
+      },
+    };
+    const session = host.child(LifecycleScope.Session, 'session-1', [
+      stubPair(IAgentLifecycleService, {
+        resolve: () => ({ getGoal: () => result }),
+      } as unknown as IAgentLifecycleService),
+    ]);
+    const agent = host.childOf(session, LifecycleScope.Agent, 'main', [
+      stubPair(IAgentScopeContext, agentScope),
+    ]);
+
+    expect(agent.accessor.get(IAgentGoalViewService).getGoal()).toEqual(result);
     host.dispose();
   });
 });

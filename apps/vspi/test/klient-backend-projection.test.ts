@@ -1,7 +1,7 @@
 /**
  * Scenario: Kimi Core wire values are projected into the VSPi product surface.
- * Responsibilities: two-level Plan projection and cache-hit calculation.
- * Wiring: pure edge translators with literal Klient-shaped input.
+ * Responsibilities: Plan, Agent task, Runtime Goal, usage, and model-price projection.
+ * Wiring: edge translators and focused Klient-shaped backend fixtures.
  * Run: pnpm -C apps/vspi test
  */
 import type { AgentTaskInfo } from "@moonshot-ai/klient";
@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
 	calculateCacheHitPercent,
+	calculateUsageCost,
 	formatModelDisplayName,
 	formatProviderDisplayName,
 	KlientChatBackend,
@@ -22,6 +23,7 @@ import {
 	serializeQuestionAnswer,
 	turnState,
 } from "../src/v1/backend/klient-backend.js";
+import type { RuntimeModelOption } from "../src/v1/backend/types.js";
 import {
 	catalogEffortCapability,
 	effortLabel,
@@ -42,6 +44,21 @@ const model = (provider: string, id: string) => ({
 		input_usd_per_million: 1,
 		output_usd_per_million: 2,
 	},
+});
+
+const pricedModel = (
+	alias: string,
+	price: RuntimeModelOption["price"],
+): RuntimeModelOption => ({
+	id: alias.includes("/") ? (alias.split("/").at(-1) ?? alias) : alias,
+	provider: alias.split("/", 1)[0] ?? "example",
+	alias,
+	brand: "Example",
+	label: alias,
+	vision: false,
+	efforts: ["off"],
+	price,
+	contextWindow: 128_000,
 });
 
 const provider = (id: string) => ({
@@ -117,8 +134,10 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		const backend = new KlientChatBackend(connection, "/workspace", "resume");
 		const internals = backend as unknown as {
 			providerAvailability: Map<string, unknown>;
+			modelOptionsPromise: Promise<unknown[]> | undefined;
 		};
 		internals.providerAvailability.set("vsplab", {});
+		internals.modelOptionsPromise = Promise.resolve([]);
 
 		await backend.start({
 			onMessage: vi.fn(),
@@ -131,6 +150,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		listeners.get("kosong.models.changed")?.();
 
 		expect(internals.providerAvailability.size).toBe(0);
+		expect(internals.modelOptionsPromise).toBeUndefined();
 		expect(onRuntimeCatalogChanged).toHaveBeenCalledTimes(1);
 	});
 
@@ -285,6 +305,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			model: models.find((item) => item.model === alias) ?? models[1],
 		}));
 		const setModel = vi.fn().mockResolvedValue(undefined);
+		const getGoal = vi.fn().mockResolvedValue({ goal: { status: "active" } });
 		const disposable = { dispose: vi.fn() };
 		const eventSource = {
 			on: vi.fn(() => disposable),
@@ -295,6 +316,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			setThinking: vi.fn().mockResolvedValue(undefined),
 			getThinking: vi.fn().mockResolvedValue("off"),
 			setModel,
+			getGoal,
 			getContext: vi.fn().mockRejectedValue(new Error("not loaded")),
 			getTasks: vi.fn().mockResolvedValue([]),
 			getCronTasks: vi.fn().mockResolvedValue([]),
@@ -320,6 +342,10 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			},
 		} as unknown as RuntimeConnection;
 		const backend = new KlientChatBackend(connection, "/workspace", "new");
+		const onRuntimeGoalStatus = vi.fn();
+		Object.assign(backend, {
+			events: { onRuntimeGoalStatus, onNotice: vi.fn() },
+		});
 		const bind = backend as unknown as {
 			bindSession(meta: { id: string }, reason: "startup"): Promise<void>;
 		};
@@ -329,6 +355,8 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			expect(queryAvailableModels).toHaveBeenCalledWith("acme");
 			expect(setDefaultModel).toHaveBeenCalledWith("acme/available");
 			expect(setModel).toHaveBeenCalledWith("acme/available");
+			expect(getGoal).toHaveBeenCalledOnce();
+			expect(onRuntimeGoalStatus).toHaveBeenCalledWith("active");
 		} finally {
 			await backend.dispose();
 		}
@@ -431,6 +459,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			{
 				provider: "vsplab",
 				id: "glm-5.3-flash",
+				alias: "vsplab/glm-5.3-flash",
 				brand: "VSPLab",
 				label: "GLM 5.3 Flash",
 			},
@@ -595,6 +624,164 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		});
 	});
 
+	it("recovers a completed agent when the task list temporarily omits it", async () => {
+		const running = {
+			taskId: "agent-running",
+			description: "Inspect repository",
+			kind: "agent",
+			status: "running",
+			detached: false,
+			startedAt: 1_000,
+			endedAt: null,
+			agentId: "agent-0",
+			parentToolCallId: "tool-swarm",
+		} satisfies AgentTaskInfo;
+		const completed = {
+			...running,
+			status: "completed" as const,
+			endedAt: 2_000,
+		} satisfies AgentTaskInfo;
+		const getTasks = vi
+			.fn()
+			.mockResolvedValueOnce([running])
+			.mockResolvedValueOnce([]);
+		const getTask = vi.fn().mockResolvedValue(completed);
+		const getTaskOutput = vi.fn().mockResolvedValue("child final");
+		const onAgentSnapshot = vi.fn();
+		const onTaskSnapshot = vi.fn();
+		const backend = new KlientChatBackend(
+			{} as RuntimeConnection,
+			"/workspace",
+			"new",
+		);
+		Object.assign(backend, {
+			agent: { getTasks, getTask, getTaskOutput },
+			events: { onAgentSnapshot, onTaskSnapshot, onMessageUpdate: vi.fn() },
+		});
+		const refresh = backend as unknown as { refreshTasks(): Promise<void> };
+
+		await refresh.refreshTasks();
+		await refresh.refreshTasks();
+
+		expect(getTask).toHaveBeenCalledWith("agent-running");
+		expect(getTaskOutput).toHaveBeenCalledWith({
+			taskId: "agent-running",
+			tail: 200,
+		});
+		expect(onAgentSnapshot).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				active: [],
+				recent: [
+					expect.objectContaining({
+						id: "agent-running",
+						status: "success",
+						outputPreview: "child final",
+						summary: "child final",
+					}),
+				],
+			}),
+		);
+		expect(onTaskSnapshot).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				agents: [
+					expect.objectContaining({
+						taskId: "agent-running",
+						status: "completed",
+						outputPreview: "child final",
+					}),
+				],
+			}),
+		);
+	});
+
+	it("marks an omitted running agent lost when getTask confirms it is gone", async () => {
+		const running = {
+			taskId: "agent-gone",
+			description: "Inspect repository",
+			kind: "agent",
+			status: "running",
+			detached: false,
+			startedAt: 1_000,
+			endedAt: null,
+		} satisfies AgentTaskInfo;
+		const getTasks = vi
+			.fn()
+			.mockResolvedValueOnce([running])
+			.mockResolvedValueOnce([]);
+		const getTask = vi.fn().mockResolvedValue(undefined);
+		const onAgentSnapshot = vi.fn();
+		const onTaskSnapshot = vi.fn();
+		const backend = new KlientChatBackend(
+			{} as RuntimeConnection,
+			"/workspace",
+			"new",
+		);
+		Object.assign(backend, {
+			agent: { getTasks, getTask },
+			events: { onAgentSnapshot, onTaskSnapshot },
+		});
+		const refresh = backend as unknown as { refreshTasks(): Promise<void> };
+
+		await refresh.refreshTasks();
+		await refresh.refreshTasks();
+
+		expect(getTask).toHaveBeenCalledWith("agent-gone");
+		expect(onAgentSnapshot).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				recent: [expect.objectContaining({ id: "agent-gone", status: "lost" })],
+			}),
+		);
+		expect(onTaskSnapshot).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				agents: [expect.objectContaining({ taskId: "agent-gone", status: "lost" })],
+			}),
+		);
+	});
+
+	it("keeps a running agent when getTask cannot confirm its state", async () => {
+		const running = {
+			taskId: "agent-unknown",
+			description: "Inspect repository",
+			kind: "agent",
+			status: "running",
+			detached: false,
+			startedAt: 1_000,
+			endedAt: null,
+		} satisfies AgentTaskInfo;
+		const getTasks = vi
+			.fn()
+			.mockResolvedValueOnce([running])
+			.mockResolvedValueOnce([]);
+		const getTask = vi.fn().mockRejectedValue(new Error("temporarily unavailable"));
+		const onAgentSnapshot = vi.fn();
+		const onTaskSnapshot = vi.fn();
+		const backend = new KlientChatBackend(
+			{} as RuntimeConnection,
+			"/workspace",
+			"new",
+		);
+		Object.assign(backend, {
+			agent: { getTasks, getTask },
+			events: { onAgentSnapshot, onTaskSnapshot },
+		});
+		const refresh = backend as unknown as { refreshTasks(): Promise<void> };
+
+		await refresh.refreshTasks();
+		await refresh.refreshTasks();
+
+		expect(onAgentSnapshot).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				active: [expect.objectContaining({ id: "agent-unknown", status: "running" })],
+				recent: [],
+			}),
+		);
+		expect(onTaskSnapshot).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				agents: [expect.objectContaining({ taskId: "agent-unknown", status: "running" })],
+			}),
+		);
+	});
+
 	it("projects and pages a compact child conversation", () => {
 		const history = [
 			{
@@ -741,6 +928,432 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 				focused: true,
 			},
 		]);
+	});
+
+	it("hydrates the Runtime Goal status without projecting a legacy StoredGoal", async () => {
+		const onRuntimeGoalStatus = vi.fn();
+		const onGoalChange = vi.fn();
+		const backend = new KlientChatBackend(
+			{} as RuntimeConnection,
+			"/workspace",
+			"new",
+		);
+		Object.assign(backend, {
+			agent: {
+				getGoal: vi.fn().mockResolvedValue({
+					goal: { status: "paused" },
+				}),
+			},
+			events: { onRuntimeGoalStatus, onGoalChange },
+		});
+
+		await (
+			backend as unknown as { publishRuntimeGoalStatus(): Promise<void> }
+		).publishRuntimeGoalStatus();
+
+		expect(onRuntimeGoalStatus).toHaveBeenCalledWith("paused");
+		expect(onGoalChange).not.toHaveBeenCalled();
+	});
+
+	it("projects goal.updated status changes and clears the Runtime Goal", () => {
+		const listeners = new Map<string, (event: any) => void>();
+		const eventSource = {
+			on: vi.fn((name: string, listener: (event: any) => void) => {
+				listeners.set(name, listener);
+				return { dispose: vi.fn() };
+			}),
+			onError: vi.fn(() => ({ dispose: vi.fn() })),
+		};
+		const onRuntimeGoalStatus = vi.fn();
+		const backend = new KlientChatBackend(
+			{} as RuntimeConnection,
+			"/workspace",
+			"new",
+		);
+		Object.assign(backend, {
+			agent: { events: eventSource },
+			session: { events: eventSource },
+			events: { onRuntimeGoalStatus },
+		});
+
+		(backend as unknown as { subscribe(): void }).subscribe();
+		listeners.get("goal.updated")?.({ snapshot: { status: "blocked" } });
+		listeners.get("goal.updated")?.({ snapshot: null });
+
+		expect(onRuntimeGoalStatus.mock.calls).toEqual([["blocked"], [undefined]]);
+	});
+
+	it("does not let delayed Goal hydration overwrite a newer goal.updated event", async () => {
+		let resolveGoal!: (value: { goal: { status: "paused" } }) => void;
+		const getGoal = vi.fn(
+			() =>
+				new Promise<{ goal: { status: "paused" } }>((resolve) => {
+					resolveGoal = resolve;
+				}),
+		);
+		const onRuntimeGoalStatus = vi.fn();
+		const backend = new KlientChatBackend(
+			{} as RuntimeConnection,
+			"/workspace",
+			"new",
+		);
+		Object.assign(backend, {
+			agent: { getGoal },
+			events: { onRuntimeGoalStatus },
+		});
+		const internals = backend as unknown as {
+			publishRuntimeGoalStatus(): Promise<void>;
+			setRuntimeGoalStatus(status: "active", live: boolean): void;
+		};
+
+		const hydration = internals.publishRuntimeGoalStatus();
+		internals.setRuntimeGoalStatus("active", true);
+		resolveGoal({ goal: { status: "paused" } });
+		await hydration;
+
+		expect(onRuntimeGoalStatus.mock.calls).toEqual([["active"]]);
+	});
+
+	it("caches normalized model options across repeated reads", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(new Response("{}", { status: 200 })),
+		);
+		const listModels = vi.fn().mockResolvedValue([model("example", "model-1")]);
+		const listProviders = vi.fn().mockResolvedValue([provider("example")]);
+		const connection = {
+			klient: {
+				global: {
+					kosong: {
+						listModels,
+						listProviders,
+						queryAvailableModels: vi.fn().mockResolvedValue({
+							providerId: "example",
+							modelIds: ["example/model-1"],
+						}),
+					},
+				},
+			},
+		} as unknown as RuntimeConnection;
+		const backend = new KlientChatBackend(connection, "/workspace", "new");
+
+		await backend.getModelOptions();
+		await backend.getModelOptions();
+
+		expect(listModels).toHaveBeenCalledOnce();
+		expect(listProviders).toHaveBeenCalledOnce();
+	});
+
+	it("publishes by-model cost while reusing cached model options", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(new Response("{}", { status: 200 })),
+		);
+		const usage = {
+			byModel: {
+				"example/model-1": {
+					inputOther: 1_000_000,
+					output: 500_000,
+					inputCacheRead: 0,
+					inputCacheCreation: 0,
+				},
+			},
+			total: {
+				inputOther: 1_000_000,
+				output: 500_000,
+				inputCacheRead: 0,
+				inputCacheCreation: 0,
+			},
+		};
+		const listModels = vi.fn().mockResolvedValue([model("example", "model-1")]);
+		const listProviders = vi.fn().mockResolvedValue([provider("example")]);
+		const connection = {
+			klient: {
+				global: {
+					kosong: {
+						listModels,
+						listProviders,
+						queryAvailableModels: vi.fn().mockResolvedValue({
+							providerId: "example",
+							modelIds: ["example/model-1"],
+						}),
+					},
+				},
+			},
+		} as unknown as RuntimeConnection;
+		const onUsage = vi.fn();
+		const backend = new KlientChatBackend(connection, "/workspace", "new");
+		Object.assign(backend, {
+			agent: {
+				getUsage: vi.fn().mockResolvedValue(usage),
+				getContext: vi.fn().mockResolvedValue({ history: [], tokenCount: 100 }),
+			},
+			events: { onUsage },
+			currentProvider: "example",
+			currentModel: "model-1",
+		});
+		const publish = backend as unknown as { publishUsage(): Promise<void> };
+
+		await publish.publishUsage();
+		await publish.publishUsage();
+
+		expect(onUsage).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				costUsd: 2,
+				costEstimateKind: "complete",
+			}),
+		);
+		expect(listModels).toHaveBeenCalledOnce();
+		expect(listProviders).toHaveBeenCalledOnce();
+	});
+
+	it("matches the full VSPLab alias to its exact official price during usage projection", async () => {
+		const alias = "vsplab/gpt-5.6-sol";
+		const price = resolveModelsDevPricing(
+			{
+				openai: {
+					models: {
+						"gpt-5.6-sol": {
+							id: "gpt-5.6-sol",
+							cost: { input: 2, output: 4 },
+						},
+					},
+				},
+			},
+			"vsplab",
+			"gpt-5.6-sol",
+		);
+		const onUsage = vi.fn();
+		const backend = new KlientChatBackend(
+			{} as RuntimeConnection,
+			"/workspace",
+			"new",
+		);
+		Object.assign(backend, {
+			agent: {
+				getUsage: vi.fn().mockResolvedValue({
+					byModel: {
+						[alias]: {
+							inputOther: 1_000_000,
+							output: 500_000,
+							inputCacheRead: 0,
+							inputCacheCreation: 0,
+						},
+					},
+					total: {
+						inputOther: 1_000_000,
+						output: 500_000,
+						inputCacheRead: 0,
+						inputCacheCreation: 0,
+					},
+				}),
+				getContext: vi.fn().mockResolvedValue({ history: [], tokenCount: 100 }),
+			},
+			events: { onUsage },
+			currentProvider: "vsplab",
+			currentModel: "gpt-5.6-sol",
+			modelOptionsPromise: Promise.resolve([pricedModel(alias, price)]),
+		});
+
+		await (
+			backend as unknown as { publishUsage(): Promise<void> }
+		).publishUsage();
+
+		expect(price).toMatchObject({
+			referenceProvider: "openai",
+			source: "official",
+		});
+		expect(onUsage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				costUsd: 4,
+				costEstimateKind: "complete",
+			}),
+		);
+	});
+
+	it("calculates one model cost with explicit cache prices", () => {
+		const estimate = calculateUsageCost(
+			{
+				"openai/gpt-5": {
+					inputOther: 1_000_000,
+					output: 500_000,
+					inputCacheRead: 250_000,
+					inputCacheCreation: 100_000,
+				},
+			},
+			[
+				pricedModel("openai/gpt-5", {
+					inputUsdPerMillion: 2,
+					outputUsdPerMillion: 6,
+					cacheReadUsdPerMillion: 0.5,
+					cacheWriteUsdPerMillion: 2.5,
+				}),
+			],
+		);
+
+		expect(estimate).toEqual({ costUsd: 5.375, kind: "complete" });
+	});
+
+	it("accumulates each model alias separately across model switches", () => {
+		const estimate = calculateUsageCost(
+			{
+				"openai/gpt-5": {
+					inputOther: 1_000_000,
+					output: 500_000,
+					inputCacheRead: 0,
+					inputCacheCreation: 0,
+				},
+				"anthropic/claude-sonnet-4": {
+					inputOther: 1_000_000,
+					output: 1_000_000,
+					inputCacheRead: 0,
+					inputCacheCreation: 0,
+				},
+			},
+			[
+				pricedModel("openai/gpt-5", {
+					inputUsdPerMillion: 2,
+					outputUsdPerMillion: 6,
+				}),
+				pricedModel("anthropic/claude-sonnet-4", {
+					inputUsdPerMillion: 1,
+					outputUsdPerMillion: 1,
+				}),
+			],
+		);
+
+		expect(estimate).toEqual({ costUsd: 7, kind: "complete" });
+	});
+
+	it("uses input price when cache prices are absent", () => {
+		const estimate = calculateUsageCost(
+			{
+				"google/gemini-3-pro": {
+					inputOther: 0,
+					output: 0,
+					inputCacheRead: 500_000,
+					inputCacheCreation: 250_000,
+				},
+			},
+			[
+				pricedModel("google/gemini-3-pro", {
+					inputUsdPerMillion: 4,
+					outputUsdPerMillion: 8,
+				}),
+			],
+		);
+
+		expect(estimate).toEqual({ costUsd: 3, kind: "complete" });
+	});
+
+	it("uses base pricing when cumulative usage cannot identify a context tier", () => {
+		const estimate = calculateUsageCost(
+			{
+				"anthropic/claude-sonnet-4": {
+					inputOther: 2_000_000,
+					output: 0,
+					inputCacheRead: 0,
+					inputCacheCreation: 0,
+				},
+			},
+			[
+				pricedModel("anthropic/claude-sonnet-4", {
+					inputUsdPerMillion: 3,
+					outputUsdPerMillion: 15,
+					contextTiers: [
+						{
+							contextTokensAbove: 200_000,
+							inputUsdPerMillion: 6,
+							outputUsdPerMillion: 22.5,
+						},
+					],
+				}),
+			],
+		);
+
+		expect(estimate).toEqual({ costUsd: 6, kind: "complete" });
+	});
+
+	it("marks a mixed priced and unpriced model set as partial without a false total", () => {
+		const estimate = calculateUsageCost(
+			{
+				"openai/gpt-5": {
+					inputOther: 1_000_000,
+					output: 0,
+					inputCacheRead: 0,
+					inputCacheCreation: 0,
+				},
+				"vsplab/luna": {
+					inputOther: 1_000_000,
+					output: 0,
+					inputCacheRead: 0,
+					inputCacheCreation: 0,
+				},
+			},
+			[
+				pricedModel("openai/gpt-5", {
+					inputUsdPerMillion: 2,
+					outputUsdPerMillion: 6,
+				}),
+				pricedModel("vsplab/luna", {}),
+			],
+		);
+
+		expect(estimate).toEqual({ costUsd: null, kind: "partial" });
+	});
+
+	it("distinguishes explicit free pricing from missing pricing", () => {
+		const usage = {
+			inputOther: 1_000_000,
+			output: 1_000_000,
+			inputCacheRead: 0,
+			inputCacheCreation: 0,
+		};
+
+		expect(
+			calculateUsageCost(
+				{ "example/free": usage },
+				[
+					pricedModel("example/free", {
+						inputUsdPerMillion: 0,
+						outputUsdPerMillion: 0,
+					}),
+				],
+			),
+		).toEqual({ costUsd: 0, kind: "complete" });
+		expect(
+			calculateUsageCost(
+				{ "example/unknown": usage },
+				[pricedModel("example/unknown", {})],
+			),
+		).toEqual({ costUsd: null, kind: "unknown" });
+	});
+
+	it("calculates zero-token usage as zero only when the model price is known", () => {
+		const usage = {
+			inputOther: 0,
+			output: 0,
+			inputCacheRead: 0,
+			inputCacheCreation: 0,
+		};
+
+		expect(
+			calculateUsageCost(
+				{ "example/free": usage },
+				[
+					pricedModel("example/free", {
+						inputUsdPerMillion: 0,
+						outputUsdPerMillion: 0,
+					}),
+				],
+			),
+		).toEqual({ costUsd: 0, kind: "complete" });
+		expect(
+			calculateUsageCost(
+				{ "example/unknown": usage },
+				[pricedModel("example/unknown", {})],
+			),
+		).toEqual({ costUsd: null, kind: "unknown" });
 	});
 
 	it("calculates cache hit rate from uncached, read, and write input", () => {
@@ -974,13 +1587,86 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		expect(formatProviderDisplayName("opencode-go")).toBe("OpenCode Go");
 	});
 
-	it("uses channel prices first and deterministic official reference prices second", () => {
+	it("uses channel prices except for VSPLab, which uses exact official references", () => {
 		const catalog = {
+			openai: {
+				models: {
+					"gpt-5.6-luna": {
+						id: "gpt-5.6-luna",
+						cost: { input: 1, output: 2 },
+					},
+					"gpt-5.6-sol": {
+						id: "gpt-5.6-sol",
+						cost: { input: 2, output: 4 },
+					},
+					"gpt-5.6-terra": {
+						id: "gpt-5.6-terra",
+						cost: { input: 3, output: 6 },
+					},
+				},
+			},
+			anthropic: {
+				models: {
+					"claude-sonnet-4": {
+						id: "claude-sonnet-4",
+						cost: { input: 3, output: 15 },
+					},
+				},
+			},
+			google: {
+				models: {
+					"gemini-3-pro": {
+						id: "gemini-3-pro",
+						cost: { input: 2, output: 12 },
+					},
+				},
+			},
+			zai: {
+				models: {
+					"glm-5": {
+						id: "glm-5",
+						cost: { input: 1, output: 4 },
+					},
+				},
+			},
 			deepseek: {
 				models: {
 					"deepseek-v4-flash": {
 						id: "deepseek-v4-flash",
 						cost: { input: 0.14, output: 0.28 },
+					},
+				},
+			},
+			"kimi-for-coding": {
+				models: {
+					k3: { id: "k3", cost: { input: 0.5, output: 2.5 } },
+					"k3-256k": {
+						id: "k3-256k",
+						cost: { input: 0.6, output: 3 },
+					},
+					"kimi-for-coding": {
+						id: "kimi-for-coding",
+						cost: { input: 0.7, output: 3.5 },
+					},
+					"kimi-for-coding-highspeed": {
+						id: "kimi-for-coding-highspeed",
+						cost: { input: 0.8, output: 4 },
+					},
+				},
+			},
+			moonshotai: {
+				models: {
+					"kimi-k2.5": {
+						id: "kimi-k2.5",
+						cost: { input: 0.6, output: 3 },
+					},
+				},
+			},
+			vsplab: {
+				models: {
+					"gpt-5.6-sol": {
+						id: "gpt-5.6-sol",
+						cost: { input: 0.01, output: 0.01 },
 					},
 				},
 			},
@@ -996,24 +1682,48 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 
 		expect(
 			resolveModelsDevPricing(catalog, "opencode-go", "deepseek-v4-flash"),
-		).toEqual({
-			inputUsdPerMillion: 0.22,
-			outputUsdPerMillion: 0.66,
-			source: "provider",
-			referenceProvider: "opencode-go",
-			contextTiers: undefined,
+		).toMatchObject({ referenceProvider: "opencode-go", source: "provider" });
+		for (const id of ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"]) {
+			expect(resolveModelsDevPricing(catalog, "vsplab", id)).toMatchObject({
+				referenceProvider: "openai",
+				source: "official",
+			});
+		}
+		expect(
+			resolveModelsDevPricing(catalog, "vsplab", "claude-sonnet-4"),
+		).toMatchObject({ referenceProvider: "anthropic", source: "official" });
+		expect(
+			resolveModelsDevPricing(catalog, "vsplab", "gemini-3-pro"),
+		).toMatchObject({ referenceProvider: "google", source: "official" });
+		expect(resolveModelsDevPricing(catalog, "vsplab", "glm-5")).toMatchObject({
+			referenceProvider: "zai",
+			source: "official",
 		});
 		expect(
 			resolveModelsDevPricing(catalog, "vsplab", "deepseek-v4-flash"),
-		).toEqual({
-			inputUsdPerMillion: 0.14,
-			outputUsdPerMillion: 0.28,
+		).toMatchObject({ referenceProvider: "deepseek", source: "official" });
+		for (const id of [
+			"k3",
+			"k3-256k",
+			"kimi-for-coding",
+			"kimi-for-coding-highspeed",
+		]) {
+			expect(resolveModelsDevPricing(catalog, "vsplab", id)).toMatchObject({
+				referenceProvider: "kimi-for-coding",
+				source: "official",
+			});
+		}
+		expect(resolveModelsDevPricing(catalog, "vsplab", "kimi-k2.5")).toMatchObject({
+			referenceProvider: "moonshotai",
 			source: "official",
-			referenceProvider: "deepseek",
-			contextTiers: undefined,
 		});
-		expect(
-			resolveModelsDevPricing(catalog, "vsplab", "deepseek-v4-pro"),
-		).toEqual({});
+		expect(resolveModelsDevPricing(catalog, "vsplab", "gpt-5.6-unknown")).toEqual(
+			{},
+		);
+		expect(resolveModelsDevPricing(catalog, "vsplab", "deepseek-reasoner")).toEqual(
+			{},
+		);
+		expect(resolveModelsDevPricing(catalog, "vsplab", "deepseek-chat")).toEqual({});
+		expect(resolveModelsDevPricing(catalog, "vsplab", "kimi-unknown")).toEqual({});
 	});
 });

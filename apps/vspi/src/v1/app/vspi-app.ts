@@ -21,6 +21,7 @@ import type {
 	CompactionActivity,
 	CompactionResult,
 	NewSessionOptions,
+	RuntimeGoalStatus,
 	RuntimeModelOption,
 	SessionHandoffInteraction,
 	TaskDashboardSnapshot,
@@ -393,6 +394,7 @@ export class VspiApp implements Component, Focusable {
 	private sessionHydrationTasks: Promise<void>[] = [];
 	private pendingRouteSubmission: { raw: string } | undefined;
 	private goalSnapshot: StoredGoal | undefined;
+	private runtimeGoalStatus: RuntimeGoalStatus | undefined;
 	private providerConfig: ProviderConfigUi | undefined;
 	private providerCatalogHash: string | undefined;
 	private runtimeDefaults: RuntimeDefaultsUi | undefined;
@@ -604,6 +606,9 @@ export class VspiApp implements Component, Focusable {
 						this.backend.modelLabel,
 					);
 					if (this.panels.kind === "goal") this.requestRender();
+				},
+				onRuntimeGoalStatus: (status) => {
+					this.setRuntimeGoalStatus(status);
 				},
 				onEffectivePrompt: (segments) => {
 					this.effectivePromptSegments = structuredClone(segments);
@@ -1989,6 +1994,11 @@ export class VspiApp implements Component, Focusable {
 		}
 	}
 
+	private setRuntimeGoalStatus(status: RuntimeGoalStatus | undefined): void {
+		this.runtimeGoalStatus = status;
+		this.requestRender();
+	}
+
 	private renderRuntimeStatus(width: number): string {
 		return renderRuntimeStatus(
 			{
@@ -1997,6 +2007,7 @@ export class VspiApp implements Component, Focusable {
 				pendingQuestions: this.pendingQuestion?.questions.length ?? 0,
 				pendingApprovals: this.pendingApproval ? 1 : 0,
 				scheduled: this.scheduledCount,
+				goal: this.runtimeGoalStatus,
 			},
 			width,
 			this.theme,
@@ -5180,6 +5191,7 @@ export class VspiApp implements Component, Focusable {
 		this.transcriptRenderCache.clear();
 		this.usage = DEFAULT_USAGE;
 		this.goalSnapshot = undefined;
+		this.runtimeGoalStatus = undefined;
 		this.panels.setGoalSnapshot(undefined, this.backend.modelLabel);
 		this.queueState = { steering: 0, followUp: 0 };
 		this.queuedPresentations.clear();

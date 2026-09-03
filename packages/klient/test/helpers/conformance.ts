@@ -598,6 +598,20 @@ export function defineKlientConformance(
       }
     });
 
+    it('agent goal view returns no current Goal through every transport', async () => {
+      const created = await target.klient.global.sessions.create({
+        workDir: process.cwd(),
+        title: 'conformance goal view',
+      });
+      try {
+        await expect(target.klient.session(created.id).agent('main').getGoal()).resolves.toEqual({
+          goal: null,
+        });
+      } finally {
+        await target.klient.session(created.id).close();
+      }
+    });
+
     it('agent runtime binding is available through every transport', async () => {
       const created = await target.klient.global.sessions.create({
         workDir: process.cwd(),

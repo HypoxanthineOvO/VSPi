@@ -24,7 +24,8 @@ export interface UsageSnapshot {
 	cacheMissCostUsd: number | null;
 	throughputNow: number | null;
 	throughputAverage: number | null;
-	costUsd: number;
+	costUsd: number | null;
+	costEstimateKind: "complete" | "partial" | "unknown";
 	officialCostCny: number | null;
 	providerBilledCny: number | null;
 	currency: "CNY";

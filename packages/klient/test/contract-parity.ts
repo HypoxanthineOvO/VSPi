@@ -29,6 +29,9 @@ import type { PermissionMode } from '@moonshot-ai/agent-core-v2/agent/permission
 import type { IAgentProfileService } from '@moonshot-ai/agent-core-v2/agent/profile/profile';
 import type { IAgentPromptService } from '@moonshot-ai/agent-core-v2/agent/prompt/prompt';
 import type { IAgentShellCommandService } from '@moonshot-ai/agent-core-v2/agent/shellCommand/shellCommand';
+import type { IAgentTaskService } from '@moonshot-ai/agent-core-v2/agent/task/task';
+import type { IAgentGoalViewService } from '@moonshot-ai/agent-core-v2/features/goal/goalView';
+import type { GoalUpdatedPayload } from '@moonshot-ai/agent-core-v2/features/goal/goalOps';
 import type { SkillRuntime } from '@moonshot-ai/agent-core-v2/features/skill/skillAgentRuntime';
 import type { ContentPart } from '@moonshot-ai/agent-core-v2/kosong/contract/message';
 import type { PlanData } from '@moonshot-ai/agent-core-v2/features/plan/plan';
@@ -182,6 +185,7 @@ import {
   cancelPlanPayloadSchema,
   cancelShellCommandPayloadSchema,
   emptyPayloadSchema,
+  goalToolResultSchema,
   getTaskOutputPayloadSchema,
   getTasksPayloadSchema,
   planDataSchema,
@@ -209,6 +213,7 @@ import {
   compactionCancelledEventSchema,
   compactionCompletedEventSchema,
   compactionStartedEventSchema,
+  goalUpdatedPayloadSchema,
   promptAbortedEventSchema,
   promptCompletedEventSchema,
   thinkingDeltaEventSchema,
@@ -663,6 +668,8 @@ type CancelShellCommandPayload = Parameters<AgentFacade['cancelShellCommand']>[0
 type SetModelPayload = { model: string };
 type CancelPlanPayload = NonNullable<Parameters<AgentFacade['cancelPlan']>[0]>;
 type GetTasksPayload = NonNullable<Parameters<AgentFacade['getTasks']>[0]>;
+type GetTaskResult = Awaited<ReturnType<IAgentTaskService['getTask']>>;
+type GoalToolResult = ReturnType<IAgentGoalViewService['getGoal']>;
 type StopTaskPayload = Parameters<AgentFacade['stopTask']>[0];
 type GetTaskOutputPayload = Parameters<AgentFacade['getTaskOutput']>[0];
 
@@ -721,6 +728,8 @@ const _runCommandPayload: AssertWire<typeof runCommandPayloadSchema, RunCommandP
 const _planData: AssertWire<typeof planDataSchema, PlanData> = true;
 const _cancelPlanPayload: AssertWire<typeof cancelPlanPayloadSchema, CancelPlanPayload> = true;
 const _getTasksPayload: AssertWire<typeof getTasksPayloadSchema, GetTasksPayload> = true;
+const _getTaskResult: AssertWire<typeof agentTaskInfoSchema, NonNullable<GetTaskResult>> = true;
+const _goalToolResult: AssertWire<typeof goalToolResultSchema, GoalToolResult> = true;
 // The wire task union mirrors the protocol `TaskInfo`; the engine's
 // declaration-merged `AgentTaskInfo` is structurally identical but depends on
 // tool-module augmentation, so parity is pinned to the protocol type.
@@ -770,6 +779,10 @@ const _compactionCompletedEvent: AssertWire<
   CompactionCompletedEvent
 > = true;
 const _warningEvent: AssertWire<typeof warningEventSchema, WarningEvent> = true;
+const _goalUpdatedPayload: AssertWire<
+  typeof goalUpdatedPayloadSchema,
+  GoalUpdatedPayload
+> = true;
 // No parity assertions for `errorEventSchema`, `permissionApproval*Schema`,
 // and `agentStatusUpdatedEventSchema`: they are deliberately `z.looseObject`s
 // (index signature breaks both-ways assignability) — `permission.approval.*`

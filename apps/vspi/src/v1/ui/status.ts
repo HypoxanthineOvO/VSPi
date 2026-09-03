@@ -1,5 +1,8 @@
 import { truncateToWidth } from "@moonshot-ai/pi-tui";
-import type { TaskDashboardSnapshot } from "../backend/types.js";
+import type {
+	RuntimeGoalStatus,
+	TaskDashboardSnapshot,
+} from "../backend/types.js";
 import { effortLabel } from "../domain/effort.js";
 import type { EffortLevel, UsageSnapshot } from "../domain/types.js";
 import { padLine, stripAnsi, visibleWidth } from "./ansi.js";
@@ -11,6 +14,7 @@ export interface RuntimeStatusInput {
 	pendingQuestions: number;
 	pendingApprovals: number;
 	scheduled: number;
+	goal?: RuntimeGoalStatus;
 }
 
 export interface StatusLineInput {
@@ -58,6 +62,16 @@ function countLabel(count: number, singular: string, plural = `${singular}s`): s
 	return `${count} ${count === 1 ? singular : plural}`;
 }
 
+function runtimeGoalLabel(status: RuntimeGoalStatus): string {
+	const labels: Record<RuntimeGoalStatus, string> = {
+		active: "执行中",
+		paused: "已暂停",
+		blocked: "阻塞",
+		complete: "已完成",
+	};
+	return `Goal · ${labels[status]}`;
+}
+
 export function renderRuntimeStatus(
 	input: RuntimeStatusInput,
 	width: number,
@@ -87,12 +101,21 @@ export function renderRuntimeStatus(
 		...(input.scheduled > 0 ? [`${input.scheduled} scheduled`] : []),
 		...(state === "Waiting" ? ["完成后自动继续"] : []),
 	];
+	const goal = input.goal === undefined ? undefined : theme.text(runtimeGoalLabel(input.goal));
+	const primary = join(parts, " · ", theme);
+	if (goal !== undefined && visibleWidth(primary) + visibleWidth(goal) + 1 > width) {
+		return padLine(primary, width);
+	}
 	for (const accessory of accessories) {
 		const candidate = join([...parts, theme.text(accessory)], " · ", theme);
-		if (visibleWidth(candidate) > width) break;
+		const required =
+			visibleWidth(candidate) + (goal === undefined ? 0 : visibleWidth(goal) + 1);
+		if (required > width) break;
 		parts.push(theme.text(accessory));
 	}
-	return padLine(join(parts, " · ", theme), width);
+	const left = join(parts, " · ", theme);
+	if (goal === undefined) return padLine(left, width);
+	return `${left}${" ".repeat(width - visibleWidth(left) - visibleWidth(goal))}${goal}`;
 }
 
 export function appendRuntimeStatus(
@@ -327,9 +350,12 @@ function costField(
 	theme: VspiTheme,
 	compactAvailable?: number,
 ): string {
-	const cost = input.usage.costUsd * input.usage.fxRate;
-	const exact = `¥${isFiniteNumber(cost) ? fixedWithoutCarry(cost, 2) : "?"}`;
-	const rounded = `¥${isFiniteNumber(cost) ? Math.round(cost) : "?"}`;
+	const cost =
+		input.usage.costUsd === null
+			? null
+			: input.usage.costUsd * input.usage.fxRate;
+	const exact = isFiniteNumber(cost) ? `¥${fixedWithoutCarry(cost, 2)}` : "—";
+	const rounded = isFiniteNumber(cost) ? `¥${String(Math.round(cost))}` : "—";
 	const formatted =
 		compactAvailable !== undefined
 			? visibleWidth(`Cost ${rounded}`) <= compactAvailable

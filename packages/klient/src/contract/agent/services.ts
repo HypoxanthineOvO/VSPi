@@ -14,6 +14,7 @@ import {
   activateSkillPayloadSchema,
   agentCommandInfoSchema,
   agentTaskInfoSchema,
+  goalToolResultSchema,
   permissionModeSchema,
   planDataSchema,
   promptLaunchResultSchema,
@@ -102,6 +103,10 @@ export const agentUsageContract = {
   status: { input: z.tuple([]), output: usageStatusSchema },
 } satisfies ServiceContract;
 
+export const agentGoalContract = {
+  getGoal: { input: z.tuple([]), output: goalToolResultSchema },
+} satisfies ServiceContract;
+
 export const agentPlanContract = {
   status: { input: z.tuple([]), output: planDataSchema },
   enter: { input: z.tuple([]), output: noResult },
@@ -134,6 +139,7 @@ export const agentFullCompactionContract = {
 } satisfies ServiceContract;
 
 export const agentTaskContract = {
+  getTask: { input: z.tuple([z.string()]), output: maybe(agentTaskInfoSchema) },
   list: {
     input: z.tuple([z.boolean().optional(), z.number().optional()]),
     output: z.array(agentTaskInfoSchema),

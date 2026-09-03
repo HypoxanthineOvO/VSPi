@@ -1237,6 +1237,76 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(review).not.toContain("✓ 1\n");
 	});
 
+	it.each([
+		["active", "执行中"],
+		["paused", "已暂停"],
+		["blocked", "阻塞"],
+		["complete", "已完成"],
+	] as const)("renders Runtime Goal %s as %s when width permits", (goal, label) => {
+		const output = stripTerminalSequences(
+			renderRuntimeStatus(
+				{
+					working: false,
+					tasks: { agents: [], processes: [], questions: [] },
+					pendingQuestions: 0,
+					pendingApprovals: 0,
+					scheduled: 0,
+					goal,
+				},
+				80,
+				theme,
+			),
+		);
+
+		expect(output.startsWith("Runtime · Idle")).toBe(true);
+		expect(output.endsWith(`Goal · ${label}`)).toBe(true);
+	});
+
+	it("hides Runtime Goal before the primary state on narrow screens", () => {
+		const input = {
+			working: false,
+			tasks: { agents: [], processes: [], questions: [] },
+			pendingQuestions: 0,
+			pendingApprovals: 0,
+			scheduled: 2,
+			goal: "active" as const,
+		};
+		const wide = stripTerminalSequences(renderRuntimeStatus(input, 80, theme));
+		const constrained = stripTerminalSequences(
+			renderRuntimeStatus(input, 32, theme),
+		);
+		const narrow = stripTerminalSequences(
+			renderRuntimeStatus(input, 20, theme),
+		).trimEnd();
+		const withoutGoal = stripTerminalSequences(
+			renderRuntimeStatus({ ...input, goal: undefined }, 80, theme),
+		).trimEnd();
+
+		expect(wide.startsWith("Runtime · Idle · 2 scheduled")).toBe(true);
+		expect(wide.endsWith("Goal · 执行中")).toBe(true);
+		expect(constrained.startsWith("Runtime · Idle")).toBe(true);
+		expect(constrained).not.toContain("scheduled");
+		expect(constrained.endsWith("Goal · 执行中")).toBe(true);
+		expect(narrow).toBe("Runtime · Idle");
+		expect(withoutGoal).toBe("Runtime · Idle · 2 scheduled");
+	});
+
+	it("requests a normal render when the Runtime Goal changes", () => {
+		const requestRender = vi.fn();
+		const app = Object.assign(Object.create(VspiApp.prototype), {
+			runtimeGoalStatus: undefined,
+			requestRender,
+		}) as {
+			runtimeGoalStatus: string | undefined;
+			setRuntimeGoalStatus(status: "active" | undefined): void;
+		};
+
+		app.setRuntimeGoalStatus("active");
+
+		expect(app.runtimeGoalStatus).toBe("active");
+		expect(requestRender).toHaveBeenCalledWith();
+	});
+
 	it("always renders Idle and treats cron as an accessory", () => {
 		const emptyTasks = { agents: [], processes: [], questions: [] };
 		const idle = stripTerminalSequences(
@@ -1467,6 +1537,60 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(output).toContain("/workspace/example");
 	});
 
+	it("renders unknown, partial, and free costs without conflating them", () => {
+		const renderUsage = (usage: typeof DEFAULT_USAGE) => {
+			const panels = new PanelController(DEFAULT_SETTINGS);
+			panels.open("usage");
+			return panels
+				.render(80, 20, theme, usage)
+				.map(stripTerminalSequences)
+				.join("\n");
+		};
+		const unknown = renderUsage(DEFAULT_USAGE);
+		const partial = renderUsage({
+			...DEFAULT_USAGE,
+			costEstimateKind: "partial",
+		});
+		const free = renderUsage({
+			...DEFAULT_USAGE,
+			costUsd: 0,
+			costEstimateKind: "complete",
+		});
+
+		expect(unknown).toContain("价格未提供");
+		expect(partial).toContain("部分价格未提供");
+		expect(free).toContain("$0.0000 · ¥0.00");
+	});
+
+	it("renders unknown and free costs differently in the footer", () => {
+		const input = {
+			cwd: "~/Workspace/VSPi",
+			modelLabel: "Example",
+			effort: "off",
+			busy: false,
+		};
+		const unknown = renderStatusLines(
+			{ ...input, usage: DEFAULT_USAGE },
+			80,
+			theme,
+		).map(stripTerminalSequences);
+		const free = renderStatusLines(
+			{
+				...input,
+				usage: {
+					...DEFAULT_USAGE,
+					costUsd: 0,
+					costEstimateKind: "complete",
+				},
+			},
+			80,
+			theme,
+		).map(stripTerminalSequences);
+
+		expect(unknown[1]?.endsWith("—")).toBe(true);
+		expect(free[1]?.endsWith("¥0.00")).toBe(true);
+	});
+
 	it("aligns the confirmed footer fields without model, effort, or host labels", () => {
 		const lines = renderStatusLines(
 			{
@@ -1530,6 +1654,6 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(lines.map(visibleWidth)).toEqual([80, 80]);
 		expect(lines[0]).toContain("Speed 42.8 tok/s");
 		expect(lines[0]?.endsWith("Context 61K / 128K 48%")).toBe(true);
-		expect(lines[1]?.endsWith("¥0.00")).toBe(true);
+		expect(lines[1]?.endsWith("—")).toBe(true);
 	});
 });

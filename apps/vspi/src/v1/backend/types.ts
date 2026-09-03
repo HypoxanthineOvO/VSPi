@@ -41,6 +41,8 @@ import type {
 import type { WorkflowSnapshot } from "../workflow/types.js";
 export type SessionOwnerRecoveryAction = "terminate" | "kill" | "cancel";
 
+export type RuntimeGoalStatus = "active" | "paused" | "blocked" | "complete";
+
 export type TaskDashboardStatus =
 	| "running"
 	| "completed"
@@ -141,6 +143,7 @@ export interface BackendSubscription {
 
 export interface RuntimeModelOption extends ModelOption {
 	provider: string;
+	alias: string;
 	contextWindow: number;
 	defaultEffort?: EffortLevel;
 }
@@ -276,6 +279,7 @@ export interface ChatBackendEvents {
 	onPlanItems?: (items: PlanItem[]) => void;
 	onPlanBindingChange?: (binding: PlanBinding | undefined) => void;
 	onGoalChange?: (goal: StoredGoal | undefined) => void;
+	onRuntimeGoalStatus?: (status: RuntimeGoalStatus | undefined) => void;
 	onEffectivePrompt?: (segments: EffectivePromptSegment[]) => void;
 	onWorkflowSnapshot?: (snapshot: WorkflowSnapshot) => void;
 	onAgentSnapshot?: (snapshot: AgentSnapshot) => void;
@@ -405,6 +409,7 @@ export interface ChatBackend {
 	setPolicy?(policy: PolicyLevel): Promise<PolicySnapshot>;
 	getAgentSnapshot?(): AgentSnapshot;
 	getTaskSnapshot?(): TaskDashboardSnapshot;
+	getAgentTask?(taskId: string): Promise<TaskDashboardItem | undefined>;
 	getAgentConversation?(
 		agentId: string,
 		options?: { cursor?: string; limit?: number },

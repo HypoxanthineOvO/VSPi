@@ -20,6 +20,7 @@ import type { IAgentShellCommandService } from '@moonshot-ai/agent-core-v2/agent
 import type { SkillRuntime } from '@moonshot-ai/agent-core-v2/features/skill/skillAgentRuntime';
 import type { IAgentTaskService } from '@moonshot-ai/agent-core-v2/agent/task/task';
 import type { IAgentCronViewService } from '@moonshot-ai/agent-core-v2/features/cron/cronView';
+import type { IAgentGoalViewService } from '@moonshot-ai/agent-core-v2/features/goal/goalView';
 import type { ISessionUsageService } from '@moonshot-ai/agent-core-v2/session/usage/sessionUsage';
 import type { ContentPart } from '@moonshot-ai/agent-core-v2/kosong/contract/message';
 import type { PermissionMode } from '@moonshot-ai/agent-core-v2/agent/permissionPolicy/types';
@@ -47,6 +48,7 @@ export type PlanData = Awaited<ReturnType<IAgentPlanService['status']>>;
 export type AgentTaskInfo = Awaited<ReturnType<IAgentTaskService['list']>>[number];
 export type McpServerEntry = ReturnType<IAgentMcpService['list']>[number];
 export type AgentCronTask = ReturnType<IAgentCronViewService['list']>[number];
+export type GoalToolResult = ReturnType<IAgentGoalViewService['getGoal']>;
 
 export interface AgentFacade {
   prompt(input: {
@@ -82,6 +84,7 @@ export interface AgentFacade {
   setThinking(level: string): Promise<void>;
   setPermission(mode: PermissionMode): Promise<void>;
   getUsage(): Promise<UsageStatus>;
+  getGoal(): Promise<GoalToolResult>;
   getContext(): Promise<AgentContextData>;
   listCommands(): Promise<readonly AgentCommandInfo[]>;
   runCommand(input: { name: string; args?: string }): Promise<void>;
@@ -91,6 +94,7 @@ export interface AgentFacade {
   enterPlan(): Promise<void>;
   clearPlan(): Promise<void>;
   cancelPlan(input?: { id?: string }): Promise<void>;
+  getTask(taskId: string): Promise<AgentTaskInfo | undefined>;
   getTasks(input?: { activeOnly?: boolean; limit?: number }): Promise<readonly AgentTaskInfo[]>;
   stopTask(input: { taskId: string; reason?: string }): Promise<void>;
   detachTask(input: { taskId: string }): Promise<void>;
@@ -143,6 +147,8 @@ export function createAgentFacade(call: ScopedCaller, scope: ScopeRef): AgentFac
     setPermission: (mode) =>
       call(scope, 'agentPermissionModeService', 'setModeAndBroadcast', [mode]) as Promise<void>,
     getUsage: () => call(scope, 'agentUsageService', 'status', []) as Promise<UsageStatus>,
+    getGoal: () =>
+      call(scope, 'agentGoalViewService', 'getGoal', []) as Promise<GoalToolResult>,
     getContext: async () => {
       const [history, tokenCount] = await Promise.all([
         call(scope, 'agentContextMemoryService', 'get', []),
@@ -170,6 +176,8 @@ export function createAgentFacade(call: ScopedCaller, scope: ScopeRef): AgentFac
     clearPlan: () => call(scope, 'agentPlanService', 'clear', []) as Promise<void>,
     cancelPlan: (input) =>
       call(scope, 'agentPlanService', 'cancel', [input?.id]) as Promise<void>,
+    getTask: (taskId) =>
+      call(scope, 'agentTaskService', 'getTask', [taskId]) as Promise<AgentTaskInfo | undefined>,
     getTasks: (input) =>
       call(scope, 'agentTaskService', 'list', [
         input?.activeOnly ?? false,

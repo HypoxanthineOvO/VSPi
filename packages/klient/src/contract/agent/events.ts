@@ -10,6 +10,7 @@
 import { z } from 'zod';
 
 import type { EventRegistration } from '../types.js';
+import { goalChangeSchema, goalSnapshotSchema } from './schemas.js';
 
 /**
  * Scope-stream registration (`kind: 'stream'`). Declared structurally here
@@ -231,6 +232,21 @@ export const agentStatusUpdatedEventSchema = z.looseObject({
   phase: z.string().optional(),
 });
 
+export const goalUpdatedPayloadSchema = z
+  .object({
+    agentId: z.string(),
+    snapshot: goalSnapshotSchema.nullable(),
+    change: goalChangeSchema.optional(),
+  })
+  .strict();
+
+export const goalUpdatedEventSchema = goalUpdatedPayloadSchema
+  .extend({
+    type: z.literal('goal.updated'),
+    time: z.number().optional(),
+  })
+  .strict();
+
 // ── registrations ───────────────────────────────────────────────────────────
 
 /** Public event name → payload type. Keys must stay in sync with `agentEvents`. */
@@ -257,6 +273,7 @@ export interface AgentEventPayloads {
   error: z.infer<typeof errorEventSchema>;
   warning: z.infer<typeof warningEventSchema>;
   'agent.status.updated': z.infer<typeof agentStatusUpdatedEventSchema>;
+  'goal.updated': z.infer<typeof goalUpdatedEventSchema>;
 }
 
 export type AgentEventName = keyof AgentEventPayloads;
@@ -319,5 +336,11 @@ export const agentEvents = {
     name: 'events',
     type: 'agent.status.updated',
     schema: agentStatusUpdatedEventSchema,
+  },
+  'goal.updated': {
+    kind: 'stream',
+    name: 'events',
+    type: 'goal.updated',
+    schema: goalUpdatedEventSchema,
   },
 } satisfies Record<AgentEventName, AgentEventRegistration>;

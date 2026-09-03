@@ -3504,6 +3504,12 @@ export class PanelController {
 			usage.throughputAverage === null
 				? "—"
 				: `${usage.throughputAverage.toFixed(1)} tok/s`;
+		const cost =
+			usage.costEstimateKind === "complete" && usage.costUsd !== null
+				? `$${usage.costUsd.toFixed(4)} · ¥${(usage.costUsd * usage.fxRate).toFixed(2)}`
+				: usage.costEstimateKind === "partial"
+					? "— · 部分价格未提供"
+					: "— · 价格未提供";
 		const lines = [
 			alignRight("上下文", formatContextUsage(usage), width),
 			alignRight("输入 ↑", usage.inputTokens.toLocaleString("zh-CN"), width),
@@ -3521,11 +3527,7 @@ export class PanelController {
 				width,
 			),
 			alignRight("生成速度", speed, width),
-			alignRight(
-				"预估成本",
-				`$${usage.costUsd.toFixed(4)} · ¥${(usage.costUsd * usage.fxRate).toFixed(2)}`,
-				width,
-			),
+			alignRight("预估成本", cost, width),
 			alignRight(
 				"汇率",
 				`1 USD = ¥${usage.fxRate.toFixed(2)} · ${usage.asOf}`,

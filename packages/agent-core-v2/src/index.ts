@@ -372,6 +372,7 @@ export * from '#/features/goal/goalDeadlineScheduler';
 export * from '#/features/goal/goal';
 export * from '#/features/goal/goalAgentRuntime';
 export * from '#/features/goal/goalOps';
+export * from '#/features/goal/goalView';
 export * from '#/features/goal/types';
 import '#/features/goal/goalFeature';
 import '#/features/staleGuard/staleGuardFeature';

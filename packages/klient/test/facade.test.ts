@@ -238,6 +238,58 @@ describe('agent profile routing', () => {
   });
 });
 
+describe('agent goal routing', () => {
+  it('routes getGoal through the Agent-scoped read view', async () => {
+    const channel = new FakeChannel();
+    const agent = createKlientFromChannel(channel).session('s1').agent('main');
+    channel.result = { goal: null };
+
+    await expect(agent.getGoal()).resolves.toEqual({ goal: null });
+    expect(channel.calls).toEqual([
+      {
+        scope: { sessionId: 's1', agentId: 'main' },
+        service: 'agentGoalViewService',
+        method: 'getGoal',
+        args: [],
+      },
+    ]);
+  });
+});
+
+describe('agent task routing', () => {
+  it('routes getTask through the agent scope and normalizes missing tasks', async () => {
+    const channel = new FakeChannel();
+    const agent = createKlientFromChannel(channel).session('s1').agent('main');
+    const task = {
+      kind: 'agent' as const,
+      taskId: 'task-1',
+      description: 'Inspect repository',
+      status: 'completed' as const,
+      startedAt: 1,
+      endedAt: 2,
+    };
+
+    channel.result = task;
+    await expect(agent.getTask(task.taskId)).resolves.toEqual(task);
+    channel.result = null;
+    await expect(agent.getTask('missing')).resolves.toBeUndefined();
+    expect(channel.calls).toEqual([
+      {
+        scope: { sessionId: 's1', agentId: 'main' },
+        service: 'agentTaskService',
+        method: 'getTask',
+        args: ['task-1'],
+      },
+      {
+        scope: { sessionId: 's1', agentId: 'main' },
+        service: 'agentTaskService',
+        method: 'getTask',
+        args: ['missing'],
+      },
+    ]);
+  });
+});
+
 describe('agent cron routing', () => {
   it('routes cron reads and mutations through the agent scope', async () => {
     const channel = new FakeChannel();

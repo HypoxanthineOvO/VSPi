@@ -76,6 +76,7 @@ export type {
   AgentFacade,
   AgentTaskInfo,
   BindProfileInput,
+  GoalToolResult,
   McpServerEntry,
   PlanData,
   PromptLaunchResult,
