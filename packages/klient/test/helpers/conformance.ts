@@ -612,6 +612,21 @@ export function defineKlientConformance(
       }
     });
 
+    it('agent goal lifecycle RPCs reject without a current Goal through every transport', async () => {
+      const created = await target.klient.global.sessions.create({
+        workDir: process.cwd(),
+        title: 'conformance goal lifecycle',
+      });
+      try {
+        const agent = target.klient.session(created.id).agent('main');
+        await expect(agent.pauseGoal()).rejects.toThrow(/No current goal/);
+        await expect(agent.resumeGoal()).rejects.toThrow(/No current goal/);
+        await expect(agent.cancelGoal()).rejects.toThrow(/No current goal/);
+      } finally {
+        await target.klient.session(created.id).close();
+      }
+    });
+
     it('agent runtime binding is available through every transport', async () => {
       const created = await target.klient.global.sessions.create({
         workDir: process.cwd(),

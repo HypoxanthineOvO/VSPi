@@ -14,6 +14,8 @@ import {
   activateSkillPayloadSchema,
   agentCommandInfoSchema,
   agentTaskInfoSchema,
+  goalReasonInputSchema,
+  goalSnapshotSchema,
   goalToolResultSchema,
   permissionModeSchema,
   planDataSchema,
@@ -21,6 +23,7 @@ import {
   promptPayloadSchema,
   promptWithSkillsPayloadSchema,
   promptWithSkillsResultSchema,
+  resumeGoalInputSchema,
   runShellCommandPayloadSchema,
   runtimeBindingSchema,
   setModelResultSchema,
@@ -105,6 +108,9 @@ export const agentUsageContract = {
 
 export const agentGoalContract = {
   getGoal: { input: z.tuple([]), output: goalToolResultSchema },
+  pauseGoal: { input: z.tuple([goalReasonInputSchema.optional()]), output: goalSnapshotSchema },
+  resumeGoal: { input: z.tuple([resumeGoalInputSchema.optional()]), output: goalSnapshotSchema },
+  cancelGoal: { input: z.tuple([goalReasonInputSchema.optional()]), output: goalSnapshotSchema },
 } satisfies ServiceContract;
 
 export const agentPlanContract = {

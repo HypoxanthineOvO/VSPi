@@ -363,6 +363,44 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		}
 	});
 
+	it("drives runtime Goal pause, resume, and cancel through the Klient agent", async () => {
+		const pauseGoal = vi.fn().mockResolvedValue({ goalId: "goal-1", status: "paused" });
+		const resumeGoal = vi.fn().mockResolvedValue({ goalId: "goal-1", status: "active" });
+		const cancelGoal = vi.fn().mockResolvedValue({ goalId: "goal-1", status: "active" });
+		const onRuntimeGoalStatus = vi.fn();
+		const backend = new KlientChatBackend(
+			{} as RuntimeConnection,
+			"/workspace",
+			"new",
+		);
+		Object.assign(backend, {
+			agent: { pauseGoal, resumeGoal, cancelGoal },
+			events: { onRuntimeGoalStatus },
+		});
+
+		await expect(backend.pauseGoal()).resolves.toEqual({
+			goalId: "goal-1",
+			status: "paused",
+		});
+		await expect(backend.resumeGoal()).resolves.toEqual({
+			goalId: "goal-1",
+			status: "active",
+		});
+		await expect(backend.cancelGoal()).resolves.toEqual({
+			goalId: "goal-1",
+			status: undefined,
+		});
+
+		expect(pauseGoal).toHaveBeenCalledWith();
+		expect(resumeGoal).toHaveBeenCalledWith();
+		expect(cancelGoal).toHaveBeenCalledWith();
+		expect(onRuntimeGoalStatus.mock.calls.map(([status]) => status)).toEqual([
+			"paused",
+			"active",
+			undefined,
+		]);
+	});
+
 	it("keeps locally configured models selectable when availability omits them", async () => {
 		vi.stubGlobal(
 			"fetch",

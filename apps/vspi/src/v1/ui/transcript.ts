@@ -16,6 +16,10 @@ import {
 	postprocessMarkdownLines,
 	renderMarkdown,
 } from "./markdown.js";
+import {
+	formatSubagentModel,
+	formatSubagentProfile,
+} from "./subagent-display.js";
 import type { VspiTheme } from "./theme.js";
 
 /** Render cap for a single thinking block. Full text stays in the message for
@@ -795,14 +799,16 @@ export function renderTranscriptMessage(
 		const lane = message.lane ? ` · lane ${message.lane}` : "";
 		const preferred =
 			message.preferredModel && message.preferredModel !== message.model
-				? ` · preferred ${message.preferredModel}`
+				? ` · preferred ${formatSubagentModel(message.preferredModel)}`
 				: "";
 		const fallback = message.fallbackReason
 			? ` · fallback ${message.fallbackReason}`
 			: "";
 		const context = message.contextMode ? ` · ${message.contextMode}` : "";
-		const agentRole = message.agentRole ? ` · ${message.agentRole}` : "";
-		const metadata = `${symbol} ${identity}${agentRole} · ${theme.blue(message.model)}${preferred} · ${effortLabel(message.effort)}${context}${lane}${fallback}`;
+		const agentRole = message.agentRole
+			? ` · ${formatSubagentProfile(message.agentRole)}`
+			: "";
+		const metadata = `${symbol} ${identity}${agentRole} · ${theme.blue(formatSubagentModel(message.model))}${preferred} · ${effortLabel(message.effort)}${context}${lane}${fallback}`;
 		// C19 P0-5：运行中的进度行——当前工具、轮次、最近活动、耗时。
 		// 2026-08-28：不再渲染 run/tree 预算警戒线行。默认 120K/500K 上限对真实
 		// 多轮任务形同虚设，警告常亮失去信息量；用量细节移至 /agents 面板详情。

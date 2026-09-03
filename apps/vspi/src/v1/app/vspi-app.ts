@@ -21,6 +21,7 @@ import type {
 	CompactionActivity,
 	CompactionResult,
 	NewSessionOptions,
+	RuntimeGoalSnapshot,
 	RuntimeGoalStatus,
 	RuntimeModelOption,
 	SessionHandoffInteraction,
@@ -3697,30 +3698,47 @@ export class VspiApp implements Component, Focusable {
 					"当前 generation 尚未结束；请等待它停止后再显式 resume",
 				);
 			}
-			const operation: (() => Promise<StoredGoal>) | undefined =
-				command.kind === "pause"
-					? this.backend.pauseGoal?.bind(this.backend)
-					: command.kind === "resume"
-						? this.backend.resumeGoal?.bind(this.backend)
-						: command.kind === "cancel"
-							? this.backend.cancelGoal?.bind(this.backend)
-							: this.backend.acceptGoal?.bind(this.backend);
-			if (!operation) throw new Error(`当前后端不支持 Goal ${command.kind}`);
-			const goal = await operation();
-			this.goalSnapshot = structuredClone(goal);
-			this.panels.setGoalSnapshot(goal, this.backend.modelLabel);
+			if (
+				command.kind === "pause" ||
+				command.kind === "resume" ||
+				command.kind === "cancel"
+			) {
+				const operation =
+					command.kind === "pause"
+						? this.backend.pauseGoal?.bind(this.backend)
+						: command.kind === "resume"
+							? this.backend.resumeGoal?.bind(this.backend)
+							: this.backend.cancelGoal?.bind(this.backend);
+				if (!operation) throw new Error(`当前后端不支持 Goal ${command.kind}`);
+				const goal = await operation();
+				this.messages.push({
+					id: `goal-${command.kind}:${goal.goalId}`,
+					role: "assistant",
+					kind: "session",
+					text: `Goal ${command.kind} · ${goal.status ?? "已清除"}`,
+				});
+				if (command.kind === "resume") await this.runGoalResume(goal);
+				else {
+					this.panels.open("goal");
+					this.focusComposer();
+					this.requestRender();
+				}
+				return;
+			}
+			const acceptGoal = this.backend.acceptGoal?.bind(this.backend);
+			if (!acceptGoal) throw new Error(`当前后端不支持 Goal ${command.kind}`);
+			const accepted = await acceptGoal();
+			this.goalSnapshot = structuredClone(accepted);
+			this.panels.setGoalSnapshot(accepted, this.backend.modelLabel);
 			this.messages.push({
-				id: `goal-${command.kind}:${goal.id}:${goal.revision}`,
+				id: `goal-accept:${accepted.id}:${accepted.revision}`,
 				role: "assistant",
 				kind: "session",
-				text: `Goal ${command.kind} · ${goal.state}`,
+				text: `Goal accept · ${accepted.state}`,
 			});
-			if (command.kind === "resume") await this.runGoalResume(goal);
-			else {
-				this.panels.open("goal");
-				this.focusComposer();
-				this.requestRender();
-			}
+			this.panels.open("goal");
+			this.focusComposer();
+			this.requestRender();
 		} catch (error) {
 			this.showNotice(
 				`Goal 操作失败：${error instanceof Error ? error.message : "未知错误"}`,
@@ -3729,11 +3747,11 @@ export class VspiApp implements Component, Focusable {
 		}
 	}
 
-	private async runGoalResume(goal: StoredGoal): Promise<void> {
+	private async runGoalResume(goal: RuntimeGoalSnapshot): Promise<void> {
 		this.setRunActive(true);
 		try {
 			await this.backend.send(
-				`<vspi_goal_resume hidden="true" goal_id="${goal.id}">Resume the bound Goal from its durable contract, Working Plan, latest marker, and repository evidence.</vspi_goal_resume>`,
+				`<vspi_goal_resume hidden="true" goal_id="${goal.goalId}">Resume the bound Goal from its durable contract, Working Plan, latest marker, and repository evidence.</vspi_goal_resume>`,
 				{ attachments: [], effort: this.effort, behavior: "prompt" },
 			);
 		} finally {

@@ -47,6 +47,7 @@ import type {
 	ChatBackendEvents,
 	ModelSelectionResult,
 	ProviderAuthInteraction,
+	RuntimeGoalSnapshot,
 	RuntimeGoalStatus,
 	RuntimeModelOption,
 	SendOptions,
@@ -1014,7 +1015,6 @@ export class KlientChatBackend implements ChatBackend {
 			}),
 			agent.events.on("thinking.delta", (event) => {
 				this.setPromptPhaseForTurn(event.turnId, "responding");
-				this.publishSpeed(this.outputSpeed.recordDelta(event.delta));
 				const id = this.turn?.thinkingId ?? `thinking:${event.turnId}`;
 				this.appendStream(id, event.delta, "thinking");
 			}),
@@ -1497,6 +1497,24 @@ export class KlientChatBackend implements ChatBackend {
 	): void {
 		if (live) this.runtimeGoalRevision += 1;
 		this.events?.onRuntimeGoalStatus?.(status);
+	}
+
+	async pauseGoal(): Promise<RuntimeGoalSnapshot> {
+		const snapshot = await this.requireAgent().pauseGoal();
+		this.setRuntimeGoalStatus(snapshot.status, true);
+		return { goalId: snapshot.goalId, status: snapshot.status };
+	}
+
+	async resumeGoal(): Promise<RuntimeGoalSnapshot> {
+		const snapshot = await this.requireAgent().resumeGoal();
+		this.setRuntimeGoalStatus(snapshot.status, true);
+		return { goalId: snapshot.goalId, status: snapshot.status };
+	}
+
+	async cancelGoal(): Promise<RuntimeGoalSnapshot> {
+		const snapshot = await this.requireAgent().cancelGoal();
+		this.setRuntimeGoalStatus(undefined, true);
+		return { goalId: snapshot.goalId, status: undefined };
 	}
 
 	private async publishUsage(finishTurn = false): Promise<void> {

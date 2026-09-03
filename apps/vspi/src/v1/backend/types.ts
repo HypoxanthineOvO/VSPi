@@ -43,6 +43,11 @@ export type SessionOwnerRecoveryAction = "terminate" | "kill" | "cancel";
 
 export type RuntimeGoalStatus = "active" | "paused" | "blocked" | "complete";
 
+export interface RuntimeGoalSnapshot {
+	readonly goalId: string;
+	readonly status: RuntimeGoalStatus | undefined;
+}
+
 export type TaskDashboardStatus =
 	| "running"
 	| "completed"
@@ -406,9 +411,9 @@ export interface ChatBackend {
 		request: string,
 		limits?: Partial<GoalLimits>,
 	): Promise<StoredGoal>;
-	pauseGoal?(): Promise<StoredGoal>;
-	resumeGoal?(): Promise<StoredGoal>;
-	cancelGoal?(): Promise<StoredGoal>;
+	pauseGoal?(): Promise<RuntimeGoalSnapshot>;
+	resumeGoal?(): Promise<RuntimeGoalSnapshot>;
+	cancelGoal?(): Promise<RuntimeGoalSnapshot>;
 	acceptGoal?(): Promise<StoredGoal>;
 	getEffectivePromptSegments?(): EffectivePromptSegment[];
 	getModelOptions?(): Promise<RuntimeModelOption[]>;

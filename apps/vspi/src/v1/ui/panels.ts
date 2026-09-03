@@ -70,6 +70,11 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "./ansi.js";
+import {
+	formatSubagentModel,
+	formatSubagentProfile,
+	formatSubagentProviderModel,
+} from "./subagent-display.js";
 
 import {
 	type InteractionState,
@@ -3957,7 +3962,7 @@ export class PanelController {
 				.replace(/\s+/gu, " ")
 				.trim();
 			const identity = `${run.codename ?? run.agentId} · ${run.taskTitle ?? run.task}`;
-			const row = `${current}${symbol} ${identity}  ${run.profile}  ${run.status}  ${agentElapsed(run)}  ${run.model.split("/").at(-1)}  ${summary}`;
+			const row = `${current}${symbol} ${identity}  ${formatSubagentProfile(run.profile)}  ${run.status}  ${agentElapsed(run)}  ${formatSubagentModel(run.model)}  ${summary}`;
 			const rendered = padLine(truncateToWidth(row, width), width);
 			lines.push(selected ? theme.focus(theme.bold(rendered)) : rendered);
 		});
@@ -4039,7 +4044,7 @@ export class PanelController {
 	): string[] {
 		const lines = [
 			theme.muted(
-				`${run.profile} · ${run.provider}/${run.model.split("/").at(-1)} · ${run.status} · ${agentElapsed(run)}`,
+				`${formatSubagentProfile(run.profile)} · ${formatSubagentProviderModel(run.provider, run.model)} · ${run.status} · ${agentElapsed(run)}`,
 			),
 			"",
 			...this.renderAgentProcess(width, theme),

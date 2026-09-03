@@ -49,6 +49,9 @@ export type AgentTaskInfo = Awaited<ReturnType<IAgentTaskService['list']>>[numbe
 export type McpServerEntry = ReturnType<IAgentMcpService['list']>[number];
 export type AgentCronTask = ReturnType<IAgentCronViewService['list']>[number];
 export type GoalToolResult = ReturnType<IAgentGoalViewService['getGoal']>;
+export type GoalSnapshot = Awaited<ReturnType<IAgentGoalViewService['pauseGoal']>>;
+export type GoalReasonInput = NonNullable<Parameters<IAgentGoalViewService['pauseGoal']>[0]>;
+export type ResumeGoalInput = NonNullable<Parameters<IAgentGoalViewService['resumeGoal']>[0]>;
 
 export interface AgentFacade {
   prompt(input: {
@@ -85,6 +88,9 @@ export interface AgentFacade {
   setPermission(mode: PermissionMode): Promise<void>;
   getUsage(): Promise<UsageStatus>;
   getGoal(): Promise<GoalToolResult>;
+  pauseGoal(input?: GoalReasonInput): Promise<GoalSnapshot>;
+  resumeGoal(input?: ResumeGoalInput): Promise<GoalSnapshot>;
+  cancelGoal(input?: GoalReasonInput): Promise<GoalSnapshot>;
   getContext(): Promise<AgentContextData>;
   listCommands(): Promise<readonly AgentCommandInfo[]>;
   runCommand(input: { name: string; args?: string }): Promise<void>;
@@ -149,6 +155,29 @@ export function createAgentFacade(call: ScopedCaller, scope: ScopeRef): AgentFac
     getUsage: () => call(scope, 'agentUsageService', 'status', []) as Promise<UsageStatus>,
     getGoal: () =>
       call(scope, 'agentGoalViewService', 'getGoal', []) as Promise<GoalToolResult>,
+    pauseGoal: (input) =>
+      // Same `[undefined]` → `[null]` wire hazard as `cancel`: the engine's
+      // `input = {}` default only applies to a missing arg.
+      call(
+        scope,
+        'agentGoalViewService',
+        'pauseGoal',
+        input === undefined ? [] : [input],
+      ) as Promise<GoalSnapshot>,
+    resumeGoal: (input) =>
+      call(
+        scope,
+        'agentGoalViewService',
+        'resumeGoal',
+        input === undefined ? [] : [input],
+      ) as Promise<GoalSnapshot>,
+    cancelGoal: (input) =>
+      call(
+        scope,
+        'agentGoalViewService',
+        'cancelGoal',
+        input === undefined ? [] : [input],
+      ) as Promise<GoalSnapshot>,
     getContext: async () => {
       const [history, tokenCount] = await Promise.all([
         call(scope, 'agentContextMemoryService', 'get', []),

@@ -187,6 +187,8 @@ import {
   cancelShellCommandPayloadSchema,
   emptyPayloadSchema,
   goalToolResultSchema,
+  goalReasonInputSchema,
+  goalSnapshotSchema,
   getTaskOutputPayloadSchema,
   getTasksPayloadSchema,
   planDataSchema,
@@ -196,6 +198,7 @@ import {
   promptSkillActivationSchema,
   promptWithSkillsPayloadSchema,
   promptWithSkillsResultSchema,
+  resumeGoalInputSchema,
   runCommandPayloadSchema,
   runShellCommandPayloadSchema,
   runtimeBindingSchema,
@@ -672,6 +675,9 @@ type CancelPlanPayload = NonNullable<Parameters<AgentFacade['cancelPlan']>[0]>;
 type GetTasksPayload = NonNullable<Parameters<AgentFacade['getTasks']>[0]>;
 type GetTaskResult = Awaited<ReturnType<IAgentTaskService['getTask']>>;
 type GoalToolResult = ReturnType<IAgentGoalViewService['getGoal']>;
+type GoalSnapshot = Awaited<ReturnType<IAgentGoalViewService['pauseGoal']>>;
+type GoalReasonInput = NonNullable<Parameters<IAgentGoalViewService['pauseGoal']>[0]>;
+type ResumeGoalInput = NonNullable<Parameters<IAgentGoalViewService['resumeGoal']>[0]>;
 type StopTaskPayload = Parameters<AgentFacade['stopTask']>[0];
 type GetTaskOutputPayload = Parameters<AgentFacade['getTaskOutput']>[0];
 
@@ -732,6 +738,9 @@ const _cancelPlanPayload: AssertWire<typeof cancelPlanPayloadSchema, CancelPlanP
 const _getTasksPayload: AssertWire<typeof getTasksPayloadSchema, GetTasksPayload> = true;
 const _getTaskResult: AssertWire<typeof agentTaskInfoSchema, NonNullable<GetTaskResult>> = true;
 const _goalToolResult: AssertWire<typeof goalToolResultSchema, GoalToolResult> = true;
+const _goalSnapshot: AssertWire<typeof goalSnapshotSchema, GoalSnapshot> = true;
+const _goalReasonInput: AssertWire<typeof goalReasonInputSchema, GoalReasonInput> = true;
+const _resumeGoalInput: AssertWire<typeof resumeGoalInputSchema, ResumeGoalInput> = true;
 // The wire task union mirrors the protocol `TaskInfo`; the engine's
 // declaration-merged `AgentTaskInfo` is structurally identical but depends on
 // tool-module augmentation, so parity is pinned to the protocol type.

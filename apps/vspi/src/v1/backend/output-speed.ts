@@ -13,41 +13,37 @@ const WINDOW_MS = 2_000;
 export class OutputSpeedTracker {
   private readonly samples: DeltaSample[] = [];
   private responseFirstDeltaAt: number | undefined;
-  private responseLastDeltaAt: number | undefined;
   private completedTokens = 0;
   private completedDurationMs = 0;
 
   constructor(private readonly now: () => number = () => performance.now()) {}
 
   recordDelta(delta: string): OutputSpeedSnapshot {
+    if (delta.length === 0) return this.snapshot();
     const at = this.now();
     this.responseFirstDeltaAt ??= at;
-    this.responseLastDeltaAt = at;
     this.samples.push({ at, estimatedTokens: Array.from(delta).length / 4 });
     return this.snapshot();
   }
 
   finish(outputTokens: number): OutputSpeedSnapshot {
-    if (
-      this.responseFirstDeltaAt !== undefined &&
-      this.responseLastDeltaAt !== undefined &&
-      this.responseLastDeltaAt > this.responseFirstDeltaAt &&
-      Number.isFinite(outputTokens) &&
-      outputTokens >= 0
-    ) {
+    const finishedAt = this.now();
+    const durationMs =
+      this.responseFirstDeltaAt === undefined
+        ? 0
+        : finishedAt - this.responseFirstDeltaAt;
+    if (durationMs > 0 && Number.isFinite(outputTokens) && outputTokens >= 0) {
       this.completedTokens += outputTokens;
-      this.completedDurationMs += this.responseLastDeltaAt - this.responseFirstDeltaAt;
+      this.completedDurationMs += durationMs;
     }
     this.samples.length = 0;
     this.responseFirstDeltaAt = undefined;
-    this.responseLastDeltaAt = undefined;
     return this.snapshot();
   }
 
   reset(): void {
     this.samples.length = 0;
     this.responseFirstDeltaAt = undefined;
-    this.responseLastDeltaAt = undefined;
     this.completedTokens = 0;
     this.completedDurationMs = 0;
   }

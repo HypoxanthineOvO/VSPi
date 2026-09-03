@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ScopeActivation } from '#/_base/di/instantiation';
 import {
@@ -18,7 +18,7 @@ import {
 } from '#/features/featureRegistry';
 import { GoalFeature } from '#/features/goal/goalFeature';
 import { IAgentGoalViewService } from '#/features/goal/goalView';
-import type { GoalToolResult } from '#/features/goal/types';
+import type { GoalSnapshot, GoalToolResult } from '#/features/goal/types';
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
 
 describe('GoalFeature', () => {
@@ -99,6 +99,33 @@ describe('GoalFeature', () => {
     ]);
 
     expect(agent.accessor.get(IAgentGoalViewService).getGoal()).toEqual(result);
+    host.dispose();
+  });
+
+  it('drives pause, resume, and cancel through the Agent goal view as the user actor', async () => {
+    const host = createScopedTestHost();
+    const agentScope = makeAgentScopeContext({ agentId: 'main', agentScope: 'agents/main' });
+    const snapshot = { goalId: 'goal-1' } as unknown as GoalSnapshot;
+    const pauseGoal = vi.fn().mockResolvedValue(snapshot);
+    const resumeGoal = vi.fn().mockResolvedValue(snapshot);
+    const cancelGoal = vi.fn().mockResolvedValue(snapshot);
+    const session = host.child(LifecycleScope.Session, 'session-1', [
+      stubPair(IAgentLifecycleService, {
+        resolve: () => ({ pauseGoal, resumeGoal, cancelGoal }),
+      } as unknown as IAgentLifecycleService),
+    ]);
+    const agent = host.childOf(session, LifecycleScope.Agent, 'main', [
+      stubPair(IAgentScopeContext, agentScope),
+    ]);
+    const view = agent.accessor.get(IAgentGoalViewService);
+
+    await expect(view.pauseGoal({ reason: 'hold' })).resolves.toBe(snapshot);
+    await expect(view.resumeGoal()).resolves.toBe(snapshot);
+    await expect(view.cancelGoal()).resolves.toBe(snapshot);
+
+    expect(pauseGoal).toHaveBeenCalledWith({ reason: 'hold' }, 'user');
+    expect(resumeGoal).toHaveBeenCalledWith({}, 'user');
+    expect(cancelGoal).toHaveBeenCalledWith({}, 'user');
     host.dispose();
   });
 });

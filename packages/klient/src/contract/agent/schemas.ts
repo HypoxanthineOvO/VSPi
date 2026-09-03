@@ -171,6 +171,22 @@ export const goalToolResultSchema = z
   .object({ goal: goalSnapshotSchema.nullable() })
   .strict();
 
+/** Same shape as `GoalReasonInput` in the engine. */
+export const goalReasonInputSchema = z
+  .object({
+    reason: z.string().optional(),
+  })
+  .strict();
+
+/** Same shape as `ResumeGoalInput` in the engine. */
+export const resumeGoalInputSchema = z
+  .object({
+    reason: z.string().optional(),
+    continueIfPaused: z.boolean().optional(),
+    continueIfBlocked: z.boolean().optional(),
+  })
+  .strict();
+
 export const goalChangeSchema = z
   .object({
     kind: z.enum(['lifecycle', 'completion']),

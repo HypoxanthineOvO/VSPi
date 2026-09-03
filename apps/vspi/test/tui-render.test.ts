@@ -38,7 +38,15 @@ import {
 } from "../src/v1/ui/status.js";
 import { TerminalFrameOptimizer } from "../src/v1/ui/terminal-frame-optimizer.js";
 import { createTheme } from "../src/v1/ui/theme.js";
-import { renderTranscript } from "../src/v1/ui/transcript.js";
+import {
+	formatSubagentModel,
+	formatSubagentProfile,
+	formatSubagentProviderModel,
+} from "../src/v1/ui/subagent-display.js";
+import {
+	renderTranscript,
+	renderTranscriptMessage,
+} from "../src/v1/ui/transcript.js";
 
 function panelsAgentSnapshot(run: AgentRunSnapshot): AgentSnapshot {
 	return {
@@ -538,6 +546,37 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		);
 	});
 
+	it("formats subagent labels only at the UI boundary", () => {
+		expect(formatSubagentProfile("coder")).toBe("Coder");
+		expect(formatSubagentProfile("explore")).toBe("Explore");
+		expect(formatSubagentProfile("plan")).toBe("Plan");
+		expect(formatSubagentModel("openai/gpt-5.6-sol")).toBe("GPT 5.6 Sol");
+		expect(formatSubagentProviderModel("openai", "gpt-5.6-sol")).toBe(
+			"OpenAI / GPT 5.6 Sol",
+		);
+
+		const message: TranscriptMessage = {
+			id: "subagent:display",
+			role: "assistant",
+			kind: "subagent",
+			model: "openai/gpt-5.6-sol",
+			preferredModel: "openai/gpt-5.5",
+			agentRole: "worker",
+			effort: "medium",
+			contextMode: "isolated",
+			task: "Inspect the repository",
+			status: "running",
+			agentKind: "task",
+		};
+		const output = renderTranscriptMessage(message, 100, theme)
+			.map(stripTerminalSequences)
+			.join("\\n");
+		expect(output).toContain("Worker · GPT 5.6 Sol");
+		expect(output).toContain("preferred GPT 5.5");
+		expect(output).not.toContain("openai/gpt-5.6-sol");
+		expect(message.model).toBe("openai/gpt-5.6-sol");
+	});
+
 	it("keeps live subagent updates out of the chronological transcript", () => {
 		const messages: TranscriptMessage[] = [
 			{
@@ -1029,6 +1068,11 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(output).toContain("1 active");
 		expect(output).toContain("▶ ● agent-0");
 		expect(output).toContain("当前选择 · agent-0");
+		const compactOutput = panels
+			.render(72, 18, theme, DEFAULT_USAGE)
+			.map(stripTerminalSequences)
+			.join("\n");
+		expect(compactOutput).toContain("Coder");
 		expect(output).toContain("● Commentary");
 		expect(output.match(/◇ Write/gu)).toHaveLength(1);
 		expect(output).toContain("Write failed");

@@ -1,5 +1,9 @@
 import type { AgentRunSnapshot, AgentSnapshot } from "../agents/types.js";
 import { frame, truncateToWidth, visibleWidth } from "./ansi.js";
+import {
+	formatSubagentModel,
+	formatSubagentProfile,
+} from "./subagent-display.js";
 import type { VspiTheme } from "./theme.js";
 
 const MAX_VISIBLE_AGENTS = 4;
@@ -94,11 +98,11 @@ function renderAgentRow(
 						? theme.muted("○")
 						: theme.focus("●");
 	const identity = `${run.codename ?? run.agentId} · ${run.taskTitle ?? run.task}`;
-	const model = run.model.split("/").at(-1) ?? run.model;
-	const elapsed = formatElapsed(run, now);
-	const full = `${symbol} ${identity}    ${run.profile} · ${model} · ${elapsed}`;
+	const model = formatSubagentModel(run.model);
+			const elapsed = formatElapsed(run, now);
+	const full = `${symbol} ${identity}    ${formatSubagentProfile(run.profile)} · ${model} · ${elapsed}`;
 	if (visibleWidth(full) <= width) return full;
-	const medium = `${symbol} ${identity}    ${run.profile} · ${elapsed}`;
+	const medium = `${symbol} ${identity}    ${formatSubagentProfile(run.profile)} · ${elapsed}`;
 	if (visibleWidth(medium) <= width) return medium;
 	return truncateToWidth(`${symbol} ${identity} · ${elapsed}`, width, "…");
 }

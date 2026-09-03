@@ -20,13 +20,49 @@ describe('output speed telemetry (stream and turn contract)', () => {
     expect(tracker.snapshot().now).toBeNull();
   });
 
-  it('uses authoritative output tokens for completed-turn average speed', () => {
+  it('uses authoritative output tokens and includes turn-end tail time', () => {
     let now = 1_000;
     const tracker = new OutputSpeedTracker(() => now);
     tracker.recordDelta('first');
     now = 1_500;
     tracker.recordDelta('last');
+    now = 2_000;
 
-    expect(tracker.finish(20)).toEqual({ now: null, average: 40 });
+    expect(tracker.finish(20)).toEqual({ now: null, average: 20 });
+  });
+
+  it('ignores thinking-like input when only assistant deltas are recorded', () => {
+    let now = 1_000;
+    const tracker = new OutputSpeedTracker(() => now);
+    tracker.recordDelta('assistant');
+    now = 2_000;
+
+    expect(tracker.snapshot().now).toBe(2.25);
+  });
+
+  it('does not start timing for empty output or complete without output', () => {
+    let now = 1_000;
+    const tracker = new OutputSpeedTracker(() => now);
+
+    expect(tracker.recordDelta('').now).toBeNull();
+    now = 2_000;
+    expect(tracker.finish(20)).toEqual({ now: null, average: null });
+  });
+
+  it('does not produce a rate for a single delta in the same millisecond', () => {
+    let now = 1_000;
+    const tracker = new OutputSpeedTracker(() => now);
+    tracker.recordDelta('1234');
+
+    expect(tracker.finish(4)).toEqual({ now: null, average: null });
+  });
+
+  it('ignores invalid authoritative token counts', () => {
+    let now = 1_000;
+    const tracker = new OutputSpeedTracker(() => now);
+    tracker.recordDelta('1234');
+    now = 2_000;
+
+    expect(tracker.finish(Number.NaN)).toEqual({ now: null, average: null });
   });
 });
