@@ -15,6 +15,7 @@ import {
 	formatProviderDisplayName,
 	KlientChatBackend,
 	projectAgentConversation,
+	projectCronSessionMessage,
 	projectTodoPlanItems,
 	reconcileTaskSnapshot,
 	resolveModelsDevPricing,
@@ -890,6 +891,94 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			["commentary", "I will inspect it"],
 			["tool", "Read"],
 		]);
+	});
+
+	it("projects Cron envelopes into a bounded local session marker", () => {
+		const xml =
+			'<cron-fire jobId="job&amp;1" cron="*/5 * * * *" recurring="true" coalescedCount="3" stale="true">\n<prompt>\nCheck <tag> literally &amp; safely\n</prompt>\n</cron-fire>';
+		const origin = {
+			kind: "cron_job",
+			jobId: "job&1",
+			cron: "*/5 * * * *",
+			recurring: true,
+			coalescedCount: 3,
+			stale: true,
+		};
+		const fromOrigin = projectCronSessionMessage("history:1", xml, origin);
+		const fromXml = projectCronSessionMessage("live:1", xml);
+
+		expect(fromOrigin).toMatchObject({
+			id: "history:1",
+			kind: "session",
+			text: "Check <tag> literally &amp; safely",
+			presentation: {
+				kind: "cron",
+				jobId: "job&1",
+				cron: "*/5 * * * *",
+				recurring: true,
+				coalescedCount: 3,
+				stale: true,
+				prompt: "Check <tag> literally &amp; safely",
+			},
+		});
+		expect(fromXml?.presentation).toEqual(fromOrigin?.presentation);
+		expect(projectCronSessionMessage("user:1", "<cron-fire>fake</cron-fire>", { kind: "user" })).toBeUndefined();
+	});
+
+	it("uses the same Cron projection for live prompt events", () => {
+		const listeners = new Map<string, (event: any) => void>();
+		const eventSource = {
+			on: vi.fn((name: string, listener: (event: any) => void) => {
+				listeners.set(name, listener);
+				return { dispose: vi.fn() };
+			}),
+			onError: vi.fn(() => ({ dispose: vi.fn() })),
+		};
+		const onMessage = vi.fn();
+		const backend = new KlientChatBackend(
+			{} as RuntimeConnection,
+			"/workspace",
+			"new",
+		);
+		Object.assign(backend, {
+			agent: { events: eventSource },
+			session: { events: eventSource },
+			events: { onMessage },
+		});
+		(backend as unknown as { subscribe(): void }).subscribe();
+		listeners.get("prompt.submitted")?.({
+			promptId: "prompt-1",
+			userMessageId: "message-1",
+			status: "running",
+			content: [
+				{
+					type: "text",
+					text: '<cron-fire jobId="deadbeef" cron="0 9 * * *" recurring="false" coalescedCount="2" stale="false">\n<prompt>\nRun smoke tests\n</prompt>\n</cron-fire>',
+				},
+			],
+		});
+
+		expect(onMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				id: "message-1",
+				kind: "session",
+				text: "Run smoke tests",
+				presentation: expect.objectContaining({
+					kind: "cron",
+					jobId: "deadbeef",
+					coalescedCount: 2,
+					stale: false,
+				}),
+			}),
+		);
+		onMessage.mockClear();
+		listeners.get("prompt.submitted")?.({
+			promptId: "prompt-2",
+			userMessageId: "message-2",
+			status: "running",
+			content: [{ type: "text", text: "ordinary user prompt" }],
+		});
+		expect(onMessage).not.toHaveBeenCalled();
 	});
 
 	it("projects a two-level TodoList and derives the parent status", () => {

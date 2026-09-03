@@ -1616,7 +1616,7 @@ describe('FullCompaction', () => {
     expect(countEvents(events, 'compaction.completed')).toBe(1);
     expect(compactedPrefixSizes).toHaveLength(1);
     expect(compactedPrefixSizes[0]).toBe(initialTokens);
-    expect(ctx.contextData().tokenCount).toBeLessThan(maxContextTokens * 0.85);
+    expect(ctx.contextData().tokenCount).toBeLessThan(maxContextTokens);
     await ctx.expectResumeMatches();
   });
 

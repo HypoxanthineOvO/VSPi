@@ -134,11 +134,23 @@ export interface SubAgentMessage {
 	usageOutputTokens?: number;
 }
 
+export interface CronSessionPresentation {
+	kind: "cron";
+	jobId: string;
+	cron?: string;
+	runAt?: string;
+	recurring: boolean;
+	coalescedCount: number;
+	stale: boolean;
+	prompt: string;
+}
+
 export interface SessionMarkerMessage {
 	id: string;
 	role: "assistant";
 	kind: "session";
 	text: string;
+	presentation?: CronSessionPresentation;
 }
 
 export interface ErrorMessage {

@@ -20,10 +20,12 @@ import {
 	resolveCatalogEffort,
 } from "../domain/effort.js";
 import type {
+	CronSessionPresentation,
 	EffortLevel,
 	PlanItem,
 	ProviderOption,
 	Question,
+	SessionMarkerMessage,
 	SessionOption,
 	TranscriptMessage,
 	UsageSnapshot,
@@ -1041,8 +1043,17 @@ export class KlientChatBackend implements ChatBackend {
 				pending?.resolve({ status: "cancelled" });
 			}),
 			agent.events.on("prompt.submitted", (event) => {
+				const userSubmitted =
+					this.pendingPrompts.has(event.promptId) ||
+					this.queuedPrompts.has(event.promptId);
 				if (event.status === "running")
 					this.consumeQueuedPrompt(event.promptId);
+				if (userSubmitted) return;
+				const cron = projectCronSessionMessage(
+					event.userMessageId,
+					contentText(event.content),
+				);
+				if (cron !== undefined) this.events?.onMessage(cron);
 			}),
 			agent.events.on("prompt.queued", (event) => {
 				if (this.queuedPrompts.has(event.promptId))
@@ -1131,7 +1142,7 @@ export class KlientChatBackend implements ChatBackend {
 						text,
 					});
 				} else if (
-					(origin["kind"] === "task" || origin["kind"] === "cron_job") &&
+					origin["kind"] === "task" &&
 					text.length > 0
 				) {
 					this.events?.onMessage({
@@ -1140,6 +1151,9 @@ export class KlientChatBackend implements ChatBackend {
 						kind: "session",
 						text,
 					});
+				} else if (origin["kind"] === "cron_job" && text.length > 0) {
+					const cron = projectCronSessionMessage(messageId, text, origin);
+					if (cron !== undefined) this.events?.onMessage(cron);
 				}
 				continue;
 			}
@@ -1996,6 +2010,97 @@ function record(value: unknown): Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 		? (value as Record<string, unknown>)
 		: {};
+}
+
+const MAX_CRON_FIELD_LENGTH = 512;
+const MAX_CRON_PROMPT_LENGTH = 8_192;
+
+export function projectCronSessionMessage(
+	id: string,
+	text: string,
+	origin?: Record<string, unknown>,
+): SessionMarkerMessage | undefined {
+	const xml = parseCronEnvelope(text);
+	const isCronOrigin = origin?.["kind"] === "cron_job";
+	if (origin !== undefined && !isCronOrigin) return undefined;
+	if (!isCronOrigin && xml === undefined) return undefined;
+	const source = { ...xml?.attributes, ...origin };
+	const jobId = boundedString(source["jobId"] ?? source["job_id"]);
+	if (jobId === undefined) return undefined;
+	const prompt = xml?.prompt ?? boundedPrompt(text);
+	if (prompt.length === 0) return undefined;
+	const cron = boundedString(source["cron"]);
+	const runAt = boundedString(source["runAt"] ?? source["run_at"]);
+	const recurring = booleanValue(source["recurring"]);
+	const coalescedCount = positiveInteger(source["coalescedCount"] ?? source["coalesced_count"]);
+	const stale = booleanValue(source["stale"]);
+	const presentation: CronSessionPresentation = {
+		kind: "cron",
+		jobId,
+		cron,
+		runAt,
+		recurring,
+		coalescedCount,
+		stale,
+		prompt,
+	};
+	return { id, role: "assistant", kind: "session", text: prompt, presentation };
+}
+
+function parseCronEnvelope(
+	text: string,
+): { attributes: Record<string, string>; prompt: string } | undefined {
+	const match = /^\s*<cron-fire\s+([^>]*?)>\n<prompt>\n([\s\S]*)\n<\/prompt>\n<\/cron-fire>\s*$/u.exec(text);
+	if (match === null) return undefined;
+	const attributes: Record<string, string> = {};
+	for (const item of match[1]?.matchAll(/([A-Za-z][A-Za-z0-9_-]*)="([^"]*)"/gu) ?? []) {
+		const key = item[1];
+		const value = item[2];
+		if (key !== undefined && value !== undefined)
+			attributes[key] = decodeXmlEntities(value).slice(0, MAX_CRON_FIELD_LENGTH);
+	}
+	const prompt = boundedPrompt(match[2] ?? "");
+	return prompt.length === 0 ? undefined : { attributes, prompt };
+}
+
+function decodeXmlEntities(value: string): string {
+	return value.replaceAll(
+		/&(?:amp|quot|apos|lt|gt|#x[0-9a-f]+|#\d+);/giu,
+		(entity) => {
+			if (entity === "&amp;") return "&";
+			if (entity === "&quot;") return '"';
+			if (entity === "&apos;") return "'";
+			if (entity === "&lt;") return "<";
+			if (entity === "&gt;") return ">";
+			const code = entity.startsWith("&#x")
+				? Number.parseInt(entity.slice(3, -1), 16)
+				: Number.parseInt(entity.slice(2, -1), 10);
+			return Number.isSafeInteger(code) && code >= 0 && code <= 0x10ffff
+				? String.fromCodePoint(code)
+				: entity;
+		},
+	);
+}
+
+function boundedString(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const result = decodeXmlEntities(value).trim();
+	return result.length === 0 ? undefined : result.slice(0, MAX_CRON_FIELD_LENGTH);
+}
+
+function boundedPrompt(value: string): string {
+	return value.length <= MAX_CRON_PROMPT_LENGTH
+		? value
+		: `${value.slice(0, MAX_CRON_PROMPT_LENGTH - 1)}…`;
+}
+
+function booleanValue(value: unknown): boolean {
+	return value === true || value === "true";
+}
+
+function positiveInteger(value: unknown): number {
+	const parsed = typeof value === "number" ? value : Number(value);
+	return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : 1;
 }
 
 function contentText(content: readonly unknown[]): string {

@@ -554,6 +554,46 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(rows).toEqual([]);
 	});
 
+	it("renders Cron markers as literal readable prompt blocks", () => {
+		const messages: TranscriptMessage[] = [
+			{
+				id: "cron-1",
+				role: "assistant",
+				kind: "session",
+				text: "check the deploy",
+				presentation: {
+					kind: "cron",
+					jobId: "deadbeef",
+					cron: "*/5 * * * *",
+					recurring: true,
+					coalescedCount: 3,
+					stale: true,
+					prompt: "check the deploy",
+				},
+			},
+		];
+		const output = renderTranscript(messages, 80, theme)
+			.map(stripTerminalSequences)
+			.join("\n");
+
+		expect(output).toContain("◇ Cron · deadbeef · cron */5 * * * *");
+		expect(output).toContain("coalesced 3 · stale");
+		expect(output).toContain("check the deploy");
+		expect(output).not.toContain("<cron-fire>");
+		expect(output).not.toContain("<prompt>");
+	});
+
+	it("keeps ordinary user XML-like text in the user surface", () => {
+		const output = renderTranscript(
+			[{ id: "user-xml", role: "user", kind: "text", text: "<prompt>keep</prompt>" }],
+			80,
+			theme,
+		)
+			.map(stripTerminalSequences)
+			.join("\n");
+		expect(output).toContain("<prompt>keep</prompt>");
+	});
+
 	it("renders assistant markdown through the original transcript renderer", () => {
 		const messages: TranscriptMessage[] = [
 			{

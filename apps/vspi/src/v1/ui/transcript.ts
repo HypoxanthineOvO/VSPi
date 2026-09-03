@@ -553,6 +553,9 @@ function estimateTranscriptBlockRowsUncached(
 	if (first.kind === "text" && first.role === "user") {
 		return 3 + estimatedWrappedRows(first.text, Math.max(1, options.width - 4));
 	}
+	if (first.kind === "session" && first.presentation?.kind === "cron") {
+		return 1 + estimatedWrappedRows(first.presentation.prompt, width);
+	}
 	if (first.kind === "thinking") {
 		if (options.thinkingDisplay === "hidden") return 2;
 		const displayText = first.translatedText || first.text;
@@ -737,6 +740,21 @@ export function renderTranscriptMessage(
 			);
 	} else if (message.kind === "tool") {
 		return renderToolGroup([message], width, theme, options);
+	} else if (message.kind === "session" && message.presentation?.kind === "cron") {
+		const cron = message.presentation;
+		const schedule = cron.cron
+			? `cron ${cron.cron}`
+			: cron.runAt
+				? `runAt ${cron.runAt}`
+				: "schedule unknown";
+		lines = [
+			theme.muted(
+				`◇ Cron · ${cron.jobId} · ${schedule} · ${cron.recurring ? "recurring" : "one-shot"} · coalesced ${String(cron.coalescedCount)} · ${cron.stale ? "stale" : "active"}`,
+			),
+			...wrapTextWithAnsi(cron.prompt, Math.max(1, width - 3)).map(
+				(line) => `   ${line}`,
+			),
+		];
 	} else if (message.kind === "session") {
 		lines = [theme.muted(`◇ ${message.text}`)];
 	} else if (message.kind === "error") {
