@@ -21,7 +21,14 @@ function normalizeThinkingBoldBoundaries(source: string): string {
       let output = "";
       let plain = "";
       const flush = () => {
-        output += plain.replace(/(\*\*[^*\n]+\*\*)\*\*(?=[^*\n]+\*\*)/gu, "$1\n\n**");
+        const escapedEmphasis = output.endsWith("\\**") || output.endsWith("\\*");
+        output += plain
+          .replaceAll(/(\*\*[^*\n]+\*\*)\*\*(?=[^*\n]+\*\*)/gu, "$1\n\n**")
+          .replaceAll(/(?<!\S)\*{4}(?!\S)/gu, "")
+          .replaceAll(
+            /(?<=[\p{L}\p{N}])\*{4}(?=\p{Lu})/gu,
+            escapedEmphasis ? "$&" : "\n\n",
+          );
         plain = "";
       };
       for (let index = 0; index < line.length;) {

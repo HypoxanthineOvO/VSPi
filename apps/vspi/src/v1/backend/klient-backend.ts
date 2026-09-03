@@ -1826,7 +1826,9 @@ export function resolveModelsDevPricing(
 	const officialProvider =
 		provider === "vsplab"
 			? vsplabOfficialProvider(modelId)
-			: canonicalOfficialProvider(modelId);
+			: provider === "kimi-coding"
+				? "kimi-for-coding"
+				: canonicalOfficialProvider(modelId);
 	const entry =
 		direct ??
 		(officialProvider === undefined
@@ -1888,7 +1890,7 @@ function canonicalOfficialProvider(modelId: string): string | undefined {
 	if (/^gemini(?:[-_.]|$)/u.test(id)) return "google";
 	if (/^deepseek(?:[-_.]|$)/u.test(id)) return "deepseek";
 	if (/^glm(?:[-_.]|$)/u.test(id)) return "zai";
-	if (/^(?:kimi|k3)(?:[-_.]|$)/u.test(id)) return "moonshotai";
+	if (/^kimi(?:[-_.]|$)/u.test(id)) return "moonshotai";
 	if (/^minimax(?:[-_.]|$)/u.test(id)) return "minimax";
 	if (/^qwen(?:[-_.]|$)/u.test(id)) return "alibaba";
 	if (/^mimo(?:[-_.]|$)/u.test(id)) return "xiaomi";

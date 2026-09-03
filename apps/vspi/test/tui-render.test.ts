@@ -697,6 +697,34 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(updated).toContain("Fourth");
 	});
 
+	it("does not leak thinking boundary markers while preserving body text", () => {
+		const thinking: TranscriptMessage = {
+			id: "thinking-boundaries",
+			role: "assistant",
+			kind: "thinking",
+			effort: "medium",
+			text: "**Planning cache clearing and process restart**\nClearing cache directories before restart****Determining cache relevance\nClearing Claude CLI cache only****Verifying cache cleanup\n\n`literal **** stars`\n```text\ncode **** stars\n```",
+			collapsed: false,
+		};
+		const expanded = renderTranscript([thinking], 100, theme, {
+			thinkingDisplay: "expanded",
+		}).map(stripTerminalSequences).join("\n");
+		expect(expanded).not.toContain("restart****Determining");
+		expect(expanded).not.toContain("only****Verifying");
+		expect(expanded).toMatch(/restart\s*\n\s*\n\s*Determining cache relevance/u);
+		expect(expanded).toMatch(/only\s*\n\s*\n\s*Verifying cache cleanup/u);
+		expect(expanded).toContain("literal **** stars");
+		expect(expanded).toContain("code **** stars");
+
+		const collapsed = renderTranscript(
+			[{ ...thinking, text: "**Verifying cache cleanup**", collapsed: true }],
+			100,
+			theme,
+			{ thinkingDisplay: "collapsed" },
+		).map(stripTerminalSequences).join("\n");
+		expect(collapsed).toContain("Verifying cache cleanup");
+	});
+
 	it("keeps fullscreen row frames lossless when similar panel rows move", () => {
 		const optimizer = new TerminalFrameOptimizer();
 		const begin = "\u001b[?2026h";

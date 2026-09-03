@@ -1314,6 +1314,31 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		expect(estimate).toEqual({ costUsd: 7, kind: "complete" });
 	});
 
+	it("calculates Kimi official pricing for USD and CNY conversion", () => {
+			const estimate = calculateUsageCost(
+				{
+					"vsplab/kimi-k2.7-code": {
+						inputOther: 1_000_000,
+						output: 500_000,
+						inputCacheRead: 1_000_000,
+						inputCacheCreation: 0,
+					},
+				},
+				[
+					pricedModel("vsplab/kimi-k2.7-code", {
+						inputUsdPerMillion: 0.95,
+						outputUsdPerMillion: 4,
+						cacheReadUsdPerMillion: 0.19,
+					}),
+				],
+			);
+
+			expect(estimate).toEqual({ costUsd: 3.14, kind: "complete" });
+			expect(estimate.costUsd === null ? null : estimate.costUsd * 7.2).toBe(
+				22.608,
+			);
+		});
+
 	it("uses input price when cache prices are absent", () => {
 		const estimate = calculateUsageCost(
 			{
@@ -1728,26 +1753,34 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			},
 			"kimi-for-coding": {
 				models: {
-					k3: { id: "k3", cost: { input: 0.5, output: 2.5 } },
+					k3: { id: "k3", cost: { input: 0, output: 0 } },
 					"k3-256k": {
 						id: "k3-256k",
-						cost: { input: 0.6, output: 3 },
+						cost: { input: 0, output: 0 },
 					},
 					"kimi-for-coding": {
 						id: "kimi-for-coding",
-						cost: { input: 0.7, output: 3.5 },
+						cost: { input: 0, output: 0 },
 					},
 					"kimi-for-coding-highspeed": {
 						id: "kimi-for-coding-highspeed",
-						cost: { input: 0.8, output: 4 },
+						cost: { input: 0, output: 0 },
 					},
 				},
 			},
 			moonshotai: {
 				models: {
+					"kimi-k2.7-code": {
+						id: "kimi-k2.7-code",
+						cost: { input: 0.95, output: 4, cache_read: 0.19 },
+					},
 					"kimi-k2.5": {
 						id: "kimi-k2.5",
 						cost: { input: 0.6, output: 3 },
+					},
+					"kimi-k3": {
+						id: "kimi-k3",
+						cost: { input: 3, output: 15, cache_read: 0.3 },
 					},
 				},
 			},
@@ -1802,6 +1835,25 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 				source: "official",
 			});
 		}
+		expect(resolveModelsDevPricing(catalog, "vsplab", "kimi-k2.7-code")).toMatchObject({
+			inputUsdPerMillion: 0.95,
+			outputUsdPerMillion: 4,
+			referenceProvider: "moonshotai",
+			source: "official",
+		});
+		expect(resolveModelsDevPricing(catalog, "moonshotai", "kimi-k3")).toMatchObject({
+			inputUsdPerMillion: 3,
+			outputUsdPerMillion: 15,
+			referenceProvider: "moonshotai",
+			source: "provider",
+		});
+		expect(resolveModelsDevPricing(catalog, "moonshotai", "k3")).toEqual({});
+		expect(resolveModelsDevPricing(catalog, "kimi-coding", "k3")).toMatchObject({
+			inputUsdPerMillion: 0,
+			outputUsdPerMillion: 0,
+			referenceProvider: "kimi-for-coding",
+			source: "official",
+		});
 		expect(resolveModelsDevPricing(catalog, "vsplab", "kimi-k2.5")).toMatchObject({
 			referenceProvider: "moonshotai",
 			source: "official",
