@@ -2761,7 +2761,7 @@ describe('AgentGoalService WaitFor background scenarios', () => {
 });
 
 describe('AgentGoalService WaitFor guidance gating', () => {
-  it('shows the WaitFor guidance in the active-goal reminder when the flag is on', async () => {
+  it('shows conservative waiting guidance in the active-goal reminder when the flag is on', async () => {
     const ctx = createTestAgent();
     try {
       ctx.configure();
@@ -2779,7 +2779,11 @@ describe('AgentGoalService WaitFor guidance gating', () => {
       await ctx.rpc.prompt({ input: [{ type: 'text', text: 'start work' }] });
       await vi.waitFor(() => expect(ctx.llmCalls).toHaveLength(3));
 
-      expect(JSON.stringify(ctx.llmCalls[0])).toContain('re-invoked again and again');
+      const reminder = JSON.stringify(ctx.llmCalls[0]);
+      expect(reminder).toContain('active Goal');
+      expect(reminder).toContain('automatically notify');
+      expect(reminder).toContain('uninterruptible atomic operation');
+      expect(reminder).not.toContain('call WaitFor to wait for them inside this turn');
     } finally {
       await ctx.dispose();
     }
@@ -2884,7 +2888,8 @@ describe('AgentGoalService WaitFor guidance gating', () => {
 
       await ctx.rpc.prompt({ input: [{ type: 'text', text: 'start work' }] });
       await vi.waitFor(() => expect(ctx.llmCalls).toHaveLength(1));
-      expect(JSON.stringify(ctx.llmCalls[0])).toContain('re-invoked again and again');
+      expect(JSON.stringify(ctx.llmCalls[0])).toContain('active Goal');
+      expect(JSON.stringify(ctx.llmCalls[0])).toContain('uninterruptible atomic operation');
 
       await ctx.get(ISessionToolPolicy).setDisabledTools(['WaitFor']);
       settle({ result: 'bg result' });

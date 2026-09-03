@@ -73,13 +73,7 @@ export function renderQueuedMessage(
 		!presentation.reducedMotion && presentation.phase !== "stable";
 	const marker = animated && presentation.frame % 2 === 0 ? "▐" : "▌";
 	const left = `${theme.focus(marker)} ${theme.bold(label)} · ${theme.muted(content)}`;
-	const arrow = presentation.phase === "settling" ? "✓" : "↪";
-	const right = theme.muted(
-		theme.capabilities.unicode
-			? arrow
-			: presentation.phase === "settling"
-				? "+"
-				: ">",
-	);
+	const arrow = "↪";
+	const right = theme.muted(theme.capabilities.unicode ? arrow : ">");
 	return theme.activitySurface(alignRight(left, right, width));
 }

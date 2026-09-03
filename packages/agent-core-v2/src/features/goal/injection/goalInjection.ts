@@ -12,7 +12,7 @@ export interface GoalInjectionOptions {
 }
 
 export const GOAL_WAIT_FOR_GUIDANCE =
-  'If you are waiting for background sub-agents or bash tasks to finish, call WaitFor to wait for them inside this turn instead of ending the turn; ending the turn just gets you re-invoked again and again. You can also use the waiting time to do useful parallel work. Either way, make sure every goal turn is productive.';
+  'An active Goal must not enter unexplained idle: it may explicitly wait for background agents, processes, questions, or scheduled work. When a background task will automatically notify you, end this turn and let that notification resume the work. Do not call WaitFor merely because the next step depends on a background result, to keep the Goal in this turn, or to avoid a continuation. Use WaitFor only when an uninterruptible atomic operation must keep this turn open for its result, then re-evaluate whether waiting is still necessary.';
 
 export class GoalInjection extends Service {
   constructor(

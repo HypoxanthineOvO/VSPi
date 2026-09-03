@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import type { RuntimeConnection } from "@vsp/vsp-runtime";
 
 import { VspiApp } from "./app/vspi-app.js";
-import { startUiAfterSplash } from "./app/startup.js";
+import {
+  shutdownInteractiveSession,
+  startUiAfterSplash,
+} from "./app/startup.js";
 import { AttachmentService } from "./attachments/service.js";
 import {
 	KlientChatBackend,
@@ -124,8 +127,12 @@ export async function runVspiTui(
 		if (closing) return;
 		closing = true;
 		try {
-			tui.stop();
-			await app.dispose();
+			await shutdownInteractiveSession({
+				tui: app.getActiveTui(),
+				drainInput: () => terminal.drainInput(),
+				prepareShutdown: () => app.requestShutdown(),
+				disposeApp: () => app.dispose(),
+			});
 		} finally {
 			resolveExit();
 		}
@@ -143,13 +150,14 @@ export async function runVspiTui(
 			width: terminal.columns,
 			theme,
 			write: (chunk) => {
-				terminal.write(chunk);
+				if (!closing) terminal.write(chunk);
 			},
 			startApp: async () => {
 				await app.start();
 				return app.startupStatus();
 			},
 			startTui: (startupSurface) => {
+				if (closing) return;
 				app.setStartupSurface(startupSurface);
 				app.getActiveTui().start();
 			},

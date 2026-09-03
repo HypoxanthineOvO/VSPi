@@ -134,8 +134,8 @@ export type PanelEvent =
 	| { type: "skillRemove"; skill: SkillCatalogItem }
 	| { type: "agentStop"; taskId: string }
 	| { type: "agentRefresh" }
-	| { type: "agentOpen"; agentId: string }
-	| { type: "agentLoadOlder"; agentId: string; cursor: string }
+	| { type: "agentOpen"; runId: string }
+	| { type: "agentLoadOlder"; runId: string; cursor: string }
 	| { type: "agentConversationClose" }
 	| { type: "settings"; settings: AppSettings }
 	| { type: "effort"; effort: EffortLevel }
@@ -794,11 +794,11 @@ export class PanelController {
 		return this.state.kind;
 	}
 
-	selectedAgentIdForPreview(): string | undefined {
+	selectedAgentRunIdForPreview(): string | undefined {
 		return this.kind === "agents" &&
 			this.agentView === "list" &&
 			this.lastBodyWidth >= 72
-			? this.selectedAgentRun()?.agentId
+			? this.selectedAgentRun()?.id
 			: undefined;
 	}
 
@@ -1094,13 +1094,18 @@ export class PanelController {
 	}
 
 	setAgentConversation(page: AgentConversationPage | undefined): void {
+		if (page !== undefined && page.runId !== this.selectedAgentRun()?.id) return;
 		this.agentConversation = page ? structuredClone(page) : undefined;
 		this.agentConversationLoading = false;
 		this.agentConversationError = undefined;
 	}
 
 	prependAgentConversation(page: AgentConversationPage): void {
-		if (this.agentConversation?.agentId !== page.agentId) return;
+		if (
+			this.agentConversation?.runId !== page.runId ||
+			page.runId !== this.selectedAgentRun()?.id
+		)
+			return;
 		if (!this.agentDetailFollowTail)
 			this.agentDetailPrependAnchorRows = this.agentDetailRenderedRows;
 		const seen = new Set(
@@ -3695,7 +3700,7 @@ export class PanelController {
 				if (selected === undefined) return;
 				this.agentSelectedRunId = selected.id;
 				this.setAgentConversationLoading();
-				return { type: "agentOpen", agentId: selected.agentId };
+				return { type: "agentOpen", runId: selected.id };
 			}
 			const page = Math.max(1, this.lastBodyWidth > 0 ? 8 : 1);
 			if (panelKey(data, Key.up)) {
@@ -3719,7 +3724,7 @@ export class PanelController {
 						};
 						return {
 							type: "agentLoadOlder",
-							agentId: selected.agentId,
+							runId: selected.id,
 							cursor,
 						};
 					}
@@ -3747,7 +3752,7 @@ export class PanelController {
 			const selected = this.selectedAgentRun();
 			if (this.lastBodyWidth >= 72 && selected) {
 				this.setAgentConversationLoading();
-				return { type: "agentOpen", agentId: selected.agentId };
+				return { type: "agentOpen", runId: selected.id };
 			}
 			return;
 		}
@@ -3777,7 +3782,7 @@ export class PanelController {
 				this.state.selected !== previous
 			) {
 				this.setAgentConversationLoading();
-				return { type: "agentOpen", agentId: selected.agentId };
+				return { type: "agentOpen", runId: selected.id };
 			}
 			return;
 		}
@@ -3786,7 +3791,7 @@ export class PanelController {
 			if (!selected) return;
 			this.agentView = "detail";
 			this.setAgentConversationLoading();
-			return { type: "agentOpen", agentId: selected.agentId };
+			return { type: "agentOpen", runId: selected.id };
 		}
 		if (panelKey(data, Key.left)) {
 			const parentId = this.selectedAgentRun()?.parentId;
@@ -3960,6 +3965,25 @@ export class PanelController {
 		return lines;
 	}
 
+	private processTaskRowText(
+		item: Extract<TaskDashboardItem, { kind: "process" }>,
+		pointer: string,
+		width: number,
+		theme: VspiTheme,
+	): string {
+		const prefix = `${pointer} ${taskDashboardSymbol(item, theme)} `;
+		const suffix = ` · pid ${String(item.pid)} · ${item.status} · ${taskDashboardElapsed(item)}`;
+		const commandWidth = Math.max(
+			1,
+			width - visibleWidth(prefix) - visibleWidth(suffix) - 1,
+		);
+		const command = truncateToWidth(
+			item.command.replace(/\s+/gu, " ").trim(),
+			commandWidth,
+		);
+		return `${prefix}${command}${suffix}`;
+	}
+
 	private renderTasks(width: number, theme: VspiTheme): string[] {
 		const items = this.taskItems();
 		const lines = [theme.bold("Agent Jobs")];
@@ -3979,7 +4003,7 @@ export class PanelController {
 			const pointer = index === this.state.selected ? "›" : " ";
 			lines.push(
 				truncateToWidth(
-					`${pointer} ${taskDashboardSymbol(item, theme)} ${item.command} · pid ${String(item.pid)} · ${item.status}`,
+					this.processTaskRowText(item, pointer, width, theme),
 					width,
 				),
 			);

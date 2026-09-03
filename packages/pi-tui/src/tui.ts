@@ -310,6 +310,7 @@ export interface TUI extends Component {
 	hasOverlay(): boolean;
 	start(): void;
 	stop(options?: TuiStopOptions): void;
+	pauseRendering(): void;
 	renderNow(force?: boolean): void;
 	requestRender(force?: boolean): void;
 	addInputListener(listener: TuiInputListener): () => void;
@@ -341,6 +342,7 @@ export abstract class TuiBase extends Container implements TUI {
 	public onDebug?: () => void;
 	private renderRequested = false;
 	private immediateRenderScheduled = false;
+	private renderingPaused = false;
 	private renderTimer: NodeJS.Timeout | undefined;
 	private lastRenderAt = 0;
 	private static readonly MIN_RENDER_INTERVAL_MS = 16;
@@ -693,6 +695,7 @@ export abstract class TuiBase extends Container implements TUI {
 
 	start(): void {
 		this.stopped = false;
+		this.renderingPaused = false;
 		this.beforeTerminalStart();
 		this.terminal.start(
 			(data) => this.handleTerminalInput(data),
@@ -757,7 +760,15 @@ export abstract class TuiBase extends Container implements TUI {
 		this.afterTerminalStop(options);
 	}
 
+	pauseRendering(): void {
+		this.renderingPaused = true;
+		this.renderRequested = false;
+		this.immediateRenderScheduled = false;
+		this.cancelRenderTimer();
+	}
+
 	renderNow(force = false): void {
+		if (this.renderingPaused) return;
 		if (force) this.resetRenderState();
 		this.renderRequested = false;
 		this.cancelRenderTimer();
@@ -766,6 +777,7 @@ export abstract class TuiBase extends Container implements TUI {
 	}
 
 	requestRender(force = false): void {
+		if (this.renderingPaused) return;
 		if (force) {
 			this.resetRenderState();
 			this.requestImmediateRender();

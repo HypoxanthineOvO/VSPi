@@ -8,6 +8,7 @@ ${completion_criterion_block}
 Status: ${status}
 Progress: ${progress}.
 ${budgets_block}${budget_guidance}
+${wait_for_guidance}
 
 Before doing any goal work, check the objective and latest request for a clear hard budget limit. If one is present and the current goal does not already record that limit, call SetGoalBudget first. Do not invent budgets. If a requested budget is not reasonable, do not set it; tell the user it is not reasonable.
 

@@ -234,11 +234,13 @@ export function isQueuedTranscriptMessage(
 	message: TranscriptMessage,
 ): message is Extract<TranscriptMessage, { kind: "text" }> & {
 	delivery: "steer" | "followUp";
+	deliveryState?: "queued";
 } {
 	return (
 		message.kind === "text" &&
 		message.role === "user" &&
-		(message.delivery === "steer" || message.delivery === "followUp")
+		(message.delivery === "steer" || message.delivery === "followUp") &&
+		(message.deliveryState === undefined || message.deliveryState === "queued")
 	);
 }
 
@@ -584,7 +586,13 @@ function attachmentSummary(
 function deliverySummary(
 	message: Extract<TranscriptMessage, { kind: "text" }>,
 ): string {
-	if (message.delivery === "cancelled") return "〔队列已取消〕";
+	if (message.delivery === "cancelled" || message.deliveryState === "cancelled")
+		return "〔队列已取消〕";
+	if (message.deliveryState === "consuming") return "〔Core 已消费〕";
+	if (message.deliveryState === "started") return "〔模型步骤已开始〕";
+	if (message.deliveryState === "responding") return "〔正在回复〕";
+	if (message.deliveryState === "failed") return "〔回复失败〕";
+	if (message.deliveryState === "completed") return "〔已完成〕";
 	return "";
 }
 

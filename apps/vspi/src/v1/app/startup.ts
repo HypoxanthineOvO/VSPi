@@ -23,14 +23,23 @@ export async function startUiAfterSplash(options: {
 
 export async function shutdownInteractiveSession(options: {
   disposeApp: () => Promise<void>;
-  tui: Pick<TUI, "stop">;
+  tui: Pick<TUI, "stop" | "pauseRendering">;
   drainInput: () => Promise<void>;
+  prepareShutdown?: () => void;
   disposeTimeoutMs?: number;
 }): Promise<void> {
   const errors: unknown[] = [];
-  // Stop the TUI first so raw mode and alternate-screen state are restored even
-  // when backend dispose hangs or rejects. The 0.6.x freeze left the terminal in
-  // raw mode because `await disposeApp()` blocked before `tui.stop()` ran.
+  try {
+    options.tui.pauseRendering?.();
+    options.prepareShutdown?.();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await options.drainInput();
+  } catch (error) {
+    errors.push(error);
+  }
   try {
     options.tui.stop();
   } catch (error) {
@@ -49,11 +58,6 @@ export async function shutdownInteractiveSession(options: {
   });
   await Promise.race([dispose, disposeTimeout]);
   if (disposeTimer) clearTimeout(disposeTimer);
-  try {
-    await options.drainInput();
-  } catch (error) {
-    errors.push(error);
-  }
 
   if (errors.length === 1) throw errors[0];
   if (errors.length > 1) throw new AggregateError(errors, "Interactive session shutdown failed");

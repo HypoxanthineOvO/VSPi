@@ -67,10 +67,28 @@ interface PendingPrompt {
 	reject(error: Error): void;
 }
 
+type PromptLifecyclePhase =
+	| "queued"
+	| "consuming"
+	| "started"
+	| "responding"
+	| "completed"
+	| "failed"
+	| "cancelled";
+
 interface QueuedPrompt {
 	readonly text: string;
 	readonly delivery: "steer" | "followUp";
+	phase: PromptLifecyclePhase;
 }
+
+const PROMPT_LIFECYCLE_ORDER: readonly PromptLifecyclePhase[] = [
+	"queued",
+	"consuming",
+	"started",
+	"responding",
+	"completed",
+];
 
 interface ProviderAvailability {
 	readonly modelIds: ReadonlySet<string>;
@@ -136,6 +154,8 @@ export class KlientChatBackend implements ChatBackend {
 	private turn: TurnState | undefined;
 	private pendingPrompts = new Map<string, PendingPrompt>();
 	private queuedPrompts = new Map<string, QueuedPrompt>();
+	private promptPhases = new Map<string, PromptLifecyclePhase>();
+	private promptTurns = new Map<number, Set<string>>();
 	private turnEndWaiters = new Map<number, Set<() => void>>();
 	private tasks = new Map<string, AgentTaskInfo>();
 	private taskOutputs = new Map<string, string>();
@@ -212,8 +232,12 @@ export class KlientChatBackend implements ChatBackend {
 		if (this.busy) {
 			const promptId = options.clientMessageId ?? randomUUID();
 			const delivery = options.behavior === "followUp" ? "followUp" : "steer";
-			this.queuedPrompts.set(promptId, { text, delivery });
-			this.events?.onPromptLifecycle?.(promptId, "queued");
+			this.queuedPrompts.set(promptId, {
+				text,
+				delivery,
+				phase: "queued",
+			});
+			this.setPromptPhase(promptId, "queued");
 			this.publishQueueState();
 			try {
 				if (delivery === "followUp") {
@@ -223,6 +247,7 @@ export class KlientChatBackend implements ChatBackend {
 				}
 			} catch (error) {
 				this.queuedPrompts.delete(promptId);
+				this.setPromptPhase(promptId, "failed");
 				this.publishQueueState();
 				throw error;
 			}
@@ -710,12 +735,14 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	async getAgentConversation(
-		agentId: string,
+		runId: string,
 		options: { cursor?: string; limit?: number } = {},
 	): Promise<AgentConversationPage> {
-		this.requireChildAgent(agentId);
+		const run = this.requireChildAgent(runId);
+		const agentId = run.agentId ?? run.taskId;
 		const context = await this.requireSession().agent(agentId).getContext();
 		return projectAgentConversation(
+			runId,
 			agentId,
 			context.history,
 			context.tokenCount,
@@ -724,10 +751,11 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	subscribeAgentConversation(
-		agentId: string,
+		runId: string,
 		listener: (activity: AgentConversationActivity) => void,
 	): BackendSubscription {
-		this.requireChildAgent(agentId);
+		const run = this.requireChildAgent(runId);
+		const agentId = run.agentId ?? run.taskId;
 		this.childConversationSubscription?.dispose();
 		const child = this.requireSession().agent(agentId);
 		const subscriptions = [
@@ -972,17 +1000,26 @@ export class KlientChatBackend implements ChatBackend {
 			agent.events.on("turn.started", (event) => {
 				this.outputSpeed.reset();
 				this.turn = turnState(event.turnId, 0);
+				if (event.promptId !== undefined) {
+					this.promptTurns.set(event.turnId, new Set([event.promptId]));
+					this.setPromptPhase(event.promptId, "started");
+				}
 				this.setBusy(true);
 			}),
 			agent.events.on("assistant.delta", (event) => {
+				this.setPromptPhaseForTurn(event.turnId, "responding");
 				this.publishSpeed(this.outputSpeed.recordDelta(event.delta));
 				const id = this.turn?.assistantId ?? `assistant:${event.turnId}`;
 				this.appendStream(id, event.delta, "text");
 			}),
 			agent.events.on("thinking.delta", (event) => {
+				this.setPromptPhaseForTurn(event.turnId, "responding");
 				this.publishSpeed(this.outputSpeed.recordDelta(event.delta));
 				const id = this.turn?.thinkingId ?? `thinking:${event.turnId}`;
 				this.appendStream(id, event.delta, "thinking");
+			}),
+			agent.events.on("turn.step.started", (event) => {
+				this.setPromptPhaseForTurn(event.turnId, "started");
 			}),
 			agent.events.on("tool.call.started", (event) => {
 				this.advanceTurnSegment();
@@ -1031,13 +1068,20 @@ export class KlientChatBackend implements ChatBackend {
 				void this.publishUsage(true);
 			}),
 			agent.events.on("prompt.completed", (event) => {
-				this.consumeQueuedPrompt(event.promptId);
+				this.removeQueuedPrompt(event.promptId);
+				this.setPromptPhase(
+					event.promptId,
+					event.reason === "failed" || event.reason === "blocked"
+						? "failed"
+						: "completed",
+				);
 				const pending = this.pendingPrompts.get(event.promptId);
 				this.pendingPrompts.delete(event.promptId);
 				pending?.resolve({ status: "completed" });
 			}),
 			agent.events.on("prompt.aborted", (event) => {
-				this.consumeQueuedPrompt(event.promptId);
+				this.removeQueuedPrompt(event.promptId);
+				this.setPromptPhase(event.promptId, "cancelled");
 				const pending = this.pendingPrompts.get(event.promptId);
 				this.pendingPrompts.delete(event.promptId);
 				pending?.resolve({ status: "cancelled" });
@@ -1057,12 +1101,18 @@ export class KlientChatBackend implements ChatBackend {
 			}),
 			agent.events.on("prompt.queued", (event) => {
 				if (this.queuedPrompts.has(event.promptId))
-					this.events?.onPromptLifecycle?.(event.promptId, "queued");
+					this.setPromptPhase(event.promptId, "queued");
 				this.publishQueueState();
 			}),
 			agent.events.on("prompt.steered", (event) => {
-				for (const promptId of event.promptIds)
-					this.consumeQueuedPrompt(promptId);
+				const turnPrompts =
+					this.promptTurns.get(this.turn?.id ?? -1) ?? new Set<string>();
+					for (const promptId of event.promptIds) {
+						this.consumeQueuedPrompt(promptId);
+						turnPrompts.add(promptId);
+					}
+					if (this.turn !== undefined)
+						this.promptTurns.set(this.turn.id, turnPrompts);
 			}),
 			agent.events.on("goal.updated", (event) => {
 				this.setRuntimeGoalStatus(event.snapshot?.status, true);
@@ -1532,9 +1582,44 @@ export class KlientChatBackend implements ChatBackend {
 		this.events?.onQueueUpdate?.({ steering, followUp });
 	}
 
+	private setPromptPhase(promptId: string, phase: PromptLifecyclePhase): void {
+		const current = this.promptPhases.get(promptId);
+		if (current === phase) return;
+		if (current !== undefined) {
+			const currentIndex = PROMPT_LIFECYCLE_ORDER.indexOf(current);
+			const nextIndex = PROMPT_LIFECYCLE_ORDER.indexOf(phase);
+			if (
+				currentIndex >= 0 &&
+				nextIndex >= 0 &&
+				nextIndex < currentIndex
+			)
+				return;
+			if (current === "completed" || current === "failed" || current === "cancelled")
+				return;
+		}
+		this.promptPhases.set(promptId, phase);
+		this.events?.onPromptLifecycle?.(promptId, phase);
+	}
+
+	private setPromptPhaseForTurn(
+		turnId: number,
+		phase: "started" | "responding",
+	): void {
+		for (const promptId of this.promptTurns.get(turnId) ?? [])
+			this.setPromptPhase(promptId, phase);
+	}
+
 	private consumeQueuedPrompt(promptId: string): void {
+		const queued = this.queuedPrompts.get(promptId);
+		if (queued === undefined) return;
+		this.queuedPrompts.delete(promptId);
+		queued.phase = "consuming";
+		this.setPromptPhase(promptId, "consuming");
+		this.publishQueueState();
+	}
+
+	private removeQueuedPrompt(promptId: string): void {
 		if (!this.queuedPrompts.delete(promptId)) return;
-		this.events?.onPromptLifecycle?.(promptId, "consuming");
 		this.publishQueueState();
 	}
 
@@ -1604,6 +1689,8 @@ export class KlientChatBackend implements ChatBackend {
 			pending.reject(new Error("Session changed"));
 		this.pendingPrompts.clear();
 		this.queuedPrompts.clear();
+		this.promptPhases.clear();
+		this.promptTurns.clear();
 		for (const waiters of this.turnEndWaiters.values()) {
 			for (const resolve of waiters) resolve();
 		}
@@ -1633,15 +1720,13 @@ export class KlientChatBackend implements ChatBackend {
 		return this.agent;
 	}
 
-	private requireChildAgent(agentId: string): void {
-		if (
-			agentId === "main" ||
-			![...this.tasks.values()].some(
-				(task) => task.kind === "agent" && task.agentId === agentId,
-			)
-		) {
-			throw new Error(`Unknown child agent: ${agentId}`);
-		}
+	private requireChildAgent(
+		runId: string,
+	): Extract<AgentTaskInfo, { kind: "agent" }> {
+		const task = this.tasks.get(runId);
+		if (task?.kind !== "agent")
+			throw new Error(`Unknown child agent run: ${runId}`);
+		return task;
 	}
 }
 
@@ -2137,6 +2222,7 @@ function summarizeOutput(value: unknown): string {
 }
 
 export function projectAgentConversation(
+	runId: string,
 	agentId: string,
 	history: readonly unknown[],
 	tokenCount: number,
@@ -2160,6 +2246,7 @@ export function projectAgentConversation(
 	const end = Math.min(blocks.length, requestedEnd ?? blocks.length);
 	const start = Math.max(0, end - limit);
 	return {
+		runId,
 		agentId,
 		blocks: blocks.slice(start, end),
 		nextCursor: start > 0 ? String(start) : undefined,

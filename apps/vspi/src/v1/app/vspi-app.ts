@@ -377,6 +377,7 @@ export class VspiApp implements Component, Focusable {
 	private noticeTimer: NodeJS.Timeout | undefined;
 	private _focused = false;
 	private renderReady = false;
+	private shutdownRequested = false;
 	private submissionId = 0;
 	private activeSubmission: ActiveSubmission | undefined;
 	private disposing = false;
@@ -566,8 +567,7 @@ export class VspiApp implements Component, Focusable {
 				},
 				onPromptLifecycle: (promptId, phase) => {
 					if (this.sessionTransition) return;
-					if (phase === "queued") this.queueMessagePresentation(promptId);
-					else this.settleQueuedMessage(promptId);
+					this.updateQueuedMessageLifecycle(promptId, phase);
 				},
 				onUsage: (usage) => {
 					if (this.sessionTransition && !this.sessionResetObserved) return;
@@ -826,6 +826,11 @@ export class VspiApp implements Component, Focusable {
 				: `Session 接管失败：${message}`,
 			"error",
 		);
+	}
+
+	requestShutdown(): void {
+		this.shutdownRequested = true;
+		this.renderReady = false;
 	}
 
 	async dispose(): Promise<void> {
@@ -1868,7 +1873,7 @@ export class VspiApp implements Component, Focusable {
 			kind: "text",
 			text,
 			attachments,
-			...(delivery ? { delivery } : {}),
+			...(delivery ? { delivery, deliveryState: "queued" as const } : {}),
 		};
 		if (delivery !== undefined) {
 			this.queuedMessages.set(messageId, message);
@@ -1893,7 +1898,10 @@ export class VspiApp implements Component, Focusable {
 					const settled = this.messages.find(
 						(candidate) => candidate.id === messageId,
 					);
-					if (settled?.kind === "text") delete settled.delivery;
+					if (settled?.kind === "text") {
+						delete settled.delivery;
+						settled.deliveryState = "started";
+					}
 					this.queuedPresentations.delete(messageId);
 				} else {
 					const mode = result?.delivery ?? delivery;
@@ -1960,6 +1968,7 @@ export class VspiApp implements Component, Focusable {
 						(candidate) => candidate.id !== messageId,
 					);
 					queuedMessage.delivery = result.delivery ?? "steer";
+						queuedMessage.deliveryState = "queued";
 					this.queuedMessages.set(messageId, queuedMessage);
 				}
 				this.queueMessagePresentation(messageId);
@@ -2264,29 +2273,30 @@ export class VspiApp implements Component, Focusable {
 		this.messages.push(queued);
 	}
 
-	private settleQueuedMessage(messageId: string): void {
-		this.promoteQueuedMessage(messageId);
-		const index = this.messages.findIndex(
-			(candidate) => candidate.id === messageId,
-		);
-		const message = this.messages[index];
-		if (message === undefined || !isQueuedTranscriptMessage(message)) {
-			this.queuedPresentations.delete(messageId);
+	private updateQueuedMessageLifecycle(
+		messageId: string,
+		phase:
+			| "queued"
+			| "consuming"
+			| "started"
+			| "responding"
+			| "completed"
+			| "failed"
+			| "cancelled",
+	): void {
+		const queued = this.queuedMessages.get(messageId);
+		const existing = this.messages.find((message) => message.id === messageId);
+		if (queued === undefined && existing?.kind !== "text") return;
+		if (phase === "queued") {
+			if (queued !== undefined) queued.deliveryState = phase;
+			this.queueMessagePresentation(messageId);
 			return;
 		}
-		if (this.activityReducedMotion()) {
-			this.messages[index] = { ...message, delivery: undefined };
-			this.queuedPresentations.delete(messageId);
-			this.syncActivityPresentation();
-			this.requestRender();
-			return;
-		}
-		const current = this.queuedPresentations.get(messageId);
-		if (current?.phase === "settling") return;
-		this.queuedPresentations.set(messageId, {
-			phase: "settling",
-			startedTick: this.queuedAnimationTick,
-		});
+		const message = queued ?? existing;
+		if (!message || message.kind !== "text") return;
+		message.deliveryState = phase;
+		if (queued !== undefined) this.promoteQueuedMessage(messageId);
+		this.queuedPresentations.delete(messageId);
 		this.syncActivityPresentation();
 		this.requestRender();
 	}
@@ -2294,18 +2304,11 @@ export class VspiApp implements Component, Focusable {
 	private advanceQueuedPresentations(): void {
 		for (const [messageId, state] of this.queuedPresentations) {
 			const elapsed = this.queuedAnimationTick - state.startedTick;
-			if (state.phase === "entering" && elapsed >= 1) {
+			if (state.phase === "entering" && elapsed >= 1)
 				this.queuedPresentations.set(messageId, {
 					phase: "stable",
 					startedTick: this.queuedAnimationTick,
 				});
-			} else if (state.phase === "settling" && elapsed >= 2) {
-				const message = this.messages.find(
-					(candidate) => candidate.id === messageId,
-				);
-				if (message?.kind === "text") delete message.delivery;
-				this.queuedPresentations.delete(messageId);
-			}
 		}
 	}
 
@@ -2394,7 +2397,7 @@ export class VspiApp implements Component, Focusable {
 		this.agentDockTimer = undefined;
 	}
 
-	private async openAgentConversation(agentId: string): Promise<void> {
+	private async openAgentConversation(runId: string): Promise<void> {
 		this.disposeAgentConversation();
 		const loadId = this.agentConversationLoadId;
 		if (!this.backend.getAgentConversation) {
@@ -2405,16 +2408,16 @@ export class VspiApp implements Component, Focusable {
 		}
 		if (this.backend.subscribeAgentConversation) {
 			this.agentConversationSubscription =
-				this.backend.subscribeAgentConversation(agentId, (activity) => {
+				this.backend.subscribeAgentConversation(runId, (activity) => {
 					if (loadId !== this.agentConversationLoadId) return;
 					this.panels.appendAgentActivity(activity);
 					this.requestRender();
 					if (activity.kind === "turn" && activity.state !== "started")
-						void this.refreshAgentConversation(agentId, loadId);
+						void this.refreshAgentConversation(runId, loadId);
 				});
 		}
 		try {
-			const page = await this.backend.getAgentConversation(agentId, {
+			const page = await this.backend.getAgentConversation(runId, {
 				limit: 100,
 			});
 			if (loadId !== this.agentConversationLoadId) return;
@@ -2429,12 +2432,12 @@ export class VspiApp implements Component, Focusable {
 	}
 
 	private async refreshAgentConversation(
-		agentId: string,
+		runId: string,
 		loadId: number,
 	): Promise<void> {
 		if (!this.backend.getAgentConversation) return;
 		try {
-			const page = await this.backend.getAgentConversation(agentId, { limit: 100 });
+			const page = await this.backend.getAgentConversation(runId, { limit: 100 });
 			if (loadId !== this.agentConversationLoadId) return;
 			this.panels.setAgentConversation(page);
 			this.requestRender();
@@ -2444,13 +2447,13 @@ export class VspiApp implements Component, Focusable {
 	}
 
 	private async loadOlderAgentConversation(
-		agentId: string,
+		runId: string,
 		cursor: string,
 	): Promise<void> {
 		if (!this.backend.getAgentConversation) return;
 		const loadId = this.agentConversationLoadId;
 		try {
-			const page = await this.backend.getAgentConversation(agentId, {
+			const page = await this.backend.getAgentConversation(runId, {
 				cursor,
 				limit: 100,
 			});
@@ -2738,8 +2741,8 @@ export class VspiApp implements Component, Focusable {
 					},
 				);
 				this.panels.open(action.handler);
-				const previewAgentId = this.panels.selectedAgentIdForPreview();
-				if (previewAgentId) await this.openAgentConversation(previewAgentId);
+				const previewRunId = this.panels.selectedAgentRunIdForPreview();
+				if (previewRunId) await this.openAgentConversation(previewRunId);
 			} catch (error) {
 				this.showNotice(
 					`Agents 操作失败：${error instanceof Error ? error.message : "未知错误"}`,
@@ -2912,9 +2915,9 @@ export class VspiApp implements Component, Focusable {
 				this.panels.setTaskSnapshot(snapshot);
 			}
 		} else if (event.type === "agentOpen") {
-			await this.openAgentConversation(event.agentId);
+			await this.openAgentConversation(event.runId);
 		} else if (event.type === "agentLoadOlder") {
-			await this.loadOlderAgentConversation(event.agentId, event.cursor);
+			await this.loadOlderAgentConversation(event.runId, event.cursor);
 		} else if (event.type === "agentConversationClose") {
 			this.disposeAgentConversation();
 		} else if (event.type === "agentStop") {
@@ -4358,7 +4361,7 @@ export class VspiApp implements Component, Focusable {
 		} else if (projection.kind === "usage") {
 			this.usage = structuredClone(projection.usage);
 		} else if (projection.kind === "queued-consumed") {
-			this.settleQueuedMessage(projection.id);
+			this.updateQueuedMessageLifecycle(projection.id, "consuming");
 		} else if (projection.kind === "notice") {
 			this.showNotice(projection.message, projection.tone);
 		}
@@ -5456,6 +5459,7 @@ export class VspiApp implements Component, Focusable {
 	private requestRender(force = false): void {
 		this.fullscreenRenderRevision += 1;
 		if (
+			!this.shutdownRequested &&
 			this.renderReady &&
 			(!this.sessionTransition ||
 				this.ownerRecoveryPromptActive ||

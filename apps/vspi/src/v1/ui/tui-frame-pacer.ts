@@ -156,6 +156,12 @@ export class VspiTuiAltScreen extends TuiAltScreen {
     this.pendingScrollLines = 0;
   }
 
+  override pauseRendering(): void {
+    this.cancelScroll();
+    this.framePacer?.cancel();
+    super.pauseRendering();
+  }
+
   override stop(options: TuiStopOptions = {}): void {
     this.cancelScroll();
     this.framePacer?.cancel();

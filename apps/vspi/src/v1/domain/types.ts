@@ -54,6 +54,14 @@ export interface TextMessage {
 	streaming?: boolean;
 	attachments?: Attachment[];
 	delivery?: "steer" | "followUp" | "cancelled";
+	deliveryState?:
+		| "queued"
+		| "consuming"
+		| "started"
+		| "responding"
+		| "completed"
+		| "failed"
+		| "cancelled";
 	presentation?: "intermediate" | "formal";
 }
 

@@ -68,6 +68,14 @@ export const thinkingDeltaEventSchema = z.object({
   delta: z.string(),
 });
 
+export const turnStepStartedEventSchema = z.object({
+  type: z.literal('turn.step.started'),
+  time: z.number().optional(),
+  turnId: z.number(),
+  step: z.number(),
+  stepId: z.string().optional(),
+});
+
 export const toolCallStartedEventSchema = z.object({
   type: z.literal('tool.call.started'),
   time: z.number().optional(),
@@ -255,6 +263,7 @@ export interface AgentEventPayloads {
   'turn.ended': z.infer<typeof turnEndedEventSchema>;
   'assistant.delta': z.infer<typeof assistantDeltaEventSchema>;
   'thinking.delta': z.infer<typeof thinkingDeltaEventSchema>;
+  'turn.step.started': z.infer<typeof turnStepStartedEventSchema>;
   'tool.call.started': z.infer<typeof toolCallStartedEventSchema>;
   'tool.call.delta': z.infer<typeof toolCallDeltaEventSchema>;
   'tool.progress': z.infer<typeof toolProgressEventSchema>;
@@ -284,6 +293,7 @@ export const agentEvents = {
   'turn.ended': { kind: 'stream', name: 'events', type: 'turn.ended', schema: turnEndedEventSchema },
   'assistant.delta': { kind: 'stream', name: 'events', type: 'assistant.delta', schema: assistantDeltaEventSchema },
   'thinking.delta': { kind: 'stream', name: 'events', type: 'thinking.delta', schema: thinkingDeltaEventSchema },
+  'turn.step.started': { kind: 'stream', name: 'events', type: 'turn.step.started', schema: turnStepStartedEventSchema },
   'tool.call.started': { kind: 'stream', name: 'events', type: 'tool.call.started', schema: toolCallStartedEventSchema },
   'tool.call.delta': { kind: 'stream', name: 'events', type: 'tool.call.delta', schema: toolCallDeltaEventSchema },
   'tool.progress': { kind: 'stream', name: 'events', type: 'tool.progress', schema: toolProgressEventSchema },

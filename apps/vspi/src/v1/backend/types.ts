@@ -114,6 +114,7 @@ export interface AgentConversationBlock {
 }
 
 export interface AgentConversationPage {
+	runId: string;
 	agentId: string;
 	blocks: AgentConversationBlock[];
 	nextCursor?: string;
@@ -263,7 +264,17 @@ export interface ChatBackendEvents {
 	onMessageUpdate: (id: string, patch: Partial<TranscriptMessage>) => void;
 	onBusy: (busy: boolean) => void;
 	onQueueUpdate?: (queue: ChatQueueState) => void;
-	onPromptLifecycle?: (promptId: string, phase: "queued" | "consuming") => void;
+	onPromptLifecycle?: (
+		promptId: string,
+		phase:
+			| "queued"
+			| "consuming"
+			| "started"
+			| "responding"
+			| "completed"
+			| "failed"
+			| "cancelled",
+	) => void;
 	onUsage: (usage: UsageSnapshot) => void;
 	onCompactionActivity?: (activity: CompactionActivity) => void;
 	onNotice: (
@@ -411,11 +422,11 @@ export interface ChatBackend {
 	getTaskSnapshot?(): TaskDashboardSnapshot;
 	getAgentTask?(taskId: string): Promise<TaskDashboardItem | undefined>;
 	getAgentConversation?(
-		agentId: string,
+		runId: string,
 		options?: { cursor?: string; limit?: number },
 	): Promise<AgentConversationPage>;
 	subscribeAgentConversation?(
-		agentId: string,
+		runId: string,
 		listener: (activity: AgentConversationActivity) => void,
 	): BackendSubscription;
 	listCronTasks?(): readonly CronTask[];

@@ -41,7 +41,7 @@ const identity = {
 
 async function main(): Promise<void> {
 	const args = process.argv.slice(2);
-	if (await dispatchCliCommand(args)) return;
+	if (await dispatchCliCommand(args, { connect: ensureConnection })) return;
 	assertSupportedNodeVersion();
 	if (await dispatchExecCommand(args, { connect: ensureConnection })) return;
 	if (args[0] === "daemon") {

@@ -166,6 +166,11 @@ export class ScrollbackTUI extends TuiMainScreen {
     this.framePacer.request(force, (nextForce) => super.requestRender(nextForce));
   }
 
+  override pauseRendering(): void {
+    this.framePacer?.cancel();
+    super.pauseRendering();
+  }
+
   override stop(options = {}): void {
     this.framePacer?.cancel();
     super.stop(options);

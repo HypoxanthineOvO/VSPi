@@ -161,6 +161,7 @@ import type {
   ToolResultEvent,
   TurnEndedEvent,
   TurnStartedEvent,
+  TurnStepStartedEvent,
   WarningEvent,
 } from '@moonshot-ai/protocol';
 
@@ -223,6 +224,7 @@ import {
   toolResultEventSchema,
   turnEndedEventSchema,
   turnStartedEventSchema,
+  turnStepStartedEventSchema,
   warningEventSchema,
 } from '../src/contract/agent/events.js';
 import {
@@ -748,6 +750,10 @@ const _fullCompactionInput: AssertWire<typeof fullCompactionInputSchema, FullCom
 // `{ type, ... }` events; schemas keep the `type` literal). One-directional
 // where a field is mirrored as `unknown`.
 const _turnStartedEvent: AssertEngineToWire<typeof turnStartedEventSchema, TurnStartedEvent> = true;
+const _turnStepStartedEvent: AssertEngineToWire<
+  typeof turnStepStartedEventSchema,
+  TurnStepStartedEvent
+> = true;
 const _turnEndedEvent: AssertEngineToWire<typeof turnEndedEventSchema, TurnEndedEvent> = true;
 const _assistantDeltaEvent: AssertWire<typeof assistantDeltaEventSchema, AssistantDeltaEvent> =
   true;

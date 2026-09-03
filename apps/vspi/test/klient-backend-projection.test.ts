@@ -857,10 +857,11 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			},
 		];
 
-		const latest = projectAgentConversation("agent-0", history, 321, {
+		const latest = projectAgentConversation("run-0", "agent-0", history, 321, {
 			limit: 4,
 		});
 		expect(latest).toMatchObject({
+			runId: "run-0",
 			agentId: "agent-0",
 			nextCursor: "4",
 			tokenCount: 321,
@@ -880,7 +881,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			["final", undefined, "message", "Finished"],
 		]);
 
-		const older = projectAgentConversation("agent-0", history, 321, {
+		const older = projectAgentConversation("run-0", "agent-0", history, 321, {
 			cursor: latest.nextCursor,
 			limit: 4,
 		});
@@ -981,7 +982,50 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		expect(onMessage).not.toHaveBeenCalled();
 	});
 
-	it("projects a two-level TodoList and derives the parent status", () => {
+	it("projects steer lifecycle from Core facts without faking a reply", () => {
+			const phases: string[] = [];
+			const backend = new KlientChatBackend(
+				{} as RuntimeConnection,
+				"/workspace",
+				"new",
+			);
+			Object.assign(backend, {
+				events: { onPromptLifecycle: (_id: string, phase: string) => phases.push(phase) },
+			});
+			const setPromptPhase = (
+				backend as unknown as { setPromptPhase(id: string, phase: string): void }
+			).setPromptPhase.bind(backend);
+			setPromptPhase("steer-1", "queued");
+			setPromptPhase("steer-1", "consuming");
+			setPromptPhase("steer-1", "started");
+			expect(phases).toEqual(["queued", "consuming", "started"]);
+			setPromptPhase("steer-1", "responding");
+			setPromptPhase("steer-1", "completed");
+			setPromptPhase("steer-1", "failed");
+			expect(phases).toEqual(["queued", "consuming", "started", "responding", "completed"]);
+		});
+
+		it("keeps failed and cancelled steer outcomes distinct", () => {
+			const phases: string[] = [];
+			const backend = new KlientChatBackend(
+				{} as RuntimeConnection,
+				"/workspace",
+				"new",
+			);
+			Object.assign(backend, {
+				events: { onPromptLifecycle: (_id: string, phase: string) => phases.push(phase) },
+			});
+			const setPromptPhase = (
+				backend as unknown as { setPromptPhase(id: string, phase: string): void }
+			).setPromptPhase.bind(backend);
+			setPromptPhase("failed", "queued");
+			setPromptPhase("failed", "failed");
+			setPromptPhase("cancelled", "queued");
+			setPromptPhase("cancelled", "cancelled");
+			expect(phases).toEqual(["queued", "failed", "queued", "cancelled"]);
+		});
+
+		it("projects a two-level TodoList and derives the parent status", () => {
 		expect(
 			projectTodoPlanItems({
 				todos: [

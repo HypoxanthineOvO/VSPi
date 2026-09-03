@@ -30,6 +30,7 @@ import {
 	sessionsSurfaceRowLimit,
 } from "../src/v1/ui/panels.js";
 import { renderSplash } from "../src/v1/ui/splash.js";
+import { shutdownInteractiveSession } from "../src/v1/app/startup.js";
 import {
 	appendRuntimeStatus,
 	renderRuntimeStatus,
@@ -177,7 +178,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 					reducedMotion: false,
 				}),
 			),
-		).toContain("✓");
+		).toContain("↪");
 
 		const reduced0 = renderQueuedMessage(steer, 80, theme, {
 			phase: "entering",
@@ -444,6 +445,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			kind: "text",
 			text: "Inspect changes",
 			delivery: "steer",
+			deliveryState: "queued",
 		} satisfies TranscriptMessage;
 		const app = Object.assign(Object.create(VspiApp.prototype), {
 			queuedMessages: new Map([[queued.id, queued]]),
@@ -460,20 +462,22 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			queuedPresentations: Map<string, { phase: string; startedTick: number }>;
 			messages: TranscriptMessage[];
 			queueMessagePresentation(id: string): void;
-			settleQueuedMessage(id: string): void;
+			updateQueuedMessageLifecycle(id: string, phase: "consuming"): void;
 		};
 
 		app.queueMessagePresentation(queued.id);
 		expect(app.messages.map((message) => message.id)).toEqual(["user-1"]);
 		expect(app.queuedPresentations.get(queued.id)?.phase).toBe("stable");
 
-		app.settleQueuedMessage(queued.id);
+		app.updateQueuedMessageLifecycle(queued.id, "consuming");
 		expect(app.messages.map((message) => message.id)).toEqual([
 			"user-1",
 			"queued-steer",
 		]);
 		expect(app.queuedMessages.has(queued.id)).toBe(false);
-		expect(app.queuedPresentations.get(queued.id)?.phase).toBe("settling");
+		expect(app.messages.at(-1)).toMatchObject({
+			deliveryState: "consuming",
+		});
 	});
 
 	it("detaches the newest foreground task without cancelling it", async () => {
@@ -947,8 +951,9 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		});
 		panels.open("agents");
 
-		expect(panels.selectedAgentIdForPreview()).toBe("agent-0");
+		expect(panels.selectedAgentRunIdForPreview()).toBe("task-alpha");
 		panels.setAgentConversation({
+			runId: "task-alpha",
 			agentId: "agent-0",
 			blocks: [
 				{
@@ -1043,9 +1048,10 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		});
 		expect(panels.handleInput("\r")).toEqual({
 			type: "agentOpen",
-			agentId: "agent-0",
+			runId: "task-alpha",
 		});
 		panels.setAgentConversation({
+			runId: "task-alpha",
 			agentId: "agent-0",
 			blocks: Array.from({ length: 12 }, (_, index) => ({
 				id: `commentary-${String(index)}`,
@@ -1108,7 +1114,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		});
 		expect(panels.handleInput("\u001b[C")).toEqual({
 			type: "agentOpen",
-			agentId: "agent-1",
+			runId: "task-beta",
 		});
 		expect(detailState.agentConversation).toBeUndefined();
 		expect(detailState.agentConversationLoading).toBe(true);
@@ -1118,7 +1124,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(panels.handleInput("\u001b[C")).toBeUndefined();
 		expect(panels.handleInput("\u001b[D")).toEqual({
 			type: "agentOpen",
-			agentId: "agent-0",
+			runId: "task-alpha",
 		});
 		expect(panels.handleInput("\u001b")).toEqual({
 			type: "agentConversationClose",
@@ -1723,5 +1729,34 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(lines[0]).toContain("Speed 42.8 tok/s");
 		expect(lines[0]?.endsWith("Context 61K / 128K 48%")).toBe(true);
 		expect(lines[1]?.endsWith("—")).toBe(true);
+	});
+
+	it("isolates Agent conversation pages by run id when child ids repeat", () => {
+		const runA = { id: "run-a", agentId: "child", codename: "same" };
+		const runB = { id: "run-b", agentId: "child", codename: "same" };
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		const snapshot = panelsAgentSnapshot as unknown as (run: AgentRunSnapshot) => AgentSnapshot;
+		panels.setAgentSnapshot({ ...snapshot(runA as AgentRunSnapshot), active: [runA as AgentRunSnapshot, runB as AgentRunSnapshot] });
+		panels.open("agents");
+		panels.setAgentConversation({ runId: "run-a", agentId: "child", blocks: [{ id: "a", kind: "final", sourceRole: "assistant", text: "RUN_A_CONTENT", injected: false }], tokenCount: 1, totalBlocks: 1 });
+		const state = panels as unknown as { state: { selected: number }; agentConversation?: { runId: string; blocks: Array<{ text: string }> } };
+		state.state.selected = 1;
+		panels.setAgentConversation({ runId: "run-a", agentId: "child", blocks: [], tokenCount: 2, totalBlocks: 0 });
+		expect(state.agentConversation?.runId).toBe("run-a");
+		panels.setAgentConversation({ runId: "run-b", agentId: "child", blocks: [], tokenCount: 3, totalBlocks: 0 });
+		expect(state.agentConversation?.runId).toBe("run-b");
+	});
+
+	it("renders multiline long process commands on one bounded row", () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.setTaskSnapshot({ agents: [], processes: [{ kind: "process", taskId: "process-long", description: "long bash", status: "running", startedAt: Date.now() - 12_000, endedAt: null, command: "printf 'first\nsecond' &&\n pnpm test " + "x".repeat(200), pid: 4242, exitCode: null }], questions: [] });
+		panels.open("tasks");
+		const width = 80;
+		const processRow = panels.render(width, 20, theme, DEFAULT_USAGE).map(stripTerminalSequences).find((line) => line.includes("pid 4242"));
+		expect(processRow).toBeDefined();
+		expect(processRow).toContain("printf 'first second'");
+		expect(processRow).toContain("· running ·");
+		expect(processRow).toMatch(/\d+s/u);
+		expect(visibleWidth(processRow ?? "")).toBeLessThanOrEqual(width);
 	});
 });
