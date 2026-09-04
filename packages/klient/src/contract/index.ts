@@ -24,6 +24,7 @@ import {
   agentShellCommandContract,
   agentSkillContract,
   agentTaskContract,
+  agentTowerContract,
   agentTokenCountingContract,
   agentUsageContract,
 } from './agent/services.js';
@@ -91,6 +92,7 @@ export const globalContract: KlientContract = {
   agentUsageService: agentUsageContract,
   agentPlanService: agentPlanContract,
   agentTaskService: agentTaskContract,
+  agentTowerService: agentTowerContract,
   agentMcpService: agentMcpContract,
   agentFullCompactionService: agentFullCompactionContract,
   agentCronViewService: agentCronContract,

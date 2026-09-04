@@ -240,6 +240,25 @@ export const cancelPlanPayloadSchema = z.object({
   id: z.string().optional(),
 });
 
+const towerMissionTaskSchema = z.object({ text: z.string(), done: z.boolean() });
+const towerMissionWorkerSchema = z.object({
+  name: z.string(),
+  agentId: z.string(),
+  kind: z.enum(['worker', 'reviewer']),
+});
+export const towerMissionProjectionSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  kind: z.enum(['build', 'survey']),
+  status: z.enum(['planned', 'active', 'completed', 'blocked', 'paused', 'merged', 'abandoned']),
+  scope: z.array(z.string()),
+  deps: z.array(z.string()),
+  owner: z.string().optional(),
+  tasks: z.array(towerMissionTaskSchema),
+  blockers: z.array(z.string()),
+  workers: z.array(towerMissionWorkerSchema),
+});
+
 export const getTasksPayloadSchema = z.object({
   activeOnly: z.boolean().optional(),
   limit: z.number().optional(),

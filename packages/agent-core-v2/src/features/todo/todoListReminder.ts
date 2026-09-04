@@ -39,13 +39,21 @@ function getTodoListReminderTurnCounts(
   let foundReminder = false;
   let turnsSinceLastWrite = 0;
   let turnsSinceLastReminder = 0;
+  const failedToolCalls = new Set(
+    history
+      .filter((message) => message.role === 'tool' && message.isError === true)
+      .map((message) => message.toolCallId)
+      .filter((id): id is string => id !== undefined),
+  );
 
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const message = history[i];
     if (message === undefined) continue;
 
+    if (message.role === 'tool') continue;
+
     if (message.role === 'assistant') {
-      if (!foundWrite && hasTodoListWrite(message)) {
+      if (!foundWrite && hasTodoListWrite(message, failedToolCalls)) {
         foundWrite = true;
       }
       if (!foundWrite) turnsSinceLastWrite += 1;
@@ -66,9 +74,13 @@ function getTodoListReminderTurnCounts(
   };
 }
 
-function hasTodoListWrite(message: ContextMessage): boolean {
+function hasTodoListWrite(
+  message: ContextMessage,
+  failedToolCalls: ReadonlySet<string>,
+): boolean {
   return message.toolCalls.some((toolCall) => {
     if (toolCall.name !== TODO_LIST_TOOL_NAME) return false;
+    if (failedToolCalls.has(toolCall.id)) return false;
     if (typeof toolCall.arguments !== 'string') return false;
 
     try {

@@ -1,4 +1,5 @@
 import {
+  type AutocompleteItem,
   type Component,
   CombinedAutocompleteProvider,
   CURSOR_MARKER,
@@ -6,6 +7,7 @@ import {
   type Focusable,
   Key,
   matchesKey,
+  type SlashCommand,
   type TUI,
 } from "@moonshot-ai/pi-tui";
 import type { Attachment } from "../domain/types.js";
@@ -47,6 +49,40 @@ function isTextInput(data: string): boolean {
   );
 }
 
+const GOAL_ARGUMENTS: AutocompleteItem[] = [
+  { value: "status", label: "status", description: "查看当前 Goal 状态" },
+  { value: "pause", label: "pause", description: "暂停当前 Goal" },
+  { value: "resume", label: "resume", description: "继续当前 Goal" },
+  { value: "cancel", label: "cancel", description: "取消当前 Goal" },
+  { value: "accept", label: "accept", description: "接受当前 Goal 结果" },
+  { value: "--rounds ", label: "--rounds", description: "设置最大自动轮数" },
+  { value: "--no-progress ", label: "--no-progress", description: "设置最大无进展轮数" },
+  { value: "--tokens ", label: "--tokens", description: "设置最大 Token 数" },
+];
+
+export function goalInlineHint(text: string, cursorAtEnd = true): string | undefined {
+  if (!cursorAtEnd) return undefined;
+  const match = /^\/goal\s+([^\s]*)$/u.exec(text);
+  if (!match) return undefined;
+  const prefix = (match[1] ?? "").toLowerCase();
+  const values = GOAL_ARGUMENTS
+    .filter((item) => item.value.trimEnd().toLowerCase().startsWith(prefix))
+    .map((item) => item.value.trimEnd());
+  if (values.length === 0) return undefined;
+  return `[${values[0]}]${values.slice(1).map((value) => `|${value}`).join("")}`;
+}
+
+export const GOAL_SLASH_COMMAND: SlashCommand = {
+  name: "goal",
+  description: "创建、续跑与查看持久 Goal",
+  getArgumentCompletions(argumentPrefix) {
+    if (/\s/u.test(argumentPrefix.trim())) return null;
+    const prefix = argumentPrefix.trimStart().toLowerCase();
+    const items = GOAL_ARGUMENTS.filter((item) => item.value.trimEnd().toLowerCase().startsWith(prefix));
+    return items.length > 0 ? items : null;
+  },
+};
+
 export class Composer implements Component, Focusable {
   readonly editor: Editor;
   attachments: Attachment[] = [];
@@ -82,7 +118,7 @@ export class Composer implements Component, Focusable {
       },
       { paddingX: 1, autocompleteMaxVisible: 6 },
     );
-    this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider([], cwd));
+    this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider([GOAL_SLASH_COMMAND], cwd));
   }
 
   set onSubmit(value: (text: string) => void) {
@@ -206,6 +242,13 @@ export class Composer implements Component, Focusable {
     }
     body = body.map((line) => this.styleAttachmentMarkers(line));
     body = this.styleSlashCommand(body);
+    const goalHint = goalInlineHint(this.editor.getText(), editorCursor.line === editorLines.length - 1 && editorCursor.col === (editorLines.at(-1)?.length ?? 0));
+    if (goalHint) {
+      const hint = this.theme.muted(goalHint);
+      body = body.map((line) =>
+        line.includes("\x1b[7m \\x1b[0m") ? line.replace("\x1b[7m \\x1b[0m", `\x1b[7m \\x1b[0m${hint}`) : line,
+      );
+    }
 
     let hiddenAbove = 0;
     let hiddenBelow = 0;

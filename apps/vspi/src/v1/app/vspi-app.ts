@@ -163,7 +163,7 @@ export interface VspiAppOptions {
 	startupRuntimeDiagnostic?: string;
 	onForegroundRelinquish?: () => void;
 	onForegroundResume?: () => void;
-	onExit: () => void;
+	onExit: (mode?: "detach" | "cancel") => void;
 }
 
 interface PromptProfileUi {
@@ -595,6 +595,10 @@ export class VspiApp implements Component, Focusable {
 					this.panels.setPlanItems(items);
 					this.requestRender();
 				},
+				onTowerMissions: () => {
+					this.planSnapshot = undefined;
+					this.requestRender();
+				},
 				onPlanBindingChange: () => {
 					const refresh = this.refreshPlanSnapshot(this.sessionEpoch);
 					if (this.sessionTransition) this.sessionHydrationTasks.push(refresh);
@@ -834,7 +838,7 @@ export class VspiApp implements Component, Focusable {
 		this.renderReady = false;
 	}
 
-	async dispose(): Promise<void> {
+	async dispose(mode: "detach" | "cancel" = "detach"): Promise<void> {
 		if (this.disposing) return;
 		this.disposing = true;
 		this.renderReady = false;
@@ -855,7 +859,7 @@ export class VspiApp implements Component, Focusable {
 		this.cancelPendingApproval("Approval cancelled because VSPi is closing");
 		this.options.approvalBroker?.setHandler(undefined);
 		try {
-			if (this.activityActive()) {
+			if (mode === "cancel" && this.activityActive()) {
 				await waitForShutdownCancellation(
 					this.backend.cancel().catch(() => undefined),
 				);
@@ -2537,7 +2541,11 @@ export class VspiApp implements Component, Focusable {
 	): Promise<void> {
 		if (action.handler !== "plan") this.planPanelExplicit = false;
 		if (action.handler === "quit") {
-			this.options.onExit();
+			this.options.onExit("detach");
+			return;
+		}
+		if (action.handler === "cancelAndExit") {
+			this.options.onExit("cancel");
 			return;
 		}
 		if (action.handler === "newSession") {

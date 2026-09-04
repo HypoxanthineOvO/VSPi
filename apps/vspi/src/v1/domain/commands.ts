@@ -33,7 +33,8 @@ export type ActionHandler =
 	| "usage"
 	| "theme"
 	| "tui"
-	| "quit";
+	| "quit"
+	| "cancelAndExit";
 
 export interface ActionDefinition extends CommandDefinition {
 	handler?: ActionHandler;
@@ -282,9 +283,18 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
 		id: "quit",
 		aliases: ["exit", "q"],
 		label: "/quit",
-		description: "退出 VSPi",
+		description: "退出 VSPi（后台任务继续）",
 		group: "VSPi",
 		handler: "quit",
+		availability: "enabled",
+	},
+	{
+		id: "cancel-and-exit",
+		aliases: ["cancel-exit"],
+		label: "/cancel-and-exit",
+		description: "取消当前运行并退出 VSPi",
+		group: "VSPi",
+		handler: "cancelAndExit",
 		availability: "enabled",
 	},
 ];

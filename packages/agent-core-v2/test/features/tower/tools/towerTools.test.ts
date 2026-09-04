@@ -122,12 +122,14 @@ beforeEach(async () => {
         get isActive() {
           return towerActive;
         },
-        enter: () => {
+        enter: async () => {
           towerActive = true;
         },
         exit: () => {
           towerActive = false;
         },
+        queryMissions: async () => [],
+        queryActive: () => towerActive,
       });
       reg.defineInstance(ISessionManager, {
         get: (id: string) => (liveSessionIds.includes(id) ? {} : undefined),

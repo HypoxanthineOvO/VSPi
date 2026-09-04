@@ -17,6 +17,7 @@ import {
 	projectAgentConversation,
 	projectCronSessionMessage,
 	projectTodoPlanItems,
+	projectTowerMissionPlanItems,
 	reconcileTaskSnapshot,
 	resolveModelsDevPricing,
 	resolveSessionStartupMode,
@@ -1097,6 +1098,68 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 				status: "in_progress",
 				depth: 1,
 				focused: true,
+			},
+		]);
+	});
+
+	it("projects Tower missions with parallel statuses and worker details", () => {
+		expect(
+			projectTowerMissionPlanItems([
+				{
+					id: "M1",
+					title: "engine",
+					kind: "build",
+					status: "active",
+					scope: ["src/engine/**"],
+					deps: [],
+					tasks: [{ text: "Implement engine", done: false }],
+					blockers: [],
+					workers: [{ name: "builder", agentId: "agent-1", kind: "worker" }],
+				},
+				{
+					id: "M2",
+					title: "tests",
+					kind: "build",
+					status: "blocked",
+					scope: ["test/**"],
+					deps: ["M1"],
+					tasks: [{ text: "Add tests", done: false }],
+					blockers: ["waiting for M1"],
+					workers: [],
+				},
+			]),
+		).toEqual([
+			{
+				id: "tower:M1",
+				label: "M1 engine · worker: builder · scope: src/engine/**",
+				status: "in_progress",
+				depth: 0,
+				group: true,
+				focused: true,
+			},
+			{
+				id: "tower:M1:task:0",
+				label: "Implement engine",
+				status: "in_progress",
+				depth: 1,
+				focused: true,
+			},
+			{
+				id: "tower:M2",
+				label: "M2 tests · scope: test/** · deps: M1",
+				status: "blocked",
+				depth: 0,
+				group: true,
+				focused: false,
+				blocker: "waiting for M1",
+			},
+			{
+				id: "tower:M2:task:0",
+				label: "Add tests",
+				status: "blocked",
+				depth: 1,
+				focused: false,
+				blocker: "waiting for M1",
 			},
 		]);
 	});

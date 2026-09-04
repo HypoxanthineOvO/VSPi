@@ -4,7 +4,11 @@
  * Wiring: original VSPi renderers with literal messages and no runtime stubs.
  * Run: pnpm -C apps/vspi test
  */
-import { stripTerminalSequences, visibleWidth } from "@moonshot-ai/pi-tui";
+import {
+  CombinedAutocompleteProvider,
+  stripTerminalSequences,
+  visibleWidth,
+} from "@moonshot-ai/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type {
 	AgentRunSnapshot,
@@ -23,7 +27,11 @@ import {
 	renderQueuedMessage,
 } from "../src/v1/ui/activity.js";
 import { detectTerminalCapabilities } from "../src/v1/ui/capabilities.js";
-import { Composer } from "../src/v1/ui/composer.js";
+import {
+  Composer,
+  GOAL_SLASH_COMMAND,
+  goalInlineHint,
+} from "../src/v1/ui/composer.js";
 import { renderMarkdown, VspiMarkdown } from "../src/v1/ui/markdown.js";
 import {
 	PanelController,
@@ -81,6 +89,46 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		LANG: "zh_CN.UTF-8",
 	});
 	const theme = createTheme(capabilities, "VSPi Dark");
+
+	it("offers Goal argument candidates after /goal ", async () => {
+		const empty = await GOAL_SLASH_COMMAND.getArgumentCompletions?.("");
+		expect(empty?.map((item) => item.value)).toEqual([
+			"status",
+			"pause",
+			"resume",
+			"cancel",
+			"accept",
+			"--rounds ",
+			"--no-progress ",
+			"--tokens ",
+		]);
+
+		const narrowed = await GOAL_SLASH_COMMAND.getArgumentCompletions?.("p");
+		expect(narrowed?.map((item) => item.value)).toEqual(["pause"]);
+	});
+
+	it("applies a Goal completion without losing /goal ", async () => {
+		const result = await GOAL_SLASH_COMMAND.getArgumentCompletions?.("p");
+		const item = result?.[0];
+		expect(item).toBeDefined();
+		if (!item) return;
+		const provider = new CombinedAutocompleteProvider([GOAL_SLASH_COMMAND], "/tmp");
+		const applied = provider.applyCompletion(["/goal p"], 0, 7, item, "p");
+		expect(applied.lines[0]).toBe("/goal pause");
+		expect(applied.cursorCol).toBe(11);
+	});
+
+	it("formats inline Goal hints without changing ordinary objectives", () => {
+		expect(goalInlineHint("/goal ")).toBe("[status]|pause|resume|cancel|accept|--rounds|--no-progress|--tokens");
+		expect(goalInlineHint("/goal p")).toBe("[pause]");
+		expect(goalInlineHint("/goal review the release")).toBeUndefined();
+		expect(goalInlineHint("/goal p", false)).toBeUndefined();
+	});
+
+	it("keeps completion descriptions available for muted SelectList rendering", async () => {
+		const items = await GOAL_SLASH_COMMAND.getArgumentCompletions?.("");
+		expect(items?.every((item) => item.description)).toBe(true);
+	});
 
 	it("renders the original VSPi splash without exposing the backend implementation brand", () => {
 		const output = renderSplash(80, theme, 1, {

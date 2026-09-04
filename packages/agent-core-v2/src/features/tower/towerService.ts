@@ -33,6 +33,7 @@ import {
   TOWER_FLAG_ID,
   TOWER_TOOL_NAMES,
   TOWER_WORKER_PROFILE,
+  type TowerMissionProjection,
 } from './tower';
 import { isTowerFeatureAssembled } from './towerFeature';
 import { TowerModeEnter, TowerModeExit, towerKey, towerOwnerKey } from './towerOps';
@@ -200,6 +201,31 @@ export class AgentTowerService extends Disposable implements IAgentTowerService 
       isTowerFeatureAssembled(this.flags) &&
       this.agentState.get(towerKey)
     );
+  }
+
+  queryActive(): boolean {
+    return this.isActive;
+  }
+
+  async queryMissions(): Promise<readonly TowerMissionProjection[]> {
+    if (this.agentCtx.agentId !== 'main' || !this.flags.enabled(TOWER_FLAG_ID)) return [];
+    const store = new TowerStore(resolveTowerRepoRoot(this.sessionCtx.cwd));
+    if (!(await store.isInitialized())) return [];
+    const state = await store.load();
+    return state.missions.map((mission) => ({
+      id: mission.id,
+      title: mission.title,
+      kind: mission.kind,
+      status: mission.status,
+      scope: [...mission.scope],
+      deps: [...mission.deps],
+      ...(mission.owner === undefined ? {} : { owner: mission.owner }),
+      tasks: mission.tasks.map((task) => ({ text: task.text, done: task.done })),
+      blockers: [...mission.blockers],
+      workers: state.roster.agents
+        .filter((agent) => agent.missionId === mission.id)
+        .map((agent) => ({ name: agent.name, agentId: agent.agentId, kind: agent.kind })),
+    }));
   }
 
   private async exitForeignTower(): Promise<void> {

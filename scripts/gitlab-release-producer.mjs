@@ -3,10 +3,10 @@ import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const RELEASE_TAG = 'v2.0.0';
-const RELEASE_VERSION = '2.0.0';
-const RELEASE_TITLE = 'VSPi 2.0.0 Alpha';
-const VERSIONED_ASSET = 'vspi-2.0.0.tgz';
+const RELEASE_TAG = 'v2.0.1';
+const RELEASE_VERSION = '2.0.1';
+const RELEASE_TITLE = 'VSPi 2.0.1';
+const VERSIONED_ASSET = 'vspi-2.0.1.tgz';
 const LATEST_ASSET = 'vspi-latest.tgz';
 const READBACK_ATTEMPTS = 5;
 const READBACK_DELAY_MS = 100;
@@ -65,7 +65,7 @@ async function downloadGitHubAsset(fetchImpl, headers, asset, operation) {
   const response = await request(
     fetchImpl,
     asset.url,
-    { method: 'GET', headers: { ...headers, accept: 'application/octet-stream' }, redirect: 'error' },
+    { method: 'GET', headers: { ...headers, accept: 'application/octet-stream' }, redirect: 'follow' },
     operation,
   );
   return Buffer.from(await response.arrayBuffer());

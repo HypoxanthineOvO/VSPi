@@ -19,6 +19,7 @@ import type { IAgentProfileService } from '@moonshot-ai/agent-core-v2/agent/prof
 import type { IAgentShellCommandService } from '@moonshot-ai/agent-core-v2/agent/shellCommand/shellCommand';
 import type { SkillRuntime } from '@moonshot-ai/agent-core-v2/features/skill/skillAgentRuntime';
 import type { IAgentTaskService } from '@moonshot-ai/agent-core-v2/agent/task/task';
+import type { IAgentTowerService } from '@moonshot-ai/agent-core-v2/features/tower/tower';
 import type { IAgentCronViewService } from '@moonshot-ai/agent-core-v2/features/cron/cronView';
 import type { IAgentGoalViewService } from '@moonshot-ai/agent-core-v2/features/goal/goalView';
 import type { ISessionUsageService } from '@moonshot-ai/agent-core-v2/session/usage/sessionUsage';
@@ -46,6 +47,7 @@ export type AgentCommandInfo = Awaited<ReturnType<IAgentCommandService['list']>>
 export type RuntimeBinding = ReturnType<IAgentRuntimeBindingService['get']>;
 export type PlanData = Awaited<ReturnType<IAgentPlanService['status']>>;
 export type AgentTaskInfo = Awaited<ReturnType<IAgentTaskService['list']>>[number];
+export type TowerMissionProjection = Awaited<ReturnType<IAgentTowerService['queryMissions']>>[number];
 export type McpServerEntry = ReturnType<IAgentMcpService['list']>[number];
 export type AgentCronTask = ReturnType<IAgentCronViewService['list']>[number];
 export type GoalToolResult = ReturnType<IAgentGoalViewService['getGoal']>;
@@ -100,6 +102,8 @@ export interface AgentFacade {
   enterPlan(): Promise<void>;
   clearPlan(): Promise<void>;
   cancelPlan(input?: { id?: string }): Promise<void>;
+  getTowerMissions(): Promise<readonly TowerMissionProjection[]>;
+  isTowerActive(): Promise<boolean>;
   getTask(taskId: string): Promise<AgentTaskInfo | undefined>;
   getTasks(input?: { activeOnly?: boolean; limit?: number }): Promise<readonly AgentTaskInfo[]>;
   stopTask(input: { taskId: string; reason?: string }): Promise<void>;
@@ -205,6 +209,9 @@ export function createAgentFacade(call: ScopedCaller, scope: ScopeRef): AgentFac
     clearPlan: () => call(scope, 'agentPlanService', 'clear', []) as Promise<void>,
     cancelPlan: (input) =>
       call(scope, 'agentPlanService', 'cancel', [input?.id]) as Promise<void>,
+    getTowerMissions: () =>
+      call(scope, 'agentTowerService', 'queryMissions', []) as Promise<readonly TowerMissionProjection[]>,
+    isTowerActive: () => call(scope, 'agentTowerService', 'queryActive', []) as Promise<boolean>,
     getTask: (taskId) =>
       call(scope, 'agentTaskService', 'getTask', [taskId]) as Promise<AgentTaskInfo | undefined>,
     getTasks: (input) =>

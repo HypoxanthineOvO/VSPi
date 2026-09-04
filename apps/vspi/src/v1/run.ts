@@ -119,11 +119,11 @@ export async function runVspiTui(
 				return connection.env.configPath;
 			},
 		}),
-		onExit: () => {
-			void shutdown();
+		onExit: (mode = "detach") => {
+			void shutdown(mode);
 		},
 	});
-	const shutdown = async (): Promise<void> => {
+	const shutdown = async (mode: "detach" | "cancel" = "detach"): Promise<void> => {
 		if (closing) return;
 		closing = true;
 		try {
@@ -131,7 +131,7 @@ export async function runVspiTui(
 				tui: app.getActiveTui(),
 				drainInput: () => terminal.drainInput(),
 				prepareShutdown: () => app.requestShutdown(),
-				disposeApp: () => app.dispose(),
+				disposeApp: () => app.dispose(mode),
 			});
 		} finally {
 			resolveExit();

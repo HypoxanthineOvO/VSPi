@@ -75,6 +75,7 @@ export type {
   AgentCronTask,
   AgentFacade,
   AgentTaskInfo,
+  TowerMissionProjection,
   BindProfileInput,
   GoalReasonInput,
   GoalSnapshot,

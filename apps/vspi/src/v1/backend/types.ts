@@ -39,6 +39,7 @@ import type {
 	SkillScope,
 } from "../skills/types.js";
 import type { WorkflowSnapshot } from "../workflow/types.js";
+import type { TowerMissionProjection } from "@moonshot-ai/klient";
 export type SessionOwnerRecoveryAction = "terminate" | "kill" | "cancel";
 
 export type RuntimeGoalStatus = "active" | "paused" | "blocked" | "complete";
@@ -293,6 +294,7 @@ export interface ChatBackendEvents {
 		signal?: AbortSignal,
 	) => Promise<Question[]>;
 	onPlanItems?: (items: PlanItem[]) => void;
+	onTowerMissions?: (missions: TowerMissionProjection[]) => void;
 	onPlanBindingChange?: (binding: PlanBinding | undefined) => void;
 	onGoalChange?: (goal: StoredGoal | undefined) => void;
 	onRuntimeGoalStatus?: (status: RuntimeGoalStatus | undefined) => void;

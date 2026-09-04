@@ -30,6 +30,7 @@ import {
   shellCommandResultSchema,
   steerPayloadSchema,
   usageStatusSchema,
+  towerMissionProjectionSchema,
 } from './schemas.js';
 
 export const agentPromptContract = {
@@ -118,6 +119,11 @@ export const agentPlanContract = {
   enter: { input: z.tuple([]), output: noResult },
   clear: { input: z.tuple([]), output: noResult },
   cancel: { input: z.tuple([z.string().optional()]), output: noResult },
+} satisfies ServiceContract;
+
+export const agentTowerContract = {
+  queryMissions: { input: z.tuple([]), output: z.array(towerMissionProjectionSchema) },
+  queryActive: { input: z.tuple([]), output: z.boolean() },
 } satisfies ServiceContract;
 
 /** `McpServerEntry` from the engine's `mcpCore/connection-manager`. */

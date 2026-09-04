@@ -3,6 +3,7 @@ import type {
 	AgentCronTask,
 	AgentHandle,
 	AgentTaskInfo,
+	TowerMissionProjection,
 	IDisposable,
 	QuestionRequest,
 	SessionHandle,
@@ -162,10 +163,13 @@ export class KlientChatBackend implements ChatBackend {
 	private taskOutputs = new Map<string, string>();
 	private parentTaskSummaries = new Map<string, string>();
 	private pendingTodoUpdates = new Map<string, PlanItem[]>();
+	private lastTodoItems: PlanItem[] = [];
+	private towerPlanActive = false;
 	private toolNames = new Map<string, string>();
 	private cronTasks: CronTask[] = [];
 	private runtimeGoalRevision = 0;
 	private taskPoll: NodeJS.Timeout | undefined;
+	private towerPoll: NodeJS.Timeout | undefined;
 	private busy = false;
 	private readonly outputSpeed = new OutputSpeedTracker();
 	private lastUsageSnapshot: UsageSnapshot | undefined;
@@ -914,7 +918,10 @@ export class KlientChatBackend implements ChatBackend {
 		await this.publishHistory();
 		this.taskPoll = setInterval(() => void this.refreshTasks(), 1_000);
 		this.taskPoll.unref();
+		this.towerPoll = setInterval(() => void this.refreshTowerMissions(), 1_000);
+		this.towerPoll.unref();
 		await this.refreshTasks();
+		await this.refreshTowerMissions();
 		await this.publishCronTasks();
 		await this.publishUsage();
 	}
@@ -1044,8 +1051,10 @@ export class KlientChatBackend implements ChatBackend {
 				this.toolNames.delete(event.toolCallId);
 				const todoItems = this.pendingTodoUpdates.get(event.toolCallId);
 				this.pendingTodoUpdates.delete(event.toolCallId);
-				if (!event.isError && todoItems !== undefined)
-					this.events?.onPlanItems?.(todoItems);
+				if (!event.isError && todoItems !== undefined) {
+					this.lastTodoItems = structuredClone(todoItems);
+					if (!this.towerPlanActive) this.events?.onPlanItems?.(todoItems);
+				}
 				this.events?.onMessageUpdate(event.toolCallId, {
 					status: event.isError ? "error" : "success",
 					output: summarizeOutput(event.output),
@@ -1276,8 +1285,10 @@ export class KlientChatBackend implements ChatBackend {
 				});
 			}
 		}
-		if (latestTodoItems !== undefined)
-			this.events?.onPlanItems?.(latestTodoItems);
+		if (latestTodoItems !== undefined) {
+			this.lastTodoItems = structuredClone(latestTodoItems);
+			if (!this.towerPlanActive) this.events?.onPlanItems?.(latestTodoItems);
+		}
 	}
 
 	private appendStream(
@@ -1448,6 +1459,24 @@ export class KlientChatBackend implements ChatBackend {
 		this.publishParentTaskSummaries();
 		this.events?.onAgentSnapshot?.(this.getAgentSnapshot());
 		this.events?.onTaskSnapshot?.(this.getTaskSnapshot());
+	}
+
+	private async refreshTowerMissions(): Promise<void> {
+		const agent = this.agent;
+		if (agent === undefined) return;
+		try {
+			const active = await agent.isTowerActive();
+			if (active) {
+				this.towerPlanActive = true;
+				const missions = await agent.getTowerMissions();
+				this.events?.onTowerMissions?.([...missions]);
+				this.events?.onPlanItems?.(projectTowerMissionPlanItems(missions));
+			} else if (this.towerPlanActive) {
+				this.towerPlanActive = false;
+				this.events?.onTowerMissions?.([]);
+				this.events?.onPlanItems?.(this.lastTodoItems);
+			}
+		} catch {}
 	}
 
 	private publishParentTaskSummaries(): void {
@@ -1698,7 +1727,9 @@ export class KlientChatBackend implements ChatBackend {
 
 	private clearBindings(): void {
 		if (this.taskPoll !== undefined) clearInterval(this.taskPoll);
+		if (this.towerPoll !== undefined) clearInterval(this.towerPoll);
 		this.taskPoll = undefined;
+		this.towerPoll = undefined;
 		for (const subscription of this.subscriptions) subscription.dispose();
 		this.subscriptions = [];
 		this.childConversationSubscription?.dispose();
@@ -2491,6 +2522,49 @@ export function projectTodoPlanItems(value: unknown): PlanItem[] | undefined {
 			},
 			...children,
 		];
+	});
+}
+
+export function projectTowerMissionPlanItems(
+	missions: readonly TowerMissionProjection[],
+): PlanItem[] {
+	const missionStatus = (status: TowerMissionProjection["status"]): PlanItem["status"] =>
+		status === "completed" || status === "merged" || status === "abandoned"
+			? "done"
+			: status === "blocked"
+				? "blocked"
+				: status === "active"
+					? "in_progress"
+					: "pending";
+	return missions.flatMap((mission) => {
+		const towerStatus = mission.status;
+		const status = missionStatus(towerStatus);
+		const worker = mission.workers.map((item) => item.name).join(", ");
+		const detail = [
+			mission.kind === "survey" ? "survey" : undefined,
+			mission.owner === undefined ? undefined : `owner: ${mission.owner}`,
+			worker.length === 0 ? undefined : `worker: ${worker}`,
+			mission.scope.length === 0 ? undefined : `scope: ${mission.scope.join(", ")}`,
+			mission.deps.length === 0 ? undefined : `deps: ${mission.deps.join(", ")}`,
+		].filter((item): item is string => item !== undefined).join(" · ");
+		const label = detail.length === 0 ? `${mission.id} ${mission.title}` : `${mission.id} ${mission.title} · ${detail}`;
+		const taskItems = mission.tasks.map((task, index) => ({
+			id: `tower:${mission.id}:task:${String(index)}`,
+			label: task.text,
+			status: task.done ? "done" : towerStatus === "blocked" ? "blocked" : towerStatus === "active" ? "in_progress" : "pending",
+			depth: 1,
+			focused: !task.done && towerStatus === "active",
+			...(towerStatus === "blocked" && mission.blockers[0] !== undefined ? { blocker: mission.blockers[0] } : {}),
+		} satisfies PlanItem));
+		return [{
+			id: `tower:${mission.id}`,
+			label,
+			status,
+			depth: 0,
+			group: taskItems.length > 0,
+			focused: status === "in_progress",
+			...(status === "blocked" && mission.blockers[0] !== undefined ? { blocker: mission.blockers.join("; ") } : {}),
+		}, ...taskItems];
 	});
 }
 
