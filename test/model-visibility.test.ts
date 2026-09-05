@@ -47,6 +47,10 @@ describe("curated runtime model visibility", () => {
     // GPT 家族：gpt-5.2 不在 curated 范围。
     expect(visible("vsplab", "gpt-5.4-mini")).toBe(true);
     expect(visible("vsplab", "gpt-5.2")).toBe(false);
+    // GPT-6 家族：2026-09 发布的 gpt-6-astra 可见，历史代际仍被排除。
+    expect(visible("vsplab", "gpt-6-astra", "GPT-6 Astra")).toBe(true);
+    expect(visible("openai", "gpt-6")).toBe(true);
+    expect(visible("vsplab", "gpt-5.3-codex-spark")).toBe(false);
   });
 
   it("hides unrelated built-ins while preserving user-defined providers", () => {

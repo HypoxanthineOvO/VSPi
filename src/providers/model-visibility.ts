@@ -67,7 +67,8 @@ function matchesAnthropic(model: CatalogModel): boolean {
 }
 
 function matchesOpenaiFamily(value: string): boolean {
-  return /gpt[- ]5[.-](?:4|5|6)(?:\D|$)/i.test(value);
+  // 2026-09-05: include the GPT-6 family (e.g. gpt-6-astra) in the curated picker.
+  return /gpt[- ](?:5[.-](?:4|5|6)|6)(?:\D|$)/i.test(value);
 }
 
 function matchesKimiFamily(value: string): boolean {
