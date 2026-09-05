@@ -77,6 +77,7 @@ import { isVisibleRuntimeModel } from "../providers/model-visibility.js";
 import { type ProviderProtocol, runProtocolProbe } from "../providers/protocol-probe.js";
 import { createProviderRequestCompatibilityExtension } from "../providers/request-compatibility.js";
 import { normalizeProjectProvider, registerBuiltinProviders } from "../providers/runtime-registration.js";
+import { enrichBuiltinProvidersWithRemoteCatalog } from "../providers/vsplab-catalog.js";
 import { createQuestionToolDefinition } from "../questions/tool.js";
 import { type SessionControlServer, startSessionControlServer } from "../sessions/control.js";
 import {
@@ -1302,7 +1303,11 @@ export class PiRuntimeBackend implements ChatBackend {
         settingsManager,
         resourceLoader: services.resourceLoader,
       });
-      registerBuiltinProviders(services.modelRuntime, BUILTIN_PROVIDERS);
+      // 中转站是模型名单/规格的权威；发现失败时静默回退内置目录，不阻塞启动。
+      const builtinProviders = await enrichBuiltinProvidersWithRemoteCatalog(BUILTIN_PROVIDERS, {
+        authPath: join(agentDir, "auth.json"),
+      });
+      registerBuiltinProviders(services.modelRuntime, builtinProviders);
       if (projectTrusted) {
         const projectConfig = createProviderConfigService({ cwd, agentDir, trustedProject: true, builtins: [] });
         const overlay = await projectConfig.loadProjectOverlay();
