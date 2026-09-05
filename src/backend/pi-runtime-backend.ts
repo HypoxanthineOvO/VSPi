@@ -296,6 +296,7 @@ export class PiRuntimeBackend implements ChatBackend {
   private replacementInvalidated = false;
   private unusableError: Error | undefined;
   private resolvedModelFallback: "same-provider" | "other-provider" | undefined;
+  private vsplabRemoteModelIds: ReadonlySet<string> = new Set();
   private effectivePromptSegments: EffectivePromptSegment[] = [];
   private readonly reviewTracker = createReviewTracker();
   private taskEpoch = 0;
@@ -723,19 +724,21 @@ export class PiRuntimeBackend implements ChatBackend {
 
   async getModelOptions(): Promise<RuntimeModelOption[]> {
     const models = await this.getAvailableModels();
-    return models.filter(isVisibleRuntimeModel).map((model) => ({
-      id: model.id,
-      provider: model.provider,
-      brand: formatProviderName(model.provider),
-      label: model.name,
-      vision: model.input?.includes("image") ?? false,
-      efforts: modelEffortLevels(model),
-      price: {
-        inputUsdPerMillion: model.cost?.input ?? 0,
-        outputUsdPerMillion: model.cost?.output ?? 0,
-      },
-      contextWindow: model.contextWindow ?? 0,
-    }));
+    return models
+      .filter((model) => this.isVisibleModel(model))
+      .map((model) => ({
+        id: model.id,
+        provider: model.provider,
+        brand: formatProviderName(model.provider),
+        label: model.name,
+        vision: model.input?.includes("image") ?? false,
+        efforts: modelEffortLevels(model),
+        price: {
+          inputUsdPerMillion: model.cost?.input ?? 0,
+          outputUsdPerMillion: model.cost?.output ?? 0,
+        },
+        contextWindow: model.contextWindow ?? 0,
+      }));
   }
 
   async getProviderOptions(): Promise<ProviderOption[]> {
@@ -749,7 +752,7 @@ export class PiRuntimeBackend implements ChatBackend {
     return providers.map((provider) => {
       const auth = runtime.getProviderAuthStatus?.(provider.id);
       const storedCredential = stored.get(provider.id);
-      const count = available.filter((model) => model.provider === provider.id && isVisibleRuntimeModel(model)).length;
+      const count = available.filter((model) => model.provider === provider.id && this.isVisibleModel(model)).length;
       const configured = auth?.configured ?? count > 0;
       return {
         id: provider.id,
@@ -1307,7 +1310,8 @@ export class PiRuntimeBackend implements ChatBackend {
       const builtinProviders = await enrichBuiltinProvidersWithRemoteCatalog(BUILTIN_PROVIDERS, {
         authPath: join(agentDir, "auth.json"),
       });
-      registerBuiltinProviders(services.modelRuntime, builtinProviders);
+      this.vsplabRemoteModelIds = builtinProviders.remoteModelIds;
+      registerBuiltinProviders(services.modelRuntime, builtinProviders.providers);
       if (projectTrusted) {
         const projectConfig = createProviderConfigService({ cwd, agentDir, trustedProject: true, builtins: [] });
         const overlay = await projectConfig.loadProjectOverlay();
@@ -2949,6 +2953,10 @@ export class PiRuntimeBackend implements ChatBackend {
   private requireRuntime(): RuntimeOwner {
     if (!this.runtime) throw new Error("Pi runtime 尚未启动");
     return this.runtime;
+  }
+
+  private isVisibleModel(model: RuntimeModel): boolean {
+    return isVisibleRuntimeModel(model, this.vsplabRemoteModelIds);
   }
 
   private requireModelRuntime(): ModelRuntimeView {

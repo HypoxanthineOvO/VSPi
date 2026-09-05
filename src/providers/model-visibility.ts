@@ -112,9 +112,15 @@ function matchesCuratedFamily(model: CatalogModel): boolean {
   return false;
 }
 
-/** VSPi's intentionally small model picker. Runtime auth/catalogs remain untouched. */
-export function isVisibleRuntimeModel(model: CatalogModel): boolean {
+/**
+ * VSPi's intentionally small model picker. Runtime auth/catalogs remain untouched.
+ *
+ * `remoteVspLabModelIds`（中转站 /models 实际登记的 vsplab 模型 id）中的条目
+ * 一律可见：中转站是模型存在性的权威，curated 家族正则只兜底本地内置目录。
+ */
+export function isVisibleRuntimeModel(model: CatalogModel, remoteVspLabModelIds?: ReadonlySet<string>): boolean {
   if (FULL_CATALOG_PROVIDER_IDS.has(model.provider)) return true;
+  if (model.provider === "vsplab" && remoteVspLabModelIds?.has(model.id)) return true;
   if (CURATED_PROVIDER_IDS.has(model.provider)) return matchesCuratedFamily(model);
   return !KNOWN_BUILTIN_PROVIDER_IDS.has(model.provider);
 }
