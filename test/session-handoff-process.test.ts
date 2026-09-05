@@ -14,6 +14,7 @@ const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0
 let abortCalls = 0;
 let managerSeen;
 let finishInteraction;
+let contenderConnected = false;
 const interactionFinished = new Promise(resolve => { finishInteraction = resolve; });
 let emitSessionEvent;
 function summary(manager) {
@@ -37,8 +38,14 @@ function session(manager) {
       manager.appendMessage({ role: 'user', content: text, timestamp: Date.now() });
       if (['question', 'approval', 'interrupt', 'projection'].includes(scenario) && role === 'A') {
         await interactionFinished;
+      } else if (['queue', 'queue-disconnect'].includes(scenario) && role === 'A' && !text.includes('B_QUEUED')) {
+        // 不赌固定的活跃窗口：等真正收到“前台已移交”（B 已连接并被接受）再放行，
+        // 避免 B 的 tsx 冷启动慢于窗口时整个编排失效。
+        const deadline = Date.now() + 20_000;
+        while (!contenderConnected && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+        await new Promise(resolve => setTimeout(resolve, 700));
       } else {
-        await new Promise(resolve => setTimeout(resolve, ['queue', 'queue-disconnect'].includes(scenario) && role === 'A' ? 2000 : 700));
+        await new Promise(resolve => setTimeout(resolve, 700));
       }
       manager.appendMessage({ role: 'assistant', content: [], api: 'openai-completions', provider: 'fixture', model: role, usage, stopReason: 'stop', timestamp: Date.now() });
     },
@@ -69,7 +76,7 @@ let markReady;
 const ready = new Promise(resolve => { markReady = resolve; });
 const events = {
   onMessage() {}, onMessageUpdate() {}, onBusy() {}, onUsage() {},
-  onNotice(message) { process.send({ type: 'notice', role, message }); },
+  onNotice(message) { if (message.includes('前台已移交')) contenderConnected = true; process.send({ type: 'notice', role, message }); },
   onSessionReady() { markReady(); },
   onSessionWait(waiting) { if (waiting) process.send({ type: 'waiting', role }); },
   onHandoffProjection(projection) {
@@ -302,7 +309,7 @@ describe("same-host Session handoff", () => {
     expect(queued?.at).toBeLessThan(acquired?.at ?? 0);
     expect(oldCompleted?.abortCalls).toBe(0);
     expect(acquired?.branch).toEqual(["BASE_USER", "BASE", "A_USER", "A", "B_QUEUED", "A"]);
-  }, 20_000);
+  }, 30_000);
 
   it("keeps an accepted queued message when the new foreground disconnects before the safe point", async () => {
     const fixture = await createProcessFixture("queue-disconnect");
@@ -315,7 +322,7 @@ describe("same-host Session handoff", () => {
     const drained = fixture.messages.find((message) => message.role === "A" && message.type === "queue-drained");
     expect(drained?.abortCalls).toBe(0);
     expect(drained?.branch).toEqual(["BASE_USER", "BASE", "A_USER", "A", "B_QUEUED", "A"]);
-  }, 20_000);
+  }, 30_000);
 
   it("interrupts the old runtime only when the new foreground explicitly cancels", async () => {
     const fixture = await createProcessFixture("interrupt");
