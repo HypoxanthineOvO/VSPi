@@ -90,6 +90,9 @@ const VSPLAB_MODELS: ProviderModelRecord[] = [
   { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", inheritFrom: "deepseek" },
   // GPT（OpenAI）
   { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", inheritFrom: "openai-codex", contextWindow: 1_050_000, maxTokens: 128_000 },
+  // 2026-09-05: GPT-6 family (released 2026-09-03). Self-contained spec: the Pi
+  // openai-codex catalog has no gpt-6 entry yet, so inheritFrom cannot be used.
+  { id: "gpt-6-astra", name: "GPT-6 Astra", contextWindow: 1_050_000, maxTokens: 128_000, reasoning: true },
   {
     id: "gpt-5.6-terra",
     name: "GPT-5.6 Terra",

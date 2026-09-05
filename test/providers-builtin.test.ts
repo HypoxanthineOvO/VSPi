@@ -49,6 +49,7 @@ describe("builtin providers", () => {
       "deepseek-v4-pro",
       // GPT
       "gpt-5.6-sol",
+      "gpt-6-astra",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
       "gpt-5.5",
@@ -89,7 +90,7 @@ describe("builtin providers", () => {
     }
     // 内置 catalog 绝不携带 credential 字段；GPT-5.6 显式选择 1.05M 长上下文。
     expect(JSON.stringify(BUILTIN_PROVIDERS)).not.toMatch(/"(api[-_]?key|secret|password|credential)"/i);
-    for (const id of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+    for (const id of ["gpt-5.6-sol", "gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna"]) {
       expect(byId.get(id)?.contextWindow).toBe(1_050_000);
       expect(byId.get(id)?.maxTokens).toBe(128_000);
     }
