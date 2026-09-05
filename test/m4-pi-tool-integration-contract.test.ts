@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +33,17 @@ function execute(tool: unknown, input: unknown, signal?: AbortSignal) {
     details?: { diff?: string; patch?: string };
   }>;
 }
+
+// find 的默认实现依赖 fd 二进制（缺失时尝试在线下载）；离线或受限环境下两者都可能不可用。
+function hasBinary(name: string): boolean {
+  try {
+    execFileSync("which", [name], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+const fdAvailable = hasBinary("fd");
 
 describe("M1 Pi-native policy tool integration", () => {
   it("provides the complete native file/folder/search catalog with unchanged schemas", async () => {
@@ -80,7 +92,14 @@ describe("M1 Pi-native policy tool integration", () => {
 
     expect((await execute(tools.read, { path: "src/a.ts" })).content[0]?.text).toContain("oldValue");
     expect((await execute(tools.ls, { path: "src" })).content[0]?.text).toContain("a.ts");
-    expect((await execute(tools.find, { pattern: "*.ts", path: "src" })).content[0]?.text).toContain("a.ts");
+    if (fdAvailable) {
+      expect((await execute(tools.find, { pattern: "*.ts", path: "src" })).content[0]?.text).toContain("a.ts");
+    } else {
+      // fd 缺失且无法下载时，find 以明确错误降级，而不是挂起或返回空结果。
+      await expect(execute(tools.find, { pattern: "*.ts", path: "src" })).rejects.toThrow(
+        "fd is not available and could not be downloaded",
+      );
+    }
     expect((await execute(tools.grep, { pattern: "oldValue", path: "src" })).content[0]?.text).toContain("oldValue");
     await execute(tools.write, { path: "created.txt", content: "created\n" });
     const edited = await execute(tools.edit, {
