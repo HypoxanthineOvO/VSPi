@@ -170,23 +170,34 @@ async function readProviderApiKey(authPath: string, providerId: string): Promise
   }
 }
 
+export interface EnrichedBuiltinProviders {
+  providers: readonly ProviderRecord[];
+  /** 远程登记的模型 id（目标 provider 下）；发现被跳过或失败时为空集合。 */
+  remoteModelIds: ReadonlySet<string>;
+}
+
 /**
  * 用远程目录补强内置复合中转站 provider。只影响内置目录的内存副本，
- * 不写回任何文件；发现失败时原样返回 builtins。
+ * 不写回任何文件；发现失败时原样返回 builtins。remoteModelIds 供可见性
+ * 联动使用：中转站登记即视为应展示，不再受 curated 家族正则限制。
  */
 export async function enrichBuiltinProvidersWithRemoteCatalog(
   builtins: readonly ProviderRecord[],
   options: { authPath?: string; timeoutMs?: number; fetchImpl?: typeof fetch; providerId?: string } = {},
-): Promise<readonly ProviderRecord[]> {
+): Promise<EnrichedBuiltinProviders> {
   const providerId = options.providerId ?? "vsplab";
+  const fallback: EnrichedBuiltinProviders = { providers: builtins, remoteModelIds: new Set<string>() };
   const provider = builtins.find((item) => item.id === providerId);
-  if (!provider?.baseUrl) return builtins;
+  if (!provider?.baseUrl) return fallback;
   const apiKey = await readProviderApiKey(options.authPath ?? join(getAgentDir(), "auth.json"), providerId);
   // 未配置凭据 = provider 未启用；跳过发现避免每次启动都白发一次注定 401 的请求。
-  if (!apiKey) return builtins;
+  if (!apiKey) return fallback;
   const result = await fetchRemoteCatalog(provider.baseUrl, apiKey, options);
-  if (result.error !== undefined || result.models.length === 0) return builtins;
-  return builtins.map((item) =>
-    item.id === providerId ? { ...item, models: mergeRemoteCatalog(item.models, result.models) } : item,
-  );
+  if (result.error !== undefined || result.models.length === 0) return fallback;
+  return {
+    providers: builtins.map((item) =>
+      item.id === providerId ? { ...item, models: mergeRemoteCatalog(item.models, result.models) } : item,
+    ),
+    remoteModelIds: new Set(result.models.map((model) => model.id)),
+  };
 }

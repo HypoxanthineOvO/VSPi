@@ -161,8 +161,10 @@ describe("enrichBuiltinProvidersWithRemoteCatalog", () => {
       authPath,
       fetchImpl: async () => jsonResponse({ data: [{ id: "gpt-6-astra" }, { id: "fresh-model" }] }),
     });
-    const vsplab = enriched.find((item) => item.id === "vsplab");
+    const vsplab = enriched.providers.find((item) => item.id === "vsplab");
     expect(vsplab?.models.map((model) => model.id)).toEqual(["gpt-6-astra", "fresh-model", "gpt-5.6-sol", "k3"]);
+    // 可见性联动使用远程登记 id 集合
+    expect([...enriched.remoteModelIds]).toEqual(["gpt-6-astra", "fresh-model"]);
     // 其它 provider 不受影响，builtins 原数组不被修改
     expect(builtins[0]?.models).toHaveLength(3);
   });
@@ -175,7 +177,8 @@ describe("enrichBuiltinProvidersWithRemoteCatalog", () => {
       authPath,
       fetchImpl: async () => new Response("down", { status: 503 }),
     });
-    expect(enriched).toEqual(builtins);
+    expect(enriched.providers).toEqual(builtins);
+    expect(enriched.remoteModelIds.size).toBe(0);
   });
 
   it("skips discovery without stored credentials", async () => {
@@ -191,7 +194,8 @@ describe("enrichBuiltinProvidersWithRemoteCatalog", () => {
       },
     });
     expect(fetched).toBe(false);
-    expect(enriched).toEqual(builtins);
+    expect(enriched.providers).toEqual(builtins);
+    expect(enriched.remoteModelIds.size).toBe(0);
     expect(await readFile(authPath, "utf8")).toContain("sk-x");
   });
 });

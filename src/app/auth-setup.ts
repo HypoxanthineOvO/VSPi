@@ -18,6 +18,7 @@ import {
 import { customProviderId, discoverProviderModels, modelsFromManualInput } from "../providers/custom-provider.js";
 import { loginProviderWithoutModelNetwork, oauthAvailableInCurrentTerminal } from "../providers/login.js";
 import { registerBuiltinProviders } from "../providers/runtime-registration.js";
+import { enrichBuiltinProvidersWithRemoteCatalog } from "../providers/vsplab-catalog.js";
 import { alignRight, frame, padLine, wrapTextWithAnsi } from "../ui/ansi.js";
 import { AuthDialog } from "../ui/auth-dialog.js";
 import { applySettingsToCapabilities, detectTerminalCapabilities } from "../ui/capabilities.js";
@@ -372,12 +373,14 @@ export async function runAuthSetup(options: {
   const capabilities = applySettingsToCapabilities(detectTerminalCapabilities(), options.settings);
   const theme = createTheme(capabilities, options.settings.theme);
   const runtime = await ModelRuntime.create();
-  registerBuiltinProviders(runtime, BUILTIN_PROVIDERS);
+  // 与主后端一致：凭据已配置时用中转站远程目录补强内置目录（best-effort，失败回退静态目录）。
+  const enriched = await enrichBuiltinProvidersWithRemoteCatalog(BUILTIN_PROVIDERS);
+  registerBuiltinProviders(runtime, enriched.providers);
   const providerConfig = createProviderConfigService({
     cwd: process.cwd(),
     agentDir: getAgentDir(),
     trustedProject: false,
-    builtins: BUILTIN_PROVIDERS,
+    builtins: [...enriched.providers],
   });
   let complete: ((message?: string) => void) | undefined;
   let resultMessage = "";

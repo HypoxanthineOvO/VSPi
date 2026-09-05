@@ -64,4 +64,19 @@ describe("curated runtime model visibility", () => {
     expect(visible("opencode-go", "gpt-5.6-luna")).toBe(true);
     expect(visible("opencode-go", "future-catalog-model")).toBe(true);
   });
+
+  it("surfaces relay-registered VSPLab models regardless of curated family rules", () => {
+    const remote = new Set(["glm-5.4", "gpt-5.2", "grok-5", "kimi-k2.5"]);
+    const remoteVisible = (provider: string, id: string) => isVisibleRuntimeModel({ provider, id, name: id }, remote);
+    // 家族正则之外的远程登记模型可见：中转站是存在性的权威。
+    expect(remoteVisible("vsplab", "glm-5.4")).toBe(true);
+    expect(remoteVisible("vsplab", "grok-5")).toBe(true);
+    // curated 明确排除的历史代际，一旦中转站实际登记也可见。
+    expect(remoteVisible("vsplab", "gpt-5.2")).toBe(true);
+    expect(remoteVisible("vsplab", "kimi-k2.5")).toBe(true);
+    // 未登记的模型仍按原规则隐藏；其它 provider 不受远程集合影响。
+    expect(remoteVisible("vsplab", "gpt-5.3-codex-spark")).toBe(false);
+    expect(remoteVisible("zai", "glm-5.4")).toBe(false);
+    expect(visible("vsplab", "glm-5.4")).toBe(false);
+  });
 });
