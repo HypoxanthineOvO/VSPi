@@ -95,6 +95,31 @@ function parseRemoteInput(value: unknown): RemoteModelInfo["input"] {
 }
 
 /**
+ * 显式 effort 档位声明（如 ["off","low","medium","high"]）合成为 thinkingLevelMap：
+ * 声明的档位原样可用，未声明的合法档位显式禁用（null）。
+ * "off" 声明时不写入映射（保持运行时默认的“关闭思考”语义），未声明则禁用。
+ */
+function effortMapFromLevels(levels: readonly EffortLevel[]): NonNullable<RemoteModelInfo["thinkingLevelMap"]> {
+  const map: NonNullable<RemoteModelInfo["thinkingLevelMap"]> = {};
+  for (const level of EFFORT_LEVELS) {
+    if (level === "off") {
+      if (!levels.includes(level)) map.off = null;
+      continue;
+    }
+    map[level] = levels.includes(level) ? level : null;
+  }
+  return map;
+}
+
+function parseRemoteEffortLevels(value: unknown): EffortLevel[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const levels = value.filter((item): item is EffortLevel =>
+    (EFFORT_LEVELS as readonly string[]).includes(item as string),
+  );
+  return levels.length > 0 ? levels : undefined;
+}
+
+/**
  * 解析中转站 /v1/models 或 /vsp/models 响应。兼容 OpenAI `data[]` 风格与 `{models:[]}` 风格；
  * 条目可以是纯 id 字符串或对象；无法识别的条目与字段静默跳过。
  */
@@ -129,8 +154,13 @@ export function parseRemoteCatalog(payload: unknown): RemoteModelInfo[] {
       record.max_completion_tokens,
     );
     const input = parseRemoteInput(record.input);
-    const reasoning = firstBoolean(record.reasoning, record.supports_reasoning);
-    const thinkingLevelMap = parseRemoteThinkingLevelMap(record.thinkingLevelMap ?? record.thinking_level_map);
+    const effortLevels = parseRemoteEffortLevels(record.effortLevels ?? record.effort_levels ?? record.effort);
+    const explicitReasoning = firstBoolean(record.reasoning, record.supports_reasoning);
+    // 显式 thinkingLevelMap 优先；缺省时由 effortLevels 声明合成档位表
+    const thinkingLevelMap =
+      parseRemoteThinkingLevelMap(record.thinkingLevelMap ?? record.thinking_level_map) ??
+      (effortLevels ? effortMapFromLevels(effortLevels) : undefined);
+    const reasoning = explicitReasoning ?? (effortLevels ? true : undefined);
     const cost = parseRemoteCost(record.cost);
     models.push({
       id,
