@@ -21,6 +21,7 @@ const expectedFiles = [
   'package/dist/search-worker.mjs',
   'package/dist/text-build-worker.mjs',
   'package/package.json',
+  'package/skills/vspi-self/SKILL.md',
 ];
 const builtins = new Set([...builtinModules, ...builtinModules.map((name) => `node:${name}`)]);
 
@@ -45,6 +46,13 @@ try {
   for (const name of ['main.mjs', 'search-worker.mjs', 'text-build-worker.mjs']) {
     await verifyImports(join(extractRoot, 'package', 'dist', name));
   }
+  const selfSkill = await readFile(join(extractRoot, 'package', 'skills', 'vspi-self', 'SKILL.md'), 'utf8');
+  for (const expected of ['${KIMI_SESSION_DIR}', 'default_model', 'secondary_model', 'vspi config reload']) {
+    assert(selfSkill.includes(expected), `vspi-self skill must include ${expected}`);
+  }
+  for (const forbidden of ['KIMI_CODE_HOME', '~/.kimi-code', 'kimi doctor']) {
+    assert(!selfSkill.includes(forbidden), `vspi-self skill must not include ${forbidden}`);
+  }
 
   const environment = {
     ...process.env,
@@ -58,6 +66,18 @@ try {
   const executable = process.platform === 'win32' ? join(prefix, 'vspi.cmd') : join(prefix, 'bin', 'vspi');
   const { stdout } = await exec(executable, ['--version'], { env: environment, timeout: 30_000 });
   assert(stdout.trim() === sourceManifest.version, `installed vspi reported ${stdout.trim() || '<empty>'}`);
+  const rootHelp = await exec(executable, ['--help'], { env: environment, timeout: 30_000 });
+  assert(rootHelp.stderr === '', `vspi --help wrote stderr: ${rootHelp.stderr}`);
+  assert(rootHelp.stdout.startsWith(`VSPi ${sourceManifest.version}`), 'vspi --help must print root usage');
+  const configHelp = await exec(executable, ['config', '--help'], { env: environment, timeout: 30_000 });
+  assert(configHelp.stderr === '', `vspi config --help wrote stderr: ${configHelp.stderr}`);
+  assert(configHelp.stdout.startsWith('Usage: vspi config'), 'vspi config --help must print config usage');
+  const configPath = await exec(executable, ['config', 'path'], { env: environment, timeout: 30_000 });
+  assert(configPath.stderr === '', `vspi config path wrote stderr: ${configPath.stderr}`);
+  assert(configPath.stdout.trim() === join(environment.VSPI_HOME, 'config.toml'), 'vspi config path must honor VSPI_HOME');
+  await assertFailsWithoutRuntime(executable, ['--unknown'], environment, 'Unknown option: --unknown');
+  await assertFailsWithoutRuntime(executable, ['unknown'], environment, 'Unknown command: unknown');
+  await assertFailsWithoutRuntime(executable, ['config', '--unknown'], environment, 'Unknown option for vspi config: --unknown');
   const help = await exec(executable, ['exec', '--help'], { env: environment, timeout: 30_000 });
   assert(help.stderr === '', `vspi exec --help wrote stderr: ${help.stderr}`);
   assert(help.stdout.startsWith('Usage: vspi exec [options]'), 'vspi exec --help must print exec usage');
@@ -88,6 +108,16 @@ async function verifyImports(path) {
   }
   const siblings = await readdir(dirname(path));
   assert(siblings.includes(basename(path)), `${path} is missing`);
+}
+
+async function assertFailsWithoutRuntime(executable, args, env, expectedMessage) {
+  try {
+    await exec(executable, args, { env, timeout: 30_000 });
+  } catch (error) {
+    assert(error.stderr?.includes(expectedMessage), `vspi ${args.join(' ')} did not report ${expectedMessage}`);
+    return;
+  }
+  throw new Error(`vspi ${args.join(' ')} unexpectedly succeeded`);
 }
 
 function assert(condition, message) {

@@ -174,15 +174,15 @@ describe('InMemorySkillCatalog prompt rendering', () => {
       stubSkill('commit', {
         dir: '/tmp/skills/commit',
         content:
-          'raw=$ARGUMENTS zero=$0 one=$1 second=$ARGUMENTS[1] flag=$flag message=$message dir=${KIMI_SKILL_DIR} session=${KIMI_SESSION_ID}',
+          'raw=$ARGUMENTS zero=$0 one=$1 second=$ARGUMENTS[1] flag=$flag message=$message dir=${KIMI_SKILL_DIR} session=${KIMI_SESSION_ID} sessionDir=${KIMI_SESSION_DIR}',
         metadata: { arguments: ['flag', 'message'] },
       }),
       '-m "fix login"',
-      { sessionId: 'ses_1' },
+      { sessionId: 'ses_1', sessionDir: '/home/vspi/sessions/workspace/ses_1' },
     );
 
     expect(rendered).toBe(
-      'raw=-m "fix login" zero=-m one=fix login second=fix login flag=-m message=fix login dir=/tmp/skills/commit session=ses_1',
+      'raw=-m "fix login" zero=-m one=fix login second=fix login flag=-m message=fix login dir=/tmp/skills/commit session=ses_1 sessionDir=/home/vspi/sessions/workspace/ses_1',
     );
   });
 

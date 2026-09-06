@@ -65,7 +65,10 @@ export class SkillTool implements ISkillTool {
       this.skill,
       args,
       this.queryDepth,
-      this.sessionContext.sessionId,
+      {
+        sessionId: this.sessionContext.sessionId,
+        sessionDir: this.sessionContext.sessionDir,
+      },
     );
   }
 }
@@ -75,7 +78,7 @@ export async function executeModelSkill(
   skillService: SkillRuntime,
   args: SkillToolInput,
   queryDepth: number,
-  sessionId: string,
+  session: { readonly sessionId: string; readonly sessionDir: string },
 ): Promise<ExecutableToolResult> {
   const currentDepth = queryDepth;
   if (currentDepth >= MAX_SKILL_QUERY_DEPTH) {
@@ -110,7 +113,7 @@ export async function executeModelSkill(
     skillPath: skill.path,
     skillSource: skill.source,
   };
-  const skillContent = catalog.catalog.renderSkillPrompt(skill, skillArgs, { sessionId });
+  const skillContent = catalog.catalog.renderSkillPrompt(skill, skillArgs, session);
   const message: ToolDeliveryMessage = {
     role: 'user',
     content: [

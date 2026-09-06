@@ -244,8 +244,10 @@ export class SkillRuntime {
   }
 
   private renderSkillPrompt(skill: SkillDefinition, rawArgs: string): string {
+    const session = this.context.get(ISessionContext);
     return this.context.get(ISessionSkillCatalog).catalog.renderSkillPrompt(skill, rawArgs, {
-      sessionId: this.context.get(ISessionContext).sessionId,
+      sessionId: session.sessionId,
+      sessionDir: session.sessionDir,
     });
   }
 

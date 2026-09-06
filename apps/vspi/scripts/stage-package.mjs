@@ -22,6 +22,7 @@ await Promise.all([
   writeFile(join(stagingRoot, 'package.json'), `${JSON.stringify(packageManifest, null, 2)}\n`),
   cp(join(repositoryRoot, 'LICENSE'), join(stagingRoot, 'LICENSE')),
   cp(join(packageRoot, 'README.md'), join(stagingRoot, 'README.md')),
+  cp(join(packageRoot, 'skills'), join(stagingRoot, 'skills'), { recursive: true }),
   ...['main.mjs', 'search-worker.mjs', 'text-build-worker.mjs'].map((name) =>
     cp(join(packageRoot, 'dist', name), join(stagingRoot, 'dist', name)),
   ),

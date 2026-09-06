@@ -1,5 +1,6 @@
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import {
 	connectRuntime,
@@ -143,6 +144,7 @@ async function serveDaemon(homeDir?: string): Promise<void> {
 		homeDir: expected.homeDir,
 		hostIdentity: identity,
 		env: daemonEnvironment(process.env),
+		skillDirs: [fileURLToPath(new URL("../skills", import.meta.url))],
 	});
 	try {
 		await writeRuntimeIdentity(expected, daemon.state.pid);

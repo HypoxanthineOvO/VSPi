@@ -1,4 +1,4 @@
-import type { RuntimeConnection } from "@vsp/vsp-runtime";
+import { resolveRuntimePaths, type RuntimeConnection } from "@vsp/vsp-runtime";
 import type { AppSettings } from "./v1/domain/types.js";
 import { loadSettings } from "./v1/config/settings.js";
 import { runAuthSetup, type AuthSetupOptions } from "./v1/app/auth-setup.js";
@@ -25,7 +25,7 @@ Commands:
   vspi resume             恢复会话并打开会话面板
   vspi exec ...           非交互执行（vspi exec --help 查看用法）
   vspi update             更新到最新发布版本
-  vspi config [provider]  交互式配置 Provider（init 为兼容别名）
+  vspi config [provider]  配置 Provider 或读写 Core 配置（--help 查看用法）
   vspi login|logout [provider]  登录 / 移除 Provider 凭据
   vspi web                输出 Web runtime 地址
   vspi daemon <start|status|stop|logs>
@@ -47,6 +47,19 @@ Commands:
     default_effort = "high"
   凭据: vspi login <provider>
   日志: vspi daemon logs
+`;
+
+export const VSPI_CONFIG_USAGE = `Usage: vspi config [provider]
+       vspi config path
+       vspi config get <section>
+       vspi config set <section> <json>
+       vspi config reload
+
+不带参数时打开交互式 Provider 配置。
+path 输出实际 config.toml 路径，不启动 runtime。
+get/set 使用 Core 配置 section 名（例如 defaultModel、secondaryModel）。
+set 通过 Core schema 校验并原子写入配置；JSON 参数必须是完整 section 值。
+reload 重新读取磁盘配置并输出 diagnostics。
 `;
 
 export async function dispatchCliCommand(
@@ -73,8 +86,22 @@ export async function dispatchCliCommand(
 		return true;
 	}
 	const command = args[0];
-	if (command !== "config" && command !== "init" && command !== "login" && command !== "logout")
-		return false;
+	if (command !== "config" && command !== "init" && command !== "login" && command !== "logout") {
+		if (
+			command === undefined ||
+			command === "continue" ||
+			command === "resume" ||
+			command === "exec" ||
+			command === "web" ||
+			command === "daemon"
+		)
+			return false;
+		throw new Error(
+			`${command.startsWith("-") ? "Unknown option" : "Unknown command"}: ${command}\nRun vspi --help for usage.`,
+		);
+	}
+	if (command === "config" && await dispatchNonInteractiveConfig(args.slice(1), dependencies, write))
+		return true;
 	if (args.length > 2) throw new Error(`Usage: vspi ${command}${command === "config" || command === "init" ? " [custom]" : " [provider]"}`);
 	if (!(dependencies.stdinIsTTY?.() ?? process.stdin.isTTY) || !(dependencies.stdoutIsTTY?.() ?? process.stdout.isTTY))
 		throw new Error("vspi config/login/logout 需要交互式 TTY");
@@ -95,4 +122,74 @@ export async function dispatchCliCommand(
 		await connection.close();
 	}
 	return true;
+}
+
+async function dispatchNonInteractiveConfig(
+	args: readonly string[],
+	dependencies: CliCommandDependencies,
+	write: (message: string) => void,
+): Promise<boolean> {
+	const subcommand = args[0];
+	if (subcommand === "--help" || subcommand === "-h" || subcommand === "help") {
+		if (args.length > 1) throw new Error("Usage: vspi config --help");
+		write(VSPI_CONFIG_USAGE);
+		return true;
+	}
+	if (subcommand === "path") {
+		if (args.length > 1) throw new Error("Usage: vspi config path");
+		write(`${resolveRuntimePaths().configPath}\n`);
+		return true;
+	}
+	if (subcommand?.startsWith("-"))
+		throw new Error(`Unknown option for vspi config: ${subcommand}\nRun vspi config --help for usage.`);
+	if (subcommand !== "get" && subcommand !== "set" && subcommand !== "reload")
+		return false;
+	if (subcommand === "get" && args.length !== 2)
+		throw new Error("Usage: vspi config get <section>");
+	if (subcommand === "set" && args.length !== 3)
+		throw new Error("Usage: vspi config set <section> <json>");
+	if (subcommand === "reload" && args.length !== 1)
+		throw new Error("Usage: vspi config reload");
+	let section = "";
+	let setValue: unknown;
+	if (subcommand === "get" || subcommand === "set")
+		section = args[1] ?? "";
+	if (subcommand === "set") {
+		const json = args[2];
+		if (json === undefined)
+			throw new Error("Usage: vspi config set <section> <json>");
+		try {
+			setValue = JSON.parse(json);
+		} catch (error) {
+			throw new Error(
+				`Invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+				{ cause: error },
+			);
+		}
+	}
+	const connect =
+		dependencies.connect ??
+		(() => Promise.reject(new Error("Runtime connection is not configured")));
+	const connection = await connect();
+	try {
+		if (subcommand === "get") {
+			const value = await connection.klient.global.config.get(section);
+			write(`${JSON.stringify(value, null, 2)}\n`);
+			return true;
+		}
+		if (subcommand === "set") {
+			await connection.klient.global.config.replace({
+				domain: section,
+				value: setValue,
+			});
+			write(`配置 section ${section} 已更新\n`);
+			return true;
+		}
+		await connection.klient.global.config.reload();
+		const diagnostics = await connection.klient.global.config.diagnostics();
+		write(`${JSON.stringify(diagnostics, null, 2)}\n`);
+		return true;
+	} finally {
+		await connection.close();
+	}
 }

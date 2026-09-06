@@ -332,6 +332,24 @@ describe('SkillTool', () => {
     });
   });
 
+  it('expands the exact session identity and directory for model-invoked skills', async () => {
+    skills.register(
+      stubSkill('session-aware', {
+        content: 'session=${KIMI_SESSION_ID} dir=${KIMI_SESSION_DIR}',
+      }),
+    );
+
+    const result = await executeTool(
+      makeTool(ix),
+      toolContext({ skill: 'session-aware' }),
+    );
+
+    expect(result.delivery?.message.content[0]).toMatchObject({
+      type: 'text',
+      text: expect.stringContaining('session=test-session dir=/sessions/test'),
+    });
+  });
+
   it('honors initialQueryDepth as an alias for queryDepth', async () => {
     const nested = await executeTool(
       makeTool(ix, 2),

@@ -24,6 +24,7 @@ export interface StartRuntimeDaemonOptions {
   readonly hostIdentity: RuntimeHostIdentity;
   readonly port?: number;
   readonly env?: NodeJS.ProcessEnv;
+  readonly skillDirs?: readonly string[];
   readonly configMigration?: Omit<MigrateRuntimeConfigOptions, 'homeDir' | 'env' | 'osHomeDir' | 'agentDir'>;
   readonly startServer?: typeof startServer;
 }
@@ -48,6 +49,7 @@ export async function startRuntimeDaemon(options: StartRuntimeDaemonOptions): Pr
       homeDir: paths.homeDir,
       env: options.env ?? process.env,
       hostIdentity: options.hostIdentity,
+      skillDirs: options.skillDirs,
       serverVersion: options.hostIdentity.version,
       telemetry: false,
     });

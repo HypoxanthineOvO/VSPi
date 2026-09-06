@@ -61,7 +61,7 @@ export interface SkillCatalog {
   renderSkillPrompt(
     skill: SkillDefinition,
     rawArgs: string,
-    context?: { readonly sessionId?: string },
+    context?: { readonly sessionId?: string; readonly sessionDir?: string },
   ): string;
   listSkills(): readonly SkillDefinition[];
   listInvocableSkills(): readonly SkillDefinition[];

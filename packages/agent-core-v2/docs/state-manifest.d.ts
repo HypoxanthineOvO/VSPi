@@ -319,6 +319,7 @@ export interface WorkspaceStateSnapshot {
       readonly experimentalFlag?: string;
     }, rawArgs: string, context?: {
       readonly sessionId?: string;
+      readonly sessionDir?: string;
     }) => string;
     listSkills: () => readonly /* SkillDefinition — packages/agent-core-v2/src/features/skill/catalog/types.ts */ {
       readonly name: string;
@@ -584,6 +585,7 @@ export interface SessionStateSnapshot {
       readonly experimentalFlag?: string;
     }, rawArgs: string, context?: {
       readonly sessionId?: string;
+      readonly sessionDir?: string;
     }) => string;
     listSkills: () => readonly /* SkillDefinition — packages/agent-core-v2/src/features/skill/catalog/types.ts */ {
       readonly name: string;

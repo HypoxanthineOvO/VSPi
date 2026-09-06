@@ -3,10 +3,10 @@ import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const RELEASE_TAG = 'v2.0.1';
-const RELEASE_VERSION = '2.0.1';
-const RELEASE_TITLE = 'VSPi 2.0.1';
-const VERSIONED_ASSET = 'vspi-2.0.1.tgz';
+const RELEASE_TAG = 'v2.0.2';
+const RELEASE_VERSION = '2.0.2';
+const RELEASE_TITLE = 'VSPi 2.0.2';
+const VERSIONED_ASSET = 'vspi-2.0.2.tgz';
 const LATEST_ASSET = 'vspi-latest.tgz';
 const READBACK_ATTEMPTS = 5;
 const READBACK_DELAY_MS = 100;
@@ -87,7 +87,7 @@ export async function readGitHubSource({ environment, fetch = globalThis.fetch }
   const release = await responseJson(response, 'GitHub release lookup');
   if (release.tag_name !== RELEASE_TAG) throw new Error('GitHub release tag conflicts with the mirror source');
   if (release.name !== RELEASE_TITLE) throw new Error('GitHub release title conflicts with the mirror source');
-  if (release.draft || !release.prerelease) throw new Error('GitHub release must be a published prerelease');
+  if (release.draft || release.prerelease) throw new Error('GitHub release must be a published stable release');
   const expectedChecksum = parseChecksum(release.body);
   const assets = Array.isArray(release.assets) ? release.assets : [];
   const expectedNames = [VERSIONED_ASSET, LATEST_ASSET];

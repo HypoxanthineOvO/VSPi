@@ -166,6 +166,33 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 		}
 	});
 
+	it("exposes host-provided product skills without enabling Kimi product skills", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-runtime-skills-"));
+		const skillRoot = join(homeDir, "product-skills");
+		await mkdir(join(skillRoot, "vspi-self"), { recursive: true });
+		await writeFile(
+			join(skillRoot, "vspi-self", "SKILL.md"),
+			"---\nname: vspi-self\ndescription: Manage VSPi itself.\n---\n\nUse the current VSPi runtime.\n",
+		);
+		daemon = await startRuntimeDaemon({
+			homeDir,
+			hostIdentity: identity,
+			env: { ...process.env, HOME: homeDir },
+			skillDirs: [skillRoot],
+		});
+		const projectRoot = join(homeDir, "project");
+		await mkdir(join(projectRoot, ".git"), { recursive: true });
+		const connection = await connectRuntime(homeDir);
+		try {
+			const session = await connection.klient.global.sessions.create({ workDir: projectRoot });
+			const skills = await connection.klient.session(session.id).skills.list();
+			expect(skills).toContainEqual(expect.objectContaining({ name: "vspi-self" }));
+			expect(skills).not.toContainEqual(expect.objectContaining({ name: "update-config" }));
+		} finally {
+			await connection.close();
+		}
+	});
+
 	it("removes discoverable runtime state when the owner closes", async () => {
 		homeDir = await mkdtemp(join(tmpdir(), "vsp-runtime-cleanup-"));
 		daemon = await startTestDaemon(homeDir);

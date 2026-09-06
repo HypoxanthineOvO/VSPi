@@ -35,6 +35,20 @@ describe("VSPi CLI command dispatch", () => {
 		await expect(dispatchCliCommand(["daemon"])).resolves.toBe(false);
 	});
 
+	it("rejects unknown commands and options before runtime startup", async () => {
+		const connect = vi.fn(async () => fakeConnection());
+		await expect(dispatchCliCommand(["--unknown"], { connect })).rejects.toThrow(
+			"Unknown option: --unknown",
+		);
+		await expect(dispatchCliCommand(["unknown"], { connect })).rejects.toThrow(
+			"Unknown command: unknown",
+		);
+		await expect(
+			dispatchCliCommand(["config", "--unknown"], { connect }),
+		).rejects.toThrow("Unknown option for vspi config: --unknown");
+		expect(connect).not.toHaveBeenCalled();
+	});
+
 	it("rejects unsupported update arguments", async () => {
 		await expect(dispatchCliCommand(["update", "extra"])).rejects.toThrow("Usage: vspi update");
 	});
@@ -54,6 +68,74 @@ describe("VSPi CLI command dispatch", () => {
 		expect(messages.join("")).toContain("Usage: vspi [command]");
 		expect(messages.join("")).toContain("config.toml");
 		expect(messages.join("")).toContain("[models.");
+	});
+
+	it("prints config help and path without a TTY or runtime connection", async () => {
+		const messages: string[] = [];
+		const connect = vi.fn(async () => fakeConnection());
+		await expect(
+			dispatchCliCommand(["config", "--help"], {
+				connect,
+				stdinIsTTY: () => false,
+				stdoutIsTTY: () => false,
+				write: (message) => messages.push(message),
+			}),
+		).resolves.toBe(true);
+		await expect(
+			dispatchCliCommand(["config", "path"], {
+				connect,
+				stdinIsTTY: () => false,
+				stdoutIsTTY: () => false,
+				write: (message) => messages.push(message),
+			}),
+		).resolves.toBe(true);
+		expect(connect).not.toHaveBeenCalled();
+		expect(messages.join("")).toContain("vspi config get <section>");
+		expect(messages.at(-1)).toMatch(/config\.toml\n$/u);
+	});
+
+	it("reads, validates, writes, and reloads config without a TTY", async () => {
+		const config = {
+			get: vi.fn(async () => "example/model"),
+			replace: vi.fn(async () => {}),
+			reload: vi.fn(async () => {}),
+			diagnostics: vi.fn(async () => [{ severity: "warning", message: "example" }]),
+		};
+		const connection = fakeConnection({ global: { config } });
+		const messages: string[] = [];
+		const common = {
+			connect: async () => connection,
+			stdinIsTTY: () => false,
+			stdoutIsTTY: () => false,
+			write: (message: string) => messages.push(message),
+		};
+
+		await expect(dispatchCliCommand(["config", "get", "defaultModel"], common)).resolves.toBe(true);
+		await expect(
+			dispatchCliCommand(
+				["config", "set", "secondaryModel", '{"defaultModel":"example/model"}'],
+				common,
+			),
+		).resolves.toBe(true);
+		await expect(dispatchCliCommand(["config", "reload"], common)).resolves.toBe(true);
+
+		expect(config.get).toHaveBeenCalledWith("defaultModel");
+		expect(config.replace).toHaveBeenCalledWith({
+			domain: "secondaryModel",
+			value: { defaultModel: "example/model" },
+		});
+		expect(config.reload).toHaveBeenCalledOnce();
+		expect(config.diagnostics).toHaveBeenCalledOnce();
+		expect(messages.join("")).toContain('"example/model"');
+		expect(connection.close).toHaveBeenCalledTimes(3);
+	});
+
+	it("rejects malformed config JSON before connecting", async () => {
+		const connect = vi.fn(async () => fakeConnection());
+		await expect(
+			dispatchCliCommand(["config", "set", "defaultModel", "{"], { connect }),
+		).rejects.toThrow("Invalid JSON");
+		expect(connect).not.toHaveBeenCalled();
 	});
 
 	it("routes config and the init compatibility alias without starting a session", async () => {
@@ -135,11 +217,11 @@ describe("VSPi CLI command dispatch", () => {
 	});
 });
 
-function fakeConnection() {
+function fakeConnection(klient: unknown = {}) {
 	return {
 		state: {} as never,
 		env: {} as never,
-		klient: {} as never,
+		klient: klient as never,
 		close: vi.fn(async () => {}),
 	};
 }

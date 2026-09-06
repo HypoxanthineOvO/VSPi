@@ -60,12 +60,13 @@ export class InMemorySkillCatalog implements SkillCatalog {
   renderSkillPrompt(
     skill: SkillDefinition,
     rawArgs: string,
-    context?: { readonly sessionId?: string },
+    context?: { readonly sessionId?: string; readonly sessionDir?: string },
   ): string {
     const argumentNames = skillArgumentNames(skill.metadata);
     const content = expandSkillParameters(skill.content, rawArgs, {
       skillDir: skill.dir,
       sessionId: context?.sessionId,
+      sessionDir: context?.sessionDir,
       argumentNames,
     });
     const plugin = skill.plugin;
@@ -130,6 +131,7 @@ export class InMemorySkillCatalog implements SkillCatalog {
 interface SkillExpandContext {
   readonly skillDir: string;
   readonly sessionId?: string;
+  readonly sessionDir?: string;
   readonly argumentNames?: readonly string[];
 }
 
@@ -165,7 +167,8 @@ function expandSkillParameters(
   const hasArgumentPlaceholder = content !== body;
   content = content
     .replaceAll('${KIMI_SKILL_DIR}', context.skillDir)
-    .replaceAll('${KIMI_SESSION_ID}', context.sessionId ?? '');
+    .replaceAll('${KIMI_SESSION_ID}', context.sessionId ?? '')
+    .replaceAll('${KIMI_SESSION_DIR}', context.sessionDir ?? '');
 
   if (!hasArgumentPlaceholder && rawArgs.length > 0) {
     return `${content}\n\nARGUMENTS: ${escapeXmlTags(rawArgs)}`;

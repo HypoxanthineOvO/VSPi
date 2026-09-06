@@ -3,10 +3,10 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const RELEASE_TAG = 'v2.0.1';
-const RELEASE_VERSION = '2.0.1';
-const RELEASE_TITLE = 'VSPi 2.0.1';
-const VERSIONED_ASSET = 'vspi-2.0.1.tgz';
+const RELEASE_TAG = 'v2.0.2';
+const RELEASE_VERSION = '2.0.2';
+const RELEASE_TITLE = 'VSPi 2.0.2';
+const VERSIONED_ASSET = 'vspi-2.0.2.tgz';
 const LATEST_ASSET = 'vspi-latest.tgz';
 const READBACK_ATTEMPTS = 5;
 const READBACK_DELAY_MS = 100;
@@ -207,7 +207,7 @@ export async function produceGitHubRelease({
   fetch = globalThis.fetch,
 }) {
   if (!assetPath || !latestAssetPath) {
-    throw new Error('Usage: node scripts/github-release-producer.mjs <vspi-2.0.1.tgz> <vspi-latest.tgz> [metadata.json]');
+    throw new Error('Usage: node scripts/github-release-producer.mjs <vspi-2.0.2.tgz> <vspi-latest.tgz> [metadata.json]');
   }
   if (!fetch) throw new Error('Global fetch is unavailable');
   const prepared = await prepareGitHubRelease({ environment, packageJsonPath, assetPath, latestAssetPath });
