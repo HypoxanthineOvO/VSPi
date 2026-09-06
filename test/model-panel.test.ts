@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE, FX, MODEL_GROUPS, MODELS } from "../src/domain/fixtures.js";
+import type { ModelOption } from "../src/domain/types.js";
 import { stripAnsi, visibleWidth } from "../src/ui/ansi.js";
 import { PanelController } from "../src/ui/panels.js";
 import { plainTheme } from "./helpers.js";
@@ -222,5 +223,66 @@ describe("model panel responsive layout", () => {
     const returnedList = render(panel, 40, 16).join("\n");
     expect(returnedList).toContain("选择模型");
     expect(returnedList).not.toContain("¥");
+  });
+});
+
+describe("model panel collapsed curation toggle", () => {
+  const CTRL_O = "\u000f";
+
+  const option = (label: string, curated?: boolean): ModelOption => ({
+    id: label.toLowerCase().replace(/\s+/g, "-"),
+    provider: "vsplab",
+    brand: "VSPLab",
+    label,
+    vision: false,
+    efforts: ["off"],
+    price: { inputUsdPerMillion: 1, outputUsdPerMillion: 2 },
+    ...(curated === undefined ? {} : { curated }),
+  });
+
+  it("hides collapsed models until Ctrl+O expands them, then keeps them selectable", () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    panel.setModels(
+      [option("A Curated", true), option("B Collapsed", false), option("C Curated", true)],
+      [],
+      "a-curated",
+    );
+    panel.open("models");
+
+    const collapsed = render(panel, 80, 16).join("\n");
+    expect(collapsed).toContain("A Curated");
+    expect(collapsed).not.toContain("B Collapsed");
+    expect(collapsed).toContain("选择模型");
+    expect(stripAnsi(panel.renderHint(80, plainTheme()))).toContain("Ctrl+O 展开折叠");
+
+    panel.handleInput(CTRL_O);
+    const expanded = render(panel, 80, 16).join("\n");
+    expect(expanded).toContain("B Collapsed");
+    expect(expanded).toContain("全部模型");
+    expect(stripAnsi(panel.renderHint(80, plainTheme()))).toContain("Ctrl+O 收起折叠");
+
+    panel.handleInput(DOWN);
+    const selected = render(panel, 80, 16).join("\n");
+    expect(selected).toContain("B Collapsed");
+    expect(selected).toContain("已折叠（Ctrl+O 展开后可选）");
+    const event = panel.handleInput("\r");
+    expect(event).toMatchObject({ type: "model", model: expect.objectContaining({ label: "B Collapsed" }) });
+
+    panel.handleInput(CTRL_O);
+    const restored = render(panel, 80, 16).join("\n");
+    expect(restored).not.toContain("B Collapsed");
+    expect(restored).toContain("选择模型");
+  });
+
+  it("leaves Ctrl+O inert when no model is collapsed", () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    panel.setModels([option("Only Visible", true)]);
+    panel.open("models");
+
+    expect(stripAnsi(panel.renderHint(80, plainTheme()))).not.toContain("Ctrl+O");
+    panel.handleInput(CTRL_O);
+    const list = render(panel, 80, 16).join("\n");
+    expect(list).toContain("Only Visible");
+    expect(list).toContain("选择模型");
   });
 });

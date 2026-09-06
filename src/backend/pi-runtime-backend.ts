@@ -724,21 +724,20 @@ export class PiRuntimeBackend implements ChatBackend {
 
   async getModelOptions(): Promise<RuntimeModelOption[]> {
     const models = await this.getAvailableModels();
-    return models
-      .filter((model) => this.isVisibleModel(model))
-      .map((model) => ({
-        id: model.id,
-        provider: model.provider,
-        brand: formatProviderName(model.provider),
-        label: model.name,
-        vision: model.input?.includes("image") ?? false,
-        efforts: modelEffortLevels(model),
-        price: {
-          inputUsdPerMillion: model.cost?.input ?? 0,
-          outputUsdPerMillion: model.cost?.output ?? 0,
-        },
-        contextWindow: model.contextWindow ?? 0,
-      }));
+    return models.map((model) => ({
+      id: model.id,
+      provider: model.provider,
+      brand: formatProviderName(model.provider),
+      label: model.name,
+      vision: model.input?.includes("image") ?? false,
+      efforts: modelEffortLevels(model),
+      price: {
+        inputUsdPerMillion: model.cost?.input ?? 0,
+        outputUsdPerMillion: model.cost?.output ?? 0,
+      },
+      contextWindow: model.contextWindow ?? 0,
+      curated: this.isVisibleModel(model),
+    }));
   }
 
   async getProviderOptions(): Promise<ProviderOption[]> {

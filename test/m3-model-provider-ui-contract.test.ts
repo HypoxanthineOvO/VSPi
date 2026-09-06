@@ -89,7 +89,10 @@ describe("M3 real ModelRuntime and Pi Session mutation", () => {
     });
 
     expect(await backend.getModelOptions()).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "claude-sonnet-5" })]),
+      expect.arrayContaining([expect.objectContaining({ id: "claude-sonnet-5", curated: true })]),
+    );
+    expect(await backend.getModelOptions()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "broken-model", curated: false })]),
     );
     expect(await backend.selectModel("anthropic", "claude-sonnet-5")).toMatchObject({
       modelId: "claude-sonnet-5",
