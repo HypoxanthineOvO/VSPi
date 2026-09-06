@@ -654,7 +654,10 @@ export class KlientChatBackend implements ChatBackend {
 		const agent = this.requireAgent();
 		const tasks = await agent.getTasks({ activeOnly: true, limit: 100 });
 		const foreground = tasks.filter(
-			(task) => task.status === "running" && task.detached !== true,
+			(task) =>
+				task.status === "running" &&
+				task.detached !== true &&
+				(task.kind === "process" || task.kind === "agent"),
 		);
 		let detached = 0;
 		for (const task of foreground) {

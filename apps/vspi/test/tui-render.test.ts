@@ -735,6 +735,48 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		);
 	});
 
+	it("shows a ctrl+b background hint on running Bash tool rows only", () => {
+		const messages: TranscriptMessage[] = [
+			{
+				id: "bash-running",
+				role: "assistant",
+				kind: "tool",
+				name: "Bash",
+				summary: "pnpm test",
+				status: "running",
+				expanded: false,
+			},
+			{
+				id: "bash-done",
+				role: "assistant",
+				kind: "tool",
+				name: "Bash",
+				summary: "git status",
+				status: "success",
+				expanded: false,
+			},
+			{
+				id: "agent-running",
+				role: "assistant",
+				kind: "tool",
+				name: "Agent",
+				summary: "探查模块",
+				status: "running",
+				expanded: false,
+			},
+		];
+
+		const output = renderTranscript(messages, 80, theme, {}).map(
+			stripTerminalSequences,
+		);
+
+		expect(output.join("\n")).toContain("pnpm test · 运行中 · ctrl+b 转后台");
+		expect(output.join("\n")).toContain("git status");
+		expect(output.join("\n")).not.toContain("git status · ctrl+b");
+		expect(output.join("\n")).toContain("探查模块 · 运行中");
+		expect(output.join("\n")).not.toContain("探查模块 · 运行中 · ctrl+b");
+	});
+
 	it("renders collapsed thinking preview as dimmed markdown with three-column indentation", () => {
 		const messages: TranscriptMessage[] = [
 			{
@@ -1448,13 +1490,13 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			renderRuntimeStatus({ ...input, goal: undefined }, 80, theme),
 		).trimEnd();
 
-		expect(wide.startsWith("Runtime · Idle · 2 scheduled")).toBe(true);
+		expect(wide.startsWith("Runtime · Waiting · 2 scheduled")).toBe(true);
 		expect(wide.endsWith("Goal · 执行中")).toBe(true);
-		expect(constrained.startsWith("Runtime · Idle")).toBe(true);
+		expect(constrained.startsWith("Runtime · Waiting")).toBe(true);
 		expect(constrained).not.toContain("scheduled");
 		expect(constrained.endsWith("Goal · 执行中")).toBe(true);
-		expect(narrow).toBe("Runtime · Idle");
-		expect(withoutGoal).toBe("Runtime · Idle · 2 scheduled");
+		expect(narrow).toBe("Runtime · Waiting");
+		expect(withoutGoal.startsWith("Runtime · Waiting · 2 scheduled")).toBe(true);
 	});
 
 	it("requests a normal render when the Runtime Goal changes", () => {
@@ -1473,7 +1515,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(requestRender).toHaveBeenCalledWith();
 	});
 
-	it("always renders Idle and treats cron as an accessory", () => {
+	it("treats scheduled cron as Waiting and keeps no-pending as Idle", () => {
 		const emptyTasks = { agents: [], processes: [], questions: [] };
 		const idle = stripTerminalSequences(
 			renderRuntimeStatus(
@@ -1503,8 +1545,8 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		).trimEnd();
 
 		expect(idle).toBe("Runtime · Idle");
-		expect(scheduled).toBe("Runtime · Idle · 2 scheduled");
-		expect(scheduled).not.toContain("Waiting");
+		expect(scheduled.startsWith("Runtime · Waiting · 2 scheduled")).toBe(true);
+		expect(scheduled).toContain("Waiting");
 	});
 
 	it("distinguishes Working and detached background Waiting", () => {

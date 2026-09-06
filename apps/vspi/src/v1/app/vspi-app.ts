@@ -2244,7 +2244,6 @@ export class VspiApp implements Component, Focusable {
 			const task = [
 				...this.taskSnapshot.agents,
 				...this.taskSnapshot.processes,
-				...this.taskSnapshot.questions,
 			]
 				.filter((item) => item.status === "running" && item.detached !== true)
 				.toSorted((left, right) => right.startedAt - left.startedAt)[0];

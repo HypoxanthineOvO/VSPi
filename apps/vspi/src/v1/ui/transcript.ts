@@ -1165,7 +1165,11 @@ function renderToolEntry(
 		truncateToWidth(toolLabel(message.name), labelWidth, "…"),
 		labelWidth,
 	);
-	const detail = state ? `${summary} · ${state}` : summary;
+	const backgroundHint =
+		message.status === "running" && message.name.toLowerCase() === "bash"
+			? " · ctrl+b 转后台"
+			: "";
+	const detail = `${state ? `${summary} · ${state}` : summary}${backgroundHint}`;
 	const lines = [
 		fitLine(
 			`${theme.muted(treeConnector(last, theme))} ${symbol} ${theme.bold(label)}  ${theme.muted(detail)}`,

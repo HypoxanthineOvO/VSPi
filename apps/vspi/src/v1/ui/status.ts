@@ -89,7 +89,7 @@ export function renderRuntimeStatus(
 		? "Needs input"
 		: input.working
 			? "Working"
-			: agents + processes > 0
+			: agents + processes > 0 || input.scheduled > 0
 				? "Waiting"
 				: "Idle";
 	const parts = [theme.muted("Runtime"), theme.text(state)];
