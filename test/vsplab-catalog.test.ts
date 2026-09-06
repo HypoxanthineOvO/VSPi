@@ -71,6 +71,40 @@ describe("parseRemoteCatalog", () => {
     ]);
   });
 
+  it("synthesizes effort level maps from explicit effortLevels declarations", () => {
+    const models = parseRemoteCatalog({
+      models: [
+        // 部分档位：只声明 low/high，其余（含 off）显式禁用
+        { id: "partial", effortLevels: ["low", "high"] },
+        // snake_case 全档位；off 声明保持运行时默认语义，不入映射
+        { id: "full", effort_levels: ["off", "minimal", "low", "medium", "high"] },
+        // 全部无效 → 视为未声明，且不隐含 reasoning
+        { id: "bogus", effort: ["turbo", 42] },
+      ],
+    });
+    expect(models).toEqual([
+      {
+        id: "partial",
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: "low",
+          medium: null,
+          high: "high",
+          xhigh: null,
+          max: null,
+        },
+      },
+      {
+        id: "full",
+        reasoning: true,
+        thinkingLevelMap: { minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: null, max: null },
+      },
+      { id: "bogus" },
+    ]);
+  });
+
   it("returns an empty list for unrecognized payloads and rejects non-positive specs", () => {
     expect(parseRemoteCatalog({ error: "boom" })).toEqual([]);
     expect(parseRemoteCatalog(null)).toEqual([]);

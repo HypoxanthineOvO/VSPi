@@ -9,6 +9,8 @@
  *
  * 契约说明：
  * - models 为数组；条目字段全部可选（缺省即“未知”，VSPi 保留本地声明，不会反向清空）。
+ * - effort 信息两个字段：`reasoning`（bool，effort 档位开关）与可选的 `effortLevels`
+ *   （显式档位数组，如 ["off","low","medium","high"]，可表达部分档位模型）。
  * - 名单权威仍是 /v1/models；本文件只补元数据，不决定模型存在性。
  * - cost 单位：美元 / 百万 token（与 VSPi inputUsdPerMillion 一致）。
  * - 新模型上手：手工在 models 里追加 {id, name, reasoning, cost, contextWindow, maxTokens} 即可。
@@ -18,6 +20,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { EFFORT_LEVELS } from "../src/domain/types.js";
 import { BUILTIN_PROVIDERS } from "../src/providers/builtins.js";
 import type { ProviderModelRecord } from "../src/providers/config-service.js";
 
@@ -86,6 +89,9 @@ function resolveModel(
     id: model.id,
     name: model.name,
     ...(reasoning !== undefined ? { reasoning } : {}),
+    ...(reasoning === true
+      ? { effortLevels: EFFORT_LEVELS.filter((level) => level !== "xhigh" && level !== "max") }
+      : {}),
     ...(input ? { input: [...input] } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
