@@ -6,8 +6,6 @@ export interface InteractionState {
   hasItems?: boolean;
   commandAvailable?: boolean;
   narrowModel?: boolean;
-  modelHasCollapsed?: boolean;
-  modelExpanded?: boolean;
   busy?: boolean;
   hasMessages?: boolean;
   composerEmpty?: boolean;
@@ -482,16 +480,6 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.tab],
     handler: "switchModelView",
     hint: "Tab 切换视图",
-  }),
-  keyAction({
-    id: "panel.models.expand",
-    surface: "panel",
-    context: "models",
-    keys: ["Ctrl+O"],
-    keyValues: [Key.ctrl("o")],
-    handler: "toggleCollapsedModels",
-    enabled: (state) => state.modelHasCollapsed === true,
-    hint: (state) => (state.modelExpanded === true ? "Ctrl+O 收起折叠" : "Ctrl+O 展开折叠"),
   }),
   keyAction({
     id: "panel.effort.select",

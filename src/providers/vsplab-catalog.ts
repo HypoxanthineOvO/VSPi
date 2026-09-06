@@ -1,35 +1,24 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { EFFORT_LEVELS, type EffortLevel } from "../domain/types.js";
 import type { ProviderModelRecord, ProviderRecord } from "./config-service.js";
 
 /**
  * VSPLab 复合中转站的远程模型目录发现。
  *
- * 数据来自两个端点，并行 best-effort 拉取：
- * - `<baseUrl>/models`（标准 OpenAI /v1/models）：模型名单的权威，决定存在性；
- * - `<origin>/vsp/models`（中转站自有非标准接口，公开静态 JSON）：按 id 补强标准接口
- *   不携带的元数据——reasoning/effort（thinkingLevelMap）、定价（cost）、输入能力、
- *   上下文规格。没有它，远程优先合并会把 effort 选项与定价抹掉。
- *
- * 设计目标：名单与规格（名称、上下文、输出上限、effort、定价）由中转站维护并优先采用；
+ * 设计目标：模型名单与规格（名称、上下文、输出上限）由中转站维护并优先采用；
  * VSPi 内置目录退化为 fallback（中转站未登记时仍可用）与调用兼容性来源
  * （api/baseUrl/inheritFrom/compat 等远程无从知晓的字段完全由本地决定）。
  * 发现是 best-effort：无凭据、网络失败、超时、响应异常都静默回退到内置目录，
- * 绝不阻塞或阻断启动；/vsp/models 失败只丢元数据增强，不影响名单发现。
+ * 绝不阻塞或阻断启动。
  */
 
-/** 远程目录单个模型条目（仅携带动态事实字段；除 id 外全部可选，缺省即“未知”）。 */
+/** 服务端 /v1/models 返回的单个模型条目（仅携带动态事实字段）。 */
 export interface RemoteModelInfo {
   id: string;
   name?: string;
   contextWindow?: number;
   maxTokens?: number;
-  input?: ("text" | "image")[];
-  reasoning?: boolean;
-  thinkingLevelMap?: Partial<Record<EffortLevel, string | null>>;
-  cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 
 export interface RemoteCatalogResult {
@@ -54,74 +43,9 @@ function firstString(...values: readonly unknown[]): string | undefined {
   return undefined;
 }
 
-function firstBoolean(...values: readonly unknown[]): boolean | undefined {
-  for (const value of values) {
-    if (typeof value === "boolean") return value;
-  }
-  return undefined;
-}
-
-/** cost 单位：美元 / 百万 token；input/output 任一存在即认定有效，缺省项按 0 计。 */
-function parseRemoteCost(value: unknown): RemoteModelInfo["cost"] {
-  if (typeof value !== "object" || value === null) return undefined;
-  const record = value as Record<string, unknown>;
-  const input = firstNumber(record.input, record.input_usd_per_million);
-  const output = firstNumber(record.output, record.output_usd_per_million);
-  if (input === undefined && output === undefined) return undefined;
-  return {
-    input: input ?? 0,
-    output: output ?? 0,
-    cacheRead: firstNumber(record.cacheRead, record.cache_read) ?? 0,
-    cacheWrite: firstNumber(record.cacheWrite, record.cache_write) ?? 0,
-  };
-}
-
-/** 只保留合法档位的 thinking 映射（值 string=上游取值、null=显式禁用）；空映射视为未提供。 */
-function parseRemoteThinkingLevelMap(value: unknown): RemoteModelInfo["thinkingLevelMap"] {
-  if (typeof value !== "object" || value === null) return undefined;
-  const result: NonNullable<RemoteModelInfo["thinkingLevelMap"]> = {};
-  for (const [level, mapped] of Object.entries(value as Record<string, unknown>)) {
-    if (!(EFFORT_LEVELS as readonly string[]).includes(level)) continue;
-    if (typeof mapped === "string" || mapped === null) result[level as EffortLevel] = mapped;
-  }
-  return Object.keys(result).length > 0 ? result : undefined;
-}
-
-function parseRemoteInput(value: unknown): RemoteModelInfo["input"] {
-  if (!Array.isArray(value)) return undefined;
-  const items = value.filter((item): item is "text" | "image" => item === "text" || item === "image");
-  if (items.length === 0) return undefined;
-  return items.includes("text") ? items : ["text", ...items];
-}
-
 /**
- * 显式 effort 档位声明（如 ["off","low","medium","high"]）合成为 thinkingLevelMap：
- * 声明的档位原样可用，未声明的合法档位显式禁用（null）。
- * "off" 声明时不写入映射（保持运行时默认的“关闭思考”语义），未声明则禁用。
- */
-function effortMapFromLevels(levels: readonly EffortLevel[]): NonNullable<RemoteModelInfo["thinkingLevelMap"]> {
-  const map: NonNullable<RemoteModelInfo["thinkingLevelMap"]> = {};
-  for (const level of EFFORT_LEVELS) {
-    if (level === "off") {
-      if (!levels.includes(level)) map.off = null;
-      continue;
-    }
-    map[level] = levels.includes(level) ? level : null;
-  }
-  return map;
-}
-
-function parseRemoteEffortLevels(value: unknown): EffortLevel[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const levels = value.filter((item): item is EffortLevel =>
-    (EFFORT_LEVELS as readonly string[]).includes(item as string),
-  );
-  return levels.length > 0 ? levels : undefined;
-}
-
-/**
- * 解析中转站 /v1/models 或 /vsp/models 响应。兼容 OpenAI `data[]` 风格与 `{models:[]}` 风格；
- * 条目可以是纯 id 字符串或对象；无法识别的条目与字段静默跳过。
+ * 解析中转站 /v1/models 响应。兼容 OpenAI `data[]` 风格与 `{models:[]}` 风格；
+ * 条目可以是纯 id 字符串或对象；无法识别的条目静默跳过。
  */
 export function parseRemoteCatalog(payload: unknown): RemoteModelInfo[] {
   const list = Array.isArray(payload)
@@ -153,68 +77,17 @@ export function parseRemoteCatalog(payload: unknown): RemoteModelInfo[] {
       record.max_tokens,
       record.max_completion_tokens,
     );
-    const input = parseRemoteInput(record.input);
-    const effortLevels = parseRemoteEffortLevels(record.effortLevels ?? record.effort_levels ?? record.effort);
-    const explicitReasoning = firstBoolean(record.reasoning, record.supports_reasoning);
-    // 显式 thinkingLevelMap 优先；缺省时由 effortLevels 声明合成档位表
-    const thinkingLevelMap =
-      parseRemoteThinkingLevelMap(record.thinkingLevelMap ?? record.thinking_level_map) ??
-      (effortLevels ? effortMapFromLevels(effortLevels) : undefined);
-    const reasoning = explicitReasoning ?? (effortLevels ? true : undefined);
-    const cost = parseRemoteCost(record.cost);
     models.push({
       id,
       ...(name !== undefined ? { name } : {}),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
       ...(maxTokens !== undefined ? { maxTokens } : {}),
-      ...(input !== undefined ? { input } : {}),
-      ...(reasoning !== undefined ? { reasoning } : {}),
-      ...(thinkingLevelMap !== undefined ? { thinkingLevelMap } : {}),
-      ...(cost !== undefined ? { cost } : {}),
     });
   }
   return models;
 }
 
-/** 非标准元数据端点：baseUrl 去掉末尾 `/v1` 段后拼 `/vsp/models`（如 …/v1 → …/vsp/models）。 */
-function metadataEndpointUrl(baseUrl: string): string {
-  return `${baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "")}/vsp/models`;
-}
-
-/**
- * /vsp/models 元数据只补强 /models 名单内的条目：名单是模型存在性的权威，
- * 元数据登记了名单外的 id 时不新增模型（中转站可能登记了尚未上线的条目）。
- */
-function applyModelMetadata(
-  roster: readonly RemoteModelInfo[],
-  metadata: readonly RemoteModelInfo[],
-): RemoteModelInfo[] {
-  if (metadata.length === 0) return [...roster];
-  const metadataById = new Map(metadata.map((entry) => [entry.id, entry]));
-  return roster.map((entry) => {
-    const extra = metadataById.get(entry.id);
-    return extra ? { ...entry, ...remoteSpecOverrides(extra) } : entry;
-  });
-}
-
-/** 远程条目中已声明的字段（远程优先），供合并时展开覆盖；未声明字段不覆盖本地值。 */
-function remoteSpecOverrides(entry: RemoteModelInfo) {
-  return {
-    ...(entry.name !== undefined ? { name: entry.name } : {}),
-    ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
-    ...(entry.maxTokens !== undefined ? { maxTokens: entry.maxTokens } : {}),
-    ...(entry.input !== undefined ? { input: [...entry.input] } : {}),
-    ...(entry.reasoning !== undefined ? { reasoning: entry.reasoning } : {}),
-    ...(entry.thinkingLevelMap !== undefined ? { thinkingLevelMap: { ...entry.thinkingLevelMap } } : {}),
-    ...(entry.cost !== undefined ? { cost: { ...entry.cost } } : {}),
-  };
-}
-
-/**
- * Best-effort 拉取中转站模型目录；任何失败都不 throw，由调用方回退到本地目录。
- * 名单（/models，带凭据）与元数据（/vsp/models，公开）共享超时并行拉取；
- * /vsp/models 失败只丢元数据增强，不影响名单发现的结果与错误语义。
- */
+/** Best-effort 拉取中转站模型目录；任何失败都不 throw，由调用方回退到本地目录。 */
 export async function fetchRemoteCatalog(
   baseUrl: string,
   apiKey: string | undefined,
@@ -224,30 +97,17 @@ export async function fetchRemoteCatalog(
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const requestJson = async (url: string, headers: Record<string, string>): Promise<unknown> => {
-    const response = await fetchImpl(url, { headers, signal: controller.signal });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return response.json();
-  };
   try {
-    const [roster, metadata] = await Promise.all([
-      requestJson(`${baseUrl.replace(/\/+$/, "")}/models`, {
+    const url = `${baseUrl.replace(/\/+$/, "")}/models`;
+    const response = await fetchImpl(url, {
+      headers: {
         Accept: "application/json",
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-      })
-        .then((payload) => parseRemoteCatalog(payload))
-        .catch((error: unknown) => {
-          throw controller.signal.aborted
-            ? new Error(`timeout after ${timeoutMs}ms`)
-            : error instanceof Error
-              ? error
-              : new Error(String(error));
-        }),
-      requestJson(metadataEndpointUrl(baseUrl), { Accept: "application/json" })
-        .then((payload) => parseRemoteCatalog(payload))
-        .catch(() => [] as RemoteModelInfo[]),
-    ]);
-    return { models: applyModelMetadata(roster, metadata), error: undefined };
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) return { models: [], error: `HTTP ${response.status}` };
+    return { models: parseRemoteCatalog(await response.json()), error: undefined };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { models: [], error: controller.signal.aborted ? `timeout after ${timeoutMs}ms` : message };
@@ -261,10 +121,8 @@ export async function fetchRemoteCatalog(
  *
  * - 名单：remote ∪ local。远程条目在前（中转站是模型存在性的权威），
  *   本地独有模型按原顺序追加在尾部——中转站短暂缺登记时本地模型不消失。
- * - 规格（name/contextWindow/maxTokens/input）与能力成本（reasoning/
- *   thinkingLevelMap/cost，通常来自 /vsp/models 元数据）：远程声明的字段优先，
- *   未声明的字段保留本地值（含 inheritFrom 继承结果）。
- * - 调用兼容性（api/baseUrl/inheritFrom/compat/headers）：完全继承本地条目。
+ * - 规格（name/contextWindow/maxTokens）：远程值优先，远程未提供时保留本地声明。
+ * - 调用兼容性（api/baseUrl/inheritFrom/compat/cost 等）：完全继承本地条目。
  * - remote 为 undefined（发现失败或未启用）时原样返回本地目录。
  */
 export function mergeRemoteCatalog(
@@ -278,12 +136,21 @@ export function mergeRemoteCatalog(
   for (const entry of remote) {
     seen.add(entry.id);
     const fallback = localById.get(entry.id);
-    const overrides = remoteSpecOverrides(entry);
     if (!fallback) {
-      merged.push({ id: entry.id, name: entry.name ?? entry.id, ...overrides });
+      merged.push({
+        id: entry.id,
+        name: entry.name ?? entry.id,
+        ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
+        ...(entry.maxTokens !== undefined ? { maxTokens: entry.maxTokens } : {}),
+      });
       continue;
     }
-    merged.push({ ...fallback, ...overrides });
+    merged.push({
+      ...fallback,
+      ...(entry.name !== undefined ? { name: entry.name } : {}),
+      ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
+      ...(entry.maxTokens !== undefined ? { maxTokens: entry.maxTokens } : {}),
+    });
   }
   for (const model of local) {
     if (!seen.has(model.id)) merged.push(model);

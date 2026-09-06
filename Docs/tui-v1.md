@@ -194,7 +194,7 @@ Plan、Commands、Model、Provider、Sessions、历史导入、Skills、Settings
 
 Skills 工作区使用“已启用 / 可导入 / 问题”Tab、搜索和列表/详情布局；外层 58 列以下用 Enter 进入详情、Esc 返回。Pi Native ResourceLoader/SettingsManager/DefaultPackageManager 是唯一资源与包真相源。Codex/Claude Code Skill 只登记原始 `SKILL.md` 路径；Git/npm 安装固定 `autoload: false`，extension、prompt、theme 为空，只允许包目录内发现的 Skill pattern。所有 mutation 先通过 Question；安装确认包含“安装并启用 / 仅安装 / 取消”。`skill_list` 与 `skill_manage` 进入模型工具表，但管理调用仍不能绕过 Question。失败安装原子回滚，既有包不被清理，URL 凭据在面板、diagnostic 和错误中脱敏。MCP 保持独立后续版本，不在此工作区注册。
 
-M3 已将 Model 接到 Pi ModelRuntime 真相源。Model 有“选择模型 / 模型组”两个横向 Tab。外层 60 列及以上固定为左侧模型/模型组列表、右侧详情/角色，内部使用一个稳定的 `❘` 分隔；上下移动只替换右侧内容，行数不变。CNY/人民币价格仅出现在单模型右侧详情，模型组右侧不出现 `¥`，并且`不显示汇率参考行`。Enter 只提出选择；必须等待 `session.setModel()` 成功后才更新勾选、Model、vision、Context 和 Profile model identity。被策展折叠的模型默认不列出；在“选择模型”Tab 按 `Ctrl+O` 可展开全部模型（标题变为「全部模型」，折叠项弱化展示并可在右侧详情标注「已折叠」），再按一次收起。
+M3 已将 Model 接到 Pi ModelRuntime 真相源。Model 有“选择模型 / 模型组”两个横向 Tab。外层 60 列及以上固定为左侧模型/模型组列表、右侧详情/角色，内部使用一个稳定的 `❘` 分隔；上下移动只替换右侧内容，行数不变。CNY/人民币价格仅出现在单模型右侧详情，模型组右侧不出现 `¥`，并且`不显示汇率参考行`。Enter 只提出选择；必须等待 `session.setModel()` 成功后才更新勾选、Model、vision、Context 和 Profile model identity。
 
 ```text
 + Model ‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒‒+

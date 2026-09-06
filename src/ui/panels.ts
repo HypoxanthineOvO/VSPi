@@ -393,11 +393,10 @@ export class PanelController {
   private modelTab = 0;
   private modelSearch = "";
   private modelNarrowDetail = false;
-  private modelExpandCollapsed = false;
   private selectedModelKey = "";
   private selectedGroupId = "";
   private models: ModelOption[] = [];
-  private filteredModelCache: { query: string; expanded: boolean; models: ModelOption[] } | undefined;
+  private filteredModelCache: { query: string; models: ModelOption[] } | undefined;
   private modelGroups: ModelGroup[] = [];
   private providers: ProviderOption[] = [];
   private sessions: SessionOption[] = [];
@@ -1081,9 +1080,6 @@ export class PanelController {
       const selected = matches[this.state.selected];
       state.hasItems = selected !== undefined;
       if (selected) state.commandAvailable = getActionDefinition(selected.command)?.availability !== "disabled";
-    } else if (this.kind === "models") {
-      state.modelHasCollapsed = this.models.some((model) => model.curated === false);
-      state.modelExpanded = this.modelExpandCollapsed;
     } else if (this.kind === "providers") {
       state.providerEditing = this.providerEditing;
       state.providerActionMenu = this.providerActionMenu;
@@ -1142,16 +1138,6 @@ export class PanelController {
       this.modelTab = this.modelTab === 0 ? 1 : 0;
       this.state.selected = 0;
       this.modelNarrowDetail = false;
-      return;
-    }
-    if (
-      this.modelTab === 0 &&
-      matchesKey(data, Key.ctrl("o")) &&
-      this.models.some((model) => model.curated === false)
-    ) {
-      this.modelExpandCollapsed = !this.modelExpandCollapsed;
-      this.filteredModelCache = undefined;
-      this.state.selected = 0;
       return;
     }
     const narrow = !usesWideModelLayout(this.lastBodyWidth);
@@ -1807,19 +1793,13 @@ export class PanelController {
 
   private filteredModels(): ModelOption[] {
     const query = this.modelSearch.toLowerCase();
-    const expanded = this.modelExpandCollapsed;
-    if (this.filteredModelCache?.query === query && this.filteredModelCache.expanded === expanded)
-      return this.filteredModelCache.models;
+    if (this.filteredModelCache?.query === query) return this.filteredModelCache.models;
     const brandIndex = (brand: string) => {
       const index = BRAND_PRIORITY.indexOf(brand);
       return index === -1 ? BRAND_PRIORITY.length : index;
     };
     const models = this.models
-      .filter(
-        (model) =>
-          (expanded || model.curated !== false) &&
-          (!query || `${model.brand} ${model.label} ${model.id}`.toLowerCase().includes(query)),
-      )
+      .filter((model) => !query || `${model.brand} ${model.label} ${model.id}`.toLowerCase().includes(query))
       .sort((left, right) => {
         const priority = brandIndex(left.brand) - brandIndex(right.brand);
         if (priority !== 0) return priority;
@@ -1831,13 +1811,12 @@ export class PanelController {
         if (price !== 0) return price;
         return left.label.localeCompare(right.label) || left.id.localeCompare(right.id);
       });
-    this.filteredModelCache = { query, expanded, models };
+    this.filteredModelCache = { query, models };
     return models;
   }
 
   private renderModels(width: number, bodyRows: number, theme: VspiTheme): string[] {
-    const baseTab = this.modelExpandCollapsed ? "全部模型" : "选择模型";
-    const modelTab = this.modelSearch ? `${baseTab} · ${this.modelSearch}` : baseTab;
+    const modelTab = this.modelSearch ? `选择模型 · ${this.modelSearch}` : "选择模型";
     const tabs = tabLine(this.modelGroups.length > 0 ? [modelTab, "模型组"] : [modelTab], this.modelTab, width, theme);
     const listRows = Math.max(2, bodyRows - 1);
     const body = usesWideModelLayout(width)
@@ -1915,8 +1894,7 @@ export class PanelController {
       const marker = selected ? theme.focus("› ") : "  ";
       const check = modelKey(entry.model) === this.selectedModelKey ? theme.success("✓ ") : "  ";
       const vision = entry.model.vision ? theme.blue(" ◉") : "";
-      const label = entry.model.curated === false ? theme.muted(entry.model.label) : entry.model.label;
-      const line = padLine(`${marker}${check}${label}${vision}`, width);
+      const line = padLine(`${marker}${check}${entry.model.label}${vision}`, width);
       return selected ? theme.selected(line) : line;
     });
   }
@@ -1950,16 +1928,9 @@ export class PanelController {
     const release = model.releasedAt ? `${theme.muted("发布  ")}${model.releasedAt}` : "";
     const price = `${theme.warning("输入 ¥")}${input.toFixed(2)} / 百万  ${theme.warning("输出 ¥")}${output.toFixed(2)} / 百万`;
     const combinedIdentity = `${provider}  ${modelId}`;
-    const curation = model.curated === false ? `${theme.muted("策展      ")}已折叠（Ctrl+O 展开后可选）` : "";
     const capabilityRelease = [capability, release].filter(Boolean).join("  ");
     const effortRows = wrapTextWithAnsi(effort, width);
-    const details = [
-      theme.bold(theme.focus(model.label)),
-      ...[combinedIdentity, curation].filter(Boolean),
-      capabilityRelease,
-      ...effortRows,
-      price,
-    ];
+    const details = [theme.bold(theme.focus(model.label)), combinedIdentity, capabilityRelease, ...effortRows, price];
     return details.length <= rowCount ? details : [...details.slice(0, rowCount - 1), price];
   }
 

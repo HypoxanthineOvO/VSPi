@@ -45,66 +45,6 @@ describe("parseRemoteCatalog", () => {
     expect(models).toEqual([{ id: "glm-5.2", contextWindow: 200_000 }]);
   });
 
-  it("parses /vsp/models metadata fields (reasoning/thinkingLevelMap/cost/input) and drops malformed ones", () => {
-    const models = parseRemoteCatalog({
-      models: [
-        {
-          id: "brand-new-model",
-          reasoning: true,
-          thinkingLevelMap: { low: "low", high: "high", off: null, bogus: "x" },
-          cost: { input: 1.25, output: 10, cache_read: 0.125 },
-          input: ["text", "image", "audio"],
-        },
-        // cost 只有 cache 字段（无 input/output）视为未提供
-        { id: "cache-only-cost", cost: { cacheRead: 1 } },
-      ],
-    });
-    expect(models).toEqual([
-      {
-        id: "brand-new-model",
-        reasoning: true,
-        input: ["text", "image"],
-        thinkingLevelMap: { low: "low", high: "high", off: null },
-        cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
-      },
-      { id: "cache-only-cost" },
-    ]);
-  });
-
-  it("synthesizes effort level maps from explicit effortLevels declarations", () => {
-    const models = parseRemoteCatalog({
-      models: [
-        // 部分档位：只声明 low/high，其余（含 off）显式禁用
-        { id: "partial", effortLevels: ["low", "high"] },
-        // snake_case 全档位；off 声明保持运行时默认语义，不入映射
-        { id: "full", effort_levels: ["off", "minimal", "low", "medium", "high"] },
-        // 全部无效 → 视为未声明，且不隐含 reasoning
-        { id: "bogus", effort: ["turbo", 42] },
-      ],
-    });
-    expect(models).toEqual([
-      {
-        id: "partial",
-        reasoning: true,
-        thinkingLevelMap: {
-          off: null,
-          minimal: null,
-          low: "low",
-          medium: null,
-          high: "high",
-          xhigh: null,
-          max: null,
-        },
-      },
-      {
-        id: "full",
-        reasoning: true,
-        thinkingLevelMap: { minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: null, max: null },
-      },
-      { id: "bogus" },
-    ]);
-  });
-
   it("returns an empty list for unrecognized payloads and rejects non-positive specs", () => {
     expect(parseRemoteCatalog({ error: "boom" })).toEqual([]);
     expect(parseRemoteCatalog(null)).toEqual([]);
@@ -152,78 +92,21 @@ describe("mergeRemoteCatalog", () => {
     expect(merged.map((model) => model.id)).toEqual(["gpt-6-astra", "brand-new-model", "gpt-5.6-sol", "k3"]);
     expect(merged[3]?.api).toBe("openai-completions");
   });
-
-  it("restores effort and pricing on remote-only models via /vsp/models metadata", () => {
-    // 标准 /v1/models 只登记名单时，远程新模型原本没有 effort 档位与定价；
-    // /vsp/models 元数据声明 reasoning/cost 后合并结果完整可用。
-    const merged = mergeRemoteCatalog(localModels, [
-      {
-        id: "brand-new-model",
-        name: "Brand New",
-        reasoning: true,
-        cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
-      },
-    ]);
-    expect(merged[0]).toEqual({
-      id: "brand-new-model",
-      name: "Brand New",
-      reasoning: true,
-      cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
-    });
-  });
-
-  it("overrides local reasoning/cost only when the remote metadata declares them", () => {
-    const merged = mergeRemoteCatalog(localModels, [
-      // 只声明 cost：reasoning 保留本地 true；未声明字段不清空本地/继承值
-      { id: "gpt-6-astra", cost: { input: 2, output: 8, cacheRead: 0, cacheWrite: 0 } },
-    ]);
-    expect(merged[0]).toMatchObject({
-      id: "gpt-6-astra",
-      reasoning: true,
-      contextWindow: 1_050_000,
-      maxTokens: 128_000,
-      cost: { input: 2, output: 8 },
-    });
-  });
 });
 
 describe("fetchRemoteCatalog", () => {
-  it("requests /models with credentials and /vsp/models metadata without, then merges by id", async () => {
-    const seen: Array<{ url: string; auth: string | null }> = [];
-    const result = await fetchRemoteCatalog("https://relay.example/v1", "sk-test", {
+  it("sends the bearer token to the resolved /models URL and parses a successful response", async () => {
+    let capturedUrl: string | undefined;
+    let capturedHeaders: Headers | undefined;
+    const result = await fetchRemoteCatalog("https://relay.example/v1/", "sk-test", {
       fetchImpl: async (input, init) => {
-        const url = String(input);
-        seen.push({ url, auth: new Headers(init?.headers).get("Authorization") });
-        if (url === "https://relay.example/v1/models") {
-          return jsonResponse({ data: [{ id: "gpt-6-astra" }, { id: "brand-new-model" }] });
-        }
-        return jsonResponse({
-          models: [
-            { id: "brand-new-model", reasoning: true, cost: { input: 1.25, output: 10 } },
-            // 名单外的元数据登记不新增模型（存在性以 /models 为准）
-            { id: "ghost-model", reasoning: true },
-          ],
-        });
-      },
-    });
-    expect(seen).toEqual([
-      { url: "https://relay.example/v1/models", auth: "Bearer sk-test" },
-      { url: "https://relay.example/vsp/models", auth: null },
-    ]);
-    expect(result.models).toEqual([
-      { id: "gpt-6-astra" },
-      { id: "brand-new-model", reasoning: true, cost: { input: 1.25, output: 10, cacheRead: 0, cacheWrite: 0 } },
-    ]);
-    expect(result.error).toBeUndefined();
-  });
-
-  it("keeps roster discovery when the /vsp/models metadata endpoint is unavailable", async () => {
-    const result = await fetchRemoteCatalog("https://relay.example/v1", "sk-test", {
-      fetchImpl: async (input) => {
-        if (String(input) === "https://relay.example/vsp/models") return new Response("not found", { status: 404 });
+        capturedUrl = String(input);
+        capturedHeaders = new Headers(init?.headers);
         return jsonResponse({ data: [{ id: "gpt-6-astra" }] });
       },
     });
+    expect(capturedUrl).toBe("https://relay.example/v1/models");
+    expect(capturedHeaders?.get("Authorization")).toBe("Bearer sk-test");
     expect(result.models).toEqual([{ id: "gpt-6-astra" }]);
     expect(result.error).toBeUndefined();
   });

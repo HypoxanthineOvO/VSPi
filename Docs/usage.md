@@ -35,8 +35,6 @@ VSPi 沿用 Pi 的模型、Provider、凭据和 session 目录，不另建 Secre
 
 模型选择器使用小型展示目录，不把 Pi 的完整模型库倾倒给用户。当前展示 GPT 5.4/5.5/5.6；最新 Haiku、Sonnet 4.6/5、Opus 4.6/4.7/4.8/5、Fable 5；Kimi K2.6/K2.7/Code/K3；MiMo V2.5；DeepSeek V4；GLM 5.1/5.2；Qwen 3.7 Max/Plus 与 3.8 Max Preview；MiniMax M2.7/M3，以及这些系列在目录中的变种。不存在的型号不会伪造，用户自定义 Provider 的模型不受内置目录筛选影响。
 
-需要选择被策展折叠的模型时，在 `/model` 面板按 `Ctrl+O` 展开全部模型（Tab 标题切换为「全部模型」，折叠项以弱化样式展示，详情面板标注「已折叠」），再按一次收起；无折叠模型时快捷键不出现。展开只影响选择器展示，不改变运行时目录、Provider 计数与凭据。
-
 主题设置真实支持 `VSPi Dark`、`VSPi Light` 与 `Terminal`。默认 `Terminal` 不写死前景或背景色，使用终端自身颜色并避免代码块黑字/深色底；Dark 和 Light 是明确选择的固定调色板。
 
 ## 启动与默认界面
