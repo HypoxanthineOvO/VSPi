@@ -32,7 +32,7 @@ describe("VSPi GitHub self-update contract", () => {
     const installPackage = vi.fn(async () => undefined);
     const fetch = vi
       .fn<typeof globalThis.fetch>()
-      .mockResolvedValueOnce(response(release(version, sha256(bytes)), RELEASE_API_URL))
+      .mockResolvedValueOnce(response(releases(release(version, sha256(bytes))), RELEASE_API_URL))
       .mockResolvedValueOnce(response(undefined, asset, 302, { location: `${assetCdnOrigin}/asset-id/package.tgz` }))
       .mockResolvedValueOnce(
         response(bytes, `${assetCdnOrigin}/asset-id/package.tgz`, 200, { "content-length": String(bytes.length) }),
@@ -57,7 +57,7 @@ describe("VSPi GitHub self-update contract", () => {
   ])("returns up-to-date for a %s latest release without downloading", async (_label, currentVersion) => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
-      .mockResolvedValueOnce(response(release("2.1.0", "a".repeat(64)), RELEASE_API_URL));
+      .mockResolvedValueOnce(response(releases(release("2.1.0", "a".repeat(64))), RELEASE_API_URL));
     await expect(updateVspi(currentVersion, { fetch })).resolves.toEqual({
       status: "up-to-date",
       currentVersion,
@@ -68,12 +68,47 @@ describe("VSPi GitHub self-update contract", () => {
 
   it("loads the real GitHub latest fixture and rejects its legacy body without SHA-256", async () => {
     await expect(
-      updateVspi("1.4.4", { fetch: vi.fn(async () => response(releaseFixture, RELEASE_API_URL)) }),
+      updateVspi("1.4.4", { fetch: vi.fn(async () => response([releaseFixture], RELEASE_API_URL)) }),
     ).rejects.toThrow("VSPi 1.4.5 Release 缺少 SHA-256");
   });
 
+  it("returns up-to-date when every published release is older, even with a legacy body", async () => {
+    const fetch = vi.fn(async () => response([releaseFixture], RELEASE_API_URL));
+    await expect(updateVspi("2.0.0", { fetch })).resolves.toEqual({
+      status: "up-to-date",
+      currentVersion: "2.0.0",
+      latestVersion: "1.4.5",
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("updates to the newest stable-tagged release even while it is marked as a GitHub prerelease", async () => {
+    const bytes = Buffer.from("package");
+    const version = "2.1.0";
+    const installPackage = vi.fn(async () => undefined);
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(
+        response([releaseFixture, { ...release(version, sha256(bytes)), prerelease: true }], RELEASE_API_URL),
+      )
+      .mockResolvedValueOnce(response(bytes, assetUrl(version)));
+    await expect(updateVspi("2.0.0", { fetch, installPackage })).resolves.toEqual({
+      status: "updated",
+      currentVersion: "2.0.0",
+      latestVersion: version,
+    });
+    expect(installPackage).toHaveBeenCalledOnce();
+  });
+
   it.each([
-    ["prerelease tag", { tag_name: "v2.1.0-rc.1" }, "GitHub Release tag"],
+    ["prerelease tag", { tag_name: "v2.1.0-rc.1" }],
+    ["draft", { draft: true }],
+  ])("reports no release when the only candidate is a %s entry", async (_label, override) => {
+    const fetch = vi.fn(async () => response([{ ...release("2.1.0", "a".repeat(64)), ...override }], RELEASE_API_URL));
+    await expect(updateVspi("2.0.0", { fetch })).rejects.toThrow("GitHub 上未找到 VSPi Release");
+  });
+
+  it.each([
     ["missing checksum", { body: "No checksum" }, "缺少 SHA-256"],
     ["wrong asset name", { assets: [{ name: "vspi.tgz", browser_download_url: assetUrl("2.1.0") }] }, "受信任的安装包"],
     [
@@ -94,7 +129,7 @@ describe("VSPi GitHub self-update contract", () => {
   ])("rejects %s", async (_label, override, message) => {
     await expect(
       updateVspi("2.0.0", {
-        fetch: vi.fn(async () => response({ ...release("2.1.0", "a".repeat(64)), ...override }, RELEASE_API_URL)),
+        fetch: vi.fn(async () => response(releases({ ...release("2.1.0", "a".repeat(64)), ...override }), RELEASE_API_URL)),
       }),
     ).rejects.toThrow(message);
   });
@@ -130,13 +165,13 @@ describe("VSPi GitHub self-update contract", () => {
   ])("rejects a %s redirect", async (_label, location, message) => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
-      .mockResolvedValueOnce(response(release("2.1.0", "a".repeat(64)), RELEASE_API_URL))
+      .mockResolvedValueOnce(response(releases(release("2.1.0", "a".repeat(64))), RELEASE_API_URL))
       .mockResolvedValueOnce(response(undefined, assetUrl("2.1.0"), 302, { location }));
     await expect(updateVspi("2.0.0", { fetch })).rejects.toThrow(message);
   });
 
   it("rejects missing redirect locations, too many redirects, and an untrusted final response URL", async () => {
-    const value = release("2.1.0", "a".repeat(64));
+    const value = releases(release("2.1.0", "a".repeat(64)));
     await expect(
       updateVspi("2.0.0", {
         fetch: fetchSequence(response(value, RELEASE_API_URL), response(undefined, assetUrl("2.1.0"), 302)),
@@ -164,13 +199,13 @@ describe("VSPi GitHub self-update contract", () => {
     const asset = assetUrl("2.1.0");
     await expect(
       updateVspi("2.0.0", {
-        fetch: fetchPair(release("2.1.0", "a".repeat(64)), response("wrong", asset)),
+        fetch: fetchPair(releases(release("2.1.0", "a".repeat(64))), response("wrong", asset)),
       }),
     ).rejects.toThrow("SHA-256");
     await expect(
       updateVspi("2.0.0", {
         fetch: fetchPair(
-          release("2.1.0", "a".repeat(64)),
+          releases(release("2.1.0", "a".repeat(64))),
           response("small", asset, 200, { "content-length": String(64 * 1024 * 1024 + 1) }),
         ),
       }),
@@ -178,7 +213,7 @@ describe("VSPi GitHub self-update contract", () => {
     const oversized = Buffer.alloc(64 * 1024 * 1024 + 1);
     await expect(
       updateVspi("2.0.0", {
-        fetch: fetchPair(release("2.1.0", sha256(oversized)), response(oversized, asset)),
+        fetch: fetchPair(releases(release("2.1.0", sha256(oversized))), response(oversized, asset)),
       }),
     ).rejects.toThrow("64 MiB");
   });
@@ -228,6 +263,10 @@ function release(version: string, checksum: string): Record<string, unknown> {
     body: `SHA-256: \`${checksum}\``,
     assets: [releaseAsset(version)],
   };
+}
+
+function releases(...entries: Record<string, unknown>[]): Record<string, unknown>[] {
+  return entries;
 }
 
 function releaseAsset(version: string): Record<string, unknown> {

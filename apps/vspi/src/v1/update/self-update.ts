@@ -4,7 +4,7 @@ import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
-import { parseGitHubVspiRelease } from "./release-contract.mjs";
+import { parseGitHubVspiRelease, releaseTagVersion, selectGitHubVspiRelease } from "./release-contract.mjs";
 
 const RELEASE_DOWNLOAD_ORIGIN = "https://github.com";
 const RELEASE_ASSET_ORIGINS = new Set([
@@ -14,7 +14,7 @@ const RELEASE_ASSET_ORIGINS = new Set([
 ]);
 const MAX_PACKAGE_BYTES = 64 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
-export const RELEASE_API_URL = "https://api.github.com/repos/HypoxanthineOvO/VSPi/releases/latest";
+export const RELEASE_API_URL = "https://api.github.com/repos/HypoxanthineOvO/VSPi/releases?per_page=30";
 
 export interface SelfUpdateResult {
   status: "up-to-date" | "updated";
@@ -227,10 +227,12 @@ export async function updateVspi(currentVersion: string, options: SelfUpdateOpti
   if (!fetchImpl) throw new Error("当前 Node.js 不支持 fetch，无法检查更新");
 
   const releaseResponse = await fetchGitHubRelease(fetchImpl, options.releaseApiUrl ?? RELEASE_API_URL);
-  const release = parseGitHubVspiRelease(await releaseResponse.json());
-  if (compareVersions(release.version, currentVersion) <= 0) {
-    return { status: "up-to-date", currentVersion, latestVersion: release.version };
+  const latestRelease = selectGitHubVspiRelease(await releaseResponse.json());
+  const latestVersion = releaseTagVersion(latestRelease);
+  if (compareVersions(latestVersion, currentVersion) <= 0) {
+    return { status: "up-to-date", currentVersion, latestVersion };
   }
+  const release = parseGitHubVspiRelease(latestRelease);
 
   const directory = await mkdtemp(join(options.temporaryRoot ?? tmpdir(), "vspi-update-"));
   const tarballPath = join(directory, `vspi-${release.version}.tgz`);

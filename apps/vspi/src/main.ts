@@ -178,7 +178,12 @@ async function ensureConnection(homeDir?: string): Promise<RuntimeConnection> {
 			(await readRuntimeIdentity(expected.homeDir)) ??
 			(await waitForRuntimeIdentity(expected.homeDir, running.pid, 250));
 		const mismatch = runtimeIdentityMismatch(expected, metadata, running);
-		if (mismatch !== undefined) await stopRuntime(expected.homeDir, 5_000);
+		if (mismatch !== undefined) {
+			process.stderr.write(
+				`VSP runtime 身份不匹配（${mismatch}），正在停止并按当前可执行文件重启；已连接的会话将断开\n`,
+			);
+			await stopRuntime(expected.homeDir, 5_000);
+		}
 	}
 	const connection = await ensureRuntime({
 		homeDir: expected.homeDir,

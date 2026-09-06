@@ -93,7 +93,7 @@ function validateReleaseMetadata(release, prepared) {
   if (release.tag_name !== prepared.tag) throw new Error('Existing GitHub release tag conflicts with the expected release');
   if (release.name !== prepared.title) throw new Error('Existing GitHub release title conflicts with the expected release');
   if (release.body !== prepared.body) throw new Error('Existing GitHub release checksum conflicts with the package bytes');
-  if (!release.prerelease) throw new Error('Existing GitHub release is not marked as a prerelease');
+  if (release.prerelease) throw new Error('Existing GitHub release is marked as a prerelease');
   if (!release.id || typeof release.upload_url !== 'string') throw new Error('Existing GitHub release metadata is incomplete');
   return release;
 }
@@ -186,7 +186,7 @@ async function createDraftRelease(fetchImpl, headers, prepared) {
     const response = await fetchImpl(prepared.releaseApiUrl, {
       method: 'POST',
       headers: { ...headers, 'content-type': 'application/json' },
-      body: JSON.stringify({ tag_name: prepared.tag, name: prepared.title, body: prepared.body, draft: true, prerelease: true }),
+      body: JSON.stringify({ tag_name: prepared.tag, name: prepared.title, body: prepared.body, draft: true, prerelease: false }),
     });
     creationStatus = response.status;
   } catch {
@@ -226,16 +226,16 @@ export async function produceGitHubRelease({
       {
         method: 'PATCH',
         headers: { ...headers, 'content-type': 'application/json' },
-        body: JSON.stringify({ draft: false, prerelease: true }),
+        body: JSON.stringify({ draft: false, prerelease: false }),
       },
       'GitHub release publication',
     );
     validateReleaseMetadata(await responseJson(response, 'GitHub release publication'), prepared);
-  } else if (!release.prerelease) {
-    throw new Error('Existing GitHub release is not marked as a prerelease');
+  } else if (release.prerelease) {
+    throw new Error('Existing GitHub release is marked as a prerelease');
   }
   const published = await readRelease(fetch, headers, prepared, 'Published GitHub release readback');
-  if (!published || published.draft || !published.prerelease) throw new Error('GitHub release publication readback failed');
+  if (!published || published.draft || published.prerelease) throw new Error('GitHub release publication readback failed');
   const assets = await validateExistingAssets(fetch, headers, published, prepared);
   for (const asset of prepared.assets) {
     if (!assets.has(asset.name)) throw new Error(`Published GitHub release is missing ${asset.name}`);

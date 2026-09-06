@@ -6,10 +6,10 @@ import { customProviderId, modelsFromManualInput } from "../src/v1/providers/cus
 
 describe("VSPi CLI command dispatch", () => {
 	it("dispatches update before runtime startup and requests a restart", async () => {
-		const update = vi.fn(async () => ({
+		const update = vi.fn(async (currentVersion: string) => ({
 			status: "updated" as const,
-			currentVersion: "2.0.0",
-			latestVersion: "2.1.0",
+			currentVersion,
+			latestVersion: "next-version",
 		}));
 		const messages: string[] = [];
 		await expect(
@@ -18,24 +18,42 @@ describe("VSPi CLI command dispatch", () => {
 				write: (message) => messages.push(message),
 			}),
 		).resolves.toBe(true);
-		expect(update).toHaveBeenCalledWith("2.0.0");
-		expect(messages.join("")).toMatch(/2\.1\.0.*重启/u);
+		expect(update).toHaveBeenCalledOnce();
+		expect(messages.join("")).toContain("next-version");
+		expect(messages.join("")).toContain("重启");
 	});
 
 	it("reports an up-to-date install and leaves runtime commands undispatched", async () => {
 		const messages: string[] = [];
 		await expect(
 			dispatchCliCommand(["update"], {
-				update: async () => ({ status: "up-to-date", currentVersion: "2.0.0", latestVersion: "2.0.0" }),
+				update: async (currentVersion) => ({ status: "up-to-date", currentVersion, latestVersion: currentVersion }),
 				write: (message) => messages.push(message),
 			}),
 		).resolves.toBe(true);
-		expect(messages.join("")).toContain("最新版本 2.0.0");
+		expect(messages.join("")).toContain("已是最新版本");
 		await expect(dispatchCliCommand(["daemon"])).resolves.toBe(false);
 	});
 
 	it("rejects unsupported update arguments", async () => {
 		await expect(dispatchCliCommand(["update", "extra"])).rejects.toThrow("Usage: vspi update");
+	});
+
+	it("prints usage for --help without connecting to the runtime", async () => {
+		const messages: string[] = [];
+		const connect = vi.fn(async () => fakeConnection());
+		for (const args of [["--help"], ["-h"], ["help"]]) {
+			await expect(
+				dispatchCliCommand(args, {
+					connect,
+					write: (message) => messages.push(message),
+				}),
+			).resolves.toBe(true);
+		}
+		expect(connect).not.toHaveBeenCalled();
+		expect(messages.join("")).toContain("Usage: vspi [command]");
+		expect(messages.join("")).toContain("config.toml");
+		expect(messages.join("")).toContain("[models.");
 	});
 
 	it("routes config and the init compatibility alias without starting a session", async () => {
