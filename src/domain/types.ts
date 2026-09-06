@@ -148,6 +148,8 @@ export interface ModelOption {
   vision: boolean;
   efforts: EffortLevel[];
   price: ModelPrice;
+  /** 策展筛选是否默认展示该模型；false 表示被折叠，仅在展开后可选。缺省视为展示。 */
+  curated?: boolean;
 }
 
 export interface ModelGroupRole {
