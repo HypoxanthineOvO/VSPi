@@ -4,7 +4,7 @@ import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
-import { parseGitHubVspiRelease, releaseTagVersion, selectGitHubVspiRelease } from "./release-contract.mjs";
+import { parseReleaseChecksums, releaseVersionFromLatestRedirect } from "./release-contract.mjs";
 
 const RELEASE_DOWNLOAD_ORIGIN = "https://github.com";
 const RELEASE_ASSET_ORIGINS = new Set([
@@ -14,7 +14,7 @@ const RELEASE_ASSET_ORIGINS = new Set([
 ]);
 const MAX_PACKAGE_BYTES = 64 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
-export const RELEASE_API_URL = "https://api.github.com/repos/HypoxanthineOvO/VSPi/releases?per_page=30";
+export const LATEST_RELEASE_URL = "https://github.com/HypoxanthineOvO/VSPi/releases/latest";
 
 export interface SelfUpdateResult {
   status: "up-to-date" | "updated";
@@ -25,7 +25,7 @@ export interface SelfUpdateResult {
 export interface SelfUpdateOptions {
   fetch?: typeof globalThis.fetch;
   installPackage?: (tarballPath: string) => Promise<void>;
-  releaseApiUrl?: string;
+  latestReleaseUrl?: string;
   temporaryRoot?: string;
 }
 
@@ -58,9 +58,9 @@ export function compareVersions(left: string, right: string): number {
   return 0;
 }
 
-function trustedApiUrl(value: string): URL {
+function trustedLatestReleaseUrl(value: string): URL {
   const url = new URL(value);
-  if (url.href !== RELEASE_API_URL) throw new Error("VSPi 更新 API 地址不受信任");
+  if (url.href !== LATEST_RELEASE_URL) throw new Error("VSPi latest Release 地址不受信任");
   return url;
 }
 
@@ -84,27 +84,33 @@ function trustedRedirectUrl(value: string): URL {
   return url;
 }
 
-function githubApiError(response: Response, url: URL): Error {
+function githubReleaseError(response: Response, url: URL): Error {
   if (response.status === 404) return new Error("GitHub 上未找到 VSPi Release");
-  const remaining = response.headers.get("x-ratelimit-remaining");
   const retryAfter = response.headers.get("retry-after");
-  if (response.status === 429 || (response.status === 403 && (remaining === "0" || retryAfter))) {
-    return new Error(`GitHub API 请求频率受限${retryAfter ? `，请在 ${retryAfter} 秒后重试` : "，请稍后重试"}`);
+  if (response.status === 429 && retryAfter) {
+    return new Error(`GitHub Release 请求频率受限，请在 ${retryAfter} 秒后重试`);
   }
   return new Error(`请求 ${url.href} 失败：HTTP ${response.status}`);
 }
 
-async function fetchGitHubRelease(fetchImpl: typeof globalThis.fetch, value: string): Promise<Response> {
-  const url = trustedApiUrl(value);
+async function fetchLatestVersion(fetchImpl: typeof globalThis.fetch, value: string): Promise<string> {
+  const url = trustedLatestReleaseUrl(value);
   const response = await fetchImpl(url, {
-    headers: { Accept: "application/vnd.github+json", "User-Agent": "VSPi-Updater" },
+    headers: { "User-Agent": "VSPi-Updater" },
     signal: AbortSignal.timeout(15_000),
     redirect: "manual",
   });
-  if (response.status >= 300 && response.status < 400) throw new Error("GitHub Release API 不允许重定向");
-  if (!response.ok) throw githubApiError(response, url);
-  if (response.url) trustedApiUrl(response.url);
-  return response;
+  if (response.status < 300 || response.status >= 400) {
+    if (!response.ok) throw githubReleaseError(response, url);
+    throw new Error("GitHub latest Release 缺少版本重定向");
+  }
+  const location = response.headers.get("location");
+  if (!location) throw new Error("GitHub latest Release 重定向缺少 Location");
+  return releaseVersionFromLatestRedirect(new URL(location, url).href);
+}
+
+function githubReleaseAssetUrl(version: string, filename: string): string {
+  return `${RELEASE_DOWNLOAD_ORIGIN}/HypoxanthineOvO/VSPi/releases/download/v${version}/${filename}`;
 }
 
 async function fetchPackage(fetchImpl: typeof globalThis.fetch, value: string): Promise<Response> {
@@ -226,18 +232,26 @@ export async function updateVspi(currentVersion: string, options: SelfUpdateOpti
   const fetchImpl = options.fetch ?? globalThis.fetch;
   if (!fetchImpl) throw new Error("当前 Node.js 不支持 fetch，无法检查更新");
 
-  const releaseResponse = await fetchGitHubRelease(fetchImpl, options.releaseApiUrl ?? RELEASE_API_URL);
-  const latestRelease = selectGitHubVspiRelease(await releaseResponse.json());
-  const latestVersion = releaseTagVersion(latestRelease);
+  const latestVersion = await fetchLatestVersion(fetchImpl, options.latestReleaseUrl ?? LATEST_RELEASE_URL);
   if (compareVersions(latestVersion, currentVersion) <= 0) {
     return { status: "up-to-date", currentVersion, latestVersion };
   }
-  const release = parseGitHubVspiRelease(latestRelease);
+  const filename = `vspi-${latestVersion}.tgz`;
+  const checksumsResponse = await fetchPackage(
+    fetchImpl,
+    githubReleaseAssetUrl(latestVersion, "SHA256SUMS"),
+  );
+  const checksumBytes = Buffer.from(await checksumsResponse.arrayBuffer());
+  if (checksumBytes.byteLength > 64 * 1024) throw new Error("VSPi SHA256SUMS 超过 64 KiB 上限");
+  const expectedChecksum = parseReleaseChecksums(checksumBytes.toString("utf8"), latestVersion);
 
   const directory = await mkdtemp(join(options.temporaryRoot ?? tmpdir(), "vspi-update-"));
-  const tarballPath = join(directory, `vspi-${release.version}.tgz`);
+  const tarballPath = join(directory, filename);
   try {
-    const packageResponse = await fetchPackage(fetchImpl, release.downloadUrl);
+    const packageResponse = await fetchPackage(
+      fetchImpl,
+      githubReleaseAssetUrl(latestVersion, filename),
+    );
     const declaredSize = Number(packageResponse.headers.get("content-length"));
     if (Number.isFinite(declaredSize) && declaredSize > MAX_PACKAGE_BYTES)
       throw new Error("VSPi 更新包超过 64 MiB 上限");
@@ -247,10 +261,10 @@ export async function updateVspi(currentVersion: string, options: SelfUpdateOpti
     const actualChecksum = createHash("sha256")
       .update(await readFile(tarballPath))
       .digest("hex");
-    if (actualChecksum !== release.checksum) throw new Error("VSPi 更新包 SHA-256 校验失败");
+    if (actualChecksum !== expectedChecksum) throw new Error("VSPi 更新包 SHA-256 校验失败");
     if (options.installPackage) await options.installPackage(tarballPath);
-    else await installVspiPackage(tarballPath, release.version);
-    return { status: "updated", currentVersion, latestVersion: release.version };
+    else await installVspiPackage(tarballPath, latestVersion);
+    return { status: "updated", currentVersion, latestVersion };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

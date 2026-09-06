@@ -1,12 +1,12 @@
-name: VSPi 2.0.2 Release
+name: VSPi 2.0.3 Release
 
 on:
   push:
     tags:
-      - v2.0.2
+      - v2.0.3
 
 concurrency:
-  group: vspi-2.0.2-release
+  group: vspi-2.0.3-release
   cancel-in-progress: false
 
 permissions:
@@ -52,16 +52,19 @@ jobs:
       - name: Build and verify the staging tarball once
         run: |
           pnpm --filter vspi package:pack
-          pnpm --filter vspi package:verify "$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/vspi-2.0.2.tgz"
-          cp "$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/vspi-2.0.2.tgz" "$RUNNER_TEMP/vspi-latest.tgz"
-          cmp "$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/vspi-2.0.2.tgz" "$RUNNER_TEMP/vspi-latest.tgz"
-          sha256sum "$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/vspi-2.0.2.tgz" "$RUNNER_TEMP/vspi-latest.tgz"
+          pnpm --filter vspi package:verify "$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/vspi-2.0.3.tgz"
+          cp "$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/vspi-2.0.3.tgz" "$RUNNER_TEMP/vspi-latest.tgz"
+          cmp "$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/vspi-2.0.3.tgz" "$RUNNER_TEMP/vspi-latest.tgz"
+          sha256sum "$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/vspi-2.0.3.tgz" "$RUNNER_TEMP/vspi-latest.tgz"
+          CHECKSUM=$(sha256sum "$RUNNER_TEMP/vspi-latest.tgz" | cut -d' ' -f1)
+          printf '%s  vspi-2.0.3.tgz\n%s  vspi-latest.tgz\n' "$CHECKSUM" "$CHECKSUM" > "$RUNNER_TEMP/SHA256SUMS"
 
       - name: Publish the GitHub release
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: >-
           node scripts/github-release-producer.mjs
-          "$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/vspi-2.0.2.tgz"
+          "$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/vspi-2.0.3.tgz"
           "$RUNNER_TEMP/vspi-latest.tgz"
+          "$RUNNER_TEMP/SHA256SUMS"
           "$RUNNER_TEMP/vspi-github-release.json"

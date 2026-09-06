@@ -2,6 +2,28 @@ const RELEASE_ORIGIN = "https://github.com";
 const REPOSITORY_PATH = "HypoxanthineOvO/VSPi";
 const STABLE_TAG_PATTERN = /^v\d+\.\d+\.\d+$/;
 
+export function releaseVersionFromLatestRedirect(value) {
+  const url = new URL(value);
+  if (url.origin !== RELEASE_ORIGIN || url.username || url.password || url.search || url.hash) {
+    throw new Error("GitHub latest Release 重定向地址不受信任");
+  }
+  const prefix = `/${REPOSITORY_PATH}/releases/tag/`;
+  if (!url.pathname.startsWith(prefix)) throw new Error("GitHub latest Release 重定向地址不受信任");
+  const tag = decodeURIComponent(url.pathname.slice(prefix.length));
+  if (!STABLE_TAG_PATTERN.test(tag)) throw new Error("GitHub latest Release tag 不是稳定 SemVer");
+  return tag.slice(1);
+}
+
+export function parseReleaseChecksums(value, version) {
+  const filename = `vspi-${version}.tgz`;
+  const matches = String(value)
+    .split(/\r?\n/u)
+    .map((line) => /^([a-f0-9]{64})\s+(.+)$/iu.exec(line))
+    .filter((match) => match?.[2] === filename);
+  if (matches.length !== 1) throw new Error(`VSPi ${version} SHA256SUMS 缺少唯一安装包校验值`);
+  return matches[0][1].toLowerCase();
+}
+
 function record(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} 格式无效`);
   return value;

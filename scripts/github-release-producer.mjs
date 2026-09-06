@@ -3,11 +3,12 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const RELEASE_TAG = 'v2.0.2';
-const RELEASE_VERSION = '2.0.2';
-const RELEASE_TITLE = 'VSPi 2.0.2';
-const VERSIONED_ASSET = 'vspi-2.0.2.tgz';
+const RELEASE_TAG = 'v2.0.3';
+const RELEASE_VERSION = '2.0.3';
+const RELEASE_TITLE = 'VSPi 2.0.3';
+const VERSIONED_ASSET = 'vspi-2.0.3.tgz';
 const LATEST_ASSET = 'vspi-latest.tgz';
+const CHECKSUMS_ASSET = 'SHA256SUMS';
 const READBACK_ATTEMPTS = 5;
 const READBACK_DELAY_MS = 100;
 
@@ -58,7 +59,7 @@ async function responseJson(response, operation) {
   }
 }
 
-export async function prepareGitHubRelease({ environment, packageJsonPath, assetPath, latestAssetPath }) {
+export async function prepareGitHubRelease({ environment, packageJsonPath, assetPath, latestAssetPath, checksumsPath }) {
   const tag = required(environment, 'GITHUB_REF_NAME');
   if (tag !== RELEASE_TAG) throw new Error(`GITHUB_REF_NAME must be ${RELEASE_TAG}: ${tag}`);
   const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8'));
@@ -67,10 +68,15 @@ export async function prepareGitHubRelease({ environment, packageJsonPath, asset
   }
   if (basename(assetPath) !== VERSIONED_ASSET) throw new Error(`Release asset must be named ${VERSIONED_ASSET}`);
   if (basename(latestAssetPath) !== LATEST_ASSET) throw new Error(`Compatibility asset must be named ${LATEST_ASSET}`);
+  if (basename(checksumsPath) !== CHECKSUMS_ASSET) throw new Error(`Checksum asset must be named ${CHECKSUMS_ASSET}`);
   const assetBytes = await readFile(assetPath);
   const latestBytes = await readFile(latestAssetPath);
   if (!assetBytes.equals(latestBytes)) throw new Error('GitHub release assets must contain identical bytes');
   const expectedChecksum = checksum(assetBytes);
+  const expectedChecksums = `${expectedChecksum}  ${VERSIONED_ASSET}\n${expectedChecksum}  ${LATEST_ASSET}\n`;
+  if (await readFile(checksumsPath, 'utf8') !== expectedChecksums) {
+    throw new Error('SHA256SUMS does not match the release assets');
+  }
   const apiUrl = trimTrailingSlash(required(environment, 'GITHUB_API_URL'));
   const repository = required(environment, 'GITHUB_REPOSITORY');
   const releaseApiUrl = `${apiUrl}/repos/${repository}/releases`;
@@ -83,6 +89,7 @@ export async function prepareGitHubRelease({ environment, packageJsonPath, asset
     assets: [
       { name: VERSIONED_ASSET, path: assetPath },
       { name: LATEST_ASSET, path: latestAssetPath },
+      { name: CHECKSUMS_ASSET, path: checksumsPath },
     ],
     releaseApiUrl,
     releaseReadUrl: `${releaseApiUrl}/tags/${encodeURIComponent(tag)}`,
@@ -203,14 +210,15 @@ export async function produceGitHubRelease({
   packageJsonPath = resolve('apps/vspi/package.json'),
   assetPath,
   latestAssetPath,
+  checksumsPath,
   metadataPath = resolve('vspi-github-release.json'),
   fetch = globalThis.fetch,
 }) {
-  if (!assetPath || !latestAssetPath) {
-    throw new Error('Usage: node scripts/github-release-producer.mjs <vspi-2.0.2.tgz> <vspi-latest.tgz> [metadata.json]');
+  if (!assetPath || !latestAssetPath || !checksumsPath) {
+    throw new Error('Usage: node scripts/github-release-producer.mjs <vspi-2.0.3.tgz> <vspi-latest.tgz> <SHA256SUMS> [metadata.json]');
   }
   if (!fetch) throw new Error('Global fetch is unavailable');
-  const prepared = await prepareGitHubRelease({ environment, packageJsonPath, assetPath, latestAssetPath });
+  const prepared = await prepareGitHubRelease({ environment, packageJsonPath, assetPath, latestAssetPath, checksumsPath });
   const headers = {
     accept: 'application/vnd.github+json',
     authorization: `Bearer ${required(environment, 'GITHUB_TOKEN')}`,
@@ -251,7 +259,8 @@ if (invokedPath === import.meta.url) {
     const metadata = await produceGitHubRelease({
       assetPath: process.argv[2],
       latestAssetPath: process.argv[3],
-      metadataPath: resolve(process.argv[4] ?? 'vspi-github-release.json'),
+      checksumsPath: process.argv[4],
+      metadataPath: resolve(process.argv[5] ?? 'vspi-github-release.json'),
     });
     process.stdout.write(`${JSON.stringify(metadata)}\n`);
   } catch (error) {
