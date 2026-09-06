@@ -49,7 +49,15 @@ describe("VSPi GitHub self-update contract", () => {
       "manual",
       "manual",
     ]);
-    expect(fetch.mock.calls.map(([url]) => String(url))).not.toContain("api.github.com");
+    expect(
+      fetch.mock.calls.map(([input]) =>
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url,
+      ),
+    ).not.toContain("api.github.com");
     expect(installPackage).toHaveBeenCalledOnce();
   });
 
