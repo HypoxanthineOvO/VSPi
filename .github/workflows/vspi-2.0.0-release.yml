@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   release:
-    name: Publish GitHub release and mirror to GitLab
+    name: Publish GitHub release
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -65,12 +65,3 @@ jobs:
           "$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/vspi-2.0.2.tgz"
           "$RUNNER_TEMP/vspi-latest.tgz"
           "$RUNNER_TEMP/vspi-github-release.json"
-
-      - name: Mirror the published GitHub asset to GitLab
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          GITLAB_TOKEN: ${{ secrets.VSPI_GITLAB_TOKEN }}
-          GITLAB_API_URL: https://gitlab.vsplab.cn/api/v4
-          GITLAB_PROJECT_ID: ${{ vars.VSPI_GITLAB_PROJECT_ID }}
-          GITLAB_PROJECT_URL: https://gitlab.vsplab.cn/heyx/vspi
-        run: node scripts/gitlab-release-producer.mjs "$RUNNER_TEMP/vspi-release-metadata.json"

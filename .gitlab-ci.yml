@@ -1,5 +1,10 @@
 stages:
   - test
+  - release
+
+default:
+  tags:
+    - vspi-docker
 
 gitlab-release-contract:
   stage: test
@@ -9,3 +14,20 @@ gitlab-release-contract:
     - node --check scripts/gitlab-release-producer.mjs
     - node --check scripts/gitlab-release-producer.test.mjs
     - node --test scripts/gitlab-release-producer.test.mjs
+
+mirror-vspi-release:
+  stage: release
+  image: node:24.15.0
+  rules:
+    - if: '$CI_COMMIT_TAG == "v2.0.2"'
+  variables:
+    GITHUB_RELEASE_BASE_URL: https://github.com/HypoxanthineOvO/VSPi/releases/download
+    GITHUB_REF_NAME: $CI_COMMIT_TAG
+    GITLAB_API_URL: $CI_API_V4_URL
+    GITLAB_PROJECT_ID: $CI_PROJECT_ID
+    GITLAB_PROJECT_URL: $CI_PROJECT_URL
+  script:
+    - node scripts/gitlab-release-producer.mjs vspi-release-metadata.json
+  artifacts:
+    paths:
+      - vspi-release-metadata.json

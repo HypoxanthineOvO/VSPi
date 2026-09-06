@@ -10,6 +10,8 @@ const VERSIONED_ASSET = 'vspi-2.0.2.tgz';
 const LATEST_ASSET = 'vspi-latest.tgz';
 const READBACK_ATTEMPTS = 5;
 const READBACK_DELAY_MS = 100;
+const GITHUB_RELEASE_ATTEMPTS = 60;
+const GITHUB_RELEASE_DELAY_MS = 10_000;
 
 function required(environment, name) {
   const value = environment[name];
@@ -71,19 +73,72 @@ async function downloadGitHubAsset(fetchImpl, headers, asset, operation) {
   return Buffer.from(await response.arrayBuffer());
 }
 
+async function waitForGitHubRelease(fetchImpl, releaseUrl, headers) {
+  for (let attempt = 0; attempt < GITHUB_RELEASE_ATTEMPTS; attempt += 1) {
+    const response = await request(
+      fetchImpl,
+      releaseUrl,
+      { method: 'GET', headers },
+      'GitHub release lookup',
+      [404],
+    );
+    if (response.status !== 404) return response;
+    if (attempt + 1 < GITHUB_RELEASE_ATTEMPTS) await delay(GITHUB_RELEASE_DELAY_MS);
+  }
+  throw new Error(`GitHub release ${RELEASE_TAG} was not published within 10 minutes`);
+}
+
+async function waitForPublicGitHubAsset(fetchImpl, url, operation) {
+  for (let attempt = 0; attempt < GITHUB_RELEASE_ATTEMPTS; attempt += 1) {
+    const response = await request(
+      fetchImpl,
+      url,
+      { method: 'GET', redirect: 'follow' },
+      operation,
+      [404],
+    );
+    if (response.status !== 404) return Buffer.from(await response.arrayBuffer());
+    if (attempt + 1 < GITHUB_RELEASE_ATTEMPTS) await delay(GITHUB_RELEASE_DELAY_MS);
+  }
+  throw new Error(`${operation} was not published within 10 minutes`);
+}
+
 export async function readGitHubSource({ environment, fetch = globalThis.fetch }) {
   if (!fetch) throw new Error('Global fetch is unavailable');
   const tag = required(environment, 'GITHUB_REF_NAME');
   if (tag !== RELEASE_TAG) throw new Error(`GITHUB_REF_NAME must be ${RELEASE_TAG}: ${tag}`);
+  if (environment.GITHUB_RELEASE_BASE_URL) {
+    const baseUrl = trimTrailingSlash(environment.GITHUB_RELEASE_BASE_URL);
+    const versionedBytes = await waitForPublicGitHubAsset(
+      fetch,
+      `${baseUrl}/${encodeURIComponent(tag)}/${encodeURIComponent(VERSIONED_ASSET)}`,
+      `GitHub asset ${VERSIONED_ASSET}`,
+    );
+    const latestBytes = await waitForPublicGitHubAsset(
+      fetch,
+      `${baseUrl}/${encodeURIComponent(tag)}/${encodeURIComponent(LATEST_ASSET)}`,
+      `GitHub asset ${LATEST_ASSET}`,
+    );
+    if (!versionedBytes.equals(latestBytes)) {
+      throw new Error('GitHub release assets do not contain identical bytes');
+    }
+    return {
+      tag,
+      version: RELEASE_VERSION,
+      title: RELEASE_TITLE,
+      checksum: checksum(versionedBytes),
+      assetBytes: versionedBytes,
+    };
+  }
   const apiUrl = trimTrailingSlash(required(environment, 'GITHUB_API_URL'));
   const repository = required(environment, 'GITHUB_REPOSITORY');
   const headers = {
     accept: 'application/vnd.github+json',
-    authorization: `Bearer ${required(environment, 'GITHUB_TOKEN')}`,
     'x-github-api-version': '2022-11-28',
   };
+  if (environment.GITHUB_TOKEN) headers.authorization = `Bearer ${environment.GITHUB_TOKEN}`;
   const releaseUrl = `${apiUrl}/repos/${repository}/releases/tags/${encodeURIComponent(tag)}`;
-  const response = await request(fetch, releaseUrl, { method: 'GET', headers }, 'GitHub release lookup');
+  const response = await waitForGitHubRelease(fetch, releaseUrl, headers);
   const release = await responseJson(response, 'GitHub release lookup');
   if (release.tag_name !== RELEASE_TAG) throw new Error('GitHub release tag conflicts with the mirror source');
   if (release.name !== RELEASE_TITLE) throw new Error('GitHub release title conflicts with the mirror source');
@@ -168,7 +223,9 @@ function validateRelease(release, prepared) {
   if (
     link?.name !== expectedLink.name ||
     link.url !== expectedLink.url ||
-    link.direct_asset_path !== expectedLink.direct_asset_path ||
+    (link.direct_asset_path !== undefined &&
+      link.direct_asset_path !== null &&
+      link.direct_asset_path !== expectedLink.direct_asset_path) ||
     link.direct_asset_url !== prepared.directAssetUrl ||
     validated.downloadUrl !== prepared.directAssetUrl
   ) {
@@ -215,7 +272,7 @@ async function verifyReleaseAsset(fetchImpl, validated, prepared) {
   const response = await request(
     fetchImpl,
     validated.downloadUrl,
-    { method: 'GET', redirect: 'error' },
+    { method: 'GET', redirect: 'follow' },
     'GitLab release asset readback',
   );
   await verifyBytes(response, prepared, 'GitLab release asset readback');
@@ -241,7 +298,7 @@ export async function mirrorGitLabRelease({
   if (!fetch) throw new Error('Global fetch is unavailable');
   const source = await readGitHubSource({ environment, fetch });
   const prepared = prepareGitLabMirror({ environment, source });
-  const headers = { 'PRIVATE-TOKEN': required(environment, 'GITLAB_TOKEN') };
+  const headers = gitLabHeaders(environment);
   const existingRelease = await readRelease(fetch, headers, prepared, 'GitLab release lookup');
   if (existingRelease) {
     await verifyReleaseAsset(fetch, existingRelease, prepared);
@@ -284,6 +341,12 @@ export async function mirrorGitLabRelease({
   }
   await writeFile(metadataPath, `${JSON.stringify(validated, null, 2)}\n`);
   return validated;
+}
+
+function gitLabHeaders(environment) {
+  if (environment.GITLAB_TOKEN) return { 'PRIVATE-TOKEN': environment.GITLAB_TOKEN };
+  if (environment.CI_JOB_TOKEN) return { 'JOB-TOKEN': environment.CI_JOB_TOKEN };
+  throw new Error('Missing required environment variable: GITLAB_TOKEN or CI_JOB_TOKEN');
 }
 
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : undefined;

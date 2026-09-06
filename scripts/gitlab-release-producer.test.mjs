@@ -132,6 +132,12 @@ function mockMirror(bytes, options = {}) {
     const url = String(urlValue);
     const method = init.method ?? 'GET';
     requests.push({ url, method, headers: init.headers, body: init.body });
+    if (url === 'https://github.test/downloads/v2.0.2/vspi-2.0.2.tgz') {
+      return new Response(options.versionedBytes ?? bytes);
+    }
+    if (url === 'https://github.test/downloads/v2.0.2/vspi-latest.tgz') {
+      return new Response(options.latestBytes ?? bytes);
+    }
     if (url === 'https://api.github.test/repos/example/vspi/releases/tags/v2.0.2') return Response.json(github);
     if (url === 'https://api.github.test/assets/1') return new Response(options.versionedBytes ?? bytes);
     if (url === 'https://api.github.test/assets/2') return new Response(options.latestBytes ?? bytes);
@@ -203,6 +209,23 @@ void test('reads only a published stable GitHub release with two identical check
   await assert.rejects(readGitHubSource({ environment: environment(), fetch: mockMirror(bytes, { latestBytes: Buffer.from('other') }).fetch }), /identical bytes/);
   await assert.rejects(readGitHubSource({ environment: environment(), fetch: mockMirror(bytes, { githubOverrides: { body: `SHA-256: \`${'0'.repeat(64)}\`` } }).fetch }), /checksum conflicts/);
   await assert.rejects(readGitHubSource({ environment: environment(), fetch: mockMirror(bytes, { githubOverrides: { assets: [githubRelease(bytes).assets[0]] } }).fetch }), /assets conflict/);
+  const anonymous = mockMirror(bytes);
+  await readGitHubSource({
+    environment: environment({ GITHUB_TOKEN: undefined }),
+    fetch: anonymous.fetch,
+  });
+  assert.ok(anonymous.requests.every(({ headers }) => headers?.authorization === undefined));
+  const direct = mockMirror(bytes);
+  const directSource = await readGitHubSource({
+    environment: environment({
+      GITHUB_TOKEN: undefined,
+      GITHUB_API_URL: undefined,
+      GITHUB_REPOSITORY: undefined,
+      GITHUB_RELEASE_BASE_URL: 'https://github.test/downloads',
+    }),
+    fetch: direct.fetch,
+  });
+  assert.equal(directSource.checksum, sha256(bytes));
 });
 
 void test('mirrors GitHub bytes to GitLab and emits updater-compatible minimal metadata', async () => {
@@ -221,6 +244,28 @@ void test('mirrors GitHub bytes to GitLab and emits updater-compatible minimal m
   assert.equal(mirror.requests.filter(({ method }) => method === 'POST').length, 1);
   const gitlabMutations = mirror.requests.filter(({ method }) => method === 'PUT' || method === 'POST');
   assert.ok(gitlabMutations.every(({ headers }) => headers['PRIVATE-TOKEN'] === 'test-gitlab-token'));
+});
+
+void test('mirrors with a GitLab CI job token and accepts an omitted direct asset path', async () => {
+  const files = await fixture();
+  const checksum = sha256(files.assetBytes);
+  const release = gitlabRelease(checksum);
+  delete release.assets.links[0].direct_asset_path;
+  const mirror = mockMirror(files.assetBytes, {
+    packageBytes: files.assetBytes,
+    release,
+  });
+
+  await mirrorGitLabRelease({
+    environment: environment({ GITLAB_TOKEN: undefined, CI_JOB_TOKEN: 'test-job-token' }),
+    fetch: mirror.fetch,
+    metadataPath: files.metadataPath,
+  });
+
+  const gitlabRequests = mirror.requests.filter(({ url }) =>
+    url.includes('gitlab.vsplab.cn/api/v4/'),
+  );
+  assert.ok(gitlabRequests.every(({ headers }) => headers?.['JOB-TOKEN'] === 'test-job-token'));
 });
 
 void test('reuses an exact GitLab mirror and rejects package or release conflicts without mutation', async () => {
