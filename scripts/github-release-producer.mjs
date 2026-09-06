@@ -74,7 +74,8 @@ export async function prepareGitHubRelease({ environment, packageJsonPath, asset
   if (!assetBytes.equals(latestBytes)) throw new Error('GitHub release assets must contain identical bytes');
   const expectedChecksum = checksum(assetBytes);
   const expectedChecksums = `${expectedChecksum}  ${VERSIONED_ASSET}\n${expectedChecksum}  ${LATEST_ASSET}\n`;
-  if (await readFile(checksumsPath, 'utf8') !== expectedChecksums) {
+  const checksumsBytes = await readFile(checksumsPath);
+  if (checksumsBytes.toString('utf8') !== expectedChecksums) {
     throw new Error('SHA256SUMS does not match the release assets');
   }
   const apiUrl = trimTrailingSlash(required(environment, 'GITHUB_API_URL'));
@@ -87,9 +88,9 @@ export async function prepareGitHubRelease({ environment, packageJsonPath, asset
     checksum: expectedChecksum,
     assetBytes,
     assets: [
-      { name: VERSIONED_ASSET, path: assetPath },
-      { name: LATEST_ASSET, path: latestAssetPath },
-      { name: CHECKSUMS_ASSET, path: checksumsPath },
+      { name: VERSIONED_ASSET, path: assetPath, bytes: assetBytes, contentType: 'application/gzip' },
+      { name: LATEST_ASSET, path: latestAssetPath, bytes: latestBytes, contentType: 'application/gzip' },
+      { name: CHECKSUMS_ASSET, path: checksumsPath, bytes: checksumsBytes, contentType: 'text/plain' },
     ],
     releaseApiUrl,
     releaseReadUrl: `${releaseApiUrl}/tags/${encodeURIComponent(tag)}`,
@@ -131,10 +132,10 @@ async function waitForRelease(fetchImpl, headers, prepared) {
   return undefined;
 }
 
-async function verifyAssetResponse(response, prepared, operation) {
+async function verifyAssetResponse(response, expectedBytes, operation) {
   const bytes = Buffer.from(await response.arrayBuffer());
-  if (checksum(bytes) !== prepared.checksum || !bytes.equals(prepared.assetBytes)) {
-    throw new Error(`${operation} conflicts with the package bytes`);
+  if (!bytes.equals(expectedBytes)) {
+    throw new Error(`${operation} conflicts with the local asset bytes`);
   }
 }
 
@@ -155,7 +156,7 @@ async function validateExistingAssets(fetchImpl, headers, release, prepared) {
       { method: 'GET', headers: { ...headers, accept: 'application/octet-stream' }, redirect: 'follow' },
       `GitHub asset ${asset.name} readback`,
     );
-    await verifyAssetResponse(response, prepared, `Existing GitHub asset ${asset.name}`);
+    await verifyAssetResponse(response, asset.bytes, `Existing GitHub asset ${asset.name}`);
   }
   return existing;
 }
@@ -169,8 +170,8 @@ async function uploadMissingAssets(fetchImpl, headers, release, prepared) {
     try {
       const response = await fetchImpl(`${uploadUrl}?name=${encodeURIComponent(asset.name)}`, {
         method: 'POST',
-        headers: { ...headers, 'content-type': 'application/gzip' },
-        body: prepared.assetBytes,
+        headers: { ...headers, 'content-type': asset.contentType },
+        body: asset.bytes,
       });
       uploadStatus = response.status;
     } catch {

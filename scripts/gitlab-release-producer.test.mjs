@@ -73,7 +73,14 @@ function mockGitHubProducer(bytes, initialRelease) {
   let nextAssetId = 1;
   const assetBytes = new Map();
   if (release) {
-    for (const asset of release.assets ?? []) assetBytes.set(asset.url, bytes);
+    for (const asset of release.assets ?? []) {
+      assetBytes.set(
+        asset.url,
+        asset.name === 'SHA256SUMS'
+          ? Buffer.from(`${sha256(bytes)}  vspi-2.0.3.tgz\n${sha256(bytes)}  vspi-latest.tgz\n`)
+          : bytes,
+      );
+    }
   }
   const fetch = async (urlValue, init = {}) => {
     const url = String(urlValue);
@@ -190,7 +197,12 @@ void test('creates one draft GitHub release, uploads the verified assets, and pu
   assert.equal(github.requests.filter(({ method }) => method === 'PATCH').length, 1);
   assert.equal(github.release().draft, false);
   assert.equal(github.release().prerelease, false);
-  assert.ok([...github.assetBytes.values()].slice(0, 2).every((value) => value.equals(files.assetBytes)));
+  assert.ok(github.assetBytes.get('https://api.github.test/assets/1').equals(files.assetBytes));
+  assert.ok(github.assetBytes.get('https://api.github.test/assets/2').equals(files.assetBytes));
+  assert.equal(
+    github.assetBytes.get('https://api.github.test/assets/3').toString('utf8'),
+    `${sha256(files.assetBytes)}  vspi-2.0.3.tgz\n${sha256(files.assetBytes)}  vspi-latest.tgz\n`,
+  );
 });
 
 void test('reuses an exact GitHub release and refuses metadata or asset conflicts', async () => {
@@ -201,7 +213,7 @@ void test('reuses an exact GitHub release and refuses metadata or asset conflict
   const wrongTitle = mockGitHubProducer(files.assetBytes, githubRelease(files.assetBytes, { name: 'Other' }));
   await assert.rejects(produceGitHubRelease({ environment: environment(), fetch: wrongTitle.fetch, ...files }), /title conflicts/);
   const wrongBytes = mockGitHubProducer(Buffer.from('different'), githubRelease(files.assetBytes));
-  await assert.rejects(produceGitHubRelease({ environment: environment(), fetch: wrongBytes.fetch, ...files }), /package bytes/);
+  await assert.rejects(produceGitHubRelease({ environment: environment(), fetch: wrongBytes.fetch, ...files }), /local asset bytes/);
 });
 
 void test('reads only a published stable GitHub release with two identical checksum-verified assets', async () => {
