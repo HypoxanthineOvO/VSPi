@@ -5,7 +5,9 @@ description: Use when generating changesets in the kimi-code repository — deci
 
 # Generate Changesets
 
-The only user-facing published package is the CLI: `@moonshot-ai/kimi-code`. All other `@moonshot-ai/*` packages (sdk, agent-core, kosong, kaos, oauth, telemetry, and so on) are internal.
+The user-facing packages are `@moonshot-ai/kimi-code` and VSPi. All other `@moonshot-ai/*` packages (sdk, agent-core, kosong, kaos, oauth, telemetry, and so on) are internal.
+
+VSPi has its own tag-based release flow. Do not create a root Changeset for VSPi-only work: record the user-facing release summary in its PR/MR, update `apps/vspi/package.json` deliberately, and publish through the VSPi release workflow. A VSPi-only change must never be attributed to `@moonshot-ai/kimi-code`.
 
 ## 1. Whether to Write
 
@@ -47,6 +49,7 @@ Wording:
 ## 4. Which Package
 
 - An internal change enters the CLI bundle and is user-perceivable → list `@moonshot-ai/kimi-code`.
+- A VSPi-only change → do not create a root Changeset; use the VSPi release process above.
 - An internal change does not enter the CLI or is not user-perceivable → write nothing; if it is written, list only that internal package.
 - Never mix packages ignored in `.changeset/config.json` with non-ignored packages in one frontmatter.
 - pi-tui exception: pi-tui-only changes list `@moonshot-ai/pi-tui`; if the same change is also visible to CLI users, write a separate CLI changeset (two files, never mixed).

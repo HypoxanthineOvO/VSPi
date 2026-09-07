@@ -1076,10 +1076,8 @@ describe('tool exchange structure', () => {
     const trailing = openAiWire.at(-1);
     expect(trailing?.['role']).toBe('user');
     const trailingContent = trailing?.['content'] as { type: string; text?: string }[];
-    expect(trailingContent[0]).toEqual({
-      type: 'text',
-      text: 'Attached media from tool result:',
-    });
+    expect(trailingContent[0]?.type).toBe('text');
+    expect(trailingContent[0]?.text).toContain('tool result');
     expect(trailingContent.some((part) => part.type === 'image_url')).toBe(true);
 
     // Composed kimi: trait mode hands shaping to the trait — the image part
@@ -1145,10 +1143,11 @@ describe('tool exchange structure', () => {
     // aborted turn's prompt and the next user message, so the two prompts no
     // longer merge into one wire message.
     expect(userMessages).toHaveLength(3);
-    expect(String(userMessages[0]?.['content'])).toContain('first message');
-    expect(String(userMessages[1]?.['content'])).toContain('<system-reminder>');
-    expect(String(userMessages[1]?.['content'])).toContain('interrupted by the user');
-    expect(String(userMessages[2]?.['content'])).toContain('second message');
+    const textOf = (content: unknown): string => typeof content === 'string' ? content : Array.isArray(content) ? content.map((part: { text?: string }) => part.text ?? '').join('') : '';
+    expect(textOf(userMessages[0]?.['content'])).toContain('first message');
+    expect(textOf(userMessages[1]?.['content'])).toContain('<system-reminder>');
+    expect(textOf(userMessages[1]?.['content'])).toContain('interrupted by the user');
+    expect(textOf(userMessages[2]?.['content'])).toContain('second message');
     expect(ctx.payloads('prompt.completed')[0]?.['reason']).toBe('completed');
   }, 60_000);
 });

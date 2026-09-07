@@ -64,6 +64,14 @@ Anti-herd jitter is applied deterministically per task id:
 
 Use `recurring: false` for "remind me at X" style requests, single deadlines, "in N minutes do Y", and any task that should not repeat. Use `recurring: true` for periodic polling (CI status, build watchers, scheduled reports), workday rituals, and anything the user explicitly described as recurring.
 
+## Patrols for long-running work
+
+When you hand off work that only reports back on completion — a long build or test suite in the background, a subagent fleet, a goal that spans hours — or when you are waiting on something with no automatic notification (external systems, CI), schedule a recurring patrol: a `recurring: true` task with a prompt like "patrol: check the background tasks and goal state; continue the work if something finished, failed, or needs a decision". Fires arrive only while the session is idle, and a parked goal resumes on each fire, so the patrol cadence (e.g. `*/10 * * * *`) is how often you re-check. Keep the default `wakesGoal: true` for patrols — that is what lets a parked goal resume on each fire.
+
+Set `wakesGoal: false` for user-facing schedules that are unrelated to goal work — reminders, daily reports, workday rituals. A recurring daily reminder left at the default would park an active goal until its next fire.
+
+Stop the patrol when its purpose ends: call `CronDelete` with the task `id` when the work completes, fails permanently, or the goal is marked `complete` or `blocked`. Do not leave patrols running after they are no longer needed.
+
 ## Session lifetime
 
 Cron tasks live in the current session. When you exit, they

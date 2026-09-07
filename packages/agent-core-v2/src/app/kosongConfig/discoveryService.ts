@@ -33,6 +33,7 @@ import {
   THINKING_SECTION,
 } from './configSection';
 import { ModelsDevImportErrors } from './errors';
+import { fetchRelayCatalog, isRelayCatalogProvider, mergeRelayCatalog } from './relayCatalog';
 import {
   IProviderDiscoveryService,
   ModelCatalogChanged,
@@ -157,6 +158,14 @@ export class ProviderDiscoveryService implements IProviderDiscoveryService {
     options: RefreshProviderModelsOptions,
   ): Promise<RefreshProviderModelsResponse> {
     await this.config.reload();
+    const relayIds = options.scope === 'oauth' ? [] : Object.entries(this.providerService.list())
+      .filter(([id, provider]) => (options.providerId === undefined || options.providerId === id) && isRelayCatalogProvider(id, provider))
+      .map(([id]) => id);
+    if (options.providerId !== undefined && relayIds.includes(options.providerId)) {
+      const response = await this.refreshRelayProviders(relayIds);
+      if (response.changed.length) this.events.publish(new ModelCatalogChanged({ payload: response }));
+      return response;
+    }
     if (options.providerId !== undefined) {
       const provider = this.providerService.get(options.providerId);
       if (provider === undefined) {
@@ -177,8 +186,34 @@ export class ProviderDiscoveryService implements IProviderDiscoveryService {
       providerId: options.providerId,
     });
     const response = mapRefreshResult(result);
+    if (relayIds.length) {
+      const relay = await this.refreshRelayProviders(relayIds);
+      response.changed.push(...relay.changed);
+      response.unchanged.push(...relay.unchanged);
+      response.failed.push(...relay.failed);
+    }
     if (response.changed.length > 0) {
       this.events.publish(new ModelCatalogChanged({ payload: response }));
+    }
+    return response;
+  }
+
+  private async refreshRelayProviders(ids: readonly string[]): Promise<RefreshProviderModelsResponse> {
+    const response: RefreshProviderModelsResponse = { changed: [], unchanged: [], failed: [] };
+    for (const id of ids) {
+      const provider = this.providerService.get(id);
+      if (!provider) continue;
+      try {
+        const payload = await fetchRelayCatalog(provider);
+        if (JSON.stringify(this.providerService.get(id)) !== JSON.stringify(provider)) throw new Error('Provider changed during discovery; retry refresh');
+        const current = this.config.inspect<Record<string, ModelRecord>>(MODELS_SECTION).userValue ?? {};
+        const merged = mergeRelayCatalog(current, id, provider, payload);
+        if (JSON.stringify(current) === JSON.stringify(merged)) { response.unchanged.push(id); continue; }
+        await this.config.replace(MODELS_SECTION, merged);
+        response.changed.push({ provider_id: id, provider_name: id, added: Object.keys(merged).length - Object.keys(current).length, removed: 0 });
+      } catch (error) {
+        response.failed.push({ provider: id, reason: error instanceof Error ? error.message : 'Relay catalog refresh failed' });
+      }
     }
     return response;
   }

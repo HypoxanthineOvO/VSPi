@@ -34,6 +34,9 @@ export class ModelRequesterImpl implements ModelRequester {
     const model = this.model;
     this.cachedChatProvider = this.protocolRegistry.createChatProvider({
       protocol: model.protocol,
+      capabilities: model.capabilities,
+      thinking: model.thinking,
+      effortMapping: model.effortMapping,
       providerType: model.providerType,
       baseUrl: model.baseUrl,
       modelName: model.name,

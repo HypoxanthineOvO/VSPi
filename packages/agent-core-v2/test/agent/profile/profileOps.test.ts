@@ -107,6 +107,8 @@ function createTestModel(
 
 function createModelCatalogStub(models: Readonly<Record<string, Model>> = {}): IModelCatalog {
   return {
+    listBuiltinProviders: async () => [],
+    configureBuiltinProvider: async () => {},
     _serviceBrand: undefined,
     get: (id) => {
       const model = models[id];

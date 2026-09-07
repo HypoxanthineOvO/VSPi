@@ -138,7 +138,7 @@ describe("VSPi CLI command dispatch", () => {
 		expect(connect).not.toHaveBeenCalled();
 	});
 
-	it("routes config and the init compatibility alias without starting a session", async () => {
+	it("routes config and init without starting a session", async () => {
 		const connect = vi.fn(async () => fakeConnection());
 		const authSetup = vi.fn(async () => {});
 		const settings = { scope: "global" } as never;
@@ -165,7 +165,7 @@ describe("VSPi CLI command dispatch", () => {
 		).resolves.toBe(true);
 		expect(authSetup).toHaveBeenNthCalledWith(1, expect.objectContaining({ mode: "config", providerRef: "custom", settings }));
 		expect(authSetup).toHaveBeenNthCalledWith(2, expect.objectContaining({ mode: "config", providerRef: "custom", settings }));
-		expect(messages.join("")).toContain("init 已更名");
+		expect(messages.join("")).not.toContain("已更名");
 		expect(connect).toHaveBeenCalledTimes(2);
 	});
 
@@ -214,6 +214,105 @@ describe("VSPi CLI command dispatch", () => {
 			{ id: "model-a", name: "model-a" },
 			{ id: "model-b", name: "model-b" },
 		]);
+	});
+
+	it("uses the read-only connection for inspect and config diagnostics without reloading", async () => {
+		const diagnostics = vi.fn(async () => []);
+		const inspect = vi.fn(async () => ({ value: { effort: "high" }, userValue: { effort: "high" } }));
+		const reload = vi.fn();
+		const connection = fakeConnection({ global: { config: { diagnostics, inspect, reload } } });
+		const connect = vi.fn();
+		const connectReadOnly = vi.fn(async () => connection);
+		const write = vi.fn();
+		await dispatchCliCommand(["config", "diagnostics"], { connect, connectReadOnly, write });
+		await dispatchCliCommand(["config", "inspect", "thinking"], { connect, connectReadOnly, write });
+		expect(connect).not.toHaveBeenCalled();
+		expect(reload).not.toHaveBeenCalled();
+		expect(inspect).toHaveBeenCalledWith("thinking");
+		expect(connection.close).toHaveBeenCalledTimes(2);
+	});
+
+	it("patches config through the Core merge API and closes on schema rejection", async () => {
+		const set = vi.fn(async () => {});
+		const replace = vi.fn();
+		const connection = fakeConnection({ global: { config: { set, replace } } });
+		const common = { connect: async () => connection, write: vi.fn() };
+		await dispatchCliCommand(["config", "patch", "subagent", '{"timeoutMs":14400000}'], common);
+		expect(set).toHaveBeenCalledWith({ domain: "subagent", patch: { timeoutMs: 14400000 } });
+		expect(replace).not.toHaveBeenCalled();
+		set.mockRejectedValueOnce(new Error("Invalid timeout"));
+		await expect(dispatchCliCommand(["config", "patch", "subagent", '{"timeoutMs":-1}'], common)).rejects.toThrow("Invalid timeout");
+		expect(connection.close).toHaveBeenCalledTimes(2);
+	});
+
+	it("redacts credentials from config reads and rejects writing a redacted section back", async () => {
+		const value = {
+			example: {
+				apiKey: "example-secret",
+				headers: { "X-Custom-Auth": "private-header" },
+				env: { CUSTOM_CREDENTIAL: "private-env" },
+				oauth: { refresh_token: "private-refresh" },
+				baseUrl: "https://user:pass@example.test/v1?api_key=private-query",
+				maxTokens: 2048,
+			},
+		};
+		const connection = fakeConnection({ global: { config: { get: async () => value } } });
+		const write = vi.fn();
+		await dispatchCliCommand(["config", "get", "providers"], { connect: async () => connection, write });
+		const output = write.mock.calls[0]![0];
+		for (const secret of ["example-secret", "private-header", "private-env", "private-refresh", "user:pass", "private-query"])
+			expect(output).not.toContain(secret);
+		expect(JSON.parse(output).example.maxTokens).toBe(2048);
+		expect(value.example.apiKey).toBe("example-secret");
+		const connect = vi.fn();
+		await expect(dispatchCliCommand(["config", "set", "providers", output], { connect })).rejects.toThrow("Redacted config");
+		expect(connect).not.toHaveBeenCalled();
+	});
+
+	it("inspects the daemon's resolved paths and catalog without exposing runtime ownership data", async () => {
+		const models = [{ model: "example/model", capabilities: ["image_in"], support_efforts: ["high"] }];
+		const listModels = vi.fn(async () => models);
+		const connection = {
+			...fakeConnection({ global: { kosong: { listModels } } }),
+			env: { homeDir: "/custom/runtime", configPath: "/custom/runtime/config.toml", sessionsDir: "/custom/session-store", logsDir: "/custom/logs" } as never,
+			state: { pid: 42, version: "test", ownerNonce: "private-owner" } as never,
+		};
+		const write = vi.fn();
+		const connect = vi.fn();
+		const common = { connect, connectReadOnly: async () => connection, write };
+		await dispatchCliCommand(["inspect"], common);
+		expect(JSON.parse(write.mock.calls[0]![0])).toMatchObject({ homeDir: "/custom/runtime", sessionsDir: "/custom/session-store", runtimeLogPath: "/custom/runtime/server/runtime.log", pid: 42 });
+		expect(write.mock.calls[0]![0]).not.toContain("private-owner");
+		await dispatchCliCommand(["inspect", "models"], common);
+		expect(JSON.parse(write.mock.calls[1]![0])).toEqual(models);
+		expect(connect).not.toHaveBeenCalled();
+		expect(connection.close).toHaveBeenCalledTimes(2);
+	});
+
+	it("inspects only an explicit session index entry without loading prompts or restoring a session", async () => {
+		const get = vi.fn(async () => ({ id: "session-a", workspaceId: "workspace-a", archived: true, lastPrompt: "private prompt", custom: { secret: "private metadata" } }));
+		const list = vi.fn();
+		const session = vi.fn();
+		const connection = {
+			...fakeConnection({ global: { sessions: { get, list } }, session }),
+			env: { homeDir: "/custom/runtime", sessionsDir: "/custom/session-store" } as never,
+		};
+		const write = vi.fn();
+		await dispatchCliCommand(["inspect", "session", "session-a"], { connectReadOnly: async () => connection, write });
+		expect(get).toHaveBeenCalledExactlyOnceWith("session-a");
+		expect(list).not.toHaveBeenCalled();
+		expect(session).not.toHaveBeenCalled();
+		expect(JSON.parse(write.mock.calls[0]![0])).toMatchObject({ archived: true, transcriptPath: "/custom/session-store/workspace-a/session-a/agents/main/wire.jsonl" });
+		expect(write.mock.calls[0]![0]).not.toContain("private");
+	});
+
+	it("rejects incomplete or unsafe inspect requests before connecting and propagates closed IPC", async () => {
+		const connectReadOnly = vi.fn(async () => { throw new Error("ipc closed"); });
+		for (const args of [["inspect", "session"], ["inspect", "session", "../other"], ["inspect", "models", "extra"], ["config", "diagnostics", "extra"]])
+			await expect(dispatchCliCommand(args, { connectReadOnly })).rejects.toThrow("Usage:");
+		expect(connectReadOnly).not.toHaveBeenCalled();
+		await expect(dispatchCliCommand(["inspect"], { connectReadOnly })).rejects.toThrow("ipc closed");
+		expect(connectReadOnly).toHaveBeenCalledOnce();
 	});
 });
 

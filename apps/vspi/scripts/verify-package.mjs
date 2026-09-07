@@ -16,6 +16,7 @@ const prefix = join(temporaryRoot, 'prefix');
 const cache = join(temporaryRoot, 'npm-cache');
 const expectedFiles = [
   'package/LICENSE',
+  'package/THIRD_PARTY_NOTICES',
   'package/README.md',
   'package/dist/main.mjs',
   'package/dist/search-worker.mjs',
@@ -62,8 +63,8 @@ try {
     npm_config_prefix: prefix,
     npm_config_update_notifier: 'false',
   };
-  await exec('npm', ['install', '--global', '--no-audit', '--no-fund', tarball], { env: environment, timeout: 180_000 });
-  const executable = process.platform === 'win32' ? join(prefix, 'vspi.cmd') : join(prefix, 'bin', 'vspi');
+  await exec('npm', ['install', '--prefix', prefix, '--no-audit', '--no-fund', tarball], { env: environment, timeout: 180_000 });
+  const executable = join(prefix, 'node_modules', '.bin', process.platform === 'win32' ? 'vspi.cmd' : 'vspi');
   const { stdout } = await exec(executable, ['--version'], { env: environment, timeout: 30_000 });
   assert(stdout.trim() === sourceManifest.version, `installed vspi reported ${stdout.trim() || '<empty>'}`);
   const rootHelp = await exec(executable, ['--help'], { env: environment, timeout: 30_000 });

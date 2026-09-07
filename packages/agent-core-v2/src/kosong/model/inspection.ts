@@ -10,7 +10,6 @@ import {
 import type { InspectionSource, ResolutionTrace } from '#/kosong/contract/inspection';
 import type { Protocol, ProtocolProviderOptions } from '#/kosong/protocol/protocol';
 
-import type { AnthropicModelProfile } from '../provider/bases/anthropic/anthropic-profile';
 import type { ProviderConfig } from '../provider/provider';
 import { getProviderDefinition } from '../provider/providerDefinition';
 
@@ -24,6 +23,7 @@ export interface InspectedAuth {
 }
 
 export interface InspectedResolvedModel {
+  readonly effortMapping?: Readonly<Record<string, string | null>>;
   readonly protocol: Protocol;
   readonly providerType?: string;
   readonly providerName: string;
@@ -127,15 +127,11 @@ export function attributeEffectiveFields(
   trace: ResolutionTraceCollector,
   configured: ModelRecord,
   effective: ModelRecord,
-  profile: AnthropicModelProfile | undefined,
-  profileInferred: boolean,
+  builtinSource?: string,
 ): void {
   const { overrides, ...base } = configured;
   const overridden = new Set(Object.keys(overrides ?? {}));
-  const profileDetail =
-    profile === undefined
-      ? undefined
-      : `anthropic profile (${profile.mode}, efforts: ${profile.efforts.join('/')}${profileInferred ? ', inferred fallback' : ''})`;
+  const profileDetail = builtinSource;
   const keys = new Set([...Object.keys(base), ...Object.keys(effective)]);
   for (const key of keys) {
     if (key === 'overrides') continue;
@@ -219,6 +215,7 @@ export function attributeProviderOptions(
 }
 
 interface ResolvedModelLike {
+  readonly effortMapping?: Readonly<Record<string, string | null>>;
   readonly protocol: Protocol;
   readonly providerType?: string;
   readonly providerName: string;
@@ -268,7 +265,7 @@ export function assembleModelInspection(args: {
       'model.effective',
       {
         kind: 'synthesized',
-        detail: 'overrides merged into the raw record, then the Anthropic profile pass fills gaps',
+        detail: 'user overrides > configured model > pinned pi-ai catalog',
       } satisfies InspectionSource,
     ],
     [
@@ -398,6 +395,7 @@ export function assembleModelInspection(args: {
       maxOutputSize: model.maxOutputSize,
       displayName: model.displayName,
       reasoningKey: model.reasoningKey,
+      effortMapping: model.effortMapping,
       supportEfforts: model.supportEfforts,
       defaultEffort: model.defaultEffort,
       alwaysThinking: model.alwaysThinking,
@@ -430,7 +428,7 @@ function attributeCapabilities(
     if (added.has(key) || (key === 'thinking' && added.has('always_thinking'))) {
       sources.set(
         path,
-        profileSource ?? { kind: 'builtin', detail: 'added by the Anthropic profile pass' },
+        profileSource ?? { kind: 'builtin', detail: 'filled from the pinned pi-ai catalog' },
       );
       continue;
     }

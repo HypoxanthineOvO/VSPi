@@ -135,6 +135,29 @@ describe('host filesystem change notifications', () => {
     return events;
   }
 
+  it('waits for ignore rules before scanning and prunes ignored directories', async () => {
+    root = await mkdtemp(join(tmpdir(), 'watch-ignore-ready-'));
+    await mkdir(join(root, 'build', 'nested'), { recursive: true });
+    await writeFile(join(root, 'build', 'nested', 'artifact'), 'output');
+    let release!: () => void;
+    const ignoredReady = new Promise<void>((resolve) => { release = resolve; });
+    const visited: string[] = [];
+    const service = new HostFsWatchService();
+    handle = service.watch(root, {
+      ignoredReady,
+      ignored: (path, kind) => {
+        visited.push(path);
+        return path === join(root, 'build') && kind === 'directory';
+      },
+    });
+    await wait(30);
+    expect(visited).toEqual([]);
+    release();
+    await handle.ready;
+    expect(visited).toContain(join(root, 'build'));
+    expect(visited).not.toContain(join(root, 'build', 'nested', 'artifact'));
+  });
+
   async function startSignal(ignored?: (path: string) => boolean): Promise<HostFsChange[]> {
     const events: HostFsChange[] = [];
     const svc = new HostFsWatchService();

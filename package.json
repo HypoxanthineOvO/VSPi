@@ -5,6 +5,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
+    "check:vspi": "node scripts/check-vspi.mjs",
     "postinstall": "node scripts/fix-node-pty-perms.mjs",
     "build": "pnpm -r run build",
     "build:packages": "pnpm -r --filter './packages/*' run build",

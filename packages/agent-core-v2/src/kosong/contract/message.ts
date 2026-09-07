@@ -5,12 +5,15 @@ export type Role = 'system' | 'user' | 'assistant' | 'tool';
 export interface TextPart {
   type: 'text';
   text: string;
+  textSignature?: string;
+  _streamIndex?: number | string;
 }
 
 export interface ThinkPart {
   type: 'think';
   think: string;
   encrypted?: string;
+  _streamIndex?: number | string;
 }
 
 export interface ImageURLPart {
@@ -83,11 +86,15 @@ export function isToolCallPart(part: StreamedMessagePart): part is ToolCallPart 
 
 export function mergeInPlace(target: StreamedMessagePart, source: StreamedMessagePart): boolean {
   if (target.type === 'text' && source.type === 'text') {
+    if (target._streamIndex !== source._streamIndex) return false;
+    if (target.textSignature !== undefined) return false;
     target.text += source.text;
+    if (source.textSignature !== undefined) target.textSignature = source.textSignature;
     return true;
   }
 
   if (target.type === 'think' && source.type === 'think') {
+    if (target._streamIndex !== source._streamIndex) return false;
     if (target.encrypted !== undefined) {
       return false;
     }

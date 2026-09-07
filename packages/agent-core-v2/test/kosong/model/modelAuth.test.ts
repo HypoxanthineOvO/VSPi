@@ -117,11 +117,11 @@ describe('effectiveModelConfig', () => {
     expect(effective.defaultEffort).toBeUndefined();
   });
 
-  it('infers the Anthropic profile for non-trait-driven vendors only', () => {
+  it('uses the pinned catalog for known Anthropic models', () => {
     const record: ModelRecord = { model: 'claude-sonnet-4-5', protocol: 'anthropic' };
     const inferred = effectiveModelConfig(record, 'anthropic');
-    expect(inferred.supportEfforts).toEqual(['low', 'medium', 'high']);
-    expect(inferred.defaultEffort).toBe('high');
+    expect(inferred.supportEfforts).toEqual(['minimal', 'low', 'medium', 'high']);
+    expect(inferred.defaultEffort).toBe('medium');
     expect(inferred.capabilities).toContain('thinking');
 
     const kimiRouted = effectiveModelConfig({ model: 'kimi-k2', protocol: 'anthropic' }, 'kimi');

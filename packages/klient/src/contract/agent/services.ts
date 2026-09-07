@@ -173,6 +173,7 @@ export const agentCronTaskSchema = z.object({
   prompt: z.string(),
   createdAt: z.number(),
   recurring: z.boolean().optional(),
+  wakesGoal: z.boolean().optional(),
   lastFiredAt: z.number().optional(),
   tags: z.record(z.string(), z.string()).optional(),
 });

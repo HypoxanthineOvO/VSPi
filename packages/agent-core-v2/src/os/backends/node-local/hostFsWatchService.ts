@@ -100,7 +100,7 @@ class HostFsWatchHandle implements IHostFsWatchHandle {
       persistent: false,
       followSymlinks: false,
       depth: options?.recursive === false ? 0 : undefined,
-      ignored: options?.ignored ?? DEFAULT_IGNORED,
+      ignored: (path, stats) => (options?.ignored ?? DEFAULT_IGNORED)(path, stats?.isDirectory() ? 'directory' : stats?.isFile() ? 'file' : undefined),
     });
     this.watcher.on('all', (eventName: string, absPath: string) => {
       const mapped = mapChokidarEvent(eventName, absPath);
@@ -111,7 +111,13 @@ class HostFsWatchHandle implements IHostFsWatchHandle {
       onUnexpectedError(error);
     });
     this.watcher.once('ready', () => this.readiness.resolve());
-    this.watcher.add(path);
+    const begin = () => { if (!this.disposed) this.watcher.add(path); };
+    if (options?.ignoredReady) {
+      void options.ignoredReady.then(begin, (error: unknown) => {
+        this.readiness.reject(error);
+        onUnexpectedError(error);
+      });
+    } else begin();
   }
 
   dispose(): void {

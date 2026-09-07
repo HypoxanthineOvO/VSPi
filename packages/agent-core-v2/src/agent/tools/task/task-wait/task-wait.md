@@ -1,10 +1,10 @@
 Wait for background tasks to finish without ending the current turn.
 
-Background task completions arrive automatically in a later turn. Default to ending the current turn and letting that notification resume the work. Use WaitFor only when preserving an uninterruptible atomic operation requires the result and that operation must continue in this same turn. The call suspends inside the current turn until a task finishes or the timeout elapses; while waiting, no LLM requests are made.
+This tool is off by default and is reserved for one narrow case: an uninterruptible atomic operation that must complete in this same turn. Waiting for a task result is not that case. Every background task notifies you on completion, so end the current turn and let that notification resume the work. Never call WaitFor to hold a turn open while work runs, to keep a goal alive, or because the next step depends on a result.
 
 Guidelines:
 
-- "My next step depends on the result", "I have no other work", and "I want to continue in the same turn" do not qualify. End the turn and wait for the automatic notification unless the strict atomic-operation exception above applies.
+- "My next step depends on the result", "I have no other work", and "I want to continue in the same turn" do not qualify. End the turn and wait for the automatic notification.
 - Do not call WaitFor right after dispatching background work. If the result had to be obtained synchronously from the outset, run that work in the foreground instead.
 - `timeout` is required, in seconds, capped at 600.
 - A timeout is not an error: the result lists the tasks that are still running. Do not call WaitFor again unless the same strict atomic-operation exception still applies after you re-evaluate the situation; otherwise end the turn for automatic notification.

@@ -170,8 +170,7 @@ const TASK_RESUME_TERMINATION_VARIANT = 'task_resume_termination';
 const ACTIVE_BACKGROUND_TASK_GUIDANCE = [
   'The conversation was compacted, so the earlier messages that started these background tasks are gone — but the tasks are still running from before.',
   'Do not start duplicates. The list below preserves their task IDs; use TaskList to refresh it, TaskOutput for a non-blocking status/output snapshot, and TaskStop to cancel one.',
-  'Completion arrives via automatic notification, so default to ending this turn and let that notification resume the work.',
-  'Do not use WaitFor merely because the next step depends on a result, no other work remains, or you want to continue in this turn. Use it only when preserving an uninterruptible atomic operation requires the result and that operation must continue in this same turn.',
+  'Completion arrives via automatic notification. When a background task is the only remaining work, end this turn — stopping is correct, and the notification resumes the work in a later turn. Do not poll in a loop and do not hold the turn open waiting.',
 ].join(' ');
 
 export function isAgentTaskTerminal(status: AgentTaskStatus): boolean {

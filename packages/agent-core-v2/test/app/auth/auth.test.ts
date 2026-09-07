@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import type { OAuthCredential, OAuthAuth } from '@earendil-works/pi-ai';
 import {
   clearManagedKimiCodeConfig,
   resolveKimiCodeOAuthKey,
@@ -35,6 +36,7 @@ import { IBootstrapService } from '#/app/bootstrap/bootstrap';
 import { IModelService, type ModelRecord } from '#/kosong/model/model';
 import { MODELS_SECTION } from '#/app/kosongConfig/configSection';
 import { IProviderService, type ProviderConfig, type ProvidersChangedEvent } from '#/kosong/provider/provider';
+import { IAtomicDocumentStore } from '#/persistence/interface/atomicDocumentStore';
 
 import '#/kosong/provider/providers/kimi/kimi.contrib';
 
@@ -43,6 +45,17 @@ import { registerTelemetryServices } from '../telemetry/stubs';
 import { stubAgentIdentity } from '../../app/agentIdentity/stubs';
 
 const OAUTH_PROVIDER = 'managed:kimi-code';
+const piMocks = vi.hoisted(() => ({ oauth: undefined as OAuthAuth | undefined }));
+vi.mock('@earendil-works/pi-ai/providers/all', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@earendil-works/pi-ai/providers/all')>();
+  return {
+    ...original,
+    builtinProviders: () => original.builtinProviders().map((provider) =>
+      provider.id === 'anthropic' && piMocks.oauth !== undefined
+        ? { ...provider, auth: { oauth: piMocks.oauth } } : provider,
+    ),
+  };
+});
 const NON_OAUTH_PROVIDER = 'openai-main';
 
 const deviceAuth = {
@@ -103,9 +116,11 @@ describe('OAuthService', () => {
   let configReplace: ReturnType<typeof vi.fn<(domain: string, value: unknown) => Promise<void>>>;
   let events: Event2[];
   let providerChangedEmitter: Emitter<ProvidersChangedEvent>;
+  let documents: Map<string, unknown>;
 
   beforeEach(() => {
     disposables = new DisposableStore();
+    documents = new Map();
     providerChangedEmitter = new Emitter<ProvidersChangedEvent>();
     providers = {
       [OAUTH_PROVIDER]: {
@@ -168,6 +183,11 @@ describe('OAuthService', () => {
     ix = createServices(disposables, {
       base: [registerBootstrapServices, registerTelemetryServices],
       additionalServices: (reg) => {
+        reg.definePartialInstance(IAtomicDocumentStore, {
+          get: async <T>(_scope: string, key: string) => documents.get(key) as T | undefined,
+          set: async (_scope, key, value) => { documents.set(key, structuredClone(value)); },
+          delete: async (_scope, key) => { documents.delete(key); },
+        });
         reg.definePartialInstance(IProviderService, {
           get: ((name: string) => providers[name]) as IProviderService['get'],
           list: (() => providers) as IProviderService['list'],
@@ -207,11 +227,199 @@ describe('OAuthService', () => {
     disposables.dispose();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    piMocks.oauth = undefined;
   });
 
   function createService(): IOAuthService {
     return ix.get(IOAuthService);
   }
+
+  function registerPi(login: OAuthAuth['login'], refreshToken?: OAuthAuth['refresh']): void {
+    piMocks.oauth = {
+          name: 'Example OAuth', login,
+          refresh: refreshToken ?? (async (credentials) => ({ ...credentials, access: 'refreshed-access', expires: Date.now() + 3600_000 })),
+          toAuth: async (credentials) => ({ apiKey: `runtime:${credentials.access}`, headers: { 'X-Example-Account': 'example-account' }, baseUrl: 'https://example.com/api' }),
+    };
+  }
+
+  const piCredentials: OAuthCredential = {
+    type: 'oauth', access: 'private-access', refresh: 'private-refresh', expires: 1,
+  };
+
+  it('lists the public pi OAuth providers alongside Kimi', () => {
+    expect(createService().listLoginProviders().map((entry) => entry.id))
+      .toEqual(expect.arrayContaining(['managed:kimi-code', 'anthropic', 'openai-codex', 'github-copilot']));
+  });
+
+  it('bridges browser and prompt login without exposing credentials in flow or config', async () => {
+    registerPi(async (callbacks) => {
+      callbacks.notify({ type: 'auth_url', url: 'https://example.com/authorize', instructions: 'Authorize the application.' });
+      expect(await callbacks.prompt({ type: 'manual_code', message: 'Paste the code.' })).toBe('example-code');
+      return piCredentials;
+    });
+    const service = createService();
+    const start = await service.startLogin('anthropic');
+    expect(start).toMatchObject({ status: 'pending', auth_url: 'https://example.com/authorize', user_code: '' });
+    const pending = service.getFlow('anthropic')!;
+    service.submitLogin('anthropic', pending.flow_id, pending.prompt!.id, 'example-code');
+    await vi.waitFor(() => expect(service.getFlow('anthropic')?.status).toBe('authenticated'));
+    expect(providers['anthropic']).toMatchObject({ type: 'anthropic', oauth: { key: 'pi-ai/anthropic/anthropic' } });
+    expect(providers['anthropic']?.apiKey).toBeUndefined();
+    expect(documents.get('pi-ai/anthropic/anthropic')).toEqual(piCredentials);
+    expect(JSON.stringify(service.getFlow('anthropic'))).not.toContain('private-');
+    expect(Object.keys(models).some((key) => key.startsWith('anthropic/'))).toBe(true);
+    expect(defaultModel).toMatch(/^anthropic\//);
+    expect(toolkit.login).not.toHaveBeenCalled();
+  });
+
+  it('supports prompts before a device authorization URL and rejects stale input', async () => {
+    registerPi(async (callbacks) => {
+      expect(await callbacks.prompt({ type: 'text', message: 'Domain' })).toBe('');
+      callbacks.notify({ type: 'auth_url', url: 'https://example.com/device', instructions: 'Enter code EXAMPLE.' });
+      await callbacks.prompt({ type: 'manual_code', message: 'Complete login.' });
+      return piCredentials;
+    });
+    const service = createService();
+    await service.startLogin('anthropic');
+    const first = service.getFlow('anthropic')!;
+    expect(first.prompt?.allow_empty).toBe(true);
+    expect(() => service.submitLogin('anthropic', 'stale', first.prompt!.id, '')).toThrow();
+    service.submitLogin('anthropic', first.flow_id, first.prompt!.id, '');
+    await flush();
+    expect(service.getFlow('anthropic')?.auth_url).toBe('https://example.com/device');
+    expect(() => service.submitLogin('anthropic', first.flow_id, first.prompt!.id, '')).toThrow();
+    await service.cancelLogin('anthropic');
+    expect(service.getFlow('anthropic')?.status).toBe('cancelled');
+    expect(documents.size).toBe(0);
+  });
+
+  it('ignores late successful login after cancellation', async () => {
+    let resolveGrant!: (credentials: OAuthCredential) => void;
+    const grant = new Promise<OAuthCredential>((resolve) => { resolveGrant = resolve; });
+    registerPi(async (callbacks) => {
+      callbacks.notify({ type: 'auth_url', url: 'https://example.com/authorize' });
+      return grant;
+    });
+    const service = createService();
+    await service.startLogin('anthropic');
+    await service.cancelLogin('anthropic');
+    resolveGrant(piCredentials);
+    await flush();
+    expect(service.getFlow('anthropic')?.status).toBe('cancelled');
+    expect(documents.size).toBe(0);
+    expect(providers['anthropic']).toBeUndefined();
+  });
+
+  it('refreshes expired pi OAuth credentials once for concurrent model requests', async () => {
+    const refresh = vi.fn(async (credentials: OAuthCredential) => ({ ...credentials, access: 'new-access', refresh: 'new-refresh', expires: Date.now() + 3600_000 }));
+    registerPi(async () => piCredentials, refresh);
+    providers['anthropic'] = { type: 'anthropic', oauth: { storage: 'file', key: 'pi-ai/anthropic/anthropic' } };
+    documents.set('pi-ai/anthropic/anthropic', piCredentials);
+    const tokenProvider = createService().resolveTokenProvider('anthropic')!;
+    expect(await Promise.all([tokenProvider.getAccessToken(), tokenProvider.getAccessToken()]))
+      .toEqual(['runtime:new-access', 'runtime:new-access']);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(documents.get('pi-ai/anthropic/anthropic')).toMatchObject({ refresh: 'new-refresh' });
+    await tokenProvider.getAccessToken({ force: true });
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves request headers, removals and account endpoints without persisting them as API keys', async () => {
+    registerPi(async () => piCredentials);
+    piMocks.oauth!.toAuth = async (credential) => ({
+      apiKey: credential.access,
+      headers: { Authorization: `Bearer ${credential.access}`, 'X-API-Key': null },
+      baseUrl: 'https://example.com/account-api',
+    });
+    providers['anthropic'] = { type: 'anthropic', oauth: { storage: 'file', key: 'pi-ai/anthropic/anthropic' } };
+    documents.set('pi-ai/anthropic/anthropic', { ...piCredentials, expires: Date.now() + 3600_000 });
+    const auth = await createService().resolveRequestAuth('anthropic');
+    expect(auth).toEqual({
+      apiKey: 'private-access', headers: { Authorization: 'Bearer private-access' },
+      removeHeaders: ['X-API-Key'], baseUrl: 'https://example.com/account-api',
+    });
+    expect(providers['anthropic']?.apiKey).toBeUndefined();
+  });
+
+  it('withdraws only the cancelled native prompt while keeping the browser flow active', async () => {
+    const controller = new AbortController();
+    let resolveGrant!: (credentials: OAuthCredential) => void;
+    const grant = new Promise<OAuthCredential>((resolve) => { resolveGrant = resolve; });
+    registerPi(async (interaction) => {
+      interaction.notify({ type: 'auth_url', url: 'https://example.com/authorize' });
+      void interaction.prompt({ type: 'manual_code', message: 'Code', signal: controller.signal }).catch(() => {});
+      return grant;
+    });
+    const service = createService();
+    await service.startLogin('anthropic');
+    expect(service.getFlow('anthropic')?.prompt).toBeDefined();
+    controller.abort();
+    expect(service.getFlow('anthropic')).toMatchObject({ status: 'pending', prompt: undefined });
+    resolveGrant(piCredentials);
+    await vi.waitFor(() => expect(service.getFlow('anthropic')?.status).toBe('authenticated'));
+  });
+
+  it('cancels pi OAuth flows when provider configuration changes', async () => {
+    registerPi(async (interaction) => {
+      await interaction.prompt({ type: 'manual_code', message: 'Code' });
+      return piCredentials;
+    });
+    const service = createService();
+    await service.startLogin('anthropic');
+    providerChangedEmitter.fire({ changed: ['anthropic'], added: [], removed: [] });
+    expect(service.getFlow('anthropic')?.status).toBe('cancelled');
+    expect(documents.size).toBe(0);
+  });
+
+  it('invalidates an in-flight refresh when the provider switches to API key auth', async () => {
+    let resolveRefresh!: (credentials: OAuthCredential) => void;
+    const refreshed = new Promise<OAuthCredential>((resolve) => { resolveRefresh = resolve; });
+    const refresh = vi.fn(() => refreshed);
+    registerPi(async () => piCredentials, refresh);
+    const ref = { storage: 'file' as const, key: 'pi-ai/anthropic/anthropic' };
+    providers['anthropic'] = { type: 'anthropic', oauth: ref };
+    documents.set(ref.key, piCredentials);
+    const request = createService().resolveRequestAuth('anthropic', ref);
+    const rejected = expect(request).rejects.toThrow('invalidated');
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    providers['anthropic'] = { type: 'anthropic', apiKey: 'YOUR_API_KEY' };
+    providerChangedEmitter.fire({ changed: ['anthropic'], added: [], removed: [] });
+    resolveRefresh({ ...piCredentials, access: 'late-access' });
+    await rejected;
+    expect(documents.get(ref.key)).toEqual(piCredentials);
+  });
+
+  it('does not resurrect credentials when logout races a refresh', async () => {
+    let resolveRefresh!: (credentials: OAuthCredential) => void;
+    const refreshed = new Promise<OAuthCredential>((resolve) => { resolveRefresh = resolve; });
+    const refresh = vi.fn(() => refreshed);
+    registerPi(async () => piCredentials, refresh);
+    providers['anthropic'] = { type: 'anthropic', oauth: { storage: 'file', key: 'pi-ai/anthropic/anthropic' } };
+    documents.set('pi-ai/anthropic/anthropic', piCredentials);
+    const service = createService();
+    const token = service.resolveTokenProvider('anthropic')!.getAccessToken();
+    const rejected = expect(token).rejects.toThrow('invalidated');
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    const logout = service.logout('anthropic');
+    resolveRefresh({ ...piCredentials, access: 'late-access' });
+    await rejected;
+    await logout;
+    expect(documents.size).toBe(0);
+    expect(await service.status('anthropic')).toEqual({ loggedIn: false });
+  });
+
+  it('sanitizes pi login failures before returning a flow or RPC error', async () => {
+    registerPi(async (callbacks) => {
+      callbacks.notify({ type: 'auth_url', url: 'https://example.com/authorize' });
+      throw new Error('Authorization failed: private-access private-refresh');
+    });
+    const service = createService();
+    await service.startLogin('anthropic');
+    await flush();
+    expect(service.getFlow('anthropic')).toMatchObject({ status: 'denied' });
+    expect(JSON.stringify(service.getFlow('anthropic'))).not.toContain('private-');
+  });
 
   function configBacking(): Record<string, unknown> {
     return { providers, models, services, defaultModel, thinking };

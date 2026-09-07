@@ -35,6 +35,7 @@ export class StaticAuthProvider implements AuthProvider {
 }
 
 export interface Model {
+  readonly effortMapping?: Readonly<Record<string, string | null>>;
   readonly id: string;
   readonly name: string;
   readonly aliases: readonly string[];
@@ -78,6 +79,9 @@ const thinkingCapabilityWireSchema = z.object({
 });
 
 export const modelCatalogItemSchema = z.object({
+  pricing_source: z.enum(['official', 'provider']).optional(),
+  curated: z.boolean().optional(),
+  released_at: z.string().optional(),
   provider: z.string().min(1),
   model: z.string().min(1),
   display_name: z.string().min(1).optional(),
@@ -139,14 +143,17 @@ export function toProtocolModel(
   const efforts = thinkingEffortsForProvider(thinking, providerType ?? model.providerType);
   return {
     provider: model.providerName,
+    curated: effective.curated,
+    pricing_source: record.pricing === undefined ? effective.pricingSource : record.pricingSource ?? 'provider',
+    released_at: effective.releasedAt,
     model: model.id,
     display_name: model.displayName ?? model.name ?? model.id,
     max_context_size: model.maxContextSize,
-    capabilities: effective.capabilities,
+    capabilities: Object.entries(model.capabilities).flatMap(([key, value]) => value === true ? [key] : []),
     thinking: toProtocolThinking(thinking),
     support_efforts: efforts.length === 0 ? undefined : [...efforts],
     default_effort: thinking.defaultEffort,
-    pricing: toProtocolPricing(record),
+    pricing: toProtocolPricing(effective),
   };
 }
 
@@ -160,6 +167,9 @@ export function toProtocolModelFallback(
   const efforts = thinkingEffortsForProvider(thinking, providerType);
   return {
     provider: effective.provider ?? '',
+    pricing_source: record.pricing === undefined ? effective.pricingSource : record.pricingSource ?? 'provider',
+    curated: effective.curated,
+    released_at: effective.releasedAt,
     model: modelId,
     display_name: effective.displayName ?? effective.model ?? modelId,
     max_context_size: effective.maxContextSize ?? 0,
@@ -255,6 +265,8 @@ export interface IModelCatalog {
   findByName(name: string): readonly string[];
 
   listModels(): Promise<readonly ModelCatalogItem[]>;
+  listBuiltinProviders(): Promise<readonly ProviderCatalogItem[]>;
+  configureBuiltinProvider(providerId: string, apiKey: string): Promise<void>;
   listProviders(): Promise<readonly ProviderCatalogItem[]>;
   getProvider(providerId: string): Promise<ProviderCatalogItem>;
   setDefaultModel(modelId: string): Promise<SetDefaultModelResponse>;

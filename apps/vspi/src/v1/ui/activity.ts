@@ -69,8 +69,7 @@ export function renderQueuedMessage(
 		.filter(Boolean)
 		.join(" · ");
 	const label = message.delivery === "followUp" ? "Follow-up" : "Steer";
-	const animated =
-		!presentation.reducedMotion && presentation.phase !== "stable";
+	const animated = !presentation.reducedMotion;
 	const marker = animated && presentation.frame % 2 === 0 ? "▐" : "▌";
 	const left = `${theme.focus(marker)} ${theme.bold(label)} · ${theme.muted(content)}`;
 	const arrow = "↪";

@@ -110,7 +110,7 @@ export interface AgentFacade {
   detachTask(input: { taskId: string }): Promise<void>;
   getTaskOutput(input: { taskId: string; tail?: number }): Promise<string>;
   getCronTasks(): Promise<readonly AgentCronTask[]>;
-  createCronTask(input: { cron: string; prompt: string; recurring?: boolean }): Promise<AgentCronTask>;
+  createCronTask(input: { cron: string; prompt: string; recurring?: boolean; wakesGoal?: boolean }): Promise<AgentCronTask>;
   deleteCronTask(id: string): Promise<boolean>;
   /**
    * Session-merged MCP server entries (workspace set + ephemeral session

@@ -116,7 +116,7 @@ export class AuthDialog implements ProviderAuthInteraction {
       return;
     }
     if (matchesKey(data, Key.enter)) {
-      if (this.input) this.resolvePending(this.input);
+      if (this.input || prompt.allowEmpty) this.resolvePending(this.input);
       return;
     }
     if (this.textInput.getValue() !== this.input) this.textInput.setValue(this.input);
@@ -144,11 +144,15 @@ export class AuthDialog implements ProviderAuthInteraction {
       if (body.length > 0) body.push("");
       body.push(theme.bold(prompt.message));
       if (prompt.type === "select") {
-        prompt.options.forEach((option, index) => {
+        const visibleCount = Math.max(3, (process.stdout.rows ?? 24) - body.length - 7);
+        const start = Math.max(0, Math.min(this.selected - Math.floor(visibleCount / 2), prompt.options.length - visibleCount));
+        prompt.options.slice(start, start + visibleCount).forEach((option, offset) => {
+          const index = start + offset;
           const row = `${index === this.selected ? theme.focus("› ") : "  "}${option.label}`;
           body.push(index === this.selected ? theme.selected(padLine(row, bodyWidth)) : row);
           if (index === this.selected && option.description) body.push(theme.muted(`    ${option.description}`));
         });
+        if (prompt.options.length > visibleCount) body.push(theme.muted(`${this.selected + 1} / ${prompt.options.length}`));
       } else {
         if (this.textInput.getValue() !== this.input) this.textInput.setValue(this.input);
         const inputValue = this.input;

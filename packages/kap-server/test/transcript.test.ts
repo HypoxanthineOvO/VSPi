@@ -130,6 +130,8 @@ describe('server-v2 /api/v1/sessions/{sid}/transcript', () => {
       await mkdtemp(join(tmpdir(), 'kimi-server-v2-transcript-')),
     );
     const modelCatalog: IModelCatalog = {
+      listBuiltinProviders: async () => [],
+      configureBuiltinProvider: async () => { throw new Error('unused'); },
       _serviceBrand: undefined,
       get: () => {
         throw new Error('modelCatalog.get not exercised in this test');

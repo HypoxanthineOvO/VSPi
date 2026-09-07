@@ -195,10 +195,12 @@ export interface ModelPrice {
 
 export interface ModelOption {
 	id: string;
+	alias?: string;
 	provider?: string;
 	brand: string;
 	label: string;
 	releasedAt?: string;
+	curated?: boolean;
 	vision: boolean;
 	efforts: EffortLevel[];
 	effortMutable?: boolean;

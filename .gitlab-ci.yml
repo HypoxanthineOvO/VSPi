@@ -15,11 +15,23 @@ gitlab-release-contract:
     - node --check scripts/gitlab-release-producer.test.mjs
     - node --test scripts/gitlab-release-producer.test.mjs
 
+vspi-quality:
+  stage: test
+  image: node:24.15.0
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+  script:
+    - corepack enable
+    - pnpm install --frozen-lockfile
+    - pnpm check:vspi
+
 mirror-vspi-release:
   stage: release
   image: node:24.15.0
   rules:
-    - if: '$CI_COMMIT_TAG == "v2.0.3"'
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
   variables:
     GITHUB_RELEASE_BASE_URL: https://github.com/HypoxanthineOvO/VSPi/releases/download
     GITHUB_REF_NAME: $CI_COMMIT_TAG

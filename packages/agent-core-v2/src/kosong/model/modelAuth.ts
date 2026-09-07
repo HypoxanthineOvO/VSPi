@@ -7,17 +7,12 @@ import { CONFIG_INVALID_ERROR_CODE } from '#/kosong/contract/errors';
 import type { InspectionSource, ResolutionTrace } from '#/kosong/contract/inspection';
 import { ProtocolSchema, type Protocol } from '#/kosong/protocol/protocol';
 
-import {
-  BUDGET_THINKING_EFFORTS,
-  matchKnownAnthropicModelProfile,
-  matchUnknownClaudeProfile,
-} from '../provider/bases/anthropic/anthropic-profile';
 import type { ProviderConfig } from '../provider/provider';
 import { explainProviderEndpoint, getProviderDefinition } from '../provider/providerDefinition';
+import { findPiModel, piModelRecord } from '../provider/pi/catalog';
 
 import type { ModelRecord } from './model';
 import type { ResolvedModelAuthMaterial } from './model.types';
-import { drivesThinkingThroughTraits } from './thinking';
 
 export function resolveModelAuthMaterial(
   args: {
@@ -49,7 +44,7 @@ export function resolveModelAuthMaterial(
     providerAuthType === undefined
       ? {}
       : explainProviderEndpoint(providerAuthType, args.provider?.env ?? {});
-  const providerApiKey = nonEmpty(args.provider?.apiKey) ?? nonEmpty(providerEndpoint.apiKey);
+  const providerApiKey = nonEmpty(args.provider?.apiKey) ?? (args.provider?.oauth === undefined ? nonEmpty(providerEndpoint.apiKey) : undefined);
   if (providerApiKey !== undefined && args.provider?.oauth !== undefined) {
     throw authConflictError('Provider', args.providerName);
   }
@@ -87,51 +82,54 @@ export function effectiveModelConfig(
   providerType?: string,
 ): ModelRecord {
   const { overrides, ...base } = model;
-  const effective: ModelRecord = overrides === undefined ? model : { ...base, ...overrides };
+  const piModel = findPiModel(providerType ?? base.providerId ?? base.provider, base.name ?? base.model ?? '', base.protocol);
+  const defaults = piModel === undefined ? undefined : {
+    ...piModelRecord(piModel, base.providerId ?? base.provider ?? piModel.provider),
+    baseUrl: base.baseUrl,
+    protocol: base.protocol,
+    provider: base.provider,
+  };
+  const effective: ModelRecord = { ...defaults, ...base, ...overrides };
+  if (defaults !== undefined || base.thinking !== undefined || overrides?.thinking !== undefined) {
+    effective.thinking = {
+      ...defaults?.thinking,
+      ...base.thinking,
+      ...overrides?.thinking,
+      efforts: overrides?.thinking?.efforts ?? overrides?.supportEfforts ?? base.thinking?.efforts ?? base.supportEfforts ?? defaults?.thinking.efforts,
+      defaultEffort: overrides?.thinking?.defaultEffort ?? overrides?.defaultEffort ?? base.thinking?.defaultEffort ?? base.defaultEffort ?? defaults?.thinking.defaultEffort,
+    };
+    const controls = overrides?.thinking?.controls ?? base.thinking?.controls;
+    if (controls !== undefined && !controls.includes('effort')) {
+      effective.thinking.efforts = undefined;
+      effective.thinking.providerEfforts = undefined;
+      effective.thinking.defaultEffort = undefined;
+      effective.supportEfforts = undefined;
+      effective.defaultEffort = undefined;
+    }
+    if ((overrides?.capabilities ?? base.capabilities)?.includes('always_thinking') && overrides?.thinking?.availability === undefined && base.thinking?.availability === undefined) {
+      effective.thinking.availability = 'always';
+      effective.thinking.canDisable = false;
+    }
+  }
+  if (effective.effortMapping && effective.thinking && effective.thinking.availability !== 'none') {
+    effective.thinking.efforts = effective.thinking.efforts?.filter((level) => effective.effortMapping?.[level] !== null);
+    if (effective.effortMapping['off'] === null) {
+      effective.thinking.canDisable = false;
+      effective.thinking.availability = 'always';
+    }
+  }
   const clamped =
     effective.maxInputSize !== undefined &&
     effective.maxContextSize !== undefined &&
     effective.maxInputSize > effective.maxContextSize
       ? { ...effective, maxInputSize: effective.maxContextSize }
       : effective;
-  return normalizeModelThinking(withAnthropicProfile(clamped, providerType), providerType);
-}
-
-function withAnthropicProfile(model: ModelRecord, providerType?: string): ModelRecord {
-  const wireName = model.name ?? model.model;
-  const protocol = model.protocol ?? providerType;
-  const profile =
-    wireName === undefined
-      ? undefined
-      : providerType !== undefined && !drivesThinkingThroughTraits(providerType) && protocol === 'anthropic'
-        ? (matchKnownAnthropicModelProfile(wireName) ?? matchUnknownClaudeProfile(wireName))
-        : matchKnownAnthropicModelProfile(wireName);
-  if (profile === undefined) return model;
-  const supportEfforts =
-    model.thinking?.efforts ??
-    model.supportEfforts ??
-    (model.adaptiveThinking === false ? [...BUDGET_THINKING_EFFORTS] : [...profile.efforts]);
-  return {
-    ...model,
-    thinking: {
-      ...model.thinking,
-      availability:
-        model.thinking?.availability ?? (profile.canDisableThinking ? 'dynamic' : 'always'),
-      canDisable: model.thinking?.canDisable ?? profile.canDisableThinking,
-      controls:
-        model.thinking?.controls ??
-        (model.adaptiveThinking === false ? ['toggle', 'budget'] : ['toggle', 'effort']),
-      efforts: supportEfforts,
-      defaultEffort:
-        model.thinking?.defaultEffort ??
-        model.defaultEffort ??
-        (supportEfforts.includes('high') ? 'high' : undefined),
-    },
-  };
+  return normalizeModelThinking(clamped, providerType);
 }
 
 function normalizeModelThinking(model: ModelRecord, providerType?: string): ModelRecord {
-  const declared = new Set((model.capabilities ?? []).map((value) => value.trim().toLowerCase()));
+  const normalizedCapabilities = (model.capabilities ?? []).map((value) => value.trim().toLowerCase()).map((value) => value === 'vision' ? 'image_in' : value);
+  const declared = new Set(normalizedCapabilities);
   const thinking = normalizeThinkingCapability(model.thinking, {
     thinking: declared.has('thinking'),
     alwaysThinking: declared.has('always_thinking'),
@@ -141,14 +139,14 @@ function normalizeModelThinking(model: ModelRecord, providerType?: string): Mode
     defaultEffort: model.defaultEffort,
   });
   const supportEfforts = thinkingEffortsForProvider(thinking, providerType);
-  const capabilities = [...(model.capabilities ?? [])];
+  const capabilities = normalizedCapabilities.filter((value) => !['thinking', 'always_thinking'].includes(value));
   if (thinking.availability !== 'none') {
     const capability = thinking.availability === 'always' ? 'always_thinking' : 'thinking';
-    if (!declared.has(capability)) capabilities.push(capability);
+    capabilities.push(capability);
   }
   return {
     ...model,
-    capabilities: capabilities.length === 0 ? undefined : capabilities,
+    capabilities: model.capabilities === undefined && capabilities.length === 0 ? undefined : capabilities,
     thinking,
     supportEfforts: supportEfforts.length === 0 ? undefined : [...supportEfforts],
     defaultEffort: thinking.defaultEffort,

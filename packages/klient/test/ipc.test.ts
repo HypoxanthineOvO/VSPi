@@ -8,16 +8,20 @@ import { describe, expect, it, vi } from 'vitest';
 import { defineKlientConformance } from './helpers/conformance.js';
 import { createKlient, serveKlientIpc, type KlientIpcHost } from '../src/transports/ipc/index.js';
 import { makeEngine, type TestEngine } from './helpers/engine.js';
+import { IpcChannel } from '../src/transports/ipc/channel.js';
 
 defineKlientConformance('ipc', async () => {
   const { homeDir, app } = await makeEngine();
   const socketPath = join(homeDir, 'klient.sock');
   const host = await serveKlientIpc({ scope: app, socketPath });
   const klient = createKlient({ socketPath });
+  const rawChannel = new IpcChannel({ socketPath });
   return {
     klient,
     app,
+    rawCall: (service, method, args) => rawChannel.call({}, service, method, args),
     cleanup: async () => {
+      await rawChannel.close();
       await klient.close();
       await host.close();
       app.dispose();
@@ -60,6 +64,33 @@ describe('ipc transport specifics', () => {
     // probe the closed channel with an uncached method instead.
     await expect(klient.global.workspaces.list()).rejects.toThrow('ipc closed');
     await teardown();
+  });
+
+  it('reports an idle transport disconnect without requiring another RPC', async () => {
+    const socketPath = await setup();
+    const klient = createKlient({ socketPath });
+    const onError = vi.fn();
+    klient.events.onError(onError);
+    klient.events.on('kosong.models.changed', () => {});
+    try {
+      await klient.global.env();
+      await host!.close();
+      host = undefined;
+      await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'ipc closed' })));
+    } finally { await klient.close(); await teardown(); }
+  });
+
+  it('does not report intentional client disposal as a disconnect', async () => {
+    const socketPath = await setup();
+    const klient = createKlient({ socketPath });
+    const onError = vi.fn();
+    klient.events.onError(onError);
+    klient.events.on('kosong.models.changed', () => {});
+    try {
+      await klient.global.env();
+      await klient.close();
+      expect(onError).not.toHaveBeenCalled();
+    } finally { await teardown(); }
   });
 
   it('drops clients whose hello token mismatches', async () => {

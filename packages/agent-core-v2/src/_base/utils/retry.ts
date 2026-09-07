@@ -7,22 +7,35 @@ const MAX_DELAY_MS = 32_000;
 const RETRY_FACTOR = 2;
 const JITTER_FACTOR = 0.25;
 
+export interface RetryBackoffOptions {
+  readonly initialDelayMs?: number;
+  readonly maxDelayMs?: number;
+}
+
 export interface RetryErrorFields {
   readonly errorName: string;
   readonly errorMessage: string;
   readonly statusCode?: number;
 }
 
-export function retryBackoffDelay(attemptIndex: number): number {
-  const base = Math.min(BASE_DELAY_MS * Math.pow(RETRY_FACTOR, attemptIndex), MAX_DELAY_MS);
+export function retryBackoffDelay(
+  attemptIndex: number,
+  options: RetryBackoffOptions = {},
+): number {
+  const initialDelayMs = options.initialDelayMs ?? BASE_DELAY_MS;
+  const maxDelayMs = options.maxDelayMs ?? MAX_DELAY_MS;
+  const base = Math.min(initialDelayMs * Math.pow(RETRY_FACTOR, attemptIndex), maxDelayMs);
   return base + Math.random() * JITTER_FACTOR * base;
 }
 
-export function retryBackoffDelays(maxAttempts: number): number[] {
+export function retryBackoffDelays(
+  maxAttempts: number,
+  options: RetryBackoffOptions = {},
+): number[] {
   const count = Math.max(maxAttempts - 1, 0);
   const delays: number[] = [];
   for (let i = 0; i < count; i += 1) {
-    delays.push(retryBackoffDelay(i));
+    delays.push(retryBackoffDelay(i, options));
   }
   return delays;
 }

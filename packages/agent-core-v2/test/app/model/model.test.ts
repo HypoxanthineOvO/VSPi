@@ -50,13 +50,13 @@ describe('effectiveModelConfig', () => {
         maxContextSize: 200000,
       }),
     ).toMatchObject({
-      capabilities: ['thinking'],
-      supportEfforts: ['low', 'medium', 'high', 'max'],
-      defaultEffort: 'high',
+      capabilities: expect.arrayContaining(['thinking', 'image_in']),
+      supportEfforts: ['minimal', 'low', 'medium', 'high', 'max'],
+      defaultEffort: 'medium',
     });
   });
 
-  it('infers Anthropic effort metadata for an unknown Claude-marked model on a non-Kimi Anthropic provider', () => {
+  it('does not invent efforts for an unknown Claude-marked model', () => {
     expect(
       effectiveModelConfig(
         {
@@ -68,13 +68,13 @@ describe('effectiveModelConfig', () => {
         'anthropic',
       ),
     ).toMatchObject({
-      capabilities: ['thinking'],
-      supportEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-      defaultEffort: 'high',
+      thinking: { availability: 'none' },
+      supportEfforts: undefined,
+      defaultEffort: undefined,
     });
   });
 
-  it('infers Anthropic effort metadata for a bare Claude family alias on a non-Kimi Anthropic provider', () => {
+  it('does not invent efforts for an unregistered family alias', () => {
     expect(
       effectiveModelConfig(
         {
@@ -86,9 +86,9 @@ describe('effectiveModelConfig', () => {
         'anthropic',
       ),
     ).toMatchObject({
-      capabilities: ['thinking'],
-      supportEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-      defaultEffort: 'high',
+      thinking: { availability: 'none' },
+      supportEfforts: undefined,
+      defaultEffort: undefined,
     });
   });
 
@@ -124,7 +124,8 @@ describe('effectiveModelConfig', () => {
 
     expect(effectiveModelConfig(model, 'kimi')).toMatchObject({
       ...model,
-      thinking: { availability: 'always', canDisable: false, controls: [] },
+      capabilities: ['always_thinking'],
+      thinking: { availability: 'always', canDisable: false },
     });
   });
 
@@ -142,7 +143,7 @@ describe('effectiveModelConfig', () => {
     });
   });
 
-  it('limits an adaptive_thinking=false model to budget efforts', () => {
+  it('requires a capability declaration for an unknown budget model', () => {
     expect(
       effectiveModelConfig(
         {
@@ -155,9 +156,9 @@ describe('effectiveModelConfig', () => {
         'anthropic',
       ),
     ).toMatchObject({
-      capabilities: ['thinking'],
-      supportEfforts: ['low', 'medium', 'high'],
-      defaultEffort: 'high',
+      thinking: { availability: 'none' },
+      supportEfforts: undefined,
+      defaultEffort: undefined,
     });
   });
 
@@ -184,7 +185,7 @@ describe('effectiveModelConfig', () => {
         defaultEffort: 'max',
       }),
     ).toMatchObject({
-      capabilities: ['always_thinking'],
+      capabilities: expect.arrayContaining(['always_thinking', 'image_in']),
       supportEfforts: ['high', 'max'],
       defaultEffort: 'max',
     });

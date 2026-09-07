@@ -29,6 +29,7 @@ export interface KlientConformanceTarget {
    * commands) through the production `IFeatureManager` path.
    */
   readonly app: TestEngine['app'];
+  rawCall(service: string, method: string, args: unknown[]): Promise<unknown>;
   cleanup(): Promise<void>;
 }
 
@@ -424,6 +425,73 @@ export function defineKlientConformance(
       }
     });
 
+    it('lists builtin providers without persisting configuration or exposing credentials', async () => {
+      const config = target.klient.global.config;
+      const beforeProviders = await config.inspect('providers');
+      const beforeModels = await config.inspect('models');
+      const providers = await target.klient.global.kosong.listBuiltinProviders();
+      expect(providers.map((provider) => provider.id)).toEqual(expect.arrayContaining([
+        'openai', 'anthropic', 'google', 'zai', 'kimi-coding', 'deepseek', 'minimax', 'xiaomi', 'qwen-token-plan-cn',
+      ]));
+      for (const provider of providers) {
+        expect(provider.has_api_key).toBe(false);
+        expect(provider.status).toBe('unconfigured');
+        expect(provider.models?.length).toBeGreaterThan(0);
+        expect(provider).not.toHaveProperty('apiKey');
+        expect(provider).not.toHaveProperty('oauth');
+      }
+      expect(await config.inspect('providers')).toEqual(beforeProviders);
+      expect(await config.inspect('models')).toEqual(beforeModels);
+    });
+
+    it('configures builtin providers persistently while retaining user model overrides and the default', async () => {
+      const config = target.klient.global.config;
+      const kosong = target.klient.global.kosong;
+      const beforeProviders = await config.inspect<Record<string, unknown>>('providers');
+      const beforeModels = await config.inspect<Record<string, unknown>>('models');
+      const beforeDefaultModel = await config.inspect<string>('defaultModel');
+      const alias = 'openai/gpt-5';
+      const override = {
+        provider: 'openai', model: 'gpt-5', maxContextSize: 32000, capabilities: [],
+        thinking: { availability: 'always', canDisable: false, controls: ['effort'], efforts: ['high'], defaultEffort: 'high' },
+      };
+      try {
+        await config.replaceSections({
+          sections: {
+            providers: { ...beforeProviders.userValue, openai: { type: 'openai', baseUrl: 'https://gateway.example.test/v1' } },
+            models: { ...beforeModels.userValue, [alias]: override },
+            defaultModel: alias,
+          },
+        });
+        await kosong.configureBuiltinProvider('openai', 'EXAMPLE_API_KEY');
+        await config.reload();
+        expect(await config.get('defaultModel')).toBe(alias);
+        expect((await config.get<Record<string, unknown>>('models'))[alias]).toMatchObject(override);
+        expect((await config.get<Record<string, unknown>>('providers'))['openai']).toMatchObject({
+          type: 'openai', apiKey: 'EXAMPLE_API_KEY', baseUrl: 'https://gateway.example.test/v1',
+        });
+        const models = await kosong.listModels();
+        expect(models.find((model) => model.model === alias)).toMatchObject({
+          max_context_size: 32000, support_efforts: ['high'], default_effort: 'high',
+        });
+        expect(models.find((model) => model.model === alias)?.capabilities).not.toContain('image_in');
+        expect(models.some((model) => model.model === 'openai/gpt-4o')).toBe(true);
+        expect(JSON.stringify(await kosong.listProviders())).not.toContain('EXAMPLE_API_KEY');
+        const beforeInvalid = await config.get('providers');
+        await expect(kosong.configureBuiltinProvider('unknown-example-provider', 'EXAMPLE_API_KEY')).rejects.toThrow();
+        await expect(kosong.configureBuiltinProvider('openai', '')).rejects.toThrow();
+        expect(await config.get('providers')).toEqual(beforeInvalid);
+      } finally {
+        await config.replaceSections({
+          sections: {
+            providers: beforeProviders.userValue,
+            models: beforeModels.userValue,
+            defaultModel: beforeDefaultModel.userValue,
+          },
+        });
+      }
+    });
+
     it('flags / plugins / auth read models respond', async () => {
       expect(Array.isArray(await target.klient.global.flags.list())).toBe(true);
       expect(Array.isArray(await target.klient.global.flags.enabledIds())).toBe(true);
@@ -431,6 +499,17 @@ export function defineKlientConformance(
       expect(Array.isArray(await target.klient.global.plugins.list())).toBe(true);
       const status = await target.klient.global.auth.status();
       expect(typeof status.loggedIn).toBe('boolean');
+      expect((await target.klient.global.auth.listLoginProviders()).map((provider) => provider.id))
+        .toEqual(expect.arrayContaining(['managed:kimi-code', 'anthropic', 'openai-codex', 'github-copilot']));
+      await expect(target.klient.global.auth.submitLogin('anthropic', 'stale-flow', 'stale-prompt', 'example-code'))
+        .rejects.toThrow();
+    });
+
+    it('rejects raw OAuth credential access outside the public auth contract', async () => {
+      for (const method of ['getCachedAccessToken', 'resolveRequestAuth', 'resolveTokenProvider', 'toolkit', 'pi']) {
+        await expect(target.rawCall('oauthService', method, ['anthropic']))
+          .rejects.toMatchObject({ code: 40001 });
+      }
     });
 
     it('global mcp round-trips user-level server CRUD', async () => {

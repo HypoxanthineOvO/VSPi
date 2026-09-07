@@ -58,6 +58,8 @@ export class VideoUploadUnsupportedError extends ChatProviderError {
   }
 }
 
+export class ImageFormatProviderError extends ChatProviderError {}
+
 export class APITimeoutError extends ChatProviderError {
   constructor(message: string) {
     super(message, PROVIDER_CONNECTION_ERROR_CODE);
@@ -213,16 +215,18 @@ const IMAGE_FORMAT_STATUS_MESSAGE_PATTERNS = [
 
 const MEDIA_TYPE_FIELD_PATTERN = /(?:media|mime)_?type/;
 
+export function isImageFormatMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return IMAGE_FORMAT_STATUS_MESSAGE_PATTERNS.some((pattern) => pattern.test(lower)) || (MEDIA_TYPE_FIELD_PATTERN.test(lower) && lower.includes('image'));
+}
+
 export function isImageFormatError(error: unknown): boolean {
+  if (error instanceof ImageFormatProviderError) return true;
   if (error instanceof APIStatusError) {
     if (error instanceof APIContextOverflowError) return false;
     if (error instanceof APIRequestTooLargeError) return false;
     if (error.statusCode !== 400) return false;
-    const lowerMessage = error.message.toLowerCase();
-    return (
-      IMAGE_FORMAT_STATUS_MESSAGE_PATTERNS.some((pattern) => pattern.test(lowerMessage)) ||
-      (MEDIA_TYPE_FIELD_PATTERN.test(lowerMessage) && lowerMessage.includes('image'))
-    );
+    return isImageFormatMessage(error.message);
   }
   if (error instanceof ChatProviderError) {
     const lowerMessage = error.message.toLowerCase();

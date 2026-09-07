@@ -78,6 +78,7 @@ describe('TowerSpawnTool', () => {
   let secondaryFlagOn: boolean;
   let secondaryModel: { readonly model: string; readonly defaultEffort?: string } | undefined;
   let thinkingEnabled: boolean | undefined;
+  let timeoutMs: number | undefined;
   let modelMeta: Record<string, Partial<Model>>;
   let createdSetMode: Mock<(mode: PermissionMode) => void>;
 
@@ -104,6 +105,7 @@ describe('TowerSpawnTool', () => {
     secondaryFlagOn = false;
     secondaryModel = undefined;
     thinkingEnabled = undefined;
+    timeoutMs = undefined;
     modelMeta = {};
     createdSetMode = vi.fn();
     createAgent = vi.fn(async () => stubAgentContext('agent-7', 1));
@@ -176,7 +178,7 @@ describe('TowerSpawnTool', () => {
     } as unknown as IAgentProfileService);
     ix.stub(IConfigService, {
       get: ((domain: string) =>
-        domain === SECONDARY_MODEL_SECTION
+        domain === 'subagent' ? { timeoutMs } : domain === SECONDARY_MODEL_SECTION
           ? secondaryModel
           : domain === 'thinking' && thinkingEnabled !== undefined
             ? { enabled: thinkingEnabled }
@@ -263,7 +265,8 @@ describe('TowerSpawnTool', () => {
     expect(state.roster.agents).toHaveLength(0);
   });
 
-  it('spawns a detached tower-worker, registers the roster entry, and releases the slot on settle', async () => {
+  it.each([undefined, 60_000, 0])('spawns with timeout %s, registers the roster and releases the slot', async (configuredTimeout) => {
+    timeoutMs = configuredTimeout;
     const result = await execute(WORKER_ARGS);
 
     expect(result.isError).toBeUndefined();
@@ -284,7 +287,7 @@ describe('TowerSpawnTool', () => {
     );
     expect(registerTask).toHaveBeenCalledWith(expect.any(SubagentTask), {
       detached: true,
-      timeoutMs: DEFAULT_SUBAGENT_TIMEOUT_MS,
+      timeoutMs: configuredTimeout ?? DEFAULT_SUBAGENT_TIMEOUT_MS,
       signal: undefined,
     });
 

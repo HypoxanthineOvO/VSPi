@@ -1048,10 +1048,13 @@ export interface AgentStateSnapshot {
     readonly content: (/* ContentPart — packages/agent-core-v2/src/kosong/contract/message.ts */ /* TextPart — packages/agent-core-v2/src/kosong/contract/message.ts */ {
       type: 'text';
       text: string;
+      textSignature?: string;
+      _streamIndex?: string | number;
     } | /* ThinkPart — packages/agent-core-v2/src/kosong/contract/message.ts */ {
       type: 'think';
       think: string;
       encrypted?: string;
+      _streamIndex?: string | number;
     } | /* ImageURLPart — packages/agent-core-v2/src/kosong/contract/message.ts */ {
       type: 'image_url';
       imageUrl: {
@@ -1258,10 +1261,13 @@ export interface AgentStateSnapshot {
   'media.resolved': Map<string, /* ContentPart — packages/agent-core-v2/src/kosong/contract/message.ts */ /* TextPart — packages/agent-core-v2/src/kosong/contract/message.ts */ {
     type: 'text';
     text: string;
+    textSignature?: string;
+    _streamIndex?: string | number;
   } | /* ThinkPart — packages/agent-core-v2/src/kosong/contract/message.ts */ {
     type: 'think';
     think: string;
     encrypted?: string;
+    _streamIndex?: string | number;
   } | /* ImageURLPart — packages/agent-core-v2/src/kosong/contract/message.ts */ {
     type: 'image_url';
     imageUrl: {

@@ -11,6 +11,8 @@ import {
 } from "@moonshot-ai/pi-tui";
 import type { ProviderAuthInteraction } from "../backend/types.js";
 import type { AppSettings } from "../domain/types.js";
+import { loginWithOAuth } from "../providers/oauth-login.js";
+import { catalogEffortCapability } from "../domain/effort.js";
 import { frame, padLine, wrapTextWithAnsi, alignRight } from "../ui/ansi.js";
 import { AuthDialog } from "../ui/auth-dialog.js";
 import {
@@ -113,15 +115,21 @@ class AuthSetupApp implements Component, Focusable {
 	}
 
 	async load(): Promise<void> {
-		const [providers, inspection] = await Promise.all([
+		const [providers, inspection, builtinProviders, loginProviders] = await Promise.all([
 			this.klient.global.kosong.listProviders(),
 			this.klient.global.config.inspect<Record<string, Record<string, unknown>>>(
 				"providers",
 			),
+			this.klient.global.kosong.listBuiltinProviders(),
+			this.klient.global.auth.listLoginProviders(),
 		]);
 		const configured = inspection.userValue ?? {};
-		this.entries = providers
-			.flatMap((provider) => entriesForProvider(provider, configured[provider.id], this.mode))
+		const loginOnlyProviders: ProviderCatalogItem[] = loginProviders.map((provider) => ({
+			id: provider.id, type: provider.id, has_api_key: false, status: "unconfigured", models: [],
+		}));
+		const allProviders = [...new Map([...loginOnlyProviders, ...builtinProviders, ...providers].map((provider) => [provider.id, provider])).values()];
+		this.entries = allProviders
+			.flatMap((provider) => entriesForProvider(provider, configured[provider.id], this.mode, loginProviders.some((login) => login.id === provider.type || login.id === provider.id)))
 			.concat(this.mode === "logout" ? [] : [customEntry()])
 			.toSorted(compareEntries);
 		this.selected = Math.min(this.selected, Math.max(0, this.entries.length - 1));
@@ -254,6 +262,7 @@ class AuthSetupApp implements Component, Focusable {
 			this.dialog = dialog;
 			await loginProvider(this.klient, entry.providerId, entry.type, dialog);
 			if (dialog.signal.aborted) return;
+			if (this.mode === "config") await configureDefaultModel(this.klient, entry.providerId, dialog);
 			this.dialog = undefined;
 			this.finish(
 				entry.type === "oauth"
@@ -269,6 +278,7 @@ class AuthSetupApp implements Component, Focusable {
 			}
 		} finally {
 			this.running = false;
+			if (this.dialog?.signal.aborted) this.dialog = undefined;
 			this.tui.requestRender();
 		}
 	}
@@ -353,11 +363,54 @@ class AuthSetupApp implements Component, Focusable {
 			await this.klient.global.config.replaceSections({
 				sections: { providers: providerValue, models: modelValue },
 			});
+			if (this.mode === "config") await configureDefaultModel(this.klient, id, dialog);
 			return { name, modelCount: models.length };
 		} finally {
 			this.dialog = undefined;
 		}
 	}
+}
+
+export async function configureDefaultModel(
+	klient: Klient,
+	providerId: string,
+	interaction: ProviderAuthInteraction,
+): Promise<void> {
+	const [catalog, providers] = await Promise.all([
+		klient.global.kosong.listModels(),
+		klient.global.kosong.listProviders(),
+	]);
+	const models = catalog.filter((model) => model.provider === providerId);
+	const provider = providers.find((candidate) => candidate.id === providerId);
+	if (models.length === 0) throw new Error("Provider 已登录，但没有可选择的模型，请检查配置");
+	const modelId = await interaction.prompt({
+		type: "select", message: "默认模型",
+		options: models.map((model) => ({ id: model.model, label: model.display_name ?? model.model })),
+		signal: interaction.signal,
+	});
+	const model = models.find((candidate) => candidate.model === modelId);
+	if (!model) throw new Error("模型选择无效");
+	const capability = catalogEffortCapability({
+		...model.thinking,
+		efforts: model.support_efforts ?? model.thinking.efforts,
+		default_effort: model.default_effort ?? model.thinking.default_effort,
+	}, { type: provider?.type, identity: providerId });
+	const efforts = capability.options;
+	const defaultEffort = capability.defaultEffort;
+	const effort = efforts.length > 1
+		? await interaction.prompt({
+			type: "select", message: "默认 Effort",
+			options: efforts.toSorted((left, right) => Number(right === defaultEffort) - Number(left === defaultEffort))
+				.map((id) => ({ id, label: id })),
+			signal: interaction.signal,
+		}) : efforts[0];
+	if (effort !== undefined && !efforts.includes(effort)) throw new Error("Effort 选择无效");
+	interaction.signal?.throwIfAborted();
+	await klient.global.kosong.setDefaultModel(modelId);
+	await klient.global.config.set({
+		domain: "thinking",
+		patch: { enabled: effort !== "off", effort: effort === "off" || effort === "on" ? undefined : effort },
+	});
 }
 
 async function loginProvider(
@@ -378,8 +431,11 @@ async function loginProvider(
 		>("providers");
 		const providers = { ...inspection.userValue };
 		const provider = providers[providerId];
-		if (provider === undefined) throw new Error(`Provider ${providerId} 不存在`);
-		providers[providerId] = { ...provider, apiKey };
+		if (provider === undefined) {
+			await klient.global.kosong.configureBuiltinProvider(providerId, apiKey);
+			return;
+		}
+		providers[providerId] = { ...provider, apiKey, oauth: undefined };
 		await klient.global.config.replace({ domain: "providers", value: providers });
 		interaction.notify({
 			type: "info",
@@ -387,23 +443,7 @@ async function loginProvider(
 		});
 		return;
 	}
-	const started = await klient.global.auth.startLogin(providerId);
-	if (started.status === "authenticated") return;
-	interaction.notify({
-		type: "device_code",
-		verificationUri: started.verification_uri_complete,
-		userCode: started.user_code,
-	});
-	while (!interaction.signal?.aborted) {
-		await delay(Math.max(500, started.interval * 1_000));
-		const flow = await klient.global.auth.flow(providerId);
-		if (flow?.status === "authenticated") return;
-		if (flow !== undefined && flow.status !== "pending") {
-			throw new Error(flow.error_message ?? `OAuth ${flow.status}`);
-		}
-	}
-	await klient.global.auth.cancelLogin(providerId);
-	throw new Error("Login cancelled");
+	await loginWithOAuth(klient.global.auth, providerId, interaction);
 }
 
 async function logoutProvider(
@@ -430,13 +470,14 @@ function entriesForProvider(
 	provider: ProviderCatalogItem,
 	config: Record<string, unknown> | undefined,
 	mode: AuthSetupMode,
+	canLogin = false,
 ): SetupEntry[] {
 	const configuredType = config?.oauth !== undefined ? "oauth" : "api_key";
 	const hasStoredCredential =
 		config?.apiKey !== undefined || config?.oauth !== undefined;
 	if (mode === "logout" && !hasStoredCredential) return [];
 	const entries: SetupEntry[] = [];
-	if (provider.id === "kimi" || config?.oauth !== undefined) {
+	if (canLogin || provider.id === "kimi" || config?.oauth !== undefined) {
 		entries.push({
 			providerId: provider.id,
 			providerName: provider.id,
@@ -485,11 +526,4 @@ function compareEntries(left: SetupEntry, right: SetupEntry): number {
 		left.providerName.localeCompare(right.providerName) ||
 		(left.type === "oauth" ? -1 : 1)
 	);
-}
-
-function delay(ms: number): Promise<void> {
-	return new Promise((resolve) => {
-		const timer = setTimeout(resolve, ms);
-		timer.unref?.();
-	});
 }

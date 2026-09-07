@@ -6,6 +6,7 @@ import { MutableDisposable, type IDisposable } from '#/_base/di/lifecycle';
 import { abortError } from '#/_base/utils/abort';
 import { isPlainRecord } from '#/_base/utils/canonical-args';
 import { AgentReminder } from '#/features/reminder/reminderAgentRuntime';
+import { AgentCron } from '#/features/cron/cronAgentRuntime';
 import { ContextAppendMessage } from '#/agent/contextMemory/contextEvents';
 import type { ContextMessage, PromptOrigin } from '#/agent/contextMemory/types';
 import { GoalInjection, GOAL_WAIT_FOR_GUIDANCE } from '#/features/goal/injection/goalInjection';
@@ -33,6 +34,7 @@ import { IAgentToolExecutorService } from '#/agent/toolExecutor/toolExecutor';
 import type { BeforeToolExecuteEvent } from '#/agent/toolExecutor/toolHooks';
 import { IAgentToolPolicyService } from '#/agent/toolPolicy/toolPolicy';
 import { IAgentToolRegistryService } from '#/agent/toolRegistry/toolRegistry';
+import { IAgentTaskService } from '#/agent/task/task';
 import { WAIT_FOR_FLAG_ID } from '#/agent/tools/task/task-wait/flag';
 import { type UsageRecordedContext } from '#/agent/usage/usage';
 import { IConfigService } from '#/app/config/config';
@@ -149,6 +151,9 @@ const GOAL_CONTINUATION_PROMPT = [
   'threshold is met and you cannot make meaningful progress without user input or an',
   'external-state change, call UpdateGoal with `blocked`; do not keep reporting the blocker while',
   'leaving the goal active. Do not ask the user for input unless a real blocker prevents progress.',
+  'If background tasks you started are still running, end the turn — the runtime parks the goal',
+  'and the task notification or a scheduled CronCreate patrol resumes it. Do not poll in a loop',
+  'and do not stall the goal waiting.',
 ].join(' ');
 
 const GOAL_STEP_CAP_CONTINUATION_PROMPT = [
@@ -688,7 +693,19 @@ async function handleTurnEnded(context: GoalOperationContext,
   const state = context.runtime.getState().goal;
   if (state === null || state.status !== 'active' || state.goalId !== lifecycleGoalId) return;
   if (blockIfBudgetReached(context, state) !== null) return;
+  if (!stepCapped && hasPendingWakeSource(context)) return;
   launchContinuationTurn(context, lifecycleGoalId, stepCapped);
+}
+
+function hasPendingWakeSource(context: GoalOperationContext): boolean {
+  if (context.runtime.get(IAgentTaskService).list(true).some((task) => task.detached !== false)) {
+    return true;
+  }
+  const cron = context.runtime.get(IAgentLifecycleService).resolve(context.runtime.agent, AgentCron);
+  if (cron.isDisabled()) return false;
+  return cron.list().some(
+    (task) => task.wakesGoal !== false && cron.getNextFireForTask(task.id) !== null,
+  );
 }
 
 function clearTurnTracking(
@@ -1169,7 +1186,6 @@ function createGoalEffectHandlers(runtime: AgentRuntimeContext<GoalRuntimeState>
     deadlineFired: () => { handleWallClockDeadline(context); },
     injection: {
       getGoal: () => getGoal(context).goal,
-      isWaitForEnabled: () => isWaitForAvailable(context),
     },
     normalize: () => { normalizeAfterReplay(context); },
     turnStarted: (event: TurnStarted) => { handleTurnLaunched(context, event.turnId, event.origin); },

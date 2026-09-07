@@ -1,4 +1,5 @@
-import { resolveRuntimePaths, type RuntimeConnection } from "@vsp/vsp-runtime";
+import { join } from "node:path";
+import { connectRuntime, resolveRuntimePaths, type RuntimeConnection } from "@vsp/vsp-runtime";
 import type { AppSettings } from "./v1/domain/types.js";
 import { loadSettings } from "./v1/config/settings.js";
 import { runAuthSetup, type AuthSetupOptions } from "./v1/app/auth-setup.js";
@@ -9,6 +10,7 @@ export interface CliCommandDependencies {
 	readonly update?: (currentVersion: string) => Promise<SelfUpdateResult>;
 	readonly write?: (message: string) => void;
 	readonly connect?: () => Promise<RuntimeConnection>;
+	readonly connectReadOnly?: () => Promise<RuntimeConnection>;
 	readonly authSetup?: (options: AuthSetupOptions) => Promise<void>;
 	readonly loadSettings?: () => Promise<AppSettings>;
 	readonly stdinIsTTY?: () => boolean;
@@ -25,7 +27,9 @@ Commands:
   vspi resume             恢复会话并打开会话面板
   vspi exec ...           非交互执行（vspi exec --help 查看用法）
   vspi update             更新到最新发布版本
+  vspi init [provider]    初始化 Provider 和默认模型
   vspi config [provider]  配置 Provider 或读写 Core 配置（--help 查看用法）
+  vspi inspect [paths|models|session <id>]  只读检查运行中的 daemon
   vspi login|logout [provider]  登录 / 移除 Provider 凭据
   vspi web                输出 Web runtime 地址
   vspi daemon <start|status|stop|logs>
@@ -52,12 +56,18 @@ Commands:
 export const VSPI_CONFIG_USAGE = `Usage: vspi config [provider]
        vspi config path
        vspi config get <section>
+       vspi config inspect <section>
+       vspi config patch <section> <json>
        vspi config set <section> <json>
+       vspi config diagnostics
        vspi config reload
 
 不带参数时打开交互式 Provider 配置。
 path 输出实际 config.toml 路径，不启动 runtime。
-get/set 使用 Core 配置 section 名（例如 defaultModel、secondaryModel）。
+get/inspect/patch/set 使用 Core 配置 section 名（例如 defaultModel、secondaryModel）。
+get/inspect 输出会隐藏凭据；不要把隐藏后的值交给 set。
+inspect 显示各配置层；diagnostics 只读检查，不重载配置。
+patch 通过 Core schema 校验并合并给定字段，保留其它字段。
 set 通过 Core schema 校验并原子写入配置；JSON 参数必须是完整 section 值。
 reload 重新读取磁盘配置并输出 diagnostics。
 `;
@@ -86,6 +96,10 @@ export async function dispatchCliCommand(
 		return true;
 	}
 	const command = args[0];
+	if (command === "inspect") {
+		await dispatchInspect(args.slice(1), dependencies, write);
+		return true;
+	}
 	if (command !== "config" && command !== "init" && command !== "login" && command !== "logout") {
 		if (
 			command === undefined ||
@@ -109,14 +123,13 @@ export async function dispatchCliCommand(
 	try {
 		const setup = dependencies.authSetup ?? runAuthSetup;
 		const settings = await (dependencies.loadSettings ?? (() => loadSettings(process.cwd())))();
-		if (command === "init") write("vspi init 已更名为 vspi config；本次继续执行配置。\n");
 		await setup({
 			mode: command === "logout" ? "logout" : command === "login" ? "login" : "config",
 			settings,
 			connection,
 			stdinIsTTY: dependencies.stdinIsTTY,
 			stdoutIsTTY: dependencies.stdoutIsTTY,
-			...(args[1] !== undefined ? { providerRef: args[1] } : {}),
+			providerRef: args[1],
 		});
 	} finally {
 		await connection.close();
@@ -142,19 +155,21 @@ async function dispatchNonInteractiveConfig(
 	}
 	if (subcommand?.startsWith("-"))
 		throw new Error(`Unknown option for vspi config: ${subcommand}\nRun vspi config --help for usage.`);
-	if (subcommand !== "get" && subcommand !== "set" && subcommand !== "reload")
+	if (!["get", "inspect", "patch", "set", "diagnostics", "reload"].includes(subcommand ?? ""))
 		return false;
-	if (subcommand === "get" && args.length !== 2)
-		throw new Error("Usage: vspi config get <section>");
-	if (subcommand === "set" && args.length !== 3)
-		throw new Error("Usage: vspi config set <section> <json>");
+	if ((subcommand === "get" || subcommand === "inspect") && args.length !== 2)
+		throw new Error(`Usage: vspi config ${subcommand} <section>`);
+	if ((subcommand === "patch" || subcommand === "set") && args.length !== 3)
+		throw new Error(`Usage: vspi config ${subcommand} <section> <json>`);
+	if (subcommand === "diagnostics" && args.length !== 1)
+		throw new Error("Usage: vspi config diagnostics");
 	if (subcommand === "reload" && args.length !== 1)
 		throw new Error("Usage: vspi config reload");
 	let section = "";
 	let setValue: unknown;
-	if (subcommand === "get" || subcommand === "set")
+	if (subcommand === "get" || subcommand === "inspect" || subcommand === "patch" || subcommand === "set")
 		section = args[1] ?? "";
-	if (subcommand === "set") {
+	if (subcommand === "patch" || subcommand === "set") {
 		const json = args[2];
 		if (json === undefined)
 			throw new Error("Usage: vspi config set <section> <json>");
@@ -166,15 +181,31 @@ async function dispatchNonInteractiveConfig(
 				{ cause: error },
 			);
 		}
+		if (JSON.stringify(setValue).includes(REDACTED))
+			throw new Error("Redacted config cannot be written back; patch only the fields you intend to change.");
 	}
-	const connect =
-		dependencies.connect ??
-		(() => Promise.reject(new Error("Runtime connection is not configured")));
+	const readOnly = subcommand === "get" || subcommand === "inspect" || subcommand === "diagnostics";
+	const connect = readOnly
+		? readOnlyConnector(dependencies)
+		: dependencies.connect ?? (() => Promise.reject(new Error("Runtime connection is not configured")));
 	const connection = await connect();
 	try {
 		if (subcommand === "get") {
 			const value = await connection.klient.global.config.get(section);
-			write(`${JSON.stringify(value, null, 2)}\n`);
+			writeJson(write, value);
+			return true;
+		}
+		if (subcommand === "inspect") {
+			writeJson(write, await connection.klient.global.config.inspect(section));
+			return true;
+		}
+		if (subcommand === "diagnostics") {
+			writeJson(write, await connection.klient.global.config.diagnostics());
+			return true;
+		}
+		if (subcommand === "patch") {
+			await connection.klient.global.config.set({ domain: section, patch: setValue });
+			write(`配置 section ${section} 已更新\n`);
 			return true;
 		}
 		if (subcommand === "set") {
@@ -187,9 +218,92 @@ async function dispatchNonInteractiveConfig(
 		}
 		await connection.klient.global.config.reload();
 		const diagnostics = await connection.klient.global.config.diagnostics();
-		write(`${JSON.stringify(diagnostics, null, 2)}\n`);
+		writeJson(write, diagnostics);
 		return true;
 	} finally {
 		await connection.close();
 	}
+}
+
+const INSPECT_USAGE = "Usage: vspi inspect [paths|models|session <id>]\n只读取运行中的 daemon；不启动、重启或恢复会话。\n";
+const REDACTED = "[REDACTED]";
+
+function readOnlyConnector(dependencies: CliCommandDependencies): () => Promise<RuntimeConnection> {
+	return dependencies.connectReadOnly ?? dependencies.connect ?? (() => connectRuntime());
+}
+
+async function dispatchInspect(
+	args: readonly string[],
+	dependencies: CliCommandDependencies,
+	write: (message: string) => void,
+): Promise<void> {
+	const command = args[0] ?? "paths";
+	if (["--help", "-h", "help"].includes(command) && args.length === 1) {
+		write(INSPECT_USAGE);
+		return;
+	}
+	if (!((command === "paths" || command === "models") && args.length <= 1) &&
+		!(command === "session" && args.length === 2 && /^[\w-]+$/u.test(args[1] ?? "")))
+		throw new Error(INSPECT_USAGE);
+	const connection = await readOnlyConnector(dependencies)();
+	try {
+		const { env, klient } = connection;
+		if (command === "models") {
+			writeJson(write, await klient.global.kosong.listModels());
+			return;
+		}
+		const paths = resolveRuntimePaths(env.homeDir);
+		if (command === "session") {
+			const session = await klient.global.sessions.get(args[1]!);
+			if (session === undefined) throw new Error(`Session not found: ${args[1]}`);
+			if (!/^[\w-]+$/u.test(session.workspaceId) || !/^[\w-]+$/u.test(session.id))
+				throw new Error("Invalid session storage identity");
+			const sessionDir = join(env.sessionsDir, session.workspaceId, session.id);
+			writeJson(write, {
+				id: session.id,
+				workspaceId: session.workspaceId,
+				cwd: session.cwd,
+				archived: session.archived,
+				lastTurnReason: session.lastTurnReason,
+				sessionDir,
+				transcriptPath: join(sessionDir, "agents", "main", "wire.jsonl"),
+			});
+			return;
+		}
+		writeJson(write, {
+			homeDir: env.homeDir,
+			configPath: env.configPath,
+			sessionsDir: env.sessionsDir,
+			logsDir: env.logsDir,
+			runtimeLogPath: paths.logPath,
+			profilesDir: join(env.homeDir, "agents"),
+			pid: connection.state.pid,
+			version: connection.state.version,
+		});
+	} finally {
+		await connection.close();
+	}
+}
+
+function writeJson(write: (message: string) => void, value: unknown): void {
+	write(`${JSON.stringify(redactConfig(value), null, 2)}\n`);
+}
+
+function redactConfig(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(redactConfig);
+	if (value !== null && typeof value === "object") {
+		return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+			key,
+			/(?:api.?key|access.?token|refresh.?token|id.?token|^token$|secret|password|credential|authorization|cookie|headers|^env$)/iu.test(key)
+				? REDACTED
+				: redactConfig(item),
+		]));
+	}
+	if (typeof value === "string") {
+		return value
+			.replaceAll(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/giu, `$1${REDACTED}@`)
+			.replaceAll(/([?&](?:api[_-]?key|token|key|secret|password|access_token)=)[^&\s]+/giu, `$1${REDACTED}`)
+			.replaceAll(/\b(Bearer|Basic)\s+[^\s"']+/giu, `$1 ${REDACTED}`);
+	}
+	return value;
 }

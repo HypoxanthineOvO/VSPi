@@ -18,6 +18,18 @@ export const oAuthFlowStatusSchema = z.enum([
   'cancelled',
 ]);
 
+const interactiveFlowFields = {
+  auth_url: z.string().optional(),
+  instructions: z.string().optional(),
+  prompt: z.object({
+    id: z.string(),
+    message: z.string(),
+    placeholder: z.string().optional(),
+    allow_empty: z.boolean().optional(),
+    options: z.array(z.object({ id: z.string(), label: z.string() })).optional(),
+  }).optional(),
+};
+
 export const oAuthFlowStartSchema = z.discriminatedUnion('status', [
   z.object({
     flow_id: z.string(),
@@ -29,6 +41,7 @@ export const oAuthFlowStartSchema = z.discriminatedUnion('status', [
     expires_in: z.number(),
     interval: z.number(),
     expires_at: z.string(),
+    ...interactiveFlowFields,
   }),
   z.object({
     flow_id: z.string(),
@@ -49,6 +62,7 @@ export const oAuthFlowSnapshotSchema = z.object({
   interval: z.number(),
   resolved_at: z.string().optional(),
   error_message: z.string().optional(),
+  ...interactiveFlowFields,
 });
 
 export const oAuthLoginCancelResponseSchema = z.object({
@@ -85,6 +99,14 @@ export const oAuthLoginOptionsSchema = z.object({
 });
 
 export const authContract = {
+  listLoginProviders: {
+    input: z.tuple([]),
+    output: z.array(z.object({ id: z.string(), name: z.string() })),
+  },
+  submitLogin: {
+    input: z.tuple([z.string(), z.string(), z.string(), z.string()]),
+    output: noResult,
+  },
   startLogin: {
     input: z.tuple([z.string().optional(), oAuthLoginOptionsSchema.optional()]),
     output: oAuthFlowStartSchema,

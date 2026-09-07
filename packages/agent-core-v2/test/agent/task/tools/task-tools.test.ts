@@ -1,6 +1,6 @@
 import { PassThrough, Readable, type Writable } from 'node:stream';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
   IAgentTaskService,
@@ -778,13 +778,13 @@ describe('WaitForTool', () => {
       },
     });
     expect(tool.description).toContain(
-      'Default to ending the current turn and letting that notification resume the work.',
+      'so end the current turn and let that notification resume the work.',
     );
     expect(tool.description).toContain(
       '"My next step depends on the result", "I have no other work", and "I want to continue in the same turn" do not qualify.',
     );
     expect(tool.description).toContain(
-      'Use WaitFor only when preserving an uninterruptible atomic operation requires the result and that operation must continue in this same turn.',
+      'reserved for one narrow case: an uninterruptible atomic operation that must complete in this same turn.',
     );
     expect(tool.description).toContain(
       'Do not call WaitFor again unless the same strict atomic-operation exception still applies',
@@ -1099,6 +1099,13 @@ describe('WaitForTool', () => {
 });
 
 describe('WaitForTool (harness)', () => {
+  beforeAll(() => {
+    process.env['KIMI_CODE_EXPERIMENTAL_WAIT_FOR'] = '1';
+  });
+  afterAll(() => {
+    delete process.env['KIMI_CODE_EXPERIMENTAL_WAIT_FOR'];
+  });
+
   function immediateProcess(exitCode: number, stdoutText = ''): IHostProcess {
     return {
       _serviceBrand: undefined,

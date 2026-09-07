@@ -117,9 +117,9 @@ export class AgentStepRetryService extends Disposable implements IAgentStepRetry
     }
     this.failedAttempts += 1;
 
+    const loopControl = this.config.get<LoopControl>(LOOP_CONTROL_SECTION);
     const maxAttempts = Math.max(
-      this.config.get<LoopControl>(LOOP_CONTROL_SECTION)?.maxAttemptsPerStep ??
-        DEFAULT_MAX_RETRY_ATTEMPTS,
+      loopControl?.maxAttemptsPerStep ?? DEFAULT_MAX_RETRY_ATTEMPTS,
       1,
     );
     if (this.failedAttempts >= maxAttempts) {
@@ -129,7 +129,12 @@ export class AgentStepRetryService extends Disposable implements IAgentStepRetry
 
     const error = unwrapErrorCause(context.error);
     const delayMs =
-      readRetryAfterMs(error) ?? retryBackoffDelays(maxAttempts)[this.failedAttempts - 1] ?? 0;
+      readRetryAfterMs(error) ??
+      retryBackoffDelays(maxAttempts, {
+        initialDelayMs: loopControl?.retryInitialDelayMs,
+        maxDelayMs: loopControl?.retryMaxDelayMs,
+      })[this.failedAttempts - 1] ??
+      0;
     void this.dispatcher.dispatch(
       new TurnStepRetrying({
         agentId: this.scopeContext.agentId,

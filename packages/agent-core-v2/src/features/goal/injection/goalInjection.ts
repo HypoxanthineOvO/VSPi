@@ -8,11 +8,16 @@ import GOAL_PAUSED_REMINDER from './goal-paused-reminder.md?raw';
 
 export interface GoalInjectionOptions {
   readonly getGoal: () => GoalSnapshot | null;
-  readonly isWaitForEnabled?: () => boolean;
 }
 
 export const GOAL_WAIT_FOR_GUIDANCE =
-  'An active Goal must not enter unexplained idle: it may explicitly wait for background agents, processes, questions, or scheduled work. When a background task will automatically notify you, end this turn and let that notification resume the work. Do not call WaitFor merely because the next step depends on a background result, to keep the Goal in this turn, or to avoid a continuation. Use WaitFor only when an uninterruptible atomic operation must keep this turn open for its result, then re-evaluate whether waiting is still necessary.';
+  'An active Goal parks between turns: when background work you started is still running, end this turn — the runtime holds the goal and the task notification or a scheduled CronCreate patrol resumes it. Never call WaitFor to wait for a background result, to keep the Goal in this turn, or to avoid a continuation. WaitFor is reserved for an uninterruptible atomic operation that must complete in this same turn.';
+
+const PENDING_WORK_GUIDANCE = [
+  'Pending-work guidance: when background tasks you started are still running, end the turn — the runtime parks the goal and the task notification resumes the work in a later turn.',
+  'When a wait has no automatic notification (external systems, long builds, subagent fleets), schedule a recurring CronCreate patrol to check on it, and delete the patrol once the goal completes or blocks.',
+  'Do not poll in a loop and do not hold the turn open waiting.',
+].join(' ');
 
 export class GoalInjection extends Service {
   constructor(
@@ -29,7 +34,7 @@ export class GoalInjection extends Service {
     const goal = this.options.getGoal();
     if (goal === null) return undefined;
     if (goal.status === 'active') {
-      return buildGoalReminder(goal, this.options.isWaitForEnabled?.() === true);
+      return buildGoalReminder(goal);
     }
     if (goal.status === 'blocked') return buildBlockedNote(goal);
     if (goal.status === 'paused') return buildPausedNote(goal);
@@ -58,7 +63,7 @@ function buildPausedNote(goal: GoalSnapshot): string {
   });
 }
 
-function buildGoalReminder(goal: GoalSnapshot, waitForEnabled: boolean): string {
+function buildGoalReminder(goal: GoalSnapshot): string {
   const budgets = formatBudgets(goal);
   return renderPrompt(GOAL_ACTIVE_REMINDER, {
     objective: escapeUntrustedText(goal.objective),
@@ -67,7 +72,7 @@ function buildGoalReminder(goal: GoalSnapshot, waitForEnabled: boolean): string 
     progress: `${goal.turnsUsed} continuation turns, ${goal.tokensUsed} tokens, ${formatElapsed(goal.wallClockMs)} elapsed`,
     budgets_block: budgets.length > 0 ? `Budgets: ${budgets}.\n` : '',
     budget_guidance: isNearingBudget(goal) ? BUDGET_GUIDANCE_NEARING : BUDGET_GUIDANCE_WITHIN,
-    wait_for_guidance: waitForEnabled ? ` ${GOAL_WAIT_FOR_GUIDANCE}` : '',
+    pending_work_guidance: ` ${PENDING_WORK_GUIDANCE}`,
   });
 }
 

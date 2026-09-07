@@ -20,6 +20,7 @@ import {
 } from "../src/v1/app/vspi-app.js";
 import { resolveCommand } from "../src/v1/domain/commands.js";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/v1/domain/defaults.js";
+import { editSubagentModels } from "../src/v1/domain/subagent-models.js";
 import type { TranscriptMessage } from "../src/v1/domain/types.js";
 import { AgentsDock } from "../src/v1/ui/agents-dock.js";
 import {
@@ -523,7 +524,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 
 		app.queueMessagePresentation(queued.id);
 		expect(app.messages.map((message) => message.id)).toEqual(["user-1"]);
-		expect(app.queuedPresentations.get(queued.id)?.phase).toBe("stable");
+		expect(app.queuedPresentations.get(queued.id)?.phase).toBe("entering");
 
 		app.updateQueuedMessageLifecycle(queued.id, "consuming");
 		expect(app.messages.map((message) => message.id)).toEqual([
@@ -959,6 +960,40 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			]);
 		},
 	);
+
+	it("keeps the star pool small and repairs its default when removing a model", () => {
+		const first = editSubagentModels({ models: {} }, { action: "toggle", model: "example/fast" });
+		expect(first).toEqual({ models: { "example/fast": "" }, defaultModel: "example/fast" });
+		const second = editSubagentModels(first, { action: "purpose", model: "example/code", purpose: " coding " });
+		expect(second.models["example/code"]).toBe("coding");
+		const removed = editSubagentModels(second, { action: "toggle", model: "example/fast" });
+		expect(removed.defaultModel).toBe("example/code");
+		expect(editSubagentModels(removed, { action: "toggle", model: "example/code" })).toEqual({ models: {}, defaultModel: undefined });
+	});
+
+	it("edits star/default/purpose without switching the main model", () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.setModels([{ id: "code", alias: "example/code", provider: "example", brand: "Example", label: "Code", vision: false, efforts: ["off"], price: {} }]);
+		panels.open("models");
+		expect(panels.handleInput("\u0013")).toEqual({ type: "subagentModel", edit: { action: "toggle", model: "example/code" } });
+		expect(panels.handleInput("\u0004")).toEqual({ type: "subagentModel", edit: { action: "default", model: "example/code" } });
+		panels.handleInput("\u0010");
+		panels.handleInput("review");
+		expect(panels.handleInput("\r")).toEqual({ type: "subagentModel", edit: { action: "purpose", model: "example/code", purpose: "review" } });
+	});
+
+	it("searches folded models and keeps current and starred choices visible", () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		const model = (id: string, curated: boolean) => ({ id, alias: `example/${id}`, provider: "example", brand: "Example", label: id, vision: false, efforts: ["off"], price: {}, curated });
+		panels.setModels([model("new", true), model("old", false), model("starred", false)], [], { provider: "example", id: "new" });
+		panels.setSubagentModelPreferences({ models: { "example/starred": "analysis" }, defaultModel: "example/starred" });
+		panels.open("models");
+		const internals = panels as unknown as { filteredModels(): Array<{ id: string }>; modelSearch: string };
+		expect(internals.filteredModels().map((m) => m.id)).not.toContain("old");
+		expect(internals.filteredModels().map((m) => m.id)).toContain("starred");
+		panels.handleInput("old");
+		expect(internals.filteredModels().map((m) => m.id)).toEqual(["old"]);
+	});
 
 	it("does not reset model selection when background snapshots arrive", () => {
 		const panels = new PanelController(DEFAULT_SETTINGS);

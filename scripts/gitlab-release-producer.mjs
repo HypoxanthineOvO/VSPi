@@ -3,10 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const RELEASE_TAG = 'v2.0.3';
-const RELEASE_VERSION = '2.0.3';
-const RELEASE_TITLE = 'VSPi 2.0.3';
-const VERSIONED_ASSET = 'vspi-2.0.3.tgz';
+import { checkoutReleaseIdentity, releaseIdentity } from './vspi-release-identity.mjs';
 const LATEST_ASSET = 'vspi-latest.tgz';
 const CHECKSUMS_ASSET = 'SHA256SUMS';
 const READBACK_ATTEMPTS = 5;
@@ -74,7 +71,7 @@ async function downloadGitHubAsset(fetchImpl, headers, asset, operation) {
   return Buffer.from(await response.arrayBuffer());
 }
 
-async function waitForGitHubRelease(fetchImpl, releaseUrl, headers) {
+async function waitForGitHubRelease(fetchImpl, releaseUrl, headers, tag) {
   for (let attempt = 0; attempt < GITHUB_RELEASE_ATTEMPTS; attempt += 1) {
     const response = await request(
       fetchImpl,
@@ -86,7 +83,7 @@ async function waitForGitHubRelease(fetchImpl, releaseUrl, headers) {
     if (response.status !== 404) return response;
     if (attempt + 1 < GITHUB_RELEASE_ATTEMPTS) await delay(GITHUB_RELEASE_DELAY_MS);
   }
-  throw new Error(`GitHub release ${RELEASE_TAG} was not published within 10 minutes`);
+  throw new Error(`GitHub release ${tag} was not published within 10 minutes`);
 }
 
 async function waitForPublicGitHubAsset(fetchImpl, url, operation) {
@@ -104,10 +101,12 @@ async function waitForPublicGitHubAsset(fetchImpl, url, operation) {
   throw new Error(`${operation} was not published within 10 minutes`);
 }
 
-export async function readGitHubSource({ environment, fetch = globalThis.fetch }) {
+export async function readGitHubSource({ environment, fetch = globalThis.fetch, packageJsonPath }) {
   if (!fetch) throw new Error('Global fetch is unavailable');
   const tag = required(environment, 'GITHUB_REF_NAME');
-  if (tag !== RELEASE_TAG) throw new Error(`GITHUB_REF_NAME must be ${RELEASE_TAG}: ${tag}`);
+  const { version: RELEASE_VERSION, tag: RELEASE_TAG, title: RELEASE_TITLE, assetName: VERSIONED_ASSET } = packageJsonPath
+    ? await checkoutReleaseIdentity(tag, packageJsonPath)
+    : releaseIdentity(tag.startsWith('v') ? tag.slice(1) : '', tag);
   if (environment.GITHUB_RELEASE_BASE_URL) {
     const baseUrl = trimTrailingSlash(environment.GITHUB_RELEASE_BASE_URL);
     const versionedBytes = await waitForPublicGitHubAsset(
@@ -139,7 +138,7 @@ export async function readGitHubSource({ environment, fetch = globalThis.fetch }
   };
   if (environment.GITHUB_TOKEN) headers.authorization = `Bearer ${environment.GITHUB_TOKEN}`;
   const releaseUrl = `${apiUrl}/repos/${repository}/releases/tags/${encodeURIComponent(tag)}`;
-  const response = await waitForGitHubRelease(fetch, releaseUrl, headers);
+  const response = await waitForGitHubRelease(fetch, releaseUrl, headers, tag);
   const release = await responseJson(response, 'GitHub release lookup');
   if (release.tag_name !== RELEASE_TAG) throw new Error('GitHub release tag conflicts with the mirror source');
   if (release.name !== RELEASE_TITLE) throw new Error('GitHub release title conflicts with the mirror source');
@@ -168,6 +167,7 @@ export async function readGitHubSource({ environment, fetch = globalThis.fetch }
 }
 
 export function prepareGitLabMirror({ environment, source }) {
+  const { assetName: VERSIONED_ASSET } = releaseIdentity(source.version, source.tag);
   const apiUrl = trimTrailingSlash(required(environment, 'GITLAB_API_URL'));
   const projectId = encodeURIComponent(required(environment, 'GITLAB_PROJECT_ID'));
   const projectUrl = trimTrailingSlash(required(environment, 'GITLAB_PROJECT_URL'));
@@ -293,11 +293,12 @@ async function waitForRelease(fetchImpl, headers, prepared) {
 
 export async function mirrorGitLabRelease({
   environment = process.env,
+  packageJsonPath,
   metadataPath = resolve('vspi-release-metadata.json'),
   fetch = globalThis.fetch,
 }) {
   if (!fetch) throw new Error('Global fetch is unavailable');
-  const source = await readGitHubSource({ environment, fetch });
+  const source = await readGitHubSource({ environment, fetch, packageJsonPath });
   const prepared = prepareGitLabMirror({ environment, source });
   const headers = gitLabHeaders(environment);
   const existingRelease = await readRelease(fetch, headers, prepared, 'GitLab release lookup');
@@ -353,7 +354,7 @@ function gitLabHeaders(environment) {
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : undefined;
 if (invokedPath === import.meta.url) {
   try {
-    const metadata = await mirrorGitLabRelease({ metadataPath: resolve(process.argv[2] ?? 'vspi-release-metadata.json') });
+    const metadata = await mirrorGitLabRelease({ packageJsonPath: resolve('apps/vspi/package.json'), metadataPath: resolve(process.argv[2] ?? 'vspi-release-metadata.json') });
     process.stdout.write(`${JSON.stringify(metadata)}\n`);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

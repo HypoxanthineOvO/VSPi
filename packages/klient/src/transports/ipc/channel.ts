@@ -88,10 +88,18 @@ export class IpcChannel implements KlientChannel {
       }
     });
     this.socket.on('close', () => {
+      const unexpected = !this.closed;
       this.closed = true;
       const error = new Error('ipc closed');
       this.rejectReady(error);
       this.failAll(error);
+      if (unexpected) {
+        const listeners = [...this.listens.values()];
+        this.listens.clear();
+        for (const listener of listeners) {
+          try { listener.onError?.(error); } catch {}
+        }
+      }
       this.listens.clear();
     });
     this.socket.on('error', () => {
@@ -278,15 +286,22 @@ export class IpcChannel implements KlientChannel {
       source.kind === 'stream'
         ? { ...base, event: source.name }
         : { ...base, service: source.service, event: source.event };
+    const failed = (error: unknown) => {
+      const listener = this.listens.get(id);
+      this.listens.delete(id);
+      listener?.onError?.(error instanceof Error ? error : new Error(String(error)));
+    };
     void this.ready.then(() => {
+      if (!this.listens.has(id)) return;
+      if (this.closed) { failed(new Error('ipc closed')); return; }
       this.send(frame);
-    });
+    }, failed).catch(() => {});
     return {
       dispose: () => {
         if (!this.listens.delete(id)) return;
         void this.ready.then(() => {
-          this.send({ type: 'unlisten', id });
-        });
+          if (!this.closed) this.send({ type: 'unlisten', id });
+        }).catch(() => {});
       },
     };
   }

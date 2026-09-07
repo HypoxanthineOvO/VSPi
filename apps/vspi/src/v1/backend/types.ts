@@ -155,6 +155,16 @@ export interface RuntimeModelOption extends ModelOption {
 	defaultEffort?: EffortLevel;
 }
 
+export interface SubagentModelPreferences {
+	models: Record<string, string>;
+	defaultModel?: string;
+}
+
+export type SubagentModelEdit =
+	| { action: "toggle"; model: string }
+	| { action: "default"; model: string }
+	| { action: "purpose"; model: string; purpose: string };
+
 export interface ModelSelectionResult {
 	modelId: string;
 	vision: boolean;
@@ -173,6 +183,7 @@ export type ProviderAuthPrompt =
 			type: "text" | "secret" | "manual_code";
 			message: string;
 			placeholder?: string;
+			allowEmpty?: boolean;
 			signal?: AbortSignal;
 	  }
 	| {
@@ -328,6 +339,7 @@ export interface ChatQueueState {
 
 export type SessionResetReason =
 	| "startup"
+	| "created"
 	| "new"
 	| "resume"
 	| "fork"
@@ -362,6 +374,8 @@ export interface SendOptions {
 }
 
 export interface ChatBackend {
+	getSubagentModelPreferences?(): Promise<SubagentModelPreferences>;
+	updateSubagentModelPreferences?(edit: SubagentModelEdit): Promise<SubagentModelPreferences>;
 	readonly kind: "runtime";
 	readonly modelLabel: string;
 	readonly modelId: string;

@@ -3,6 +3,10 @@ import { decodeKittyPrintable, Key, type KeyId, matchesKey } from "@moonshot-ai/
 export type InteractionSurface = "panel" | "composer" | "inspect";
 
 export interface InteractionState {
+	modelChoiceTab?: boolean;
+	modelPurposeEditing?: boolean;
+	modelHasCollapsed?: boolean;
+	modelExpanded?: boolean;
   hasItems?: boolean;
   commandAvailable?: boolean;
   narrowModel?: boolean;
@@ -500,6 +504,30 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.tab],
     handler: "switchModelView",
     hint: "Tab 切换视图",
+  }),
+  ...([
+    ["star", "s", "Ctrl+S 星标"],
+    ["default", "d", "Ctrl+D 默认子模型"],
+    ["purpose", "p", "Ctrl+P 用途"],
+  ] as const).map(([action, key, hint]) => keyAction({
+    id: `panel.models.${action}`,
+    surface: "panel",
+    context: "models",
+    keys: [`Ctrl+${key.toUpperCase()}`],
+    keyValues: [Key.ctrl(key)],
+    handler: "editSubagentModels",
+    enabled: (state) => state.modelChoiceTab === true && state.modelPurposeEditing !== true,
+    hint,
+  })),
+  keyAction({
+    id: "panel.models.expand",
+    surface: "panel",
+    context: "models",
+    keys: ["Ctrl+O"],
+    keyValues: [Key.ctrl("o")],
+    handler: "expandModelList",
+    enabled: (state) => state.modelChoiceTab === true && state.modelHasCollapsed === true && state.modelPurposeEditing !== true,
+    hint: (state) => state.modelExpanded ? "Ctrl+O 精选" : "Ctrl+O 全部",
   }),
   keyAction({
     id: "panel.effort.select",

@@ -25,6 +25,13 @@ export const CronCreateInputSchema = z.object({
     .describe(
       'true (default) = fire on every cron match until deleted or auto-expired after 7 days. false = fire once at the next match, then auto-delete. Use false for "remind me at X" one-shot requests with pinned minute/hour/dom/month.',
     ),
+  wakesGoal: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe(
+      'true (default) = this task counts as a wake source for an active Goal: when it is the only pending work, the goal parks until the fire resumes it. Set false for user-facing reminders, reports, and rituals that are unrelated to goal work — a recurring daily reminder with wakesGoal: true would park an active goal until its next fire.',
+    ),
 });
 
 export type CronCreateInput = z.Infer<typeof CronCreateInputSchema>;
@@ -34,6 +41,7 @@ export interface CronCreateOutput {
   readonly cron: string;
   readonly humanSchedule: string;
   readonly recurring: boolean;
+  readonly wakesGoal: boolean;
   readonly nextFireAt: number | null;
 }
 

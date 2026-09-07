@@ -8,6 +8,10 @@ Call `CreateGoal` only when:
 Do NOT create a goal for greetings, ordinary questions, or vague requests that lack a
 verifiable completion condition. A goal needs a checkable end state.
 
+Never create a goal on your own initiative to manage long-running or background work:
+a goal is not a scheduling tool. Background tasks notify you on completion, and
+CronCreate patrols cover waits without automatic notification.
+
 When the request is vague, ask the user for the missing completion criterion before creating
 the goal. If the user clearly insists after you warn them that the wording is vague or risky,
 respect that and create the goal.

@@ -599,6 +599,9 @@ describe('server-v2 /api/v1/sessions', () => {
     );
 
     const oauth: IOAuthServiceType = {
+      listLoginProviders: () => [],
+      submitLogin: () => { throw new Error('unused'); },
+      resolveRequestAuth: async () => { throw new Error('unused'); },
       _serviceBrand: undefined,
       startLogin: async () => {
         throw new Error('unused');

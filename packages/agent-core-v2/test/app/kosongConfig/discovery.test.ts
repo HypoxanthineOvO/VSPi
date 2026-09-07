@@ -11,6 +11,7 @@ import { IConfigService } from '#/app/config/config';
 import { ConfigRegistry } from '#/app/config/configService';
 import { IEventService } from '#/app/event/event';
 import { IProviderDiscoveryService } from '#/app/kosongConfig/discovery';
+import { mergeRelayCatalog } from '#/app/kosongConfig/relayCatalog';
 import '#/app/kosongConfig/discoveryService';
 import { MODEL_CATALOG_SECTION } from '#/app/kosongConfig/configSection';
 import { IKosongConfigService } from '#/app/kosongConfig/kosongConfig';
@@ -123,6 +124,45 @@ const staticSections: Record<string, unknown> = {
 };
 
 describe('queryAvailableModels', () => {
+
+  it('merges station models without dropping local entries or user overrides', () => {
+    const records = {
+      local: { provider: 'relay', model: 'local-only', maxContextSize: 1000 },
+      known: { provider: 'relay', model: 'gpt-5.4', overrides: { curated: true, maxContextSize: 2048 } },
+    };
+    const result = mergeRelayCatalog(records, 'relay', { type: 'openai_responses' }, { models: [
+      { id: 'new-model', contextWindow: 65536, reasoning: true, effortLevels: ['low', 'high'] },
+      { id: 'gpt-5.4', contextWindow: 1000000, hidden: true },
+    ] });
+    expect(result['local']).toEqual(records.local);
+    expect(result['relay/new-model']).toMatchObject({ model: 'new-model', maxContextSize: 65536, thinking: { efforts: ['low', 'high'] } });
+    expect(result['known']?.overrides).toEqual(records.known.overrides);
+    expect(mergeRelayCatalog(result, 'relay', {}, { models: [] })).toEqual(result);
+  });
+
+  it('rejects a partly malformed station table instead of accepting a destructive subset', () => {
+    expect(() => mergeRelayCatalog({}, 'relay', {}, { models: [{ id: 'valid' }, { name: 'missing-id' }] })).toThrow();
+    expect(() => mergeRelayCatalog({}, 'relay', {}, { models: [{ id: 'same' }, { id: 'same' }] })).toThrow();
+  });
+
+  it('preserves missing prices and accepts explicitly free rates', () => {
+    const records = { m: { provider: 'relay', model: 'example', pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 8, cacheReadUsdPerMillion: 0.2 } } };
+    const partial = mergeRelayCatalog(records, 'relay', {}, { models: [{ id: 'example', cost: { input: 3 } }] });
+    expect(partial['m']?.pricing).toMatchObject({ inputUsdPerMillion: 3, outputUsdPerMillion: 8, cacheReadUsdPerMillion: 0.2 });
+    const free = mergeRelayCatalog(records, 'relay', {}, { models: [{ id: 'example', cost: { input: 0, output: 0 } }] });
+    expect(free['m']?.pricing).toMatchObject({ inputUsdPerMillion: 0, outputUsdPerMillion: 0 });
+  });
+
+  it('retains the previous snapshot when the optional station endpoint fails', async () => {
+    const { host, config, discovery } = await createHost({ providers: { vsplab: { type: 'openai', baseUrl: 'https://relay.example.test/v1' } }, models: { local: { provider: 'vsplab', model: 'local', maxContextSize: 1000 } } });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('down', { status: 503 })));
+    try {
+      const before = config.get('models');
+      const result = await discovery.refreshProviderModels({ providerId: 'vsplab' });
+      expect(result.failed).toHaveLength(1);
+      expect(config.get('models')).toEqual(before);
+    } finally { host.dispose(); }
+  });
   it.each([
     ['openai', 'static'],
     ['openai', 'discover'],

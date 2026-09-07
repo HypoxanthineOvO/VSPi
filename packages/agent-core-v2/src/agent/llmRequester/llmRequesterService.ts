@@ -84,7 +84,9 @@ import {
   retryBackoffDelay,
   retryErrorFields,
   sleepForRetry,
+  type RetryBackoffOptions,
 } from '#/_base/utils/retry';
+import { LOOP_CONTROL_SECTION, type LoopControl } from '#/agent/loop/configSection';
 import { IBootstrapService } from '#/app/bootstrap/bootstrap';
 
 const EMPTY_TOOL_PARAMETERS: Record<string, unknown> = {
@@ -477,7 +479,7 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
         infiniteRetryAttempt += 1;
         const delayMs =
           readRetryAfterMs(raw) ??
-          retryBackoffDelay(infiniteRetryAttempt - 1);
+          retryBackoffDelay(infiniteRetryAttempt - 1, this.retryBackoffOptions());
         this.log.warn('llm request failed; retrying indefinitely (KIMI_CODE_INFINITE_RETRY)', {
           model: request.model.name,
           ...request.logFields,
@@ -492,6 +494,14 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
 
   private get infiniteRetryEnabled(): boolean {
     return parseBooleanEnv(this.bootstrap.getEnv(KIMI_CODE_INFINITE_RETRY_ENV)) === true;
+  }
+
+  private retryBackoffOptions(): RetryBackoffOptions {
+    const loopControl = this.config.get<LoopControl>(LOOP_CONTROL_SECTION);
+    return {
+      initialDelayMs: loopControl?.retryInitialDelayMs,
+      maxDelayMs: loopControl?.retryMaxDelayMs,
+    };
   }
 
   private nextProjectionPolicyForError(

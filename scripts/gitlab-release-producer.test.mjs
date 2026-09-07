@@ -7,8 +7,23 @@ import { afterEach, test } from 'node:test';
 
 import { prepareGitHubRelease, produceGitHubRelease } from './github-release-producer.mjs';
 import { mirrorGitLabRelease, readGitHubSource } from './gitlab-release-producer.mjs';
+import { releaseIdentity } from './vspi-release-identity.mjs';
 
 const cleanups = [];
+
+void test('derives asset names from the manifest version without editing release scripts', async () => {
+  const files = await fixture('3.1.7');
+  const prepared = await prepareGitHubRelease({ environment: environment({ GITHUB_REF_NAME: 'v3.1.7' }), ...files });
+  assert.equal(prepared.tag, 'v3.1.7');
+  assert.equal(prepared.title, 'VSPi 3.1.7');
+  assert.equal(prepared.assets[0].name, 'vspi-3.1.7.tgz');
+});
+
+void test('rejects mismatched or non-release versions before publishing', () => {
+  assert.throws(() => releaseIdentity('3.1.7', 'v3.1.8'), /mismatch/);
+  assert.throws(() => releaseIdentity('3.1.7-alpha.1'), /stable semantic version/);
+  assert.throws(() => releaseIdentity('../release'), /stable semantic version/);
+});
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
 });

@@ -148,6 +148,8 @@ jobs:
           done
       - name: Typecheck VS Code extension
         run: pnpm --filter kimi-code run typecheck
+      - name: Typecheck VSPi
+        run: pnpm --filter vspi run typecheck
       - name: Typecheck vis-server
         run: pnpm --filter @moonshot-ai/vis-server run typecheck
       - name: Typecheck vis-web

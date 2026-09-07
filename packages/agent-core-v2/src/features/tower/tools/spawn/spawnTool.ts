@@ -33,7 +33,7 @@ import { IAgentLifecycleService, MAIN_AGENT_ID } from '#/session/agentLifecycle/
 import { subagentLabels } from '#/session/agentLifecycle/subagentMetadata';
 import { ISessionContext } from '#/session/sessionContext/sessionContext';
 import {
-  DEFAULT_SUBAGENT_TIMEOUT_MS,
+  resolveSubagentTimeoutMs,
   resolveSubagentBinding,
   resolveSubagentThinking,
   wrapSubagentModelError,
@@ -182,7 +182,7 @@ export class TowerSpawnTool implements ITowerSpawnTool {
         try {
           taskId = this.tasks.registerTask(new SubagentTask(handle, description, controller), {
             detached: true,
-            timeoutMs: DEFAULT_SUBAGENT_TIMEOUT_MS,
+            timeoutMs: resolveSubagentTimeoutMs(this.config),
             signal: undefined,
           });
         } catch (error) {

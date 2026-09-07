@@ -14,6 +14,7 @@ defineKlientConformance('memory', async () => {
   return {
     klient,
     app,
+    rawCall: (service, method, args) => createMemoryDispatcher(app).call({}, service, method, args),
     cleanup: async () => {
       await klient.close();
       app.dispose();

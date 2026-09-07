@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import type {
 	AgentCronTask,
 	AgentHandle,
@@ -10,6 +11,7 @@ import type {
 	SessionMeta,
 } from "@moonshot-ai/klient";
 import type { RuntimeConnection } from "@vsp/vsp-runtime";
+import { loginWithOAuth } from "../providers/oauth-login.js";
 
 import type { AgentSnapshot } from "../agents/types.js";
 import type { CompactOptions } from "../continuity/compaction-profiles.js";
@@ -38,6 +40,8 @@ import type {
 	PolicySnapshot,
 } from "../policy/execution-policy.js";
 import { OutputSpeedTracker } from "./output-speed.js";
+import { editSubagentModels, subagentModelPreferences } from "../domain/subagent-models.js";
+import type { SubagentModelEdit, SubagentModelPreferences } from "./types.js";
 import type {
 	AgentConversationActivity,
 	AgentConversationBlock,
@@ -58,6 +62,7 @@ import type {
 } from "./types.js";
 
 interface TurnState {
+	effort?: EffortLevel;
 	readonly id: number;
 	readonly segment: number;
 	readonly assistantId: string;
@@ -171,6 +176,12 @@ export class KlientChatBackend implements ChatBackend {
 	private taskPoll: NodeJS.Timeout | undefined;
 	private towerPoll: NodeJS.Timeout | undefined;
 	private busy = false;
+	private connectionFailed = false;
+	private draftModelAlias: string | undefined;
+	private draftPermission: "auto" | "yolo" | "manual" | undefined;
+	private sessionCreation: Promise<void> | undefined;
+	private submissionEpoch = 0;
+	private subagentTimeoutSeconds = 0;
 	private readonly outputSpeed = new OutputSpeedTracker();
 	private lastUsageSnapshot: UsageSnapshot | undefined;
 	private cacheTelemetryObserved = false;
@@ -180,6 +191,7 @@ export class KlientChatBackend implements ChatBackend {
 	private currentProvider = "";
 	private providerAvailability = new Map<string, ProviderAvailability>();
 	private modelOptionsPromise: Promise<RuntimeModelOption[]> | undefined;
+	private subagentModelWrite: Promise<unknown> = Promise.resolve();
 
 	constructor(
 		private readonly connection: RuntimeConnection,
@@ -207,11 +219,12 @@ export class KlientChatBackend implements ChatBackend {
 	async start(events: ChatBackendEvents): Promise<void> {
 		this.events = events;
 		this.subscribeGlobalCatalog();
+		void this.refreshRelayCatalogs();
 		const workspace =
 			await this.connection.klient.global.workspaces.createOrTouch({
 				root: this.cwd,
 			});
-		if (this.startupMode === "resume") return;
+		if (this.startupMode === "resume") { await this.prepareDraft("startup"); return; }
 		let meta: SessionMeta | undefined;
 		if (this.startupMode === "continue") {
 			const page = await this.connection.klient.global.sessions.list({
@@ -225,14 +238,81 @@ export class KlientChatBackend implements ChatBackend {
 				meta = await existing.get();
 			}
 		}
-		meta ??= await this.connection.klient.global.sessions.create({
-			workDir: this.cwd,
-		});
-		await this.bindSession(meta, "startup");
+		if (meta) await this.bindSession(meta, "resume");
+		else await this.prepareDraft("startup");
 		events.onSessionReady?.();
 	}
 
+	private async prepareDraft(reason: "startup" | "new"): Promise<void> {
+		this.clearBindings();
+		this.session = undefined;
+		this.agent = undefined;
+		this.meta = undefined;
+		const [alias, thinking, models, providers] = await Promise.all([
+			this.connection.klient.global.config.get<string | undefined>("defaultModel"),
+			this.connection.klient.global.config.get<{ effort?: string } | undefined>("thinking"),
+			this.connection.klient.global.kosong.listModels(),
+			this.connection.klient.global.kosong.listProviders(),
+		]);
+		const selected = models.find((model) => model.model === alias);
+		this.draftModelAlias = selected?.model;
+		this.applyModel(selected?.provider ?? "", selected ? displayModelId(selected.provider, selected.model) : "", selected?.capabilities ?? [], selected?.display_name);
+		const capability = catalogEffortCapability(selected?.thinking, { identity: selected?.provider, type: providers.find((provider) => provider.id === selected?.provider)?.type });
+		this.effort = resolveCatalogEffort(thinking?.effort, capability);
+		this.events?.onSessionReset?.({ id: `draft-${randomUUID()}`, reason, effort: this.effort });
+		this.events?.onPlanItems?.([]);
+		this.events?.onUsage({ ...DEFAULT_USAGE, contextWindow: selected?.max_context_size ?? 0 });
+	}
+
+	private async refreshRelayCatalogs(): Promise<void> {
+		try {
+			const providers = await this.connection.klient.global.kosong.listProviders();
+			for (const provider of providers.filter((provider) => provider.id === "vsplab" || provider.type === "vsplab")) {
+				const result = await this.connection.klient.global.kosong.refreshProviders({ providerId: provider.id });
+				for (const failure of result.failed) this.events?.onNotice(`模型目录刷新失败，保留本地快照：${failure.reason}`, "warning");
+			}
+		} catch (error) {
+			this.events?.onNotice(`模型目录补充暂不可用：${error instanceof Error ? error.message : String(error)}`, "warning");
+		}
+	}
+
+	private async ensureSession(epoch: number): Promise<void> {
+		if (this.sessionCreation) { await this.sessionCreation; return; }
+		if (this.agent) return;
+		if (!this.sessionCreation) {
+			const create = async () => {
+				if (!this.draftModelAlias) throw new Error("请先配置并选择模型");
+				const meta = await this.connection.klient.global.sessions.create({ workDir: this.cwd });
+				try {
+					if (epoch !== this.submissionEpoch) { await this.connection.klient.session(meta.id).delete(); return; }
+					await this.bindSession(meta, "created");
+					this.events?.onSessionReady?.();
+				} catch (error) {
+					this.clearBindings(); this.agent = undefined; this.session = undefined; this.meta = undefined;
+					await this.connection.klient.session(meta.id).delete().catch(() => this.events?.onNotice("初始化失败的空会话未能清理", "warning"));
+					throw error;
+				}
+			};
+			const pending = create();
+			this.sessionCreation = pending;
+			void pending.finally(() => { if (this.sessionCreation === pending) this.sessionCreation = undefined; }).catch(() => {});
+		}
+		await this.sessionCreation;
+	}
+
 	async send(text: string, options: SendOptions): Promise<SendResult> {
+		if (!text.trim() && options.attachments.length === 0) return { status: "cancelled" };
+		const epoch = this.submissionEpoch;
+		const input: Parameters<AgentHandle["prompt"]>[0]["input"] = [
+			{ type: "text", text },
+			...await Promise.all(options.attachments.map(async (attachment) => ({
+				type: "image_url" as const,
+				imageUrl: { url: `data:${attachment.mimeType};base64,${(await readFile(attachment.path)).toString("base64")}` },
+			}))),
+		];
+		if (epoch !== this.submissionEpoch) return { status: "cancelled" };
+		await this.ensureSession(epoch);
+		if (epoch !== this.submissionEpoch) return { status: "cancelled" };
 		const agent = this.requireAgent();
 		if (this.busy) {
 			const promptId = options.clientMessageId ?? randomUUID();
@@ -246,9 +326,9 @@ export class KlientChatBackend implements ChatBackend {
 			this.publishQueueState();
 			try {
 				if (delivery === "followUp") {
-					await agent.prompt({ input: [{ type: "text", text }], promptId });
+					await agent.prompt({ input, promptId });
 				} else {
-					await agent.steer({ input: [{ type: "text", text }], promptId });
+					await agent.steer({ input, promptId });
 				}
 			} catch (error) {
 				this.queuedPrompts.delete(promptId);
@@ -262,8 +342,9 @@ export class KlientChatBackend implements ChatBackend {
 		const completion = new Promise<SendResult>((resolve, reject) => {
 			this.pendingPrompts.set(promptId, { resolve, reject });
 		});
+		void completion.catch(() => {});
 		try {
-			await agent.prompt({ input: [{ type: "text", text }], promptId });
+			await agent.prompt({ input, promptId });
 		} catch (error) {
 			this.pendingPrompts.delete(promptId);
 			throw error;
@@ -272,11 +353,10 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	async cancel(): Promise<CancelResult> {
+		this.submissionEpoch += 1;
 		const agent = this.agent;
 		if (agent === undefined) return { queuedMessages: [] };
-		const queuedMessages = [...this.queuedPrompts.values()].map(
-			(item) => item.text,
-		);
+		const queued = [...this.queuedPrompts.values()];
 		const turnId = this.turn?.id;
 		const ended =
 			turnId === undefined ? undefined : this.waitForTurnEnd(turnId);
@@ -285,7 +365,7 @@ export class KlientChatBackend implements ChatBackend {
 		if (ended !== undefined) await ended;
 		this.queuedPrompts.clear();
 		this.publishQueueState();
-		return { queuedMessages };
+		return { queuedMessages: queued.filter((item) => item.phase === "queued").map((item) => item.text) };
 	}
 
 	compact(options?: CompactOptions): Promise<boolean> {
@@ -295,10 +375,9 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	async newSession(): Promise<void> {
-		const meta = await this.connection.klient.global.sessions.create({
-			workDir: this.cwd,
-		});
-		await this.bindSession(meta, "new");
+		this.submissionEpoch += 1;
+		await this.sessionCreation?.catch(() => {});
+		await this.prepareDraft("new");
 		this.events?.onSessionReady?.();
 	}
 
@@ -363,10 +442,9 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	private async loadModelOptions(): Promise<RuntimeModelOption[]> {
-		const [models, providers, pricingCatalog] = await Promise.all([
+		const [models, providers] = await Promise.all([
 			this.connection.klient.global.kosong.listModels(),
 			this.connection.klient.global.kosong.listProviders(),
-			loadModelsDevPricingCatalog(),
 		]);
 		await Promise.all(
 			providers
@@ -404,6 +482,8 @@ export class KlientChatBackend implements ChatBackend {
 					model.display_name,
 				),
 				vision: model.capabilities?.includes("image_in") ?? false,
+				curated: model.curated,
+				releasedAt: model.released_at,
 				efforts: catalogEffortCapability(model.thinking, {
 					identity: model.provider,
 					type: providerTypes.get(model.provider),
@@ -417,12 +497,8 @@ export class KlientChatBackend implements ChatBackend {
 					type: providerTypes.get(model.provider),
 				}).defaultEffort,
 				price:
-					model.provider === "vsplab" || model.pricing === undefined
-						? resolveModelsDevPricing(
-								pricingCatalog,
-								model.provider,
-								displayModelId(model.provider, model.model),
-							)
+					model.pricing === undefined
+						? {}
 						: {
 								inputUsdPerMillion: model.pricing.input_usd_per_million,
 								outputUsdPerMillion: model.pricing.output_usd_per_million,
@@ -430,7 +506,7 @@ export class KlientChatBackend implements ChatBackend {
 									model.pricing.cache_read_usd_per_million,
 								cacheWriteUsdPerMillion:
 									model.pricing.cache_write_usd_per_million,
-								source: "provider" as const,
+								source: model.pricing_source ?? "provider" as const,
 								referenceProvider: model.provider,
 								contextTiers: model.pricing.context_tiers?.map((tier) => ({
 									contextTokensAbove: tier.context_tokens_above,
@@ -446,10 +522,45 @@ export class KlientChatBackend implements ChatBackend {
 		return [];
 	}
 
+	async getSubagentModelPreferences(): Promise<SubagentModelPreferences> {
+		const timeout = await this.connection.klient.global.config.get<{ timeoutMs?: number } | undefined>("subagent");
+		if (timeout?.timeoutMs !== undefined) this.subagentTimeoutSeconds = timeout.timeoutMs / 1000;
+		return subagentModelPreferences(await this.connection.klient.global.config.get<Record<string, unknown> | undefined>("secondaryModel"));
+	}
+
+	updateSubagentModelPreferences(edit: SubagentModelEdit): Promise<SubagentModelPreferences> {
+		const save = async () => {
+			const config = this.connection.klient.global.config;
+			const inspection = await config.inspect<Record<string, unknown>>("secondaryModel");
+			const current = subagentModelPreferences(inspection.userValue);
+			const removing = edit.action === "toggle" && Object.hasOwn(current.models, edit.model);
+			if (!removing) {
+				const models = await this.connection.klient.global.kosong.listModels();
+				if (!models.some((model) => model.model === edit.model)) throw new Error("模型已不在当前目录中，请刷新后重试");
+			}
+			const next = editSubagentModels(current, edit);
+			await config.replace({ domain: "secondaryModel", value: {
+				...inspection.userValue,
+				model: undefined,
+				force: false,
+				models: Object.keys(next.models).length ? next.models : undefined,
+				defaultModel: next.defaultModel,
+			} });
+			return this.getSubagentModelPreferences();
+		};
+		const pending = this.subagentModelWrite.then(save, save);
+		this.subagentModelWrite = pending.catch(() => undefined);
+		return pending;
+	}
+
 	async getProviderOptions(): Promise<ProviderOption[]> {
-		const providers =
-			await this.connection.klient.global.kosong.listProviders();
-		return providers
+		const [providers, builtins, loginProviders, configured] = await Promise.all([
+			this.connection.klient.global.kosong.listProviders(),
+			this.connection.klient.global.kosong.listBuiltinProviders(),
+			this.connection.klient.global.auth.listLoginProviders(),
+			this.connection.klient.global.config.inspect<Record<string, Record<string, unknown>>>("providers"),
+		]);
+		return [...new Map([...builtins, ...providers].map((provider) => [provider.id, provider])).values()]
 			.filter((provider) => !hiddenLegacyProvider(provider.id))
 			.map((provider) => ({
 				id: provider.id,
@@ -464,8 +575,13 @@ export class KlientChatBackend implements ChatBackend {
 				detail: `${String(provider.models?.length ?? 0)} models`,
 				baseUrl: provider.base_url,
 				custom: true,
-				authMethods: [{ type: "api_key", label: "API Key" }],
-				storedCredential: provider.has_api_key ? "api_key" : undefined,
+				authMethods: [
+					{ type: "api_key" as const, label: "API Key" },
+					...loginProviders.some((login) => login.id === provider.type || login.id === provider.id)
+						? [{ type: "oauth" as const, label: "订阅账号" }] : [],
+				],
+				storedCredential: configured.userValue?.[provider.id]?.["oauth"] !== undefined
+					? "oauth" : provider.has_api_key ? "api_key" : undefined,
 			}));
 	}
 
@@ -489,7 +605,8 @@ export class KlientChatBackend implements ChatBackend {
 		const alias = resolveModelAlias(models, provider, id);
 		const selected =
 			await this.connection.klient.global.kosong.setDefaultModel(alias);
-		await this.requireAgent().setModel(alias);
+		this.draftModelAlias = alias;
+		await this.agent?.setModel(alias);
 		this.applyModel(
 			selected.model.provider,
 			displayModelId(selected.model.provider, selected.model.model),
@@ -560,9 +677,11 @@ export class KlientChatBackend implements ChatBackend {
 				>("providers");
 			const providers = { ...inspection.userValue };
 			const provider = providers[providerId];
-			if (provider === undefined)
-				throw new Error(`Provider ${providerId} 不存在`);
-			providers[providerId] = { ...provider, apiKey };
+			if (provider === undefined) {
+				await this.connection.klient.global.kosong.configureBuiltinProvider(providerId, apiKey);
+				return;
+			}
+			providers[providerId] = { ...provider, apiKey, oauth: undefined };
 			await this.connection.klient.global.config.replace({
 				domain: "providers",
 				value: providers,
@@ -573,27 +692,7 @@ export class KlientChatBackend implements ChatBackend {
 			});
 			return;
 		}
-		const started =
-			await this.connection.klient.global.auth.startLogin(providerId);
-		if (started.status === "authenticated") {
-			interaction.notify({ type: "info", message: "Provider 已登录" });
-			return;
-		}
-		interaction.notify({
-			type: "device_code",
-			verificationUri: started.verification_uri_complete,
-			userCode: started.user_code,
-		});
-		while (!interaction.signal?.aborted) {
-			await delay(Math.max(500, started.interval * 1_000));
-			const flow = await this.connection.klient.global.auth.flow(providerId);
-			if (flow?.status === "authenticated") return;
-			if (flow !== undefined && flow.status !== "pending") {
-				throw new Error(flow.error_message ?? `OAuth ${flow.status}`);
-			}
-		}
-		await this.connection.klient.global.auth.cancelLogin(providerId);
-		throw new Error("Login cancelled");
+		await loginWithOAuth(this.connection.klient.global.auth, providerId, interaction);
 	}
 
 	async logoutProvider(providerId: string): Promise<void> {
@@ -625,14 +724,16 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	async setEffort(level: EffortLevel): Promise<void> {
-		await this.requireAgent().setThinking(level);
-		this.effort = level;
+		if (!this.agent) { this.effort = level; return; }
+		await this.agent.setThinking(level);
+		this.effort = normalizeEffortLevel(await this.agent.getThinking(), level);
 	}
 
 	async setPolicy(policy: PolicyLevel): Promise<PolicySnapshot> {
 		const mode =
 			policy === "Auto" ? "auto" : policy === "YOLO" ? "yolo" : "manual";
-		await this.requireAgent().setPermission(mode);
+		this.draftPermission = mode;
+		await this.agent?.setPermission(mode);
 		return {
 			policy,
 			boundary: "Host",
@@ -707,7 +808,7 @@ export class KlientChatBackend implements ChatBackend {
 				maxRunTokens: 0,
 				maxTreeTokens: 0,
 				maxTreeCostUsd: 0,
-				maxRunSeconds: 7_200,
+				maxRunSeconds: this.subagentTimeoutSeconds,
 			},
 			pools: [],
 			active,
@@ -854,6 +955,8 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	async dispose(): Promise<void> {
+		this.submissionEpoch += 1;
+		await this.sessionCreation?.catch(() => {});
 		this.clearBindings();
 		for (const subscription of this.globalSubscriptions) subscription.dispose();
 		this.globalSubscriptions = [];
@@ -861,26 +964,36 @@ export class KlientChatBackend implements ChatBackend {
 
 	private async bindSession(
 		meta: SessionMeta,
-		reason: "startup" | "new" | "resume" | "fork",
+		reason: "startup" | "new" | "resume" | "fork" | "created",
 	): Promise<void> {
 		this.clearBindings();
 		this.meta = meta;
 		this.session = this.connection.klient.session(meta.id);
 		this.agent = this.session.agent("main");
-		const thinking = await this.connection.klient.global.config.get<
+		let thinking = await this.connection.klient.global.config.get<
 			{ effort?: string } | undefined
 		>("thinking");
-		const defaultModel = await this.connection.klient.global.config.get<
+		let defaultModel = await this.connection.klient.global.config.get<
 			string | undefined
 		>("defaultModel");
+		if (reason === "created") { defaultModel = this.draftModelAlias ?? defaultModel; thinking = { effort: this.effort }; }
+		let restoredModel: string | undefined;
+		if (reason === "resume" || reason === "fork") {
+			restoredModel = await this.agent.getModel();
+			const catalog = await this.connection.klient.global.kosong.listModels();
+			if (catalog.some((model) => model.model === restoredModel)) {
+				defaultModel = restoredModel;
+				thinking = { effort: await this.agent.getThinking() };
+			}
+		}
 		if (defaultModel !== undefined) {
 			const resolvedDefaultModel =
 				await this.resolveAvailableDefaultModel(defaultModel);
-			const selected =
-				await this.connection.klient.global.kosong.setDefaultModel(
-					resolvedDefaultModel,
-				);
-			await this.agent.setModel(resolvedDefaultModel);
+			const selectedModel = (await this.connection.klient.global.kosong.listModels()).find((model) => model.model === resolvedDefaultModel);
+			if (!selectedModel) throw new Error(`模型 ${resolvedDefaultModel} 不在当前目录中`);
+			const selected = { model: selectedModel };
+			if (reason !== "resume" && reason !== "fork" && resolvedDefaultModel !== defaultModel) await this.connection.klient.global.kosong.setDefaultModel(resolvedDefaultModel);
+			if (restoredModel !== resolvedDefaultModel) await this.agent.setModel(resolvedDefaultModel);
 			this.applyModel(
 				selected.model.provider,
 				displayModelId(selected.model.provider, selected.model.model),
@@ -916,9 +1029,10 @@ export class KlientChatBackend implements ChatBackend {
 			this.supportsVision = false;
 		}
 		this.subscribe();
+		if (this.draftPermission) await this.agent.setPermission(this.draftPermission);
 		this.events?.onSessionReset?.({ id: meta.id, reason, effort: this.effort });
 		await this.publishRuntimeGoalStatus();
-		await this.publishHistory();
+		if (reason !== "created") await this.publishHistory();
 		this.taskPoll = setInterval(() => void this.refreshTasks(), 1_000);
 		this.taskPoll.unref();
 		this.towerPoll = setInterval(() => void this.refreshTowerMissions(), 1_000);
@@ -999,9 +1113,24 @@ export class KlientChatBackend implements ChatBackend {
 			this.events?.onRuntimeCatalogChanged?.();
 		};
 		this.globalSubscriptions.push(
+			this.connection.klient.events.onError((error) => this.handleConnectionError(error)),
 			this.connection.klient.events.on("kosong.providers.changed", changed),
 			this.connection.klient.events.on("kosong.models.changed", changed),
 		);
+	}
+
+	private handleConnectionError(error: Error): void {
+		if (error.message !== "ipc closed") { this.events?.onSessionError?.(error); return; }
+		if (this.connectionFailed) return;
+		this.connectionFailed = true;
+		this.turn = undefined;
+		for (const pending of this.pendingPrompts.values()) pending.reject(error);
+		this.pendingPrompts.clear();
+		for (const id of this.queuedPrompts.keys()) this.setPromptPhase(id, "failed");
+		this.queuedPrompts.clear();
+		this.publishQueueState();
+		this.setBusy(false);
+		this.events?.onSessionError?.(error);
 	}
 
 	private subscribe(): void {
@@ -1010,7 +1139,7 @@ export class KlientChatBackend implements ChatBackend {
 		this.subscriptions.push(
 			agent.events.on("turn.started", (event) => {
 				this.outputSpeed.reset();
-				this.turn = turnState(event.turnId, 0);
+				this.turn = { ...turnState(event.turnId, 0), effort: this.effort };
 				if (event.promptId !== undefined) {
 					this.promptTurns.set(event.turnId, new Set([event.promptId]));
 					this.setPromptPhase(event.promptId, "started");
@@ -1029,6 +1158,7 @@ export class KlientChatBackend implements ChatBackend {
 				this.appendStream(id, event.delta, "thinking");
 			}),
 			agent.events.on("turn.step.started", (event) => {
+				if (this.turn) this.turn.effort = this.effort;
 				this.setPromptPhaseForTurn(event.turnId, "started");
 			}),
 			agent.events.on("tool.call.started", (event) => {
@@ -1153,7 +1283,7 @@ export class KlientChatBackend implements ChatBackend {
 				this.events?.onCompactionActivity?.({ type: "cancelled" });
 			}),
 			agent.events.on("error", (event) => {
-				if (event.code === "compaction.failed")
+				if (event["code"] === "compaction.failed")
 					this.events?.onCompactionActivity?.({ type: "failed" });
 				this.events?.onMessage({
 					id: `error:${Date.now()}`,
@@ -1168,8 +1298,8 @@ export class KlientChatBackend implements ChatBackend {
 			session.events.on("interactions.changed", () =>
 				this.refreshInteractions(),
 			),
-			agent.events.onError((error) => this.events?.onSessionError?.(error)),
-			session.events.onError((error) => this.events?.onSessionError?.(error)),
+			agent.events.onError((error) => this.handleConnectionError(error)),
+			session.events.onError((error) => this.handleConnectionError(error)),
 		);
 	}
 
@@ -1314,7 +1444,7 @@ export class KlientChatBackend implements ChatBackend {
 							id,
 							role: "assistant",
 							kind: "thinking",
-							effort: this.effort,
+							effort: this.turn?.effort ?? this.effort,
 							text: delta,
 							collapsed: true,
 							streaming: true,
@@ -1340,7 +1470,7 @@ export class KlientChatBackend implements ChatBackend {
 		const turn = this.turn;
 		if (turn === undefined) return;
 		this.finishTurnSegment();
-		this.turn = turnState(turn.id, turn.segment + 1);
+		this.turn = { ...turnState(turn.id, turn.segment + 1), effort: turn.effort };
 	}
 
 	private finishTurnSegment(): void {
@@ -1418,6 +1548,7 @@ export class KlientChatBackend implements ChatBackend {
 			if (strict) throw error;
 			return;
 		}
+		if (this.agent !== agent) return;
 		const previous = this.tasks;
 		const listedTaskIds = new Set(tasks.map((task) => task.taskId));
 		const missingRunningAgents = [...previous.values()].filter(
@@ -1439,6 +1570,7 @@ export class KlientChatBackend implements ChatBackend {
 			...tasks,
 			...rechecked.flatMap(({ task }) => (task === undefined ? [] : [task])),
 		];
+		if (this.agent !== agent) return;
 		this.tasks = reconcileTaskSnapshot(previous, mergedTasks, Date.now());
 		await Promise.all(
 			mergedTasks
@@ -1459,6 +1591,7 @@ export class KlientChatBackend implements ChatBackend {
 					}
 				}),
 		);
+		if (this.agent !== agent) return;
 		this.publishParentTaskSummaries();
 		this.events?.onAgentSnapshot?.(this.getAgentSnapshot());
 		this.events?.onTaskSnapshot?.(this.getTaskSnapshot());
@@ -1469,9 +1602,11 @@ export class KlientChatBackend implements ChatBackend {
 		if (agent === undefined) return;
 		try {
 			const active = await agent.isTowerActive();
+			if (this.agent !== agent) return;
 			if (active) {
 				this.towerPlanActive = true;
 				const missions = await agent.getTowerMissions();
+				if (this.agent !== agent) return;
 				this.events?.onTowerMissions?.([...missions]);
 				this.events?.onPlanItems?.(projectTowerMissionPlanItems(missions));
 			} else if (this.towerPlanActive) {
@@ -1506,7 +1641,9 @@ export class KlientChatBackend implements ChatBackend {
 		const agent = this.agent;
 		if (agent === undefined) return;
 		try {
-			this.cronTasks = (await agent.getCronTasks()).map(toCronTask);
+			const tasks = await agent.getCronTasks();
+			if (this.agent !== agent) return;
+			this.cronTasks = tasks.map(toCronTask);
 			this.events?.onCronSnapshot?.(this.cronTasks);
 		} catch {}
 	}
@@ -1550,8 +1687,11 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	private async publishUsage(finishTurn = false): Promise<void> {
+		const agent = this.agent;
+		if (!agent) return;
 		try {
-			const usage = await this.requireAgent().getUsage();
+			const usage = await agent.getUsage();
+			if (this.agent !== agent) return;
 			const total = usage.total;
 			const currentTurn = usage.currentTurn;
 			const speed = finishTurn
@@ -1559,8 +1699,9 @@ export class KlientChatBackend implements ChatBackend {
 				: this.outputSpeed.snapshot();
 			this.cacheTelemetryObserved ||=
 				(total?.inputCacheRead ?? 0) + (total?.inputCacheCreation ?? 0) > 0;
-			const context = await this.requireAgent().getContext();
+			const context = await agent.getContext();
 			const modelOptions = await this.getModelOptions();
+			if (this.agent !== agent) return;
 			const cost = calculateUsageCost(usage.byModel, modelOptions);
 			const snapshot: UsageSnapshot = {
 				...DEFAULT_USAGE,
@@ -1662,6 +1803,7 @@ export class KlientChatBackend implements ChatBackend {
 	private consumeQueuedPrompt(promptId: string): void {
 		const queued = this.queuedPrompts.get(promptId);
 		if (queued === undefined) return;
+		this.advanceTurnSegment();
 		this.queuedPrompts.delete(promptId);
 		queued.phase = "consuming";
 		this.setPromptPhase(promptId, "consuming");
@@ -1718,6 +1860,7 @@ export class KlientChatBackend implements ChatBackend {
 			options: model.efforts,
 			defaultEffort: model.defaultEffort ?? model.efforts[0] ?? "off",
 		});
+		if (!this.agent) { this.effort = resolved; return; }
 		await this.requireAgent().setThinking(resolved);
 		this.effort = resolveCatalogEffort(
 			normalizeEffortLevel(await this.requireAgent().getThinking(), resolved),
@@ -1751,6 +1894,8 @@ export class KlientChatBackend implements ChatBackend {
 		this.parentTaskSummaries.clear();
 		this.taskOutputs.clear();
 		this.pendingTodoUpdates.clear();
+		this.lastTodoItems = [];
+		this.towerPlanActive = false;
 		this.toolNames.clear();
 		this.cronTasks = [];
 		this.runtimeGoalRevision += 1;
@@ -1897,161 +2042,10 @@ export function calculateUsageCost(
 	return { costUsd, kind: "complete" };
 }
 
-interface ModelsDevPricingCatalog {
-	readonly [provider: string]: {
-		readonly models?: Readonly<
-			Record<
-				string,
-				{
-					readonly id?: string;
-					readonly cost?: {
-						readonly input?: number;
-						readonly output?: number;
-						readonly cache_read?: number;
-						readonly cache_write?: number;
-						readonly tiers?: readonly {
-							readonly input?: number;
-							readonly output?: number;
-							readonly tier?: {
-								readonly type?: string;
-								readonly size?: number;
-							};
-						}[];
-					};
-				}
-			>
-		>;
-	};
-}
 
-let modelsDevPricingCatalogPromise:
-	| Promise<ModelsDevPricingCatalog | undefined>
-	| undefined;
 
-function loadModelsDevPricingCatalog(): Promise<
-	ModelsDevPricingCatalog | undefined
-> {
-	if (modelsDevPricingCatalogPromise === undefined) {
-		const pending = fetch("https://models.dev/api.json", {
-			headers: { Accept: "application/json" },
-			signal: AbortSignal.timeout(5_000),
-		})
-			.then(async (response) =>
-				response.ok
-					? ((await response.json()) as ModelsDevPricingCatalog)
-					: undefined,
-			)
-			.catch(() => undefined);
-		modelsDevPricingCatalogPromise = pending;
-		void pending.then((catalog) => {
-			if (catalog === undefined && modelsDevPricingCatalogPromise === pending)
-				modelsDevPricingCatalogPromise = undefined;
-		});
-	}
-	return modelsDevPricingCatalogPromise;
-}
 
-export function resolveModelsDevPricing(
-	catalog: ModelsDevPricingCatalog | undefined,
-	provider: string,
-	modelId: string,
-): RuntimeModelOption["price"] {
-	const direct =
-		provider === "vsplab"
-			? undefined
-			: modelsDevPricingEntry(catalog, provider, modelId);
-	const officialProvider =
-		provider === "vsplab"
-			? vsplabOfficialProvider(modelId)
-			: provider === "kimi-coding"
-				? "kimi-for-coding"
-				: canonicalOfficialProvider(modelId);
-	const entry =
-		direct ??
-		(officialProvider === undefined
-			? undefined
-			: modelsDevPricingEntry(catalog, officialProvider, modelId));
-	const cost = entry?.cost;
-	if (cost === undefined || !validPrice(cost.input) || !validPrice(cost.output))
-		return {};
-	const input = cost.input;
-	const output = cost.output;
-	const contextTiers = cost.tiers?.flatMap((tier) => {
-		const size = tier.tier?.size;
-		return tier.tier?.type === "context" &&
-			validPositiveInteger(size) &&
-			validPrice(tier.input) &&
-			validPrice(tier.output)
-			? [
-					{
-						contextTokensAbove: size,
-						inputUsdPerMillion: tier.input,
-						outputUsdPerMillion: tier.output,
-					},
-				]
-			: [];
-	});
-	return {
-		inputUsdPerMillion: input,
-		outputUsdPerMillion: output,
-		cacheReadUsdPerMillion: validPrice(cost.cache_read)
-			? cost.cache_read
-			: undefined,
-		cacheWriteUsdPerMillion: validPrice(cost.cache_write)
-			? cost.cache_write
-			: undefined,
-		source: direct === undefined ? "official" : "provider",
-		referenceProvider: direct === undefined ? officialProvider : provider,
-		contextTiers: contextTiers?.length ? contextTiers : undefined,
-	};
-}
 
-function modelsDevPricingEntry(
-	catalog: ModelsDevPricingCatalog | undefined,
-	provider: string,
-	modelId: string,
-) {
-	const models = catalog?.[provider]?.models ?? {};
-	return (
-		models[modelId] ??
-		Object.values(models).find((model) => model.id === modelId)
-	);
-}
-
-function canonicalOfficialProvider(modelId: string): string | undefined {
-	const id = modelId
-		.toLowerCase()
-		.replace(/^(?:openai|anthropic|google)\//u, "");
-	if (/^(?:gpt|codex|o[134])(?:[-_.]|$)/u.test(id)) return "openai";
-	if (/^claude(?:[-_.]|$)/u.test(id)) return "anthropic";
-	if (/^gemini(?:[-_.]|$)/u.test(id)) return "google";
-	if (/^deepseek(?:[-_.]|$)/u.test(id)) return "deepseek";
-	if (/^glm(?:[-_.]|$)/u.test(id)) return "zai";
-	if (/^kimi(?:[-_.]|$)/u.test(id)) return "moonshotai";
-	if (/^minimax(?:[-_.]|$)/u.test(id)) return "minimax";
-	if (/^qwen(?:[-_.]|$)/u.test(id)) return "alibaba";
-	if (/^mimo(?:[-_.]|$)/u.test(id)) return "xiaomi";
-	if (/^grok(?:[-_.]|$)/u.test(id)) return "xai";
-	return undefined;
-}
-
-function vsplabOfficialProvider(modelId: string): string | undefined {
-	const id = modelId.toLowerCase();
-	if (/^(?:gpt|codex)(?:[-_.]|$)/u.test(id) || id.startsWith("o")) return "openai";
-	if (/^claude(?:[-_.]|$)/u.test(id)) return "anthropic";
-	if (/^gemini(?:[-_.]|$)/u.test(id)) return "google";
-	if (/^glm(?:[-_.]|$)/u.test(id)) return "zai";
-	if (/^deepseek(?:[-_.]|$)/u.test(id)) return "deepseek";
-	if (
-		id === "k3" ||
-		id === "k3-256k" ||
-		id === "kimi-for-coding" ||
-		id === "kimi-for-coding-highspeed"
-	)
-		return "kimi-for-coding";
-	if (/^kimi(?:[-_.]|$)/u.test(id)) return "moonshotai";
-	return undefined;
-}
 
 function hiddenLegacyProvider(providerId: string): boolean {
 	return /^custom-gemini-via-[a-z0-9-]+-[a-f0-9]{8}$/u.test(
@@ -2059,13 +2053,7 @@ function hiddenLegacyProvider(providerId: string): boolean {
 	);
 }
 
-function validPrice(value: number | undefined): value is number {
-	return value !== undefined && Number.isFinite(value) && value >= 0;
-}
 
-function validPositiveInteger(value: number | undefined): value is number {
-	return value !== undefined && Number.isInteger(value) && value > 0;
-}
 
 export function formatModelDisplayName(
 	provider: string,
@@ -2121,12 +2109,6 @@ function formatModelWord(word: string, index: number): string {
 	if (/^\d+k$/iu.test(word)) return `${word.slice(0, -1)}K`;
 	if (index === 0 && /^[a-z]{2,4}$/u.test(word)) return word.toUpperCase();
 	return `${word.charAt(0).toUpperCase()}${word.slice(1).toLowerCase()}`;
-}
-
-function delay(ms: number): Promise<void> {
-	return new Promise((resolve) => {
-		setTimeout(resolve, ms);
-	});
 }
 
 function summarizeArgs(value: unknown): string {
@@ -2774,7 +2756,7 @@ function toAgentRunSnapshot(
 			maxTreeTokens: 0,
 			treeCostUsd: 0,
 			maxTreeCostUsd: 0,
-			maxRunSeconds: 7_200,
+			maxRunSeconds: (task.timeoutMs ?? 0) / 1000,
 			warnRunTokens: false,
 			warnTreeTokens: false,
 			warnTreeCost: false,

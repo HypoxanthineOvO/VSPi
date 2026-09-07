@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
+import { getBuiltinModel } from '@earendil-works/pi-ai/providers/all';
 
 import { createScopedTestHost } from '#/_base/di/test';
 import { isErrorCode } from '#/_base/errors/codes';
@@ -277,7 +279,7 @@ describe('Model assembly (pure data)', () => {
     }
   });
 
-  it('infers the Anthropic effort profile for non-trait-driven anthropic vendors', () => {
+  it('uses pi model efforts for a configured Anthropic vendor alias', () => {
     const { host, catalog } = createHost({
       providers: { claude: { type: 'anthropic', apiKey: 'sk-a' } },
       models: {
@@ -287,8 +289,8 @@ describe('Model assembly (pure data)', () => {
     try {
       const model = catalog.get('sonnet');
       expect(model.protocol).toBe('anthropic');
-      expect(model.supportEfforts).toEqual(['low', 'medium', 'high']);
-      expect(model.defaultEffort).toBe('high');
+      expect(model.supportEfforts).toEqual(getSupportedThinkingLevels(getBuiltinModel('anthropic', 'claude-sonnet-4-5')).filter((level) => level !== 'off'));
+      expect(model.defaultEffort).toBe('medium');
       expect(model.capabilities.thinking).toBe(true);
     } finally {
       host.dispose();
@@ -627,7 +629,7 @@ describe('ModelCatalog inspect', () => {
     }
   });
 
-  it('attributes profile-filled efforts and capabilities to builtin', () => {
+  it('attributes pi catalog efforts and capabilities to builtin', () => {
     const { host, catalog } = createHost({
       providers: { claude: { type: 'anthropic', apiKey: 'sk-a' } },
       models: {
@@ -636,10 +638,10 @@ describe('ModelCatalog inspect', () => {
     });
     try {
       const view = catalog.inspect('sonnet');
-      expect(view.resolved.supportEfforts).toEqual(['low', 'medium', 'high']);
+      expect(view.resolved.supportEfforts).toEqual(getSupportedThinkingLevels(getBuiltinModel('anthropic', 'claude-sonnet-4-5')).filter((level) => level !== 'off'));
       expect(view.sources['model.effective.supportEfforts']).toMatchObject({
         kind: 'builtin',
-        detail: expect.stringContaining('anthropic profile'),
+        detail: expect.stringContaining('pi-ai'),
       });
       expect(view.sources['model.effective.defaultEffort']).toMatchObject({ kind: 'builtin' });
       expect(view.sources['resolved.supportEfforts']).toMatchObject({ kind: 'builtin' });
@@ -1088,6 +1090,99 @@ describe('wire projection (pure)', () => {
 });
 
 describe('ModelCatalog enumeration', () => {
+  it('applies canonical user overrides above a previously persisted builtin thinking snapshot', async () => {
+    const { host, catalog } = createHost({
+      providers: { example: { type: 'openai', apiKey: 'EXAMPLE_API_KEY' } },
+      models: {
+        example: {
+          provider: 'example', model: 'gpt-5', capabilities: ['image_in', 'thinking', 'tool_use'],
+          thinking: { availability: 'always', canDisable: false, controls: ['effort'], efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
+          overrides: {
+            capabilities: ['thinking', 'tool_use'],
+            thinking: { efforts: ['high'], defaultEffort: 'high' },
+          },
+        },
+      },
+    });
+    try {
+      expect(catalog.get('example')).toMatchObject({
+        supportEfforts: ['high'], defaultEffort: 'high', capabilities: { image_in: false },
+        thinking: { availability: 'always', canDisable: false, efforts: ['high'] },
+      });
+      expect(catalog.inspect('example').resolved).toMatchObject({ supportEfforts: ['high'], defaultEffort: 'high' });
+      expect((await catalog.listModels())[0]).toMatchObject({
+        support_efforts: ['high'], default_effort: 'high', capabilities: ['thinking', 'tool_use'],
+      });
+    } finally {
+      host.dispose();
+    }
+  });
+
+  it('honors an explicit empty vision capability list in runtime and wire projections', async () => {
+    const { host, catalog } = createHost({
+      providers: { example: { type: 'openai', apiKey: 'example-key' } },
+      models: {
+        inherited: { provider: 'example', model: 'gpt-4o' },
+        disabled: { provider: 'example', model: 'gpt-4o', capabilities: [] },
+        overridden: { provider: 'example', model: 'gpt-4o', capabilities: ['image_in'], overrides: { capabilities: [] } },
+      },
+    });
+    try {
+      expect(catalog.get('inherited').capabilities.image_in).toBe(true);
+      const entries = await catalog.listModels();
+      for (const id of ['disabled', 'overridden']) {
+        expect(catalog.get(id).capabilities.image_in).toBe(false);
+        expect(catalog.inspect(id).resolved.capabilities.image_in).toBe(false);
+        expect(entries.find((entry) => entry.model === id)?.capabilities ?? []).not.toContain('image_in');
+      }
+    } finally {
+      host.dispose();
+    }
+  });
+
+  it('configures a builtin provider without replacing user model overrides or defaults', async () => {
+    const customModel: ModelRecord = {
+      provider: 'openai', model: 'gpt-4o', capabilities: [], maxContextSize: 32000,
+      supportEfforts: ['off'], defaultEffort: 'off',
+    };
+    const { host, catalog, models, providers } = createHost({
+      providers: { openai: { type: 'openai', baseUrl: 'https://gateway.example.test/v1', env: { EXAMPLE_REGION: 'keep' } } },
+      models: { 'openai/gpt-4o': customModel },
+      defaultModel: 'openai/gpt-4o',
+    });
+    try {
+      await catalog.configureBuiltinProvider('openai', 'example-key');
+      expect(models.get('openai/gpt-4o')).toEqual(customModel);
+      expect(models.getDefaultModel()).toBe('openai/gpt-4o');
+      expect(models.get('openai/gpt-5')).toMatchObject({ provider: 'openai', model: 'gpt-5' });
+      expect(providers.get('openai')).toMatchObject({ apiKey: 'example-key', baseUrl: 'https://gateway.example.test/v1', env: { EXAMPLE_REGION: 'keep' } });
+      await catalog.configureBuiltinProvider('openai', 'replacement-key');
+      expect(models.get('openai/gpt-4o')).toEqual(customModel);
+      expect(models.getDefaultModel()).toBe('openai/gpt-4o');
+      expect(JSON.stringify(await catalog.listBuiltinProviders())).not.toContain('replacement-key');
+    } finally {
+      host.dispose();
+    }
+  });
+
+  it('configures a builtin provider and chooses its first model only when no default exists', async () => {
+    const { host, catalog, models, providers } = createHost();
+    try {
+      const builtin = (await catalog.listBuiltinProviders()).find((provider) => provider.id === 'qwen-token-plan-cn');
+      expect(builtin?.models?.length).toBeGreaterThan(0);
+      await catalog.configureBuiltinProvider('qwen-token-plan-cn', 'example-key');
+      expect(models.getDefaultModel()).toBe(builtin?.models?.[0]);
+      expect(providers.get('qwen-token-plan-cn')?.type).toBe('qwen-token-plan-cn');
+      const before = models.list();
+      await expect(catalog.configureBuiltinProvider('does-not-exist', 'example-key')).rejects.toThrow();
+      await expect(catalog.configureBuiltinProvider('openai', '  ')).rejects.toThrow();
+      expect(models.list()).toEqual(before);
+      expect(providers.get('openai')).toBeUndefined();
+    } finally {
+      host.dispose();
+    }
+  });
+
   it('lists configured models as selectable aliases', async () => {
     const { host, catalog } = createHost(catalogSections);
     try {
@@ -1110,7 +1205,7 @@ describe('ModelCatalog enumeration', () => {
         expect.objectContaining({
           provider: 'openai',
           model: 'gpt4o',
-          display_name: 'gpt-4o',
+          display_name: getBuiltinModel('openai', 'gpt-4o').name,
           max_context_size: 128000,
           thinking: expect.objectContaining({ availability: 'none', can_disable: false }),
         }),
@@ -1140,7 +1235,7 @@ describe('ModelCatalog enumeration', () => {
     }
   });
 
-  it('projects official Anthropic effort metadata inferred from the model name', async () => {
+  it('projects official Anthropic efforts and vision from the pinned pi catalog', async () => {
     const sections = structuredClone(catalogSections);
     (sections['providers'] as Record<string, ProviderConfig>)['anthropic'] = { type: 'anthropic' };
     (sections['models'] as Record<string, ModelRecord>)['opus'] = {
@@ -1152,16 +1247,16 @@ describe('ModelCatalog enumeration', () => {
     try {
       const opus = (await catalog.listModels()).find((model) => model.model === 'opus');
       expect(opus).toMatchObject({
-        capabilities: ['thinking'],
-        support_efforts: ['low', 'medium', 'high', 'max'],
-        default_effort: 'high',
+        capabilities: expect.arrayContaining(['image_in', 'thinking', 'tool_use']),
+        support_efforts: getSupportedThinkingLevels(getBuiltinModel('anthropic', 'claude-opus-4-6')).filter((level) => level !== 'off'),
+        default_effort: 'medium',
       });
     } finally {
       host.dispose();
     }
   });
 
-  it('projects latest Opus efforts for unknown Claude-marked Anthropic-compatible models', async () => {
+  it('does not invent efforts for unknown Claude-marked Anthropic-compatible models', async () => {
     const sections = structuredClone(catalogSections);
     (sections['providers'] as Record<string, ProviderConfig>)['custom'] = { type: 'anthropic' };
     (sections['models'] as Record<string, ModelRecord>)['compatible'] = {
@@ -1172,11 +1267,9 @@ describe('ModelCatalog enumeration', () => {
     const { host, catalog } = createHost(sections);
     try {
       const compatible = (await catalog.listModels()).find((model) => model.model === 'compatible');
-      expect(compatible).toMatchObject({
-        capabilities: ['thinking'],
-        support_efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-        default_effort: 'high',
-      });
+      expect(compatible?.support_efforts).toBeUndefined();
+      expect(compatible?.default_effort).toBeUndefined();
+      expect(compatible?.thinking.availability).toBe('none');
     } finally {
       host.dispose();
     }
@@ -1193,7 +1286,7 @@ describe('ModelCatalog enumeration', () => {
     const { host, catalog } = createHost(sections);
     try {
       const compatible = (await catalog.listModels()).find((model) => model.model === 'compatible');
-      expect(compatible?.capabilities).toBeUndefined();
+      expect(compatible?.capabilities).toEqual([]);
       expect(compatible?.support_efforts).toBeUndefined();
       expect(compatible?.default_effort).toBeUndefined();
     } finally {
@@ -1201,7 +1294,7 @@ describe('ModelCatalog enumeration', () => {
     }
   });
 
-  it('projects latest Opus efforts for a flat providerless Claude-marked Anthropic model', async () => {
+  it('does not invent efforts for a flat providerless Claude-marked model', async () => {
     const { host, catalog } = createHost({
       providers: {},
       models: {
@@ -1215,11 +1308,9 @@ describe('ModelCatalog enumeration', () => {
     });
     try {
       const compatible = (await catalog.listModels()).find((model) => model.model === 'compatible');
-      expect(compatible).toMatchObject({
-        capabilities: ['thinking'],
-        support_efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-        default_effort: 'high',
-      });
+      expect(compatible?.support_efforts).toBeUndefined();
+      expect(compatible?.default_effort).toBeUndefined();
+      expect(compatible?.thinking.availability).toBe('none');
     } finally {
       host.dispose();
     }
@@ -1239,7 +1330,7 @@ describe('ModelCatalog enumeration', () => {
     });
     try {
       const compatible = (await catalog.listModels()).find((model) => model.model === 'compatible');
-      expect(compatible?.capabilities).toBeUndefined();
+      expect(compatible?.capabilities).toEqual([]);
       expect(compatible?.support_efforts).toBeUndefined();
       expect(compatible?.default_effort).toBeUndefined();
     } finally {
@@ -1259,7 +1350,7 @@ describe('ModelCatalog enumeration', () => {
     try {
       const compatible = (await catalog.listModels()).find((model) => model.model === 'compatible');
       expect(compatible).toMatchObject({ provider: 'kimi', model: 'compatible' });
-      expect(compatible?.capabilities).toBeUndefined();
+      expect(compatible?.capabilities).toEqual([]);
       expect(compatible?.support_efforts).toBeUndefined();
       expect(compatible?.default_effort).toBeUndefined();
     } finally {

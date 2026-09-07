@@ -132,6 +132,29 @@ describe('facade routing', () => {
     });
   });
 
+  it('preserves interactive OAuth prompts and forwards flow-scoped input', async () => {
+    const channel = new FakeChannel();
+    const klient = createKlientFromChannel(channel);
+    channel.results.set('oauthService.listLoginProviders', [{ id: 'anthropic', name: 'Anthropic' }]);
+    expect(await klient.global.auth.listLoginProviders()).toEqual([{ id: 'anthropic', name: 'Anthropic' }]);
+    channel.results.set('oauthService.getFlow', {
+      flow_id: 'example-flow', provider: 'anthropic', status: 'pending',
+      verification_uri: '', verification_uri_complete: '', user_code: '',
+      expires_in: 900, expires_at: '2026-09-06T12:00:00.000Z', interval: 1,
+      auth_url: 'https://example.com/authorize',
+      prompt: { id: 'example-prompt', message: 'Authorization code', allow_empty: false },
+    });
+    const flow = await klient.global.auth.flow('anthropic');
+    expect(flow?.prompt).toMatchObject({ id: 'example-prompt', allow_empty: false });
+    expect(flow?.auth_url).toBe('https://example.com/authorize');
+    channel.results.set('oauthService.submitLogin', undefined);
+    await klient.global.auth.submitLogin('anthropic', 'example-flow', 'example-prompt', 'example-code');
+    expect(channel.calls.at(-1)).toMatchObject({
+      service: 'oauthService', method: 'submitLogin',
+      args: ['anthropic', 'example-flow', 'example-prompt', 'example-code'],
+    });
+  });
+
   it('routes capability calls through the registered app service contract', async () => {
     const channel = new FakeChannel();
     const klient = createKlientFromChannel(channel);

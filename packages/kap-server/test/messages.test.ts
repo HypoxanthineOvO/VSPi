@@ -51,6 +51,8 @@ describe('server-v2 /api/v1/sessions/{sid}/messages', () => {
   beforeEach(async () => {
     home = await isolateTestWorkspace(await mkdtemp(join(tmpdir(), 'kimi-server-v2-messages-')));
     const modelCatalog: IModelCatalog = {
+      listBuiltinProviders: async () => [],
+      configureBuiltinProvider: async () => { throw new Error('unused'); },
       _serviceBrand: undefined,
       get: () => {
         throw new Error('modelCatalog.get not exercised in this test');

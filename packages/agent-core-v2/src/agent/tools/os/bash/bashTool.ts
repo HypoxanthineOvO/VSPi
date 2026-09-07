@@ -81,7 +81,7 @@ function withoutBackgroundDescription(description: string): string {
       '',
     )
     .replace(
-      /\r?\n- Prefer `run_in_background=true`[\s\S]*?conversation to continue before the command finishes\./,
+      /\r?\n- Run commands in the background by default:[\s\S]*?the completion notification resume the work\./,
       '\n- Do not set `run_in_background=true`; background task management tools are not available.',
     );
 }

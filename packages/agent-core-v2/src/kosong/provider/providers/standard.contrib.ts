@@ -1,4 +1,5 @@
-import { registerProviderDefinition } from '../providerDefinition';
+import { registerProviderDefinition, hasProviderDefinition } from '../providerDefinition';
+import { listPiProviders } from '../pi/catalog';
 
 registerProviderDefinition({
   id: 'anthropic',
@@ -29,3 +30,14 @@ registerProviderDefinition({
     { endpoint: () => ({ apiKeyEnv: 'GOOGLE_API_KEY', baseUrlEnv: 'GOOGLE_GEMINI_BASE_URL' }) },
   ],
 });
+
+for (const provider of listPiProviders()) {
+  if (hasProviderDefinition(provider.id)) continue;
+  registerProviderDefinition({
+    id: provider.id,
+    baseProtocol: provider.protocol,
+    traits: [],
+    modelSource: 'static',
+    endpoint: { apiKeyEnv: provider.envKey, defaultBaseUrl: provider.baseUrl },
+  });
+}

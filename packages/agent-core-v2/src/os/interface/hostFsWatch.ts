@@ -13,7 +13,8 @@ export interface HostFsChange {
 
 export interface HostFsWatchOptions {
   readonly recursive?: boolean;
-  readonly ignored?: (path: string) => boolean;
+  readonly ignored?: (path: string, kind?: HostFsChangeKind) => boolean;
+  readonly ignoredReady?: Promise<void>;
   readonly signal?: boolean;
 }
 

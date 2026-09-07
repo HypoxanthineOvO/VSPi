@@ -64,6 +64,10 @@ import {
 } from '#/kosong/provider/provider';
 import { isOAuthCatalogVendor } from '#/kosong/provider/providerDefinition';
 import { ITelemetryService } from '#/app/telemetry/telemetry';
+import { IAtomicDocumentStore } from '#/persistence/interface/atomicDocumentStore';
+import { PiOAuthAdapter } from './piOAuthAdapter';
+import { listPiModelRecords } from '#/kosong/provider/pi/catalog';
+import type { ProviderRequestAuth } from '#/kosong/contract/provider';
 
 import {
   AuthModelNotResolvedError,
@@ -98,6 +102,7 @@ interface FlowState {
 export class OAuthService extends Disposable implements IOAuthService {
   declare readonly _serviceBrand: undefined;
   private readonly flows = new Map<string, FlowState>();
+  private readonly pi: PiOAuthAdapter;
 
   private refreshChain: Promise<unknown> = Promise.resolve();
 
@@ -109,9 +114,17 @@ export class OAuthService extends Disposable implements IOAuthService {
     @ILogService private readonly log: ILogService,
     @IEventService private readonly events: IEventService,
     @IBootstrapService private readonly bootstrap: IBootstrapService,
+    @IAtomicDocumentStore docs: IAtomicDocumentStore,
   ) {
     super();
+    this.pi = this._register(new PiOAuthAdapter(
+      docs,
+      providerService,
+      bootstrap.scope('credentials'),
+      (provider, type) => this.provisionPiModels(provider, type),
+    ));
     this._register(providerService.onDidChangeProviders((event) => {
+      this.pi.invalidateProviders(event);
       this.invalidateFlows(event);
     }));
   }
@@ -120,6 +133,9 @@ export class OAuthService extends Disposable implements IOAuthService {
     provider = KIMI_CODE_PROVIDER_NAME,
     options: OAuthLoginOptions = {},
   ): Promise<OAuthFlowStart> {
+    if (provider !== KIMI_CODE_PROVIDER_NAME && this.pi.handles(provider)) {
+      return this.pi.startLogin(provider);
+    }
     this.log.info('oauth startLogin: enter', { provider });
     const loginAuth = this.resolveLoginAuth(provider, options.region);
     this.log.info('oauth startLogin: resolved login auth', {
@@ -216,12 +232,15 @@ export class OAuthService extends Disposable implements IOAuthService {
   }
 
   getFlow(provider = KIMI_CODE_PROVIDER_NAME): OAuthFlowSnapshot | undefined {
+    const piFlow = this.pi.getFlow(provider);
+    if (piFlow !== undefined) return piFlow;
     const state = this.flows.get(provider);
     if (state === undefined || state.device === undefined) return undefined;
     return this.toSnapshot(state, state.device);
   }
 
   cancelLogin(provider = KIMI_CODE_PROVIDER_NAME): Promise<OAuthLoginCancelResponse> {
+    if (this.pi.getFlow(provider) !== undefined) return Promise.resolve(this.pi.cancelLogin(provider));
     const state = this.flows.get(provider);
     if (state === undefined || state.status !== 'pending') {
       return Promise.resolve({ cancelled: false, status: state?.status ?? 'cancelled' });
@@ -232,6 +251,10 @@ export class OAuthService extends Disposable implements IOAuthService {
   }
 
   async logout(provider = KIMI_CODE_PROVIDER_NAME): Promise<OAuthLogoutResponse> {
+    if (provider !== KIMI_CODE_PROVIDER_NAME && this.pi.handles(provider)) {
+      await this.pi.logout(provider);
+      return { logged_out: true, provider };
+    }
     const oauthRef =
       provider === KIMI_CODE_PROVIDER_NAME
         ? this.resolveRuntimeOAuthRef(provider)
@@ -259,14 +282,46 @@ export class OAuthService extends Disposable implements IOAuthService {
   }
 
   resolveTokenProvider(provider: string, oauthRef?: OAuthRef): BearerTokenProvider | undefined {
+    if (this.pi.handles(provider, oauthRef)) return this.pi.tokenProvider(provider, oauthRef);
     return this.toolkit.tokenProvider(provider, this.resolveRuntimeOAuthRef(provider, oauthRef));
   }
 
   getCachedAccessToken(provider: string, oauthRef?: OAuthRef): Promise<string | undefined> {
+    if (this.pi.handles(provider, oauthRef)) return this.pi.getCachedAccessToken(provider, oauthRef);
     return this.toolkit.getCachedAccessToken(provider, this.resolveRuntimeOAuthRef(provider, oauthRef));
   }
 
+  async resolveRequestAuth(provider: string, oauthRef?: OAuthRef, options?: { readonly force?: boolean }): Promise<ProviderRequestAuth> {
+    if (this.pi.handles(provider, oauthRef)) return this.pi.getRequestAuth(provider, oauthRef, options?.force);
+    const tokenProvider = this.resolveTokenProvider(provider, oauthRef);
+    if (tokenProvider === undefined) throw new AuthTokenMissingError(provider);
+    return { apiKey: await tokenProvider.getAccessToken(options) };
+  }
+
+  listLoginProviders(): readonly { readonly id: string; readonly name: string }[] {
+    return [{ id: KIMI_CODE_PROVIDER_NAME, name: 'Kimi Code' }, ...this.pi.list()];
+  }
+
+  submitLogin(provider: string, flowId: string, promptId: string, input: string): void {
+    this.pi.submitLogin(provider, flowId, promptId, input);
+  }
+
+  private async provisionPiModels(provider: string, type: string): Promise<void> {
+    const current = this.config.inspect<Record<string, ModelRecord>>(MODELS_SECTION).userValue ?? {};
+    const records = Object.fromEntries(Object.entries(listPiModelRecords(type, provider)).map(([key, model]) => [
+      key, { ...model, baseUrl: undefined },
+    ]));
+    const merged = { ...records, ...current };
+    await this.config.replace(MODELS_SECTION, merged);
+    const defaultModel = this.config.get<string | undefined>(DEFAULT_MODEL_SECTION);
+    const first = Object.keys(records)[0];
+    if (!defaultModel && first !== undefined) await this.config.replace(DEFAULT_MODEL_SECTION, first);
+  }
+
   getManagedUsage(provider = KIMI_CODE_PROVIDER_NAME): Promise<AuthManagedUsageResult> {
+    if (this.pi.handles(provider)) {
+      return Promise.resolve({ kind: 'error', message: 'This provider does not expose managed usage.' });
+    }
     const configured = this.providerService.get(provider);
     const auth = resolveKimiCodeRuntimeAuth({
       configuredBaseUrl: configured?.baseUrl,
@@ -279,6 +334,9 @@ export class OAuthService extends Disposable implements IOAuthService {
   }
 
   getManagedUserInfo(provider = KIMI_CODE_PROVIDER_NAME): Promise<AuthManagedUserInfoResult> {
+    if (this.pi.handles(provider)) {
+      return Promise.resolve({ kind: 'error', message: 'This provider does not expose managed account information.' });
+    }
     const configured = this.providerService.get(provider);
     const auth = resolveKimiCodeRuntimeAuth({
       configuredBaseUrl: configured?.baseUrl,

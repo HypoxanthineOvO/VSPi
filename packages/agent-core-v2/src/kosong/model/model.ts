@@ -6,6 +6,10 @@ import type { Protocol } from '#/kosong/protocol/protocol';
 import type { OAuthRef } from '../provider/provider';
 
 export interface ModelOverride {
+  pricingSource?: 'official' | 'provider';
+  effortMapping?: Record<string, string | null>;
+  curated?: boolean;
+  releasedAt?: string;
   maxContextSize?: number;
   maxInputSize?: number;
   maxOutputSize?: number;
@@ -34,6 +38,10 @@ export interface ModelPricingTier {
 }
 
 export interface ModelRecord {
+  pricingSource?: 'official' | 'provider';
+  effortMapping?: Record<string, string | null>;
+  curated?: boolean;
+  releasedAt?: string;
   providerId?: string;
 
   baseUrl?: string;

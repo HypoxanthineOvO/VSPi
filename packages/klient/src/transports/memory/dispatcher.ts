@@ -56,6 +56,7 @@ import { Readable } from 'node:stream';
 import type { EventSourceRef, IDisposable, ScopeRef } from '../../core/channel.js';
 import { RPCError } from '../../core/errors.js';
 import { IEventService, serviceTokens } from './serviceRegistry.js';
+import { authContract } from '../../contract/global/auth.js';
 
 /** Structural minimum of an engine `Scope` / `IScopeHandle`. */
 export interface ScopeLike {
@@ -134,6 +135,11 @@ const PROMPT_ID_CONFLICT = 40927;
 
 /** Wire name of the engine's `IMcpManagementService` decorator id. */
 const MCP_MANAGEMENT_SERVICE = 'mcpManagementService';
+
+const OAUTH_PUBLIC_METHODS = new Set([
+  ...Object.keys(authContract),
+  'getManagedUsage', 'getManagedUserInfo', 'getRegion',
+]);
 
 /**
  * Session-scope domain services whose methods take the lifecycle-issued
@@ -289,6 +295,9 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
     if (!/^on[A-Z]/.test(source.event)) {
       throw new RPCError(REQUEST_INVALID, `not an event property: ${source.event}`);
     }
+    if (source.service === 'oauthService') {
+      throw new RPCError(REQUEST_INVALID, `event not found: ${source.service}.${source.event}`);
+    }
     const instance = resolveService(resolved, source.service);
     const emitter = instance[source.event];
     if (typeof emitter !== 'function') {
@@ -304,6 +313,9 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
 
   return {
     async call(scope, service, method, args) {
+      if (service === 'oauthService' && !OAUTH_PUBLIC_METHODS.has(method)) {
+        throw new RPCError(REQUEST_INVALID, `method not found: ${service}.${method}`);
+      }
       const resolved = await resolveScope(scope);
       const instance = resolveService(resolved, service);
       // `fileService` adapts bytes ⇄ streams: the JSON wire cannot carry
@@ -418,6 +430,9 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
 
           const ensureStarted = (): Promise<void> => {
             started ??= (async () => {
+              if (service === 'oauthService') {
+                throw new RPCError(REQUEST_INVALID, `not a streaming method: ${service}.${method}`);
+              }
               const resolved = await resolveScope(scope);
               const instance = resolveService(resolved, service);
               const member = instance[method];

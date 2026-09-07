@@ -138,6 +138,7 @@ export class CronCreateTool implements ICronCreateTool {
           cron: normalizedCron,
           prompt: args.prompt,
           recurring,
+          wakesGoal: args.wakesGoal !== false,
         });
 
         const ideal = computeNextCronRun(parsed, nowMs);
@@ -153,6 +154,7 @@ export class CronCreateTool implements ICronCreateTool {
           cron: normalizedCron,
           humanSchedule,
           recurring,
+          wakesGoal: task.wakesGoal !== false,
           nextFireAt,
         };
 
@@ -171,6 +173,7 @@ function formatOutput(o: CronCreateOutput): string {
     `cron: ${o.cron}`,
     `humanSchedule: ${o.humanSchedule}`,
     `recurring: ${String(o.recurring)}`,
+    `wakesGoal: ${String(o.wakesGoal)}`,
     `nextFireAt: ${
       o.nextFireAt === null ? 'null' : formatLocalIsoWithOffset(o.nextFireAt)
     }`,

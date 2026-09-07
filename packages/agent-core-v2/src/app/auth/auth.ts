@@ -12,6 +12,7 @@ import { createDecorator, type ServiceIdentifier } from '#/_base/di/instantiatio
 import { Error2 } from '#/_base/errors/errors';
 
 import type { OAuthRef } from '#/kosong/provider/provider';
+import type { ProviderRequestAuth } from '#/kosong/contract/provider';
 
 import { AuthErrors } from './errors';
 import type {
@@ -35,6 +36,8 @@ export interface IOAuthService {
   readonly _serviceBrand: undefined;
 
   startLogin(provider?: string, options?: OAuthLoginOptions): Promise<OAuthFlowStart>;
+  listLoginProviders(): readonly { readonly id: string; readonly name: string }[];
+  submitLogin(provider: string, flowId: string, promptId: string, input: string): void;
   getFlow(provider?: string): OAuthFlowSnapshot | undefined;
   cancelLogin(provider?: string): Promise<OAuthLoginCancelResponse>;
   logout(provider?: string): Promise<OAuthLogoutResponse>;
@@ -44,6 +47,7 @@ export interface IOAuthService {
   getManagedUserInfo(provider?: string): Promise<AuthManagedUserInfoResult>;
   resolveTokenProvider(provider: string, oauthRef?: OAuthRef): BearerTokenProvider | undefined;
   getCachedAccessToken(provider: string, oauthRef?: OAuthRef): Promise<string | undefined>;
+  resolveRequestAuth(provider: string, oauthRef?: OAuthRef, options?: { readonly force?: boolean }): Promise<ProviderRequestAuth>;
   getRegion(): KimiRegion;
 }
 

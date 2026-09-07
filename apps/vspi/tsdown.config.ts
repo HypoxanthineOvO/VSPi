@@ -19,6 +19,7 @@ const main = defineConfig({
     onlyBundle: false,
     alwaysBundle: [
       /^@vsp\//,
+      /^@earendil-works\//,
       /^@moonshot-ai\//,
       /^@jimp\//,
       /^@modelcontextprotocol\//,

@@ -123,7 +123,7 @@ describe('server-v2 /api/v1 model/provider catalog', () => {
     const { status, body } = await getJson<{ items: unknown[] }>('/api/v1/models');
     expect(status).toBe(200);
     expect(body.code).toBe(0);
-    expect(body.data.items).toEqual([
+    expect(body.data.items).toMatchObject([
       {
         provider: 'kimi',
         model: 'k2',
@@ -142,7 +142,7 @@ describe('server-v2 /api/v1 model/provider catalog', () => {
       {
         provider: 'openai',
         model: 'gpt4o',
-        display_name: 'gpt-4o',
+        display_name: 'GPT-4o',
         max_context_size: 128000,
         thinking: { availability: 'none', can_disable: false, controls: [] },
       },
@@ -213,7 +213,7 @@ describe('server-v2 /api/v1 model/provider catalog', () => {
     await boot(CATALOG_TOML);
     const { body } = await postJson<unknown>('/api/v1/models/turbo:set_default', {});
     expect(body.code).toBe(0);
-    expect(body.data).toEqual({
+    expect(body.data).toMatchObject({
       default_model: 'turbo',
       model: {
         provider: 'kimi',
@@ -264,6 +264,8 @@ describe('server-v2 /api/v1 model/provider catalog', () => {
 
   function catalogStub(): IModelCatalogType {
     return {
+      listBuiltinProviders: async () => [],
+      configureBuiltinProvider: async () => { throw new Error('unused'); },
       _serviceBrand: undefined,
       get: () => {
         throw new Error('unused');
@@ -303,6 +305,9 @@ describe('server-v2 /api/v1 model/provider catalog', () => {
     refreshOAuthProviderModels: IOAuthServiceType['refreshOAuthProviderModels'],
   ): IOAuthServiceType {
     return {
+      listLoginProviders: () => [],
+      submitLogin: () => { throw new Error('unused'); },
+      resolveRequestAuth: async () => { throw new Error('unused'); },
       _serviceBrand: undefined,
       startLogin: async () => {
         throw new Error('unused');

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { createDecorator, type ServiceIdentifier } from '#/_base/di/instantiation';
-import type { ModelCapability } from '#/kosong/contract/capability';
+import type { ModelCapability, ThinkingCapability } from '#/kosong/contract/capability';
 import type { InspectionSource } from '#/kosong/contract/inspection';
 import type { ChatProvider } from '#/kosong/contract/provider';
 
@@ -30,6 +30,9 @@ export interface ProtocolProviderOptions {
 }
 
 export interface ProtocolAdapterConfig {
+  readonly effortMapping?: Readonly<Record<string, string | null>>;
+  readonly capabilities?: ModelCapability;
+  readonly thinking?: ThinkingCapability;
   readonly protocol: Protocol;
   readonly providerType?: string;
   readonly baseUrl?: string;

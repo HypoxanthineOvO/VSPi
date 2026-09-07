@@ -1,4 +1,5 @@
 import { TomlError } from 'smol-toml';
+import { z } from 'zod';
 
 import type { IConfigRegistry } from './config';
 import { describeUnknownError, isPlainObject } from './configPure';
@@ -54,7 +55,8 @@ export function applySectionToToml(
   registry: IConfigRegistry,
 ): void {
   const snakeKey = camelToSnake(domain);
-  const toToml = registry.getSection(domain)?.toToml;
+  const section = registry.getSection(domain);
+  const toToml = section?.toToml;
 
   if (value === undefined) {
     delete rawSnake[snakeKey];
@@ -62,7 +64,7 @@ export function applySectionToToml(
   }
 
   if (toToml !== undefined) {
-    const rawSub = cloneRecord(rawSnake[snakeKey]);
+    const rawSub = pruneKnownTomlKeys(section?.schema, value, rawSnake[snakeKey]);
     const converted = toToml(value, rawSub);
     if (converted === undefined || converted === null) {
       delete rawSnake[snakeKey];
@@ -78,13 +80,32 @@ export function applySectionToToml(
     setDefined(rawSnake, snakeKey, value);
     return;
   }
-  const rawSub = cloneRecord(rawSnake[snakeKey]);
+  const rawSub = pruneKnownTomlKeys(section?.schema, value, rawSnake[snakeKey]);
   const converted = plainObjectToToml(value, rawSub);
   if (Object.keys(converted).length > 0) {
     rawSnake[snakeKey] = converted;
   } else {
     delete rawSnake[snakeKey];
   }
+}
+
+function pruneKnownTomlKeys(schema: unknown, value: unknown, raw: unknown): Record<string, unknown> {
+  const out = cloneRecord(raw);
+  if (!isPlainObject(value)) return out;
+  while (schema instanceof z.ZodOptional || schema instanceof z.ZodDefault || schema instanceof z.ZodNullable) schema = schema.unwrap() as z.ZodType;
+  if (schema instanceof z.ZodObject) {
+    for (const [key, child] of Object.entries(schema.shape)) {
+      const snakeKey = camelToSnake(key);
+      if (!Object.hasOwn(value, key)) delete out[snakeKey];
+      else if (isPlainObject(value[key]) && isPlainObject(out[snakeKey])) out[snakeKey] = pruneKnownTomlKeys(child as z.ZodType, value[key], out[snakeKey]);
+    }
+  } else if (schema instanceof z.ZodRecord) {
+    for (const key of Object.keys(out)) {
+      if (!Object.hasOwn(value, key)) delete out[key];
+      else if (isPlainObject(value[key]) && isPlainObject(out[key])) out[key] = pruneKnownTomlKeys(schema.valueType as z.ZodType, value[key], out[key]);
+    }
+  }
+  return out;
 }
 
 export function describeTomlSyntaxError(error: unknown): string {

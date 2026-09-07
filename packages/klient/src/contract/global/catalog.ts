@@ -8,6 +8,7 @@
  */
 
 import { z } from 'zod';
+import { noResult } from '../helpers.js';
 
 import type { ServiceContract, StreamingProcedureContract } from '../types.js';
 
@@ -21,6 +22,9 @@ export const thinkingCapabilitySchema = z.object({
 });
 
 export const modelCatalogItemSchema = z.object({
+  pricing_source: z.enum(['official', 'provider']).optional(),
+  curated: z.boolean().optional(),
+  released_at: z.string().optional(),
   provider: z.string(),
   model: z.string(),
   display_name: z.string().optional(),
@@ -79,6 +83,8 @@ const generateEventSchema = z.object({
 }).passthrough();
 
 export const catalogContract = {
+  listBuiltinProviders: { input: z.tuple([]), output: z.array(providerCatalogItemSchema) },
+  configureBuiltinProvider: { input: z.tuple([z.string(), z.string().min(1)]), output: noResult },
   listModels: { input: z.tuple([]), output: z.array(modelCatalogItemSchema) },
   listProviders: { input: z.tuple([]), output: z.array(providerCatalogItemSchema) },
   getProvider: { input: z.tuple([z.string()]), output: providerCatalogItemSchema },

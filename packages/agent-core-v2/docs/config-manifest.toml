@@ -192,6 +192,8 @@ extra_skill_dirs = []
 [loop_control]
 # max_steps_per_turn: integer
 # max_attempts_per_step: integer
+# retry_initial_delay_ms: integer
+# retry_max_delay_ms: integer
 # max_ralph_iterations: integer
 # reserved_context_size: integer
 # compaction_trigger_ratio: number
@@ -269,6 +271,10 @@ merge_all_available_skills = true
   # support_efforts: string[]
   # default_effort: string
   # off_effort: string
+  # effort_mapping: record<string, string | null>
+  # curated: boolean
+  # pricing_source: "official" | "provider"
+  # released_at: string
   # pricing: object
     # input_usd_per_million: number
     # output_usd_per_million: number
@@ -293,6 +299,10 @@ merge_all_available_skills = true
     # support_efforts: string[]
     # default_effort: string
     # off_effort: string
+    # effort_mapping: record<string, string | null>
+    # curated: boolean
+    # pricing_source: "official" | "provider"
+    # released_at: string
 
 # ##########################################################################
 # permission

@@ -19,6 +19,8 @@ import type {
   ResponseFormat,
   StreamedMessage,
 } from '#/kosong/contract/provider';
+import type { ProtocolAdapterConfig } from '#/kosong/protocol/protocol';
+import { getProtocolBase } from '#/kosong/protocol/protocolBase';
 import '#/kosong/provider/bases/anthropic/index';
 import {
   AnthropicChatProvider,
@@ -100,7 +102,19 @@ afterEach(() => {
   }
 });
 
-const registry = new ProtocolAdapterRegistry();
+class LegacyProtocolBaseRegistry extends ProtocolAdapterRegistry {
+  override createChatProvider(config: ProtocolAdapterConfig): ChatProvider {
+    const identity = this.resolveAdapterIdentity(config.protocol, config.providerType);
+    const base = getProtocolBase(identity.baseId);
+    if (base === undefined) throw new Error(`Missing protocol base '${identity.baseId}'.`);
+    return base.createChatProvider({
+      config,
+      traits: identity.traits.map(({ trait }) => ({ trait, context: { config, providerId: config.providerType } })),
+    });
+  }
+}
+
+const registry = new LegacyProtocolBaseRegistry();
 
 describe('supportedProtocols (probe 4)', () => {
   it('is derived from the registered bases and contains neither kimi nor vertexai', () => {

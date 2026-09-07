@@ -50,6 +50,10 @@ const modelBaseSchema = z.object({
   supportEfforts: z.array(z.string()).optional(),
   defaultEffort: z.string().optional(),
   offEffort: z.string().optional(),
+  effortMapping: z.record(z.string(), z.union([z.string(), z.null()])).optional(),
+  curated: z.boolean().optional(),
+  pricingSource: z.enum(['official', 'provider']).optional(),
+  releasedAt: z.string().optional(),
   pricing: z.object({
     inputUsdPerMillion: z.number().nonnegative(),
     outputUsdPerMillion: z.number().nonnegative(),

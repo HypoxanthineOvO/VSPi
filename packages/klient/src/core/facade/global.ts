@@ -169,6 +169,8 @@ export interface GlobalConfigFacade {
 }
 
 export interface GlobalKosongFacade {
+  listBuiltinProviders(): Promise<readonly ProviderCatalogItem[]>;
+  configureBuiltinProvider(providerId: string, apiKey: string): Promise<void>;
   // -- Provider ---------------------------------------------------------
   listProviders(): Promise<readonly ProviderCatalogItem[]>;
   getProvider(id: string): Promise<ProviderCatalogItem>;
@@ -202,6 +204,8 @@ export interface GlobalAuthFacade {
    */
   ensureReady(modelOverride?: string): Promise<void>;
   startLogin(provider?: string, options?: OAuthLoginOptions): Promise<OAuthFlowStart>;
+  listLoginProviders(): Promise<readonly { readonly id: string; readonly name: string }[]>;
+  submitLogin(provider: string, flowId: string, promptId: string, input: string): Promise<void>;
   flow(provider?: string): Promise<OAuthFlowSnapshot | undefined>;
   cancelLogin(provider?: string): Promise<OAuthLoginCancelResponse>;
   logout(provider?: string): Promise<OAuthLogoutResponse>;
@@ -452,6 +456,8 @@ export function createGlobalFacade(scoped: ScopedCaller, scopedStream: ScopedStr
     },
 
     kosong: {
+      listBuiltinProviders: () => call('modelResolver', 'listBuiltinProviders', []) as Promise<readonly ProviderCatalogItem[]>,
+      configureBuiltinProvider: (providerId, apiKey) => call('modelResolver', 'configureBuiltinProvider', [providerId, apiKey]) as Promise<void>,
       listProviders: () =>
         call('modelResolver', 'listProviders', []) as Promise<
           readonly ProviderCatalogItem[]
@@ -518,6 +524,9 @@ export function createGlobalFacade(scoped: ScopedCaller, scopedStream: ScopedStr
     },
 
     auth: {
+      listLoginProviders: () => call('oauthService', 'listLoginProviders', []) as Promise<readonly { readonly id: string; readonly name: string }[]>,
+      submitLogin: (provider, flowId, promptId, input) =>
+        call('oauthService', 'submitLogin', [provider, flowId, promptId, input]) as Promise<void>,
       status: (provider) => call('oauthService', 'status', [provider]) as Promise<AuthStatus>,
       summarize: () => call('authSummaryService', 'summarize', []) as Promise<readonly AuthStatus[]>,
       ensureReady: (modelOverride) =>

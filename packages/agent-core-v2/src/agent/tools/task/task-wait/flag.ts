@@ -7,9 +7,9 @@ export const waitForFlag: FlagDefinitionInput = {
   id: WAIT_FOR_FLAG_ID,
   title: 'WaitFor tool',
   description:
-    'Give the model the WaitFor tool so it can wait for background tasks inside the current turn instead of ending the turn and being re-invoked.',
+    'Give the model the WaitFor tool so it can wait for background tasks inside the current turn instead of ending the turn and being re-invoked. Off by default: models overuse it to hold turns open, so the default execution model is to end the turn and be resumed by the task notification.',
   env: WAIT_FOR_FLAG_ENV,
-  default: true,
+  default: false,
   surface: 'core',
 };
 

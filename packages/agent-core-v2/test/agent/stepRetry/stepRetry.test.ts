@@ -257,6 +257,43 @@ describe('stepRetry plugin', () => {
     expect(rpcEvents('turn.step.retrying')).toEqual([]);
   });
 
+  it('honors loop_control backoff delay options', async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    ctx = createTestAgent(
+      llmGenerateServices(async () => {
+        calls += 1;
+        if (calls <= 2) throw new APIConnectionError('terminated');
+        return {
+          id: 'backoff-response',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'recovered' }],
+            toolCalls: [],
+          },
+          usage: emptyUsage(),
+          finishReason: 'completed',
+          rawFinishReason: 'stop',
+        };
+      }),
+      {
+        initialConfig: { loopControl: { retryInitialDelayMs: 1_000, retryMaxDelayMs: 2_000 } },
+      },
+    );
+
+    const result = await runTurn(1);
+
+    expect(result).toEqual({ type: 'completed', steps: 3, truncated: false });
+    const delays = rpcEvents('turn.step.retrying').map(
+      (event) => (event.args as { delayMs: number }).delayMs,
+    );
+    expect(delays).toHaveLength(2);
+    expect(delays[0]).toBeGreaterThanOrEqual(1_000);
+    expect(delays[0]).toBeLessThanOrEqual(1_250);
+    expect(delays[1]).toBeGreaterThanOrEqual(2_000);
+    expect(delays[1]).toBeLessThanOrEqual(2_500);
+  });
+
   it('starts a fresh attempt budget on the next turn', async () => {
     vi.useFakeTimers();
     let calls = 0;
@@ -389,5 +426,19 @@ describe('retryBackoffDelays', () => {
     expect(delays[6]).toBeLessThanOrEqual(40_000);
     expect(delays[8]).toBeGreaterThanOrEqual(32_000);
     expect(delays[8]).toBeLessThanOrEqual(40_000);
+  });
+
+  it('honors custom initial and max delays', () => {
+    const delays = retryBackoffDelays(10, { initialDelayMs: 1_000, maxDelayMs: 4_000 });
+
+    expect(delays).toHaveLength(9);
+    expect(delays[0]).toBeGreaterThanOrEqual(1_000);
+    expect(delays[0]).toBeLessThanOrEqual(1_250);
+    expect(delays[1]).toBeGreaterThanOrEqual(2_000);
+    expect(delays[1]).toBeLessThanOrEqual(2_500);
+    expect(delays[2]).toBeGreaterThanOrEqual(4_000);
+    expect(delays[2]).toBeLessThanOrEqual(5_000);
+    expect(delays[8]).toBeGreaterThanOrEqual(4_000);
+    expect(delays[8]).toBeLessThanOrEqual(5_000);
   });
 });

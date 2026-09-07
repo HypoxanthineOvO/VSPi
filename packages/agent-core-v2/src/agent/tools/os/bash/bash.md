@@ -29,7 +29,7 @@ If `run_in_background=true`, the command will be started as a background task an
 - Use pipe operations (`|`) and redirections (`>`, `>>`) to chain input and output between commands
 - Always quote file paths containing spaces with double quotes (e.g., cd "/path with spaces/")
 - Compose multi-step logic in a single call with `if` / `case` / `for` / `while` control flows.
-- Prefer `run_in_background=true` for long-running builds, tests, watchers, or servers when you need the conversation to continue before the command finishes.
+- Run commands in the background by default: builds, test suites, installs, watchers, servers, and anything expected to take longer than roughly ten seconds should use `run_in_background=true`. Keep a command in the foreground only when it is quick and its output decides your immediate next action. After starting background work, end the turn and let the completion notification resume the work.
 
 **Commands available:**
 The following common command categories are usually available. Availability still depends on the host, so when in doubt run `which <command>` first to confirm a command exists before relying on it.

@@ -6,6 +6,8 @@ import type {
 	AgentConversationPage,
 	TaskDashboardItem,
 	TaskDashboardSnapshot,
+	SubagentModelPreferences,
+	SubagentModelEdit,
 } from "../backend/types.js";
 import { nextCronTaskRun } from "../cron/runtime.js";
 import { formatCronLocalTime } from "../cron/schedule.js";
@@ -115,6 +117,7 @@ export type PanelEvent =
 	| { type: "close" }
 	| { type: "command"; command: CommandDefinition }
 	| { type: "model"; model: ModelOption }
+	| { type: "subagentModel"; edit: SubagentModelEdit }
 	| { type: "modelGroup"; group: ModelGroup }
 	| { type: "provider"; provider: ProviderOption }
 	| { type: "providerActions"; provider: ProviderOption; actions: string[] }
@@ -633,8 +636,11 @@ export class PanelController {
 	private selectedModelKey = "";
 	private selectedGroupId = "";
 	private models: ModelOption[] = [];
+	private subagentPreferences: SubagentModelPreferences = { models: {} };
+	private subagentEditing: { model: string; purpose: string } | undefined;
+	private modelExpandCollapsed = false;
 	private filteredModelCache:
-		| { query: string; models: ModelOption[] }
+		| { query: string; expanded: boolean; models: ModelOption[] }
 		| undefined;
 	private modelGroups: ModelGroup[] = [];
 	private providers: ProviderOption[] = [];
@@ -817,6 +823,7 @@ export class PanelController {
 	}
 
 	open(kind: PanelKind): void {
+		this.subagentEditing = undefined;
 		this.state = { kind, selected: 0, scroll: 0 };
 		if (kind === "commands") this.state.selected = 0;
 		if (kind === "models") this.modelNarrowDetail = false;
@@ -950,6 +957,15 @@ export class PanelController {
 			this.modelGroups.find((group) => group.id === this.selectedGroupId)?.id ??
 			"";
 		this.state.selected = 0;
+	}
+
+	setSubagentModelPreferences(preferences: SubagentModelPreferences): void {
+		this.subagentPreferences = structuredClone(preferences);
+		this.filteredModelCache = undefined;
+	}
+
+	private subagentAlias(model: ModelOption): string {
+		return model.alias ?? `${model.provider ?? model.brand}/${model.id}`;
 	}
 
 	confirmModelSelection(
@@ -1205,6 +1221,16 @@ export class PanelController {
 	}
 
 	handleInput(data: string): PanelEvent | undefined {
+		if (this.kind === "models" && this.subagentEditing) {
+			if (matchesKey(data, Key.escape)) { this.subagentEditing = undefined; return; }
+			if (matchesKey(data, Key.enter)) {
+				const edit = this.subagentEditing;
+				this.subagentEditing = undefined;
+				return { type: "subagentModel", edit: { action: "purpose", ...edit } };
+			}
+			this.subagentEditing.purpose = this.editSharedTextField("subagent-purpose", this.subagentEditing.purpose, data, 300);
+			return;
+		}
 		if (this.kind === "settings" && this.settingsEndpointEditing)
 			return this.handleSettings(data);
 		if (this.kind === "agents") return this.handleAgents(data);
@@ -1696,6 +1722,10 @@ export class PanelController {
 	private interactionState(): InteractionState {
 		const state: InteractionState = {
 			narrowModel: !usesWideModelLayout(this.lastBodyWidth),
+			modelChoiceTab: this.modelTab === 0,
+			modelPurposeEditing: this.subagentEditing !== undefined,
+			modelHasCollapsed: this.models.some((model) => model.curated === false),
+			modelExpanded: this.modelExpandCollapsed,
 		};
 		if (this.kind === "plan")
 			state.hasItems = this.visiblePlanItems().length > 0;
@@ -1787,6 +1817,25 @@ export class PanelController {
 	}
 
 	private handleModels(data: string): PanelEvent | undefined {
+		if (this.modelTab === 0 && matchesKey(data, Key.ctrl("o"))) {
+			const selected = this.filteredModels()[this.state.selected];
+			this.modelExpandCollapsed = !this.modelExpandCollapsed;
+			this.filteredModelCache = undefined;
+			this.state.selected = Math.max(0, this.filteredModels().findIndex((model) => modelKey(model) === modelKey(selected)));
+			return;
+		}
+		if (this.modelTab === 0) {
+			const model = this.filteredModels()[this.state.selected];
+			if (model) {
+				const alias = this.subagentAlias(model);
+				if (matchesKey(data, Key.ctrl("s"))) return { type: "subagentModel", edit: { action: "toggle", model: alias } };
+				if (matchesKey(data, Key.ctrl("d"))) return { type: "subagentModel", edit: { action: "default", model: alias } };
+				if (matchesKey(data, Key.ctrl("p"))) {
+					this.subagentEditing = { model: alias, purpose: this.subagentPreferences.models[alias] ?? "" };
+					return;
+				}
+			}
+		}
 		if (matchesKey(data, Key.tab) && this.modelGroups.length > 0) {
 			this.modelTab = this.modelTab === 0 ? 1 : 0;
 			this.state.selected = 0;
@@ -2651,13 +2700,14 @@ export class PanelController {
 
 	private filteredModels(): ModelOption[] {
 		const query = this.modelSearch.toLowerCase();
-		if (this.filteredModelCache?.query === query)
+		if (this.filteredModelCache?.query === query && this.filteredModelCache.expanded === this.modelExpandCollapsed)
 			return this.filteredModelCache.models;
 		const brandIndex = (brand: string) => {
 			const index = BRAND_PRIORITY.indexOf(brand);
 			return index === -1 ? BRAND_PRIORITY.length : index;
 		};
 		const models = this.models
+			.filter((model) => query || this.modelExpandCollapsed || model.curated !== false || modelKey(model) === this.selectedModelKey || Object.hasOwn(this.subagentPreferences.models, this.subagentAlias(model)))
 			.filter(
 				(model) =>
 					!query ||
@@ -2683,7 +2733,7 @@ export class PanelController {
 					left.id.localeCompare(right.id)
 				);
 			});
-		this.filteredModelCache = { query, models };
+		this.filteredModelCache = { query, expanded: this.modelExpandCollapsed, models };
 		return models;
 	}
 
@@ -2692,9 +2742,15 @@ export class PanelController {
 		bodyRows: number,
 		theme: VspiTheme,
 	): string[] {
+		if (this.subagentEditing) return [
+			theme.bold("子模型用途"),
+			...wrapTextWithAnsi(this.subagentEditing.model, width),
+			...wrapTextWithAnsi(this.subagentEditing.purpose || " ", width),
+		].slice(0, bodyRows);
+		const modelView = this.modelExpandCollapsed ? "全部模型" : "精选模型";
 		const modelTab = this.modelSearch
 			? `选择模型 · ${this.modelSearch}`
-			: "选择模型";
+			: modelView;
 		const tabs = tabLine(
 			this.modelGroups.length > 0 ? [modelTab, "模型组"] : [modelTab],
 			this.modelTab,
@@ -2819,8 +2875,10 @@ export class PanelController {
 					? theme.success("✓ ")
 					: "  ";
 			const vision = entry.model.vision ? theme.blue(" ◉") : "";
+			const alias = this.subagentAlias(entry.model);
+			const star = Object.hasOwn(this.subagentPreferences.models, alias) ? theme.warning("★ ") : "  ";
 			const line = padLine(
-				`${marker}${check}${entry.model.label}${vision}`,
+				`${marker}${check}${star}${entry.model.label}${vision}`,
 				width,
 			);
 			return selected ? theme.selected(line) : line;
@@ -2902,6 +2960,10 @@ export class PanelController {
 		];
 		const details = [
 			theme.bold(theme.focus(model.label)),
+			...Object.hasOwn(this.subagentPreferences.models, this.subagentAlias(model)) ? [
+				theme.warning(this.subagentPreferences.defaultModel === this.subagentAlias(model) ? "★ 默认子模型" : "★ 子模型候选"),
+				...wrapTextWithAnsi(this.subagentPreferences.models[this.subagentAlias(model)] || "用途未设置", width),
+			] : [],
 			combinedIdentity,
 			capabilityRelease,
 			...effortRows,

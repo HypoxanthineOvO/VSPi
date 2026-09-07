@@ -988,13 +988,10 @@ describe('AgentTaskService', () => {
       'gone — but the tasks are still running from before. Do not start duplicates. The list below preserves their task IDs',
     );
     expect(reminder).toContain(
-      'default to ending this turn and let that notification resume the work',
+      'When a background task is the only remaining work, end this turn — stopping is correct',
     );
     expect(reminder).toContain(
-      'Do not use WaitFor merely because the next step depends on a result, no other work remains, or you want to continue in this turn.',
-    );
-    expect(reminder).toContain(
-      'Use it only when preserving an uninterruptible atomic operation requires the result and that operation must continue in this same turn.',
+      'Do not poll in a loop and do not hold the turn open waiting.',
     );
     expect(reminder).toContain('active_background_tasks: 1');
     expect(reminder).toContain(taskId);

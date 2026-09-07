@@ -5,6 +5,9 @@
  * Run: pnpm -C apps/vspi test
  */
 import type { AgentTaskInfo } from "@moonshot-ai/klient";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { RuntimeConnection } from "@vsp/vsp-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -19,7 +22,6 @@ import {
 	projectTodoPlanItems,
 	projectTowerMissionPlanItems,
 	reconcileTaskSnapshot,
-	resolveModelsDevPricing,
 	resolveSessionStartupMode,
 	sessionDisplayLabel,
 	serializeQuestionAnswer,
@@ -72,11 +74,134 @@ const provider = (id: string) => ({
 	models: [],
 });
 
+function draftBackendFixture() {
+	const listeners = new Map<string, (event: Record<string, unknown>) => void>();
+	let connectionError: ((error: Error) => void) | undefined;
+	const events = { on: vi.fn((name: string, handler: (event: Record<string, unknown>) => void) => { listeners.set(name, handler); return { dispose: vi.fn() }; }), onError: vi.fn((handler: (error: Error) => void) => { connectionError = handler; return { dispose: vi.fn() }; }) };
+	const models = [model("example", "code")];
+	let thinking = "off";
+	const agent = {
+		events, setModel: vi.fn(async () => undefined), getModel: vi.fn(async () => "example/code"),
+		setThinking: vi.fn(async (value: string) => { thinking = value; }), getThinking: vi.fn(async () => thinking),
+		getGoal: vi.fn(async () => ({})), getTasks: vi.fn(async () => []), getCronTasks: vi.fn(async () => []),
+		getUsage: vi.fn(async () => { throw new Error("no usage"); }), getContext: vi.fn(async () => ({ history: [], tokenCount: 0 })),
+		prompt: vi.fn(async ({ promptId }: { promptId: string }) => { listeners.get("prompt.completed")?.({ promptId, reason: "completed" }); }),
+	};
+	const create = vi.fn(async () => ({ id: "new-session" }));
+	const remove = vi.fn(async () => undefined);
+	const getConfig = vi.fn(async (section: string): Promise<unknown> => section === "defaultModel" ? "example/code" : undefined);
+	const connection = { klient: { events, session: () => ({ agent: () => agent, events, delete: remove, restore: async () => true, get: async () => ({ id: "old-session" }) }), global: {
+		workspaces: { createOrTouch: vi.fn(async () => ({ id: "workspace" })) }, sessions: { create },
+		config: { get: getConfig },
+		kosong: { listModels: vi.fn(async () => models), listProviders: vi.fn(async () => [provider("example")]), getProvider: vi.fn(async () => provider("example")), queryAvailableModels: vi.fn(async () => ({ modelIds: ["example/code"] })), setDefaultModel: vi.fn(async () => ({ model: models[0] })) },
+	} } } as unknown as RuntimeConnection;
+	const backend = new KlientChatBackend(connection, "/workspace", "new");
+	const reset = vi.fn();
+	const start = () => backend.start({ onMessage: vi.fn(), onMessageUpdate: vi.fn(), onBusy: vi.fn(), onUsage: vi.fn(), onNotice: vi.fn(), onSessionReset: reset });
+	return { backend, create, remove, agent, reset, start, listeners, getConfig, disconnect: () => connectionError?.(new Error("ipc closed")) };
+}
+
 afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
 describe("Klient backend projection (Core wire to VSPi UI)", () => {
+	it("creates no session for opening, model settings, empty submission or /new", async () => {
+		const fixture = draftBackendFixture();
+		try {
+			await fixture.start();
+			await fixture.backend.selectModel("example", "code");
+			await fixture.backend.setEffort("off");
+			await fixture.backend.send(" ", { attachments: [], effort: "off", behavior: "prompt" });
+			await fixture.backend.newSession();
+			expect(fixture.create).not.toHaveBeenCalled();
+			expect(fixture.agent.setModel).not.toHaveBeenCalled();
+			expect(fixture.backend.isSessionReady()).toBe(false);
+		} finally { await fixture.backend.dispose(); }
+	});
+
+	it("creates exactly one session for concurrent first submissions", async () => {
+		const fixture = draftBackendFixture();
+		try {
+			await fixture.start();
+			await Promise.all(["first", "second"].map((text) => fixture.backend.send(text, { attachments: [], effort: "off", behavior: "prompt" })));
+			expect(fixture.create).toHaveBeenCalledOnce();
+			expect(fixture.agent.prompt).toHaveBeenCalledTimes(2);
+			expect(fixture.reset).toHaveBeenLastCalledWith(expect.objectContaining({ id: "new-session", reason: "created" }));
+		} finally { await fixture.backend.dispose(); }
+	});
+
+	it("settles a disconnect before prompt acknowledgement without an orphan rejection", async () => {
+		const fixture = draftBackendFixture();
+		try {
+			await fixture.start();
+			fixture.agent.prompt.mockImplementationOnce(async () => {
+				fixture.disconnect();
+				throw new Error("ipc closed");
+			});
+			await expect(fixture.backend.send("first", { attachments: [], effort: "off", behavior: "prompt" })).rejects.toThrow("ipc closed");
+		} finally { await fixture.backend.dispose(); }
+	});
+
+	it("cancels a pending initial creation without submitting or retaining an empty session", async () => {
+		const fixture = draftBackendFixture();
+		let release!: (meta: { id: string }) => void;
+		fixture.create.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+		try {
+			await fixture.start();
+			const submitted = fixture.backend.send("first", { attachments: [], effort: "off", behavior: "prompt" });
+			await vi.waitFor(() => expect(fixture.create).toHaveBeenCalledOnce());
+			await fixture.backend.cancel();
+			release({ id: "cancelled-session" });
+			expect(await submitted).toEqual({ status: "cancelled" });
+			expect(fixture.remove).toHaveBeenCalledOnce();
+			expect(fixture.agent.prompt).not.toHaveBeenCalled();
+		} finally { await fixture.backend.dispose(); }
+	});
+
+	it("keeps the restored session model instead of replacing it with the global default", async () => {
+		const fixture = draftBackendFixture();
+		try {
+			await fixture.start();
+			fixture.getConfig.mockImplementation(async (section: string) => section === "defaultModel" ? "example/other" : undefined);
+			await fixture.backend.switchSession("old-session");
+			expect(fixture.agent.getModel).toHaveBeenCalledOnce();
+			expect(fixture.agent.setModel).not.toHaveBeenCalled();
+			expect(fixture.create).not.toHaveBeenCalled();
+		} finally { await fixture.backend.dispose(); }
+	});
+
+	it("starts a new output segment before consuming steer so later deltas cannot rewrite earlier output", async () => {
+		const fixture = draftBackendFixture();
+		try {
+			await fixture.start();
+			await fixture.backend.send("first", { attachments: [], effort: "off", behavior: "prompt" });
+			const state = fixture.backend as unknown as { queuedPrompts: Map<string, unknown>; turn: ReturnType<typeof turnState>; consumeQueuedPrompt(id: string): void };
+			state.turn = turnState(1, 0);
+			state.queuedPrompts.set("steer", { text: "change", delivery: "steer", phase: "queued" });
+			state.consumeQueuedPrompt("steer");
+			expect(state.turn.assistantId).toBe("assistant:1:1");
+			expect(state.queuedPrompts.size).toBe(0);
+		} finally { await fixture.backend.dispose(); }
+	});
+	it("sends image bytes with queued input instead of silently dropping attachments", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "vspi-image-"));
+		try {
+			const path = join(dir, "image.png");
+			await writeFile(path, Buffer.from([1, 2, 3]));
+			const steer = vi.fn().mockResolvedValue(undefined);
+			const backend = new KlientChatBackend({} as RuntimeConnection, dir, "new");
+			Object.assign(backend, { agent: { steer }, busy: true });
+			await backend.send("image", {
+				effort: "off", behavior: "prompt", clientMessageId: "image-prompt",
+				attachments: [{ id: "image", alias: "image", mimeType: "image/png", width: 1, height: 1, size: 3, path, status: "ready" }],
+			});
+			expect(steer).toHaveBeenCalledWith({ promptId: "image-prompt", input: [
+				{ type: "text", text: "image" },
+				{ type: "image_url", imageUrl: { url: "data:image/png;base64,AQID" } },
+			] });
+		} finally { await rm(dir, { recursive: true, force: true }); }
+	});
 	it("maps resume to the session picker startup mode", () => {
 		expect(resolveSessionStartupMode("resume")).toBe("resume");
 		expect(resolveSessionStartupMode("continue")).toBe("continue");
@@ -90,10 +215,12 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		const onSessionReady = vi.fn();
 		const connection = {
 			klient: {
-				events: { on: vi.fn(() => ({ dispose: vi.fn() })) },
+				events: { on: vi.fn(() => ({ dispose: vi.fn() })), onError: vi.fn(() => ({ dispose: vi.fn() })) },
 				global: {
 					workspaces: { createOrTouch },
 					sessions: { create, list },
+					config: { get: vi.fn(async () => undefined) },
+					kosong: { listModels: vi.fn(async () => []), listProviders: vi.fn(async () => []) },
 				},
 			},
 		} as unknown as RuntimeConnection;
@@ -121,6 +248,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		const connection = {
 			klient: {
 				events: {
+					onError: vi.fn(() => ({ dispose: vi.fn() })),
 					on: vi.fn((name: string, listener: () => void) => {
 						listeners.set(name, listener);
 						return { dispose: vi.fn() };
@@ -130,6 +258,8 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 					workspaces: {
 						createOrTouch: vi.fn().mockResolvedValue({ id: "workspace-1" }),
 					},
+					config: { get: vi.fn(async () => undefined) },
+					kosong: { listModels: vi.fn(async () => []), listProviders: vi.fn(async () => []) },
 				},
 			},
 		} as unknown as RuntimeConnection;
@@ -264,8 +394,8 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 				controls: ["effort"],
 				efforts: ["low", "high"],
 				provider_efforts: {
-					acme: ["eco", "turbo"],
-					openai: ["minimal", "max"],
+					acme: ["minimal", "max"],
+					openai: ["eco", "turbo"],
 					other: ["wrong"],
 				},
 				default_effort: "turbo",
@@ -294,6 +424,22 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		});
 		expect(resolveCatalogEffort("中", invalidDefault)).toBe("medium");
 		expect(catalogEffortCapability(undefined).options).toEqual(["off"]);
+	});
+
+	it("uses the Core provider type rather than an alias when effort maps conflict", () => {
+		const thinking = {
+			availability: "always" as const,
+			can_disable: false,
+			controls: ["effort" as const],
+			efforts: ["medium"],
+			provider_efforts: { alias: ["low"], openai: ["high"] },
+			default_effort: "high",
+		};
+		expect(catalogEffortCapability(thinking, { identity: "alias", type: "openai" })).toMatchObject({
+			options: ["high"], defaultEffort: "high", mutable: false,
+		});
+		expect(catalogEffortCapability(thinking, { identity: "alias", type: "unknown" }).options).toEqual(["medium"]);
+		expect(catalogEffortCapability(thinking, { identity: "alias" }).options).toEqual(["low"]);
 	});
 
 	it("falls back to an available model from the default provider and persists it", async () => {
@@ -1343,20 +1489,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 
 	it("matches the full VSPLab alias to its exact official price during usage projection", async () => {
 		const alias = "vsplab/gpt-5.6-sol";
-		const price = resolveModelsDevPricing(
-			{
-				openai: {
-					models: {
-						"gpt-5.6-sol": {
-							id: "gpt-5.6-sol",
-							cost: { input: 2, output: 4 },
-						},
-					},
-				},
-			},
-			"vsplab",
-			"gpt-5.6-sol",
-		);
+		const price: RuntimeModelOption["price"] = { inputUsdPerMillion: 2, outputUsdPerMillion: 4, source: "official" };
 		const onUsage = vi.fn();
 		const backend = new KlientChatBackend(
 			{} as RuntimeConnection,
@@ -1393,10 +1526,6 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			backend as unknown as { publishUsage(): Promise<void> }
 		).publishUsage();
 
-		expect(price).toMatchObject({
-			referenceProvider: "openai",
-			source: "official",
-		});
 		expect(onUsage).toHaveBeenCalledWith(
 			expect.objectContaining({
 				costUsd: 4,
@@ -1846,170 +1975,13 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		expect(formatProviderDisplayName("opencode-go")).toBe("OpenCode Go");
 	});
 
-	it("uses channel prices except for VSPLab, which uses exact official references", () => {
-		const catalog = {
-			openai: {
-				models: {
-					"gpt-5.6-luna": {
-						id: "gpt-5.6-luna",
-						cost: { input: 1, output: 2 },
-					},
-					"gpt-5.6-sol": {
-						id: "gpt-5.6-sol",
-						cost: { input: 2, output: 4 },
-					},
-					"gpt-5.6-terra": {
-						id: "gpt-5.6-terra",
-						cost: { input: 3, output: 6 },
-					},
-				},
-			},
-			anthropic: {
-				models: {
-					"claude-sonnet-4": {
-						id: "claude-sonnet-4",
-						cost: { input: 3, output: 15 },
-					},
-				},
-			},
-			google: {
-				models: {
-					"gemini-3-pro": {
-						id: "gemini-3-pro",
-						cost: { input: 2, output: 12 },
-					},
-				},
-			},
-			zai: {
-				models: {
-					"glm-5": {
-						id: "glm-5",
-						cost: { input: 1, output: 4 },
-					},
-				},
-			},
-			deepseek: {
-				models: {
-					"deepseek-v4-flash": {
-						id: "deepseek-v4-flash",
-						cost: { input: 0.14, output: 0.28 },
-					},
-				},
-			},
-			"kimi-for-coding": {
-				models: {
-					k3: { id: "k3", cost: { input: 0, output: 0 } },
-					"k3-256k": {
-						id: "k3-256k",
-						cost: { input: 0, output: 0 },
-					},
-					"kimi-for-coding": {
-						id: "kimi-for-coding",
-						cost: { input: 0, output: 0 },
-					},
-					"kimi-for-coding-highspeed": {
-						id: "kimi-for-coding-highspeed",
-						cost: { input: 0, output: 0 },
-					},
-				},
-			},
-			moonshotai: {
-				models: {
-					"kimi-k2.7-code": {
-						id: "kimi-k2.7-code",
-						cost: { input: 0.95, output: 4, cache_read: 0.19 },
-					},
-					"kimi-k2.5": {
-						id: "kimi-k2.5",
-						cost: { input: 0.6, output: 3 },
-					},
-					"kimi-k3": {
-						id: "kimi-k3",
-						cost: { input: 3, output: 15, cache_read: 0.3 },
-					},
-				},
-			},
-			vsplab: {
-				models: {
-					"gpt-5.6-sol": {
-						id: "gpt-5.6-sol",
-						cost: { input: 0.01, output: 0.01 },
-					},
-				},
-			},
-			"opencode-go": {
-				models: {
-					"deepseek-v4-flash": {
-						id: "deepseek-v4-flash",
-						cost: { input: 0.22, output: 0.66 },
-					},
-				},
-			},
-		};
-
-		expect(
-			resolveModelsDevPricing(catalog, "opencode-go", "deepseek-v4-flash"),
-		).toMatchObject({ referenceProvider: "opencode-go", source: "provider" });
-		for (const id of ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"]) {
-			expect(resolveModelsDevPricing(catalog, "vsplab", id)).toMatchObject({
-				referenceProvider: "openai",
-				source: "official",
-			});
-		}
-		expect(
-			resolveModelsDevPricing(catalog, "vsplab", "claude-sonnet-4"),
-		).toMatchObject({ referenceProvider: "anthropic", source: "official" });
-		expect(
-			resolveModelsDevPricing(catalog, "vsplab", "gemini-3-pro"),
-		).toMatchObject({ referenceProvider: "google", source: "official" });
-		expect(resolveModelsDevPricing(catalog, "vsplab", "glm-5")).toMatchObject({
-			referenceProvider: "zai",
-			source: "official",
-		});
-		expect(
-			resolveModelsDevPricing(catalog, "vsplab", "deepseek-v4-flash"),
-		).toMatchObject({ referenceProvider: "deepseek", source: "official" });
-		for (const id of [
-			"k3",
-			"k3-256k",
-			"kimi-for-coding",
-			"kimi-for-coding-highspeed",
-		]) {
-			expect(resolveModelsDevPricing(catalog, "vsplab", id)).toMatchObject({
-				referenceProvider: "kimi-for-coding",
-				source: "official",
-			});
-		}
-		expect(resolveModelsDevPricing(catalog, "vsplab", "kimi-k2.7-code")).toMatchObject({
-			inputUsdPerMillion: 0.95,
-			outputUsdPerMillion: 4,
-			referenceProvider: "moonshotai",
-			source: "official",
-		});
-		expect(resolveModelsDevPricing(catalog, "moonshotai", "kimi-k3")).toMatchObject({
-			inputUsdPerMillion: 3,
-			outputUsdPerMillion: 15,
-			referenceProvider: "moonshotai",
-			source: "provider",
-		});
-		expect(resolveModelsDevPricing(catalog, "moonshotai", "k3")).toEqual({});
-		expect(resolveModelsDevPricing(catalog, "kimi-coding", "k3")).toMatchObject({
-			inputUsdPerMillion: 0,
-			outputUsdPerMillion: 0,
-			referenceProvider: "kimi-for-coding",
-			source: "official",
-		});
-		expect(resolveModelsDevPricing(catalog, "vsplab", "kimi-k2.5")).toMatchObject({
-			referenceProvider: "moonshotai",
-			source: "official",
-		});
-		expect(resolveModelsDevPricing(catalog, "vsplab", "gpt-5.6-unknown")).toEqual(
-			{},
-		);
-		expect(resolveModelsDevPricing(catalog, "vsplab", "deepseek-reasoner")).toEqual(
-			{},
-		);
-		expect(resolveModelsDevPricing(catalog, "vsplab", "deepseek-chat")).toEqual({});
-		expect(resolveModelsDevPricing(catalog, "vsplab", "kimi-unknown")).toEqual({});
+	it("uses the effective Core price and capability projection without a second catalog", async () => {
+	 const listed = { ...model("example", "reasoner"), pricing_source: "official", capabilities: ["image_in"] };
+	 const connection = { klient: { global: { kosong: {
+	 listModels: async () => [listed], listProviders: async () => [provider("example")],
+	 getProvider: async () => provider("example"), queryAvailableModels: async () => ({ modelIds: [listed.model] }),
+	 } } } } as unknown as RuntimeConnection;
+	 const backend = new KlientChatBackend(connection, "/workspace", "new");
+	 expect(await backend.getModelOptions()).toMatchObject([{ alias: "example/reasoner", vision: true, price: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, source: "official" } }]);
 	});
 });

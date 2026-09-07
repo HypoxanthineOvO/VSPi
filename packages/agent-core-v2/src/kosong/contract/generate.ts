@@ -212,7 +212,12 @@ function flushPart(
   toolCallIndexMap: Map<number | string, number>,
 ): void {
   if (isContentPart(part)) {
-    message.content.push(part);
+    if (part.type === 'text' || part.type === 'think') {
+      const { _streamIndex, ...stored } = part;
+      message.content.push(stored);
+    } else {
+      message.content.push(part);
+    }
     return;
   }
   if (isToolCall(part)) {

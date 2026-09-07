@@ -19,11 +19,6 @@ import {
 
 import { CONFIG_INVALID_ERROR_CODE } from '#/kosong/contract/errors';
 import {
-  LATEST_OPUS_PROFILE,
-  matchKnownAnthropicModelProfile,
-  matchUnknownClaudeProfile,
-} from '../provider/bases/anthropic/anthropic-profile';
-import {
   IProviderService,
   type ProviderConfig,
 } from '../provider/provider';
@@ -69,7 +64,7 @@ import { IModelOAuthTokens } from './modelOAuth';
 import type { ResolvedModelAuthMaterial } from './model.types';
 import type { ModelRequester } from './modelRequester';
 import { ModelRequesterImpl } from './modelRequesterImpl';
-import { drivesThinkingThroughTraits } from './thinking';
+import { findPiModel, listPiProviders, listPiModelRecords } from '../provider/pi/catalog';
 
 type MutableProtocolProviderOptions = {
   -readonly [K in keyof ProtocolProviderOptions]: ProtocolProviderOptions[K];
@@ -196,6 +191,38 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
     return out;
   }
 
+  async listBuiltinProviders(): Promise<readonly ProviderCatalogItem[]> {
+    return listPiProviders().map((provider) => ({
+      id: provider.id,
+      type: provider.id,
+      base_url: provider.baseUrl,
+      has_api_key: false,
+      status: 'unconfigured' as const,
+      models: provider.models.map((model) => `${provider.id}/${model.id}`),
+    }));
+  }
+
+  async configureBuiltinProvider(providerId: string, apiKey: string): Promise<void> {
+    const builtin = listPiProviders().find((provider) => provider.id === providerId);
+    if (builtin === undefined || apiKey.trim().length === 0) {
+      throw new Error2(CONFIG_INVALID_ERROR_CODE, 'A known provider and non-empty API key are required');
+    }
+    const previous = this.providers.get(providerId);
+    await this.providers.set(providerId, {
+      ...previous,
+      type: previous?.type ?? providerId,
+      baseUrl: previous?.baseUrl ?? builtin.baseUrl,
+      apiKey,
+      oauth: undefined,
+    });
+    const current = this.models.list();
+    await this.models.replaceAll({ ...listPiModelRecords(providerId), ...current });
+    if (this.models.getDefaultModel() === undefined) {
+      const first = builtin.models[0];
+      if (first !== undefined) await this.models.setDefaultModel(`${providerId}/${first.id}`);
+    }
+  }
+
   async getProvider(providerId: string): Promise<ProviderCatalogItem> {
     const provider = this.providers.get(providerId);
     if (provider === undefined) {
@@ -282,13 +309,12 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
     );
     trace.capture(TRACE.effectiveModel, model);
     const wireName = model.name ?? model.model;
-    const profileAttribution = profileForAttribution(configuredModel, providerConfig, wireName);
+    const piModel = findPiModel(providerConfig?.type, wireName ?? '', protocol);
     attributeEffectiveFields(
       trace,
       configuredModel,
       model,
-      profileAttribution.profile,
-      profileAttribution.inferred,
+      piModel === undefined ? undefined : `pi-ai 0.85.1: ${piModel.provider}/${piModel.id}`,
     );
 
     const auth = resolveModelAuthMaterial(
@@ -328,12 +354,19 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
     );
     trace.capture(TRACE.detectedCapability, explainedCapability.capability);
     trace.capture(TRACE.capabilitySource, explainedCapability.source);
-    const capabilities = resolveModelCapabilities(
+    const capabilities = { ...resolveModelCapabilities(
       model.capabilities,
-      explainedCapability.capability,
+      configuredModel.overrides?.capabilities === undefined && configuredModel.capabilities === undefined ? explainedCapability.capability : {
+        ...explainedCapability.capability,
+        image_in: false,
+        video_in: false,
+        audio_in: false,
+        thinking: false,
+        tool_use: false,
+      },
       model.maxContextSize,
       model.maxInputSize,
-    );
+    ), thinking: normalizeThinkingCapability(model.thinking).availability !== 'none' };
     const providerOptions = buildProtocolProviderOptions(
       model,
       protocol,
@@ -372,6 +405,7 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
       providerName,
       authProvider,
       providerOptions,
+      effortMapping: model.effortMapping,
     };
   }
 
@@ -460,6 +494,7 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
       return {
         canRefresh: true,
         async getAuth(options): Promise<ProviderRequestAuth | undefined> {
+          if (tokens.getRequestAuth !== undefined) return tokens.getRequestAuth(providerKey, oauthRef, options);
           const apiKey = await tokens.getAccessToken(providerKey, oauthRef, {
             force: options?.force === true,
           });
@@ -556,26 +591,6 @@ function buildProtocolProviderOptions(
   return Object.values(options).some((value) => value !== undefined)
     ? options
     : undefined;
-}
-
-function profileForAttribution(
-  configuredModel: ModelRecord,
-  providerConfig: ProviderConfig | undefined,
-  wireName: string | undefined,
-): { readonly profile: typeof LATEST_OPUS_PROFILE | undefined; readonly inferred: boolean } {
-  if (wireName === undefined) return { profile: undefined, inferred: false };
-  const profileArg = providerConfig?.type ?? configuredModel.protocol;
-  const gateProtocol = configuredModel.protocol ?? profileArg;
-  const known = matchKnownAnthropicModelProfile(wireName);
-  const infer =
-    profileArg !== undefined &&
-    !drivesThinkingThroughTraits(profileArg) &&
-    gateProtocol === 'anthropic';
-  if (infer) {
-    const fallback = known ?? matchUnknownClaudeProfile(wireName);
-    return { profile: fallback, inferred: known === undefined && fallback !== undefined };
-  }
-  return { profile: known, inferred: false };
 }
 
 function vertexAIProject(provider: ProviderConfig | undefined): string | undefined {

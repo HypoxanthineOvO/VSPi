@@ -71,11 +71,8 @@ export function catalogEffortCapability(
 	const canDisable =
 		thinking.availability === "dynamic" && thinking.can_disable;
 	const providerEfforts = thinking.provider_efforts;
-	const matchedProviderEfforts =
-		(provider?.identity === undefined
-			? undefined
-			: providerEfforts?.[provider.identity]) ??
-		(provider?.type === undefined ? undefined : providerEfforts?.[provider.type]);
+	const providerType = provider?.type ?? provider?.identity;
+	const matchedProviderEfforts = providerType === undefined ? undefined : providerEfforts?.[providerType];
 	const declaredEfforts = normalizeCatalogEfforts(matchedProviderEfforts ?? thinking.efforts);
 	let options: EffortLevel[];
 	if (thinking.controls.includes("effort") && declaredEfforts.length > 0) {

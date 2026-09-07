@@ -2,7 +2,7 @@ import { Image } from "@moonshot-ai/pi-tui";
 import type { Attachment } from "../domain/types.js";
 import type { VspiTheme } from "../ui/theme.js";
 import { readClipboardImage } from "./clipboard.js";
-import { AttachmentStore, type AttachmentStoreOptions } from "./store.js";
+import { AttachmentStore, readVerifiedAttachmentBytes, type AttachmentStoreOptions } from "./store.js";
 
 export interface AttachmentServiceEvents {
   onAttachment: (attachment: Attachment, ownership?: AttachmentSessionOwnership) => void | Promise<void>;
@@ -58,6 +58,24 @@ export class AttachmentService {
       await next.initialize();
       if (generation !== this.generation) return;
       this.store = next;
+    });
+  }
+
+  async promoteSession(sessionId: string): Promise<Map<string, Attachment>> {
+    const previous = this.store;
+    const next = new AttachmentStore(sessionId, this.storeOptions);
+    const generation = ++this.generation;
+    return this.enqueue(async () => {
+      const migrated = new Map<string, Attachment>();
+      await next.initialize();
+      if (generation !== this.generation) return migrated;
+      for (const attachment of previous.list()) {
+        const bytes = await readVerifiedAttachmentBytes(attachment, { expectedDirectory: previous.directory, maxBytes: previous.maxBytes });
+        const added = await next.add(bytes, attachment.mimeType);
+        migrated.set(attachment.id, await next.rename(added.id, attachment.alias));
+      }
+      if (generation === this.generation) this.store = next;
+      return migrated;
     });
   }
 

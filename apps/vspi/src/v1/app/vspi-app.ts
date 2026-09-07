@@ -690,6 +690,34 @@ export class VspiApp implements Component, Focusable {
 					);
 				},
 				onSessionReset: (session) => {
+					if (session.reason === "created") {
+						this.backendSessionReady = true;
+						this.effort = session.effort;
+						this.modelLabel = this.backend.modelLabel;
+						this.currentModelIdentity = this.backend.modelProvider ? { provider: this.backend.modelProvider, id: this.backend.modelId } : undefined;
+						if (this.currentModelIdentity) this.panels.confirmModelSelection(this.currentModelIdentity);
+						this.attachmentSessionId = session.id;
+						const pending = [...this.composer.attachments];
+						const epoch = this.sessionEpoch;
+						void this.options.attachments.promoteSession(session.id).then((migrated) => {
+							if (this.sessionEpoch !== epoch || this.attachmentSessionId !== session.id) return;
+							for (const message of this.messages) {
+								if (message.kind !== "text") continue;
+								for (const attachment of message.attachments ?? []) {
+									const replacement = migrated.get(attachment.id);
+									if (replacement) Object.assign(attachment, replacement);
+								}
+							}
+							this.composer.restoreAttachments(pending.map((attachment) => migrated.get(attachment.id) ?? attachment));
+							this.transcriptRenderCache.clear();
+							this.requestRender();
+						}).catch(() => {
+							if (this.sessionEpoch === epoch && this.attachmentSessionId === session.id) this.attachmentSessionId = this.options.attachments.store.sessionId;
+							this.showNotice("草稿附件迁移失败，原文件已保留", "warning");
+						});
+						this.requestRender();
+						return;
+					}
 					const hydrating = this.sessionTransition;
 					this.sessionResetObserved = hydrating;
 					this.sessionHandoffPending = false;
@@ -742,7 +770,7 @@ export class VspiApp implements Component, Focusable {
 			this.renderReady = true;
 			this.startupShellReady = true;
 			this.backendSessionReady = this.backend.isSessionReady?.() ?? true;
-			if (this.backendSessionReady) await this.initializeRuntimeSurface();
+			await this.initializeRuntimeSurface();
 			await this.refreshPlanSnapshot(this.sessionEpoch);
 			await this.refreshWorkflowSnapshot();
 			this.queueVisibleThinkingTranslations();
@@ -779,6 +807,8 @@ export class VspiApp implements Component, Focusable {
 				? { provider: this.backend.modelProvider, id: this.backend.modelId }
 				: undefined;
 			this.panels.setModels(models, groups, backendModelIdentity);
+			const subagentPreferences = await this.backend.getSubagentModelPreferences?.();
+			if (subagentPreferences) this.panels.setSubagentModelPreferences(subagentPreferences);
 			this.modelOptions = structuredClone(models);
 			this.providerConfig = this.options.providerConfigFactory?.(
 				this.backend.isProjectTrusted?.() ?? false,
@@ -1791,7 +1821,7 @@ export class VspiApp implements Component, Focusable {
 		options?: { skipPlanRoute?: boolean },
 	): Promise<void> {
 		let text = raw.trim();
-		if (!text) return;
+		if (!text && this.composer.attachments.length === 0) return;
 		const queuedDuringWork = this.activityActive();
 		const behavior = this.nextBehavior;
 		this.nextBehavior = "prompt";
@@ -1915,7 +1945,7 @@ export class VspiApp implements Component, Focusable {
 					this.showNotice(
 						mode === "followUp"
 							? "已加入 Follow-up，将在当前任务完成后继续"
-							: "已插入，将在下一次模型调用前送达",
+							: "已排队，等待插入",
 						"success",
 					);
 				}
@@ -2264,7 +2294,7 @@ export class VspiApp implements Component, Focusable {
 	private queueMessagePresentation(messageId: string): void {
 		if (this.queuedPresentations.has(messageId)) return;
 		this.queuedPresentations.set(messageId, {
-			phase: "stable",
+			phase: "entering",
 			startedTick: this.queuedAnimationTick,
 		});
 		this.syncActivityPresentation();
@@ -2288,6 +2318,7 @@ export class VspiApp implements Component, Focusable {
 			| "failed"
 			| "cancelled",
 	): void {
+		if (this.clearingQueue && phase === "cancelled") return;
 		const queued = this.queuedMessages.get(messageId);
 		const existing = this.messages.find((message) => message.id === messageId);
 		if (queued === undefined && existing?.kind !== "text") return;
@@ -2665,7 +2696,13 @@ export class VspiApp implements Component, Focusable {
 			await this.openLogout(raw);
 			return;
 		}
-		if (action.handler === "models") this.panels.open("models");
+		if (action.handler === "models") {
+			this.panels.open("models");
+			try {
+				const preferences = await this.backend.getSubagentModelPreferences?.();
+				if (preferences) this.panels.setSubagentModelPreferences(preferences);
+			} catch (error) { this.showNotice(`子模型配置读取失败：${error instanceof Error ? error.message : String(error)}`, "error"); }
+		}
 		else if (action.handler === "providers") this.panels.open("providers");
 		else if (action.handler === "tools") this.panels.open("tools");
 		else if (action.handler === "agents" || action.handler === "tasks") {
@@ -2942,6 +2979,13 @@ export class VspiApp implements Component, Focusable {
 					"error",
 				);
 			}
+		} else if (event.type === "subagentModel") {
+			try {
+				if (!this.backend.updateSubagentModelPreferences) throw new Error("当前后端不支持子模型配置");
+				const preferences = await this.backend.updateSubagentModelPreferences(event.edit);
+				this.panels.setSubagentModelPreferences(preferences);
+				this.showNotice("子模型候选配置已保存", "success");
+			} catch (error) { this.showNotice(`子模型配置未保存：${error instanceof Error ? error.message : String(error)}`, "error"); }
 		} else if (event.type === "model") {
 			const switchingDuringActivity = this.activityActive();
 			try {
@@ -5140,7 +5184,7 @@ export class VspiApp implements Component, Focusable {
 
 	private async interruptWithComposer(): Promise<void> {
 		const text = this.composer.getText().trim();
-		if (text.length === 0) {
+		if (text.length === 0 && this.composer.attachments.length === 0) {
 			await this.cancelGeneration();
 			return;
 		}

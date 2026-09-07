@@ -189,6 +189,7 @@ interface CronAddPayload {
     prompt: string;
     createdAt: number;
     recurring?: boolean;
+    wakesGoal?: boolean;
     lastFiredAt?: number;
     tags?: Record<string, string>;
   };

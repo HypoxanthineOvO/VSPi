@@ -621,7 +621,7 @@ describe('ConfigState.provider applies global KIMI_MODEL_* request config', () =
 
     await requester.request({}, undefined, new AbortController().signal);
 
-    expect(capturedProvider).toMatchObject({ name: 'anthropic' });
+    expect(capturedProvider).toMatchObject({ name: 'kimi' });
     expect(capturedOptions?.thinking?.effort).toBe('max');
   });
 });

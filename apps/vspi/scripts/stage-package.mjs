@@ -21,6 +21,7 @@ await mkdir(join(stagingRoot, 'dist'), { recursive: true });
 await Promise.all([
   writeFile(join(stagingRoot, 'package.json'), `${JSON.stringify(packageManifest, null, 2)}\n`),
   cp(join(repositoryRoot, 'LICENSE'), join(stagingRoot, 'LICENSE')),
+  cp(join(packageRoot, 'THIRD_PARTY_NOTICES'), join(stagingRoot, 'THIRD_PARTY_NOTICES')),
   cp(join(packageRoot, 'README.md'), join(stagingRoot, 'README.md')),
   cp(join(packageRoot, 'skills'), join(stagingRoot, 'skills'), { recursive: true }),
   ...['main.mjs', 'search-worker.mjs', 'text-build-worker.mjs'].map((name) =>

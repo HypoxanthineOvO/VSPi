@@ -12,16 +12,32 @@ export const oauthFlowStatusEnum = z.enum([
 ]);
 export type OAuthFlowStatus = z.infer<typeof oauthFlowStatusEnum>;
 
+export const oauthLoginPromptSchema = z.object({
+  id: z.string(),
+  message: z.string(),
+  placeholder: z.string().optional(),
+  allow_empty: z.boolean().optional(),
+  options: z.array(z.object({ id: z.string(), label: z.string() })).optional(),
+});
+export type OAuthLoginPrompt = z.infer<typeof oauthLoginPromptSchema>;
+
+const interactiveFlowFields = {
+  auth_url: z.string().url().optional(),
+  instructions: z.string().optional(),
+  prompt: oauthLoginPromptSchema.optional(),
+};
+
 export const oauthFlowStartPendingSchema = z.object({
   flow_id: z.string().min(1),
   provider: z.string().min(1),
   status: z.literal('pending'),
-  verification_uri: z.string().url(),
-  verification_uri_complete: z.string().url(),
-  user_code: z.string().min(1),
+  verification_uri: z.string(),
+  verification_uri_complete: z.string(),
+  user_code: z.string(),
   expires_in: z.number().int().positive(),
   interval: z.number().int().positive(),
   expires_at: isoDateTimeSchema,
+  ...interactiveFlowFields,
 });
 export type OAuthFlowStartPending = z.infer<typeof oauthFlowStartPendingSchema>;
 
@@ -42,14 +58,15 @@ export const oauthFlowSnapshotSchema = z.object({
   flow_id: z.string().min(1),
   provider: z.string().min(1),
   status: oauthFlowStatusEnum,
-  verification_uri: z.string().url(),
-  verification_uri_complete: z.string().url(),
-  user_code: z.string().min(1),
+  verification_uri: z.string(),
+  verification_uri_complete: z.string(),
+  user_code: z.string(),
   expires_in: z.number().int().positive(),
   expires_at: isoDateTimeSchema,
   interval: z.number().int().positive(),
   resolved_at: isoDateTimeSchema.optional(),
   error_message: z.string().optional(),
+  ...interactiveFlowFields,
 });
 export type OAuthFlowSnapshot = z.infer<typeof oauthFlowSnapshotSchema>;
 

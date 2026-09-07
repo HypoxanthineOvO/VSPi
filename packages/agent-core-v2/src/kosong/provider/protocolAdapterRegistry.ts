@@ -17,9 +17,11 @@ import {
   type ProtocolBaseId,
   type ResolvedAdapterIdentity,
 } from '#/kosong/protocol/protocolBase';
-import type { ProtocolTrait, ResolvedTrait, TraitContext } from '#/kosong/protocol/protocolTrait';
+import { traitDefaultHeaders, type ProtocolTrait, type ResolvedTrait, type TraitContext } from '#/kosong/protocol/protocolTrait';
 
 import { getProviderDefinition } from './providerDefinition';
+import { findPiModel, piCapability } from './pi/catalog';
+import { PiChatProvider } from './pi/piChatProvider';
 
 const CONFIG_DEFAULT_HEADERS_TRAIT: ProtocolTrait = {
   defaultHeaders: (ctx) =>
@@ -66,6 +68,11 @@ export class ProtocolAdapterRegistry implements IProtocolAdapterRegistry {
     modelName: string,
     providerType?: string,
   ): ExplainedCapability {
+    const model = findPiModel(providerType, modelName, protocol);
+    if (model !== undefined) return {
+      capability: piCapability(model),
+      source: { kind: 'builtin', detail: `pi-ai 0.85.1: ${model.provider}/${model.id}` },
+    };
     const identity = this.resolveAdapterIdentity(protocol, providerType);
     let traitCapability: ModelCapability | undefined;
     for (const { trait, context } of identity.traits) {
@@ -104,13 +111,12 @@ export class ProtocolAdapterRegistry implements IProtocolAdapterRegistry {
       trait,
       context: { config, providerId: config.providerType },
     }));
-    const base = getProtocolBase(identity.baseId);
-    if (base === undefined) {
-      throw new ChatProviderError(
-        `No protocol base registered for '${identity.baseId}'. Import the base's contrib module first.`,
-      );
-    }
-    return base.createChatProvider({ config, traits });
+    const effectiveConfig = { ...config, defaultHeaders: traitDefaultHeaders(traits) };
+    return new PiChatProvider(effectiveConfig, findPiModel(config.providerType, config.modelName, config.protocol), () => {
+      const base = getProtocolBase(identity.baseId);
+      if (base === undefined) throw new ChatProviderError(`No compatibility adapter for '${identity.baseId}'.`);
+      return base.createChatProvider({ config, traits });
+    });
   }
 }
 

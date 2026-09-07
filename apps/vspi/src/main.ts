@@ -42,7 +42,7 @@ const identity = {
 
 async function main(): Promise<void> {
 	const args = process.argv.slice(2);
-	if (await dispatchCliCommand(args, { connect: ensureConnection })) return;
+	if (await dispatchCliCommand(args, { connect: ensureConnection, connectReadOnly: () => connectRuntime() })) return;
 	assertSupportedNodeVersion();
 	if (await dispatchExecCommand(args, { connect: ensureConnection })) return;
 	if (args[0] === "daemon") {
@@ -153,22 +153,32 @@ async function serveDaemon(homeDir?: string): Promise<void> {
 		throw error;
 	}
 	let closing = false;
+	const diagnostic = (event: string, signal?: string) => {
+		const memory = process.memoryUsage();
+		process.stderr.write(`${JSON.stringify({ event, time: new Date().toISOString(), pid: process.pid, signal, uptimeSeconds: Math.round(process.uptime()), rss: memory.rss, heapUsed: memory.heapUsed, heapTotal: memory.heapTotal })}\n`);
+	};
+	diagnostic("runtime.ready");
+	const memoryTimer = setInterval(() => diagnostic("runtime.memory"), 60_000);
+	memoryTimer.unref();
 	await new Promise<void>((resolve, reject) => {
-		const close = (): void => {
+		const close = (signal: string): void => {
 			if (closing) return;
 			closing = true;
+			clearInterval(memoryTimer);
+			diagnostic("runtime.stopping", signal);
 			void (async () => {
 				try {
 					await daemon.close();
 					await removeRuntimeIdentity(expected.homeDir, daemon.state.pid);
+					diagnostic("runtime.stopped", signal);
 					resolve();
 				} catch (error) {
 					reject(error);
 				}
 			})();
 		};
-		process.once("SIGINT", close);
-		process.once("SIGTERM", close);
+		process.once("SIGINT", () => close("SIGINT"));
+		process.once("SIGTERM", () => close("SIGTERM"));
 	});
 }
 
@@ -181,10 +191,7 @@ async function ensureConnection(homeDir?: string): Promise<RuntimeConnection> {
 			(await waitForRuntimeIdentity(expected.homeDir, running.pid, 250));
 		const mismatch = runtimeIdentityMismatch(expected, metadata, running);
 		if (mismatch !== undefined) {
-			process.stderr.write(
-				`VSP runtime 身份不匹配（${mismatch}），正在停止并按当前可执行文件重启；已连接的会话将断开\n`,
-			);
-			await stopRuntime(expected.homeDir, 5_000);
+			throw new Error(`VSP runtime 身份不匹配（${mismatch}）。现有 daemon 和任务保持运行；请使用相同版本的客户端，或使用独立 VSPI_HOME。确认所有任务结束后，才可显式运行 vspi daemon stop 切换版本。`);
 		}
 	}
 	const connection = await ensureRuntime({
@@ -228,7 +235,6 @@ async function ensureConnection(homeDir?: string): Promise<RuntimeConnection> {
 		return connection;
 	} catch (error) {
 		await connection.close();
-		await stopRuntime(expected.homeDir, 5_000).catch(() => {});
 		throw error;
 	}
 }

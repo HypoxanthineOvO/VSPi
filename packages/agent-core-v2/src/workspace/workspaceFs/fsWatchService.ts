@@ -37,7 +37,7 @@ export class WorkspaceFsWatchService extends Disposable implements IWorkspaceFsW
   private readonly subscriptions = new Set<WorkspaceFsWatchSubscription>();
   private handle: IHostFsWatchHandle | undefined;
   private handleSub: IDisposable | undefined;
-  private gitignoreLoaded = false;
+  private gitignoreReady: Promise<void> | undefined;
   private readonly matcher: Ignore = ignore().add('.git/');
   private readonly workDir: string;
 
@@ -87,8 +87,15 @@ export class WorkspaceFsWatchService extends Disposable implements IWorkspaceFsW
 
   private ensureHandle(): void {
     if (this.handle !== undefined) return;
-    this.loadGitignore();
-    const handle = this.hostFsWatch.watch(this.workDir, { recursive: true });
+    const handle = this.hostFsWatch.watch(this.workDir, {
+      recursive: true,
+      ignoredReady: this.loadGitignore(),
+      ignored: (path, kind) => {
+        const rel = this.toRel(path);
+        if (rel === '.') return false;
+        return this.matcher.ignores(kind === 'directory' ? `${rel}/` : rel);
+      },
+    });
     this.handle = handle;
     this.handleSub = handle.onDidChange((e) => this.onRaw(e));
   }
@@ -100,15 +107,14 @@ export class WorkspaceFsWatchService extends Disposable implements IWorkspaceFsW
     this.handle = undefined;
   }
 
-  private loadGitignore(): void {
-    if (this.gitignoreLoaded) return;
-    this.gitignoreLoaded = true;
-    void this.hostFs.readText(join(this.workDir, '.gitignore')).then(
+  private loadGitignore(): Promise<void> {
+    this.gitignoreReady ??= this.hostFs.readText(join(this.workDir, '.gitignore')).then(
       (content) => {
         this.matcher.add(content);
       },
       () => undefined,
     );
+    return this.gitignoreReady;
   }
 
   private onRaw(e: HostFsChange): void {
@@ -281,4 +287,3 @@ function isUnderAny(rel: string, parents: ReadonlySet<string>): boolean {
   }
   return false;
 }
-

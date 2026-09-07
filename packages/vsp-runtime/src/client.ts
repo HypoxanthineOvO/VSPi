@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { appendFile, readFile } from 'node:fs/promises';
 
 import { createKlient, probeKlientIpc } from '@moonshot-ai/klient/ipc';
 
@@ -33,8 +33,8 @@ export async function inspectRuntime(homeDir?: string): Promise<RuntimeState | u
 
 export async function connectRuntime(homeDir?: string, callTimeoutMs = 10_000): Promise<RuntimeConnection> {
   const paths = resolveRuntimePaths(homeDir);
-  const state = await inspectRuntime(paths.homeDir);
-  if (state === undefined) throw new Error('VSP runtime is not running');
+  const state = await readRuntimeState(paths.statePath);
+  if (state === undefined || !isProcessAlive(state.pid)) throw new Error('VSP runtime is not running');
   assertCompatibleRuntimeState(state);
   const token = (await readFile(paths.tokenPath, 'utf8')).trim();
   if (token.length === 0) throw new Error('VSP runtime token is empty');
@@ -62,14 +62,7 @@ export async function ensureRuntime(options: EnsureRuntimeOptions): Promise<Runt
       try {
         return await connectRuntime(paths.homeDir);
       } catch (connectError) {
-        try {
-          await stopRuntime(paths.homeDir, 5_000);
-        } catch (stopError) {
-          throw new AggregateError(
-            [connectError, stopError],
-            'VSP runtime is unreachable and could not be restarted',
-          );
-        }
+        throw new Error('VSP runtime is alive but unreachable or incompatible; it has not been stopped. Existing tasks are preserved. Inspect the runtime or explicitly stop it after confirming no work will be lost.', { cause: connectError });
       }
     }
   }
@@ -97,6 +90,7 @@ export async function stopRuntime(homeDir?: string, timeoutMs = 10_000): Promise
   if (token.length === 0) throw new Error('VSP runtime ownership cannot be proven: token is empty');
   const handshake = await probeKlientIpc({ socketPath: state.ipcPath, token, callTimeoutMs: Math.min(timeoutMs, 5_000) });
   assertOwnedRuntime(state, handshake, paths.homeDir);
+  await appendFile(paths.logPath, `${JSON.stringify({ event: 'runtime.stop-requested', time: new Date().toISOString(), callerPid: process.pid, targetPid: state.pid })}\n`, { mode: 0o600 }).catch(() => {});
   try {
     process.kill(state.pid, 'SIGTERM');
   } catch (error) {

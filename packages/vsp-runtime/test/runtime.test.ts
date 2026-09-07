@@ -4,14 +4,18 @@
  * Wiring: real KAP/Core/Klient with isolated filesystem state and no model network calls.
  * Run: pnpm -C packages/vsp-runtime test
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseSkillText } from "@moonshot-ai/agent-core-v2/features/skill/catalog/parser";
+import { InMemorySkillCatalog } from "@moonshot-ai/agent-core-v2/features/skill/catalog/registry";
 
 import {
 	connectRuntime,
+	ensureRuntime,
 	inspectRuntime,
 	resolveRuntimePaths,
 	stopRuntime,
@@ -51,6 +55,25 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 		} finally {
 			await connection.close();
 		}
+	});
+
+	it("does not stop or replace a live runtime when its protocol is incompatible", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-runtime-preserve-"));
+		daemon = await startTestDaemon(homeDir);
+		const statePath = resolveRuntimePaths(homeDir).statePath;
+		const original = await readFile(statePath, "utf8");
+		const state = JSON.parse(original);
+		await writeFile(statePath, JSON.stringify({ ...state, protocolVersion: 999 }));
+		const spawn = vi.fn();
+		const kill = vi.spyOn(process, "kill");
+		try {
+			await expect(ensureRuntime({ homeDir, spawn })).rejects.toThrow("has not been stopped");
+			expect(spawn).not.toHaveBeenCalled();
+			expect(kill.mock.calls.every((call) => call[1] === 0)).toBe(true);
+			await writeFile(statePath, original);
+			const client = await connectRuntime(homeDir);
+			await client.close();
+		} finally { kill.mockRestore(); await writeFile(statePath, original); }
 	});
 
 	it("persists a workspace when a client registers one, another client observes it", async () => {
@@ -99,6 +122,24 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 		} finally {
 			await second.close();
 		}
+	});
+
+	it("persists removal of the subagent candidate pool across config reload", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-star-config-"));
+		daemon = await startTestDaemon(homeDir);
+		const connection = await connectRuntime(homeDir);
+		try {
+			await connection.klient.global.config.replaceSections({ sections: {
+				providers: { example: { type: "openai", apiKey: "YOUR_API_KEY" } },
+				models: { "example/code": { provider: "example", model: "code", maxContextSize: 4096 } },
+			} });
+			await connection.klient.global.config.replace({ domain: "secondaryModel", value: { models: { "example/code": "Coding tasks" }, defaultModel: "example/code" } });
+			await connection.klient.global.config.replace({ domain: "secondaryModel", value: { force: false } });
+			await connection.klient.global.config.reload();
+			expect(await connection.klient.global.config.get("secondaryModel")).toEqual({ force: false });
+			const disk = await readFile(resolveRuntimePaths(homeDir).configPath, "utf8");
+			expect(disk).not.toContain("Coding tasks");
+		} finally { await connection.close(); }
 	});
 
 	it("rejects a second daemon when the same runtime home is already owned", async () => {
@@ -168,12 +209,7 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 
 	it("exposes host-provided product skills without enabling Kimi product skills", async () => {
 		homeDir = await mkdtemp(join(tmpdir(), "vsp-runtime-skills-"));
-		const skillRoot = join(homeDir, "product-skills");
-		await mkdir(join(skillRoot, "vspi-self"), { recursive: true });
-		await writeFile(
-			join(skillRoot, "vspi-self", "SKILL.md"),
-			"---\nname: vspi-self\ndescription: Manage VSPi itself.\n---\n\nUse the current VSPi runtime.\n",
-		);
+		const skillRoot = fileURLToPath(new URL("../../../apps/vspi/skills", import.meta.url));
 		daemon = await startRuntimeDaemon({
 			homeDir,
 			hostIdentity: identity,
@@ -186,11 +222,40 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 		try {
 			const session = await connection.klient.global.sessions.create({ workDir: projectRoot });
 			const skills = await connection.klient.session(session.id).skills.list();
-			expect(skills).toContainEqual(expect.objectContaining({ name: "vspi-self" }));
+			expect(skills).toContainEqual(expect.objectContaining({
+				name: "vspi-self",
+				path: join(skillRoot, "vspi-self", "SKILL.md"),
+				description: expect.stringContaining("effort or vision capabilities"),
+			}));
+			expect(skills.find((skill) => skill.name === "vspi-self")?.disableModelInvocation).not.toBe(true);
 			expect(skills).not.toContainEqual(expect.objectContaining({ name: "update-config" }));
 		} finally {
 			await connection.close();
 		}
+	});
+
+	it("renders the shipped self skill with the current custom-home session and bounded diagnostics", async () => {
+		const skillMdPath = fileURLToPath(new URL("../../../apps/vspi/skills/vspi-self/SKILL.md", import.meta.url));
+		const skill = parseSkillText({
+			skillMdPath,
+			skillDirName: "vspi-self",
+			source: "extra",
+			text: await readFile(skillMdPath, "utf8"),
+		});
+		const catalog = new InMemorySkillCatalog();
+		catalog.register(skill);
+		const prompt = catalog.renderSkillPrompt(skill, "", {
+			sessionId: "session-current",
+			sessionDir: "/custom/runtime/sessions/workspace-current/session-current",
+		});
+		expect(catalog.getModelSkillListing()).toContain("vspi-self");
+		expect(prompt).toContain("/custom/runtime/sessions/workspace-current/session-current");
+		expect(prompt).toContain("vspi inspect session 'session-current'");
+		expect(prompt).not.toContain("${KIMI_SESSION_");
+		for (const command of ["vspi inspect paths", "vspi inspect models", "vspi config patch", "vspi config diagnostics"])
+			expect(prompt).toContain(command);
+		expect(prompt).toContain("Never select the newest session");
+		expect(prompt).toContain("Do not read OAuth token stores");
 	});
 
 	it("removes discoverable runtime state when the owner closes", async () => {

@@ -1,10 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PassThrough, Readable, type Writable } from 'node:stream';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { isUserCancellation } from '#/_base/utils/abort';
 import { Event } from '#/_base/event';
 import { TurnEnded } from '#/agent/loop/turnOps';
 import { TurnStarted } from '#/agent/loop/turnEvents';
+import { AgentCron } from '#/features/cron/cronAgentRuntime';
+import type { CronConfig } from '#/features/cron/configSection';
 
 import type { IDisposable } from '#/_base/di/lifecycle';
 import { IAgentContextMemoryService } from '#/agent/contextMemory/contextMemory';
@@ -1324,7 +1329,7 @@ describe('AgentGoalService core workflow hooks', () => {
       name: 'goal_continuation',
     });
     expect(JSON.stringify(context.get().at(-1)?.content)).toContain('Continue working toward');
-    expect(JSON.stringify(context.get().at(-1)?.content)).toContain('WaitFor');
+    expect(JSON.stringify(context.get().at(-1)?.content)).toContain('parks the goal');
   });
 
   it('blocks the next continuation only after the final allowed turn ends', async () => {
@@ -2414,6 +2419,13 @@ describe('AgentGoalService fork boundaries', () => {
 });
 
 describe('AgentGoalService WaitFor regression', () => {
+  beforeAll(() => {
+    process.env['KIMI_CODE_EXPERIMENTAL_WAIT_FOR'] = '1';
+  });
+  afterAll(() => {
+    delete process.env['KIMI_CODE_EXPERIMENTAL_WAIT_FOR'];
+  });
+
   it('does not launch a goal continuation while WaitFor is pending, and the continuation prompt mentions WaitFor', async () => {
     const ctx = createTestAgent();
     try {
@@ -2485,6 +2497,13 @@ describe('AgentGoalService WaitFor regression', () => {
 });
 
 describe('AgentGoalService WaitFor background scenarios', () => {
+  beforeAll(() => {
+    process.env['KIMI_CODE_EXPERIMENTAL_WAIT_FOR'] = '1';
+  });
+  afterAll(() => {
+    delete process.env['KIMI_CODE_EXPERIMENTAL_WAIT_FOR'];
+  });
+
   function controllableSpawn(): {
     spawn: IHostProcessService['spawn'];
     pushOutput: (text: string) => void;
@@ -2705,7 +2724,7 @@ describe('AgentGoalService WaitFor background scenarios', () => {
     }
   });
 
-  it('runs a ten-turn goal chain with WaitFor in a continuation turn', async () => {
+  it('parks the goal while a background task runs and resumes via the task notification instead of a continuation', async () => {
     const sh = controllableSpawn();
     const ctx = createTestAgent(
       execEnvServices({ processRunner: { spawn: sh.spawn } }),
@@ -2722,16 +2741,7 @@ describe('AgentGoalService WaitFor background scenarios', () => {
         name: 'Bash',
         arguments: JSON.stringify({ command: 'sleep 30', run_in_background: true, description: 'bg sleep' }),
       });
-      ctx.mockNextResponse({ type: 'text', text: 'slice 1 done' });
-      ctx.mockNextResponse({
-        type: 'function',
-        id: 'wait_1',
-        name: 'WaitFor',
-        arguments: JSON.stringify({ timeout: 30 }),
-      });
-      for (let round = 2; round <= 9; round++) {
-        ctx.mockNextResponse({ type: 'text', text: `slice ${String(round)} done` });
-      }
+      ctx.mockNextResponse({ type: 'text', text: 'slice done' });
       ctx.mockNextResponse({
         type: 'function',
         id: 'ug_1',
@@ -2741,18 +2751,116 @@ describe('AgentGoalService WaitFor background scenarios', () => {
       ctx.mockNextResponse({ type: 'text', text: 'done' });
 
       await ctx.rpc.prompt({ input: [{ type: 'text', text: 'start work' }] });
-      await vi.waitFor(() => expect(ctx.llmCalls).toHaveLength(3));
+      await vi.waitFor(() => expect(ctx.llmCalls).toHaveLength(2));
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      expect(continuationTurnIds).toEqual([]);
 
       sh.pushOutput('BG-OUTPUT\n');
       sh.finish(0);
 
-      await vi.waitFor(() => expect(ctx.llmCalls).toHaveLength(13), { timeout: 5000 });
+      await vi.waitFor(() => expect(ctx.llmCalls).toHaveLength(4), { timeout: 5000 });
 
-      expect(continuationTurnIds).toHaveLength(9);
-      expect(endedReasons).toEqual(Array<string>(10).fill('completed'));
-      const waitResultHistory = JSON.stringify(ctx.llmCalls[3]?.history);
-      expect(waitResultHistory).toContain('wait_status: completed');
-      expect(waitResultHistory).toContain('BG-OUTPUT');
+      expect(continuationTurnIds).toEqual([]);
+      const notifiedHistory = JSON.stringify(ctx.llmCalls[2]?.history);
+      expect(notifiedHistory).toContain('task.completed');
+      expect(notifiedHistory).toContain('bg sleep completed');
+      expect((await ctx.rpc.getGoal({})).goal).toBeNull();
+      expect(endedReasons).toEqual(['completed', 'completed']);
+    } finally {
+      await ctx.dispose();
+    }
+  });
+});
+
+describe('AgentGoalService goal parking', () => {
+  function manualCronContext(): { ctx: TestAgentContext; clockFile: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'goal-cron-park-'));
+    const clockFile = join(dir, 'clock.txt');
+    writeFileSync(clockFile, String(Date.now()));
+    const ctx = createUnrestoredTestAgent();
+    const cronConfig: CronConfig = {
+      debug: false,
+      noJitter: true,
+      noStale: false,
+      disabled: false,
+      manualTick: true,
+      clock: `file:${clockFile}`,
+    };
+    ctx.kimiConfig = { ...ctx.kimiConfig, cron: cronConfig };
+    return { ctx, clockFile };
+  }
+
+  function watchContinuations(ctx: TestAgentContext): number[] {
+    const continuationTurnIds: number[] = [];
+    ctx.get(IEventBus).subscribe(TurnStarted, (event) => {
+      if (event.origin.kind === 'system_trigger' && event.origin.name === 'goal_continuation') {
+        continuationTurnIds.push(event.turnId);
+      }
+    });
+    return continuationTurnIds;
+  }
+
+  it('parks while a wakesGoal cron task is scheduled and resumes when it fires', async () => {
+    const { ctx, clockFile } = manualCronContext();
+    try {
+      await ctx.restorePersisted();
+      await ctx.rpc.setPermission({ mode: 'yolo' });
+      const cron = ctx.resolve(AgentCron);
+      cron.addTask({ cron: '* * * * *', prompt: 'patrol: check the work', recurring: true, wakesGoal: true });
+      await ctx.rpc.createGoal({ objective: 'finish bounded work' });
+      const continuationTurnIds = watchContinuations(ctx);
+
+      ctx.mockNextResponse({ type: 'text', text: 'slice done' });
+      ctx.mockNextResponse({
+        type: 'function',
+        id: 'ug_1',
+        name: 'UpdateGoal',
+        arguments: JSON.stringify({ status: 'complete' }),
+      });
+      ctx.mockNextResponse({ type: 'text', text: 'done' });
+
+      await ctx.rpc.prompt({ input: [{ type: 'text', text: 'start work' }] });
+      await vi.waitFor(() => expect(ctx.llmCalls).toHaveLength(1));
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      expect(continuationTurnIds).toEqual([]);
+
+      writeFileSync(clockFile, String(Date.now() + 120_000));
+      await cron.tick();
+
+      await vi.waitFor(() => expect(ctx.llmCalls).toHaveLength(3));
+      expect(continuationTurnIds).toEqual([]);
+      expect((await ctx.rpc.getGoal({})).goal).toBeNull();
+    } finally {
+      await ctx.dispose();
+    }
+  });
+
+  it('continues immediately when the only cron task has wakesGoal false', async () => {
+    const { ctx } = manualCronContext();
+    try {
+      await ctx.restorePersisted();
+      await ctx.rpc.setPermission({ mode: 'yolo' });
+      const cron = ctx.resolve(AgentCron);
+      cron.addTask({ cron: '0 9 * * *', prompt: 'daily standup notes', recurring: true, wakesGoal: false });
+      await ctx.rpc.createGoal({ objective: 'finish bounded work' });
+      const continuationTurnIds = watchContinuations(ctx);
+
+      ctx.mockNextResponse({ type: 'text', text: 'slice done' });
+      ctx.mockNextResponse({ type: 'text', text: 'slice two done' });
+      ctx.mockNextResponse({
+        type: 'function',
+        id: 'ug_1',
+        name: 'UpdateGoal',
+        arguments: JSON.stringify({ status: 'complete' }),
+      });
+      ctx.mockNextResponse({ type: 'text', text: 'done' });
+
+      await ctx.rpc.prompt({ input: [{ type: 'text', text: 'start work' }] });
+      await vi.waitFor(() => expect(ctx.llmCalls.length).toBeGreaterThanOrEqual(1));
+      await vi.waitFor(() => expect(continuationTurnIds).toHaveLength(2));
+      await vi.waitFor(() => expect(ctx.llmCalls).toHaveLength(4));
       expect((await ctx.rpc.getGoal({})).goal).toBeNull();
     } finally {
       await ctx.dispose();
@@ -2761,7 +2869,14 @@ describe('AgentGoalService WaitFor background scenarios', () => {
 });
 
 describe('AgentGoalService WaitFor guidance gating', () => {
-  it('shows conservative waiting guidance in the active-goal reminder when the flag is on', async () => {
+  beforeAll(() => {
+    process.env['KIMI_CODE_EXPERIMENTAL_WAIT_FOR'] = '1';
+  });
+  afterAll(() => {
+    delete process.env['KIMI_CODE_EXPERIMENTAL_WAIT_FOR'];
+  });
+
+  it('shows pending-work parking guidance in the active-goal reminder and never teaches in-turn waiting', async () => {
     const ctx = createTestAgent();
     try {
       ctx.configure();
@@ -2779,11 +2894,14 @@ describe('AgentGoalService WaitFor guidance gating', () => {
       await ctx.rpc.prompt({ input: [{ type: 'text', text: 'start work' }] });
       await vi.waitFor(() => expect(ctx.llmCalls).toHaveLength(3));
 
-      const reminder = JSON.stringify(ctx.llmCalls[0]);
-      expect(reminder).toContain('active Goal');
-      expect(reminder).toContain('automatically notify');
-      expect(reminder).toContain('uninterruptible atomic operation');
-      expect(reminder).not.toContain('call WaitFor to wait for them inside this turn');
+      const reminderMessage = ctx.llmCalls[0]!.history.find((message) =>
+        JSON.stringify(message.content).includes('You are working under an active goal'),
+      );
+      expect(reminderMessage).toBeDefined();
+      const reminder = JSON.stringify(reminderMessage?.content);
+      expect(reminder).toContain('parks the goal');
+      expect(reminder).toContain('CronCreate patrol');
+      expect(reminder).not.toContain('WaitFor');
     } finally {
       await ctx.dispose();
     }
@@ -2888,8 +3006,8 @@ describe('AgentGoalService WaitFor guidance gating', () => {
 
       await ctx.rpc.prompt({ input: [{ type: 'text', text: 'start work' }] });
       await vi.waitFor(() => expect(ctx.llmCalls).toHaveLength(1));
-      expect(JSON.stringify(ctx.llmCalls[0])).toContain('active Goal');
-      expect(JSON.stringify(ctx.llmCalls[0])).toContain('uninterruptible atomic operation');
+      expect(JSON.stringify(ctx.llmCalls[0])).toContain('active goal');
+      expect(JSON.stringify(ctx.llmCalls[0])).toContain('parks the goal');
 
       await ctx.get(ISessionToolPolicy).setDisabledTools(['WaitFor']);
       settle({ result: 'bg result' });
@@ -2900,7 +3018,7 @@ describe('AgentGoalService WaitFor guidance gating', () => {
         JSON.stringify(message).includes('Continue working toward the active goal'),
       );
       expect(continuationPrompt).toBeDefined();
-      expect(JSON.stringify(continuationPrompt)).not.toContain('re-invoked again and again');
+      expect(JSON.stringify(continuationPrompt)).not.toContain('Never call WaitFor');
       const freshReminder = continuationCall.history.at(-1);
       expect(JSON.stringify(freshReminder)).toContain('active goal');
       expect(JSON.stringify(freshReminder)).not.toContain('re-invoked again and again');

@@ -240,6 +240,7 @@ describe('CronCreateTool', () => {
         cron: '*/5 * * * *',
         prompt: 'ping',
         recurring: true,
+        wakesGoal: true,
       }),
     );
 
@@ -258,6 +259,7 @@ describe('CronCreateTool', () => {
       cron: */5 * * * *
       humanSchedule: every 5 minutes
       recurring: true
+      wakesGoal: true
       nextFireAt: <iso>"
     `);
   });
@@ -271,6 +273,7 @@ describe('CronCreateTool', () => {
         cron: '0 12 * * *',
         prompt: 'noon',
         recurring: false,
+        wakesGoal: true,
       }),
     );
 
@@ -292,6 +295,7 @@ describe('CronCreateTool', () => {
         cron: '*/5 * * * *',
         prompt: 'ping',
         recurring: true,
+        wakesGoal: true,
       }),
     );
 
@@ -308,6 +312,7 @@ describe('CronCreateTool', () => {
         cron: 'not a cron',
         prompt: 'ping',
         recurring: true,
+        wakesGoal: true,
       }),
     );
 
@@ -324,6 +329,7 @@ describe('CronCreateTool', () => {
         cron: '0 0 31 2 *',
         prompt: 'never',
         recurring: true,
+        wakesGoal: true,
       }),
     );
 
@@ -343,6 +349,7 @@ describe('CronCreateTool', () => {
         cron: '*/5 * * * *',
         prompt: 'overflow',
         recurring: true,
+        wakesGoal: true,
       }),
     );
 
@@ -361,11 +368,13 @@ describe('CronCreateTool', () => {
       cron: '*/5 * * * *',
       prompt: 'first',
       recurring: true,
+      wakesGoal: true,
     });
     const second = tool.resolveExecution({
       cron: '*/5 * * * *',
       prompt: 'second',
       recurring: true,
+      wakesGoal: true,
     });
     if (!isRunnableExecution(first) || !isRunnableExecution(second)) {
       throw new Error('expected runnable executions');
@@ -396,6 +405,7 @@ describe('CronCreateTool', () => {
         cron: '*/5 * * * *',
         prompt,
         recurring: true,
+        wakesGoal: true,
       }),
     );
 
@@ -411,6 +421,7 @@ describe('CronCreateTool', () => {
         cron: '  */5\n*\t*\t*\t*  ',
         prompt: 'ping',
         recurring: true,
+        wakesGoal: true,
       }),
     );
 
@@ -426,6 +437,7 @@ describe('CronCreateTool', () => {
       cron: '*/5 * * * *',
       prompt: 'delayed approval',
       recurring: true,
+      wakesGoal: true,
     });
     if (!isRunnableExecution(execution)) throw new Error('expected runnable execution');
 
@@ -447,16 +459,19 @@ describe('CronCreateTool', () => {
       cron: '*/5\n* * * *',
       prompt: 'same',
       recurring: true,
+      wakesGoal: true,
     });
     const b = tool.resolveExecution({
       cron: '0 9 * * *',
       prompt: 'same',
       recurring: true,
+      wakesGoal: true,
     });
     const c = tool.resolveExecution({
       cron: '*/5 * * * *',
       prompt: 'different',
       recurring: true,
+      wakesGoal: true,
     });
 
     if (!isRunnableExecution(a) || !isRunnableExecution(b) || !isRunnableExecution(c)) {
@@ -727,6 +742,7 @@ describe('cron tools on non-main agents', () => {
         cron: '*/5 * * * *',
         prompt: 'ping',
         recurring: true,
+        wakesGoal: true,
       }),
     );
 

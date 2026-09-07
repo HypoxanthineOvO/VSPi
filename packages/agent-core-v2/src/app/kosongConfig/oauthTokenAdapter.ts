@@ -8,6 +8,7 @@ import { AuthErrors } from '#/app/auth/errors';
 import { nonEmpty } from '#/kosong/model/modelAuth';
 import { IModelOAuthTokens } from '#/kosong/model/modelOAuth';
 import type { OAuthRef } from '#/kosong/provider/provider';
+import type { ProviderRequestAuth } from '#/kosong/contract/provider';
 
 export class ModelOAuthTokenAdapter implements IModelOAuthTokens {
   declare readonly _serviceBrand: undefined;
@@ -35,6 +36,18 @@ export class ModelOAuthTokenAdapter implements IModelOAuthTokens {
     );
     if (token.trim().length === 0) throw loginRequired(provider);
     return token;
+  }
+
+  async getRequestAuth(
+    provider: string,
+    oauthRef: OAuthRef,
+    options?: { readonly force?: boolean },
+  ): Promise<ProviderRequestAuth> {
+    const auth = await this.oauth.resolveRequestAuth(provider, oauthRef, options);
+    if (nonEmpty(auth.apiKey) === undefined && Object.keys(auth.headers ?? {}).length === 0) {
+      throw loginRequired(provider);
+    }
+    return auth;
   }
 }
 

@@ -3,10 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const RELEASE_TAG = 'v2.0.3';
-const RELEASE_VERSION = '2.0.3';
-const RELEASE_TITLE = 'VSPi 2.0.3';
-const VERSIONED_ASSET = 'vspi-2.0.3.tgz';
+import { checkoutReleaseIdentity } from './vspi-release-identity.mjs';
 const LATEST_ASSET = 'vspi-latest.tgz';
 const CHECKSUMS_ASSET = 'SHA256SUMS';
 const READBACK_ATTEMPTS = 5;
@@ -61,11 +58,7 @@ async function responseJson(response, operation) {
 
 export async function prepareGitHubRelease({ environment, packageJsonPath, assetPath, latestAssetPath, checksumsPath }) {
   const tag = required(environment, 'GITHUB_REF_NAME');
-  if (tag !== RELEASE_TAG) throw new Error(`GITHUB_REF_NAME must be ${RELEASE_TAG}: ${tag}`);
-  const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8'));
-  if (packageJson.version !== RELEASE_VERSION) {
-    throw new Error(`Tag/package version mismatch: ${tag} != ${String(packageJson.version)}`);
-  }
+  const { title: RELEASE_TITLE, assetName: VERSIONED_ASSET } = await checkoutReleaseIdentity(tag, packageJsonPath);
   if (basename(assetPath) !== VERSIONED_ASSET) throw new Error(`Release asset must be named ${VERSIONED_ASSET}`);
   if (basename(latestAssetPath) !== LATEST_ASSET) throw new Error(`Compatibility asset must be named ${LATEST_ASSET}`);
   if (basename(checksumsPath) !== CHECKSUMS_ASSET) throw new Error(`Checksum asset must be named ${CHECKSUMS_ASSET}`);
@@ -216,7 +209,7 @@ export async function produceGitHubRelease({
   fetch = globalThis.fetch,
 }) {
   if (!assetPath || !latestAssetPath || !checksumsPath) {
-    throw new Error('Usage: node scripts/github-release-producer.mjs <vspi-2.0.3.tgz> <vspi-latest.tgz> <SHA256SUMS> [metadata.json]');
+    throw new Error('Usage: node scripts/github-release-producer.mjs <versioned-package.tgz> <vspi-latest.tgz> <SHA256SUMS> [metadata.json]');
   }
   if (!fetch) throw new Error('Global fetch is unavailable');
   const prepared = await prepareGitHubRelease({ environment, packageJsonPath, assetPath, latestAssetPath, checksumsPath });
