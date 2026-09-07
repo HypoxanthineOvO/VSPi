@@ -1,92 +1,102 @@
-# 贡献指南
+# Contributing to kimi-code
 
-感谢关注 VSPi！本文面向想提交代码的开发者，说明开发环境、Commit / PR 规范与发布流程。提 PR（或 MR）前请先读完本文。
+[中文版](CONTRIBUTING.zh-CN.md)
 
-## 仓库布局
+Thanks for taking the time to contribute! This project moves quickly, and thoughtful contributions from the community are what keep it sharp. The guide below walks you through how we work so your PR has the best chance of landing smoothly.
 
-VSPi 有两个远端：
+## Before You Start
 
-| 远端 | 地址 | 用途 |
-| ---- | ---- | ---- |
-| GitLab（主仓） | `gitlab.vsplab.cn:heyx/vspi` | 日常开发、CI 打包、内部 MR |
-| GitHub（镜像） | `github.com/HypoxanthineOvO/VSPi` | 公开镜像、Release 发布、外部 PR |
+Kimi Code already has opinions on CLI/TUI behavior, agent workflows, and public APIs. If your change shifts that direction, open an issue first so we can align before you invest time in a PR.
 
-- 内部贡献：在 GitLab 主仓从 `main` 拉分支，完成后提 Merge Request。
-- 外部贡献：Fork GitHub 镜像，从 `main` 拉分支，完成后提 Pull Request。
+We hold AI-assisted contributions to the same standard as hand-written ones. **You should understand what you submit** — what changed, how it behaves at the edges, and why it fits this codebase. If you cannot explain that, the PR is not ready for review.
 
-两侧规范一致，下文统称 PR。
+We only merge PRs aligned with the roadmap. Drive-by refactors without context are unlikely to land.
 
-## 开发环境
+**External PRs are accepted for approved bug fixes only.** Open an issue first and wait for a maintainer to approve it with an `/approve` comment, then link that issue in your PR. PRs without an approved linked issue may be closed without review; once the issue is approved, ask a maintainer to reopen your PR.
 
-- Node.js `>= 22.19.0`（CI 固定使用 22.22.0）
-- 安装依赖：`npm ci`（会自动执行 postinstall 补丁脚本，请勿跳过）
+**Discuss first** — open an issue before coding:
 
-常用命令：
+- Bug fixes, including small or typo-level ones: open a bug issue and wait for a maintainer's `/approve` before opening the PR
+- New features or user-visible behavior changes (regardless of size): external feature PRs are not accepted — features are discussed and decided in issues, and accepted features are implemented by the team or by explicit maintainer invitation
+- Refactors or other changes larger than ~100 lines
+- Public API or compatibility changes
 
-```bash
-npm run dev        # tsx 直接运行源码
-npm run check      # tsc --noEmit + biome（提交前必须通过）
-npm test           # vitest 全量测试（pretest 自动先 build）
-npm run check:fix  # biome 自动修复格式与 import 排序
-npm run smoke      # fixture 模式渲染一帧，快速冒烟
-npm run test:pty   # PTY 端到端子集（较慢，改动 TUI/会话时跑）
+## Project Layout
+
+This is a pnpm monorepo. The most relevant entry points are:
+
+- `apps/kimi-code` — CLI / TUI
+- `apps/vscode` — VS Code extension
+- `apps/vis` — session debug visualizer
+- `packages/node-sdk` — public TypeScript SDK (`@moonshot-ai/kimi-code-sdk`)
+- `packages/agent-core-v2` — the agent engine (v2, DI Scope architecture); `packages/agent-core` is v1 and being phased out
+- `packages/klient`, `kap-server`, `protocol`, `transcript`, `kosong`, `kaos`, `oauth`, `telemetry` — internal engine packages
+- `docs/` — VitePress bilingual docs site
+
+For the full project map, see [AGENTS.md](AGENTS.md).
+
+## Development Setup
+
+Prerequisites: Node.js >= 24.15.0, pnpm 10.33.0, Git.
+
+```sh
+git clone https://github.com/MoonshotAI/kimi-code.git
+cd kimi-code
+pnpm install
 ```
 
-## Commit 规范
+Useful scripts:
 
-采用 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/)，标题保持一行、祈使语气：
+- `pnpm dev:cli` — run the CLI in dev mode
+- `pnpm test` — run tests (vitest)
+- `pnpm typecheck` — TypeScript check (note: builds packages first)
+- `pnpm lint` — oxlint
+- `pnpm lint:fix` — oxlint with auto-fix
+- `pnpm build` — build all packages
 
-```
-<type>: <summary>
-```
+## Commit Convention
 
-常用 type：`feat` / `fix` / `docs` / `refactor` / `test` / `chore` / `perf`。
+All commits and PR titles must follow [Conventional Commits](https://www.conventionalcommits.org/).
 
-- 标题不超过 72 字符，结尾不加句号。
-- 正文可选；涉及行为变更时写清动机与影响面（参考 `git log` 中既有提交）。
-- 一个 commit 聚焦一件事，避免混合无关改动。
+| Type     | Use for                                     | Example                                   |
+|----------|---------------------------------------------|-------------------------------------------|
+| feat     | A new feature                               | feat(agent-core): add tool dedup          |
+| fix      | A bug fix                                   | fix(tui): correct status bar alignment    |
+| docs     | Documentation only                          | docs: clarify install instructions        |
+| chore    | Tooling / housekeeping                      | chore: bump dependencies                  |
+| refactor | Internal refactor without behavior change   | refactor(kosong): extract retry helper    |
+| test     | Adding or improving tests                   | test(agent-core): cover skill resolver    |
+| ci       | CI / build pipeline changes                 | ci: cache pnpm store                      |
+| build    | Build system / artifact changes             | build(native): add win32-arm64 target     |
+| perf     | Performance improvement                     | perf(session): batch event flushes        |
+| style    | Formatting only (no logic)                  | style: apply oxlint --fix                 |
 
-## 分支命名
+PR titles are enforced by the `pr-title-checker` workflow — a non-conforming title will block merge.
 
-从 `main` 拉出，格式 `<type>/<短描述>`：
+## Changesets
 
-```
-feat/vsplab-composite-catalog
-fix/reload-watchdog
-docs/contributing
-```
+This repo uses [changesets](https://github.com/changesets/changesets) to manage versioning and releases.
 
-## PR 规范
+- Every PR that affects release artifacts (code, behavior, public API) **must** include a changeset.
+- Docs-only, test-only, or CI-only PRs may skip changesets.
+- Generate one with `pnpm changeset` and follow the prompts (which packages are touched, which bump level).
+- For repo-specific conventions on package selection and bump levels, see `.changeset/README.md`. When working in this repo with coding agents, use the `gen-changesets` skill.
 
-**标题**：与最终 squash 合入的 commit 标题一致，即 `<type>: <summary>`。
+## Pull Requests
 
-**描述**必须包含三部分：
+Every PR opens with the [PR template](.github/pull_request_template.md). PR titles must follow [Conventional Commits](#commit-convention); CI runs `pnpm lint`, `pnpm typecheck`, and `pnpm test` on every PR. Update user-facing docs in `docs/` when behavior changes — use the `gen-docs` skill when working with coding agents.
 
-1. **动机 / 问题**：为什么改；修 bug 时写清现象与根因（可附 issue 链接）。
-2. **改动点**：主要变更列表；涉及接口 / 配置 / 协议变化时显式列出。
-3. **验证方式**：跑了哪些命令与测试；UI 改动附截图或录屏。
+## Code Style
 
-**提交前 Checklist**：
+- TypeScript across the codebase.
+- Linting via `oxlint` (config in `.oxlintrc.json`).
+- Auto-formatting via `pnpm lint:fix`.
+- Follow existing local patterns when the lint rules do not cover a style choice.
 
-- [ ] `npm run check` 无错误
-- [ ] `npm test` 全量通过；新增行为附带测试，**bug 修复必须带回归测试**
-- [ ] 未引入内部工作目录（`.pipeline/`、`.artifacts/`、`tmp/` 等均不入库）
-- [ ] 行为变化已同步更新 `Docs/` 与 `README.md`
-- [ ] 未提交任何凭据：内置 Provider 只允许携带公开元数据（baseUrl、协议、模型目录），API Key 一律走环境变量或 `vspi login`
+## Reporting Security Issues
 
-## 测试约定
+Found a security issue? Please see [SECURITY.md](SECURITY.md) instead of opening a public issue.
 
-- 测试统一放在 `test/`，命名 `*.test.ts`，使用 [Vitest](https://vitest.dev/)。
-- 单测保持离线：优先使用 fixture 后端（`VSPi_FIXTURE=1`），不得依赖真实 API Key 或外网。
-- 涉及进程 / TTY 行为的测试优先写到普通 vitest；确需真实终端时放入 `test:pty` 子集。
+## License
 
-## 发布流程（维护者）
-
-1. 更新 `package.json` 版本号并合入 `main`。
-2. 打 tag：`git tag vX.Y.Z && git push origin vX.Y.Z`（两个远端都要推）。
-3. `v*` tag 触发 GitLab CI 打包（`npm pack` + `scripts/ci/verify-package.mjs` 校验）与 GitHub Release 工作流（发布 `vspi-latest.tgz`）。
-4. 发布后在 GitHub 创建 Release Notes。
-
-## 联系方式
-
-问题与建议优先开 issue；内部同学也可在 GitLab MR 中直接 @ 维护者评审。
+By contributing to this repository, you agree that your contributions will be licensed under the [MIT License](LICENSE).

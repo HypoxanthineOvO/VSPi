@@ -1,0 +1,314 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, test } from 'node:test';
+
+import { prepareGitHubRelease, produceGitHubRelease } from './github-release-producer.mjs';
+import { mirrorGitLabRelease, readGitHubSource } from './gitlab-release-producer.mjs';
+import { releaseIdentity } from './vspi-release-identity.mjs';
+
+const cleanups = [];
+
+void test('derives asset names from the manifest version without editing release scripts', async () => {
+  const files = await fixture('3.1.7');
+  const prepared = await prepareGitHubRelease({ environment: environment({ GITHUB_REF_NAME: 'v3.1.7' }), ...files });
+  assert.equal(prepared.tag, 'v3.1.7');
+  assert.equal(prepared.title, 'VSPi 3.1.7');
+  assert.equal(prepared.assets[0].name, 'vspi-3.1.7.tgz');
+});
+
+void test('rejects mismatched or non-release versions before publishing', () => {
+  assert.throws(() => releaseIdentity('3.1.7', 'v3.1.8'), /mismatch/);
+  assert.throws(() => releaseIdentity('3.1.7-alpha.1'), /stable semantic version/);
+  assert.throws(() => releaseIdentity('../release'), /stable semantic version/);
+});
+afterEach(async () => {
+  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+});
+
+async function fixture(version = '2.0.3') {
+  const directory = await mkdtemp(join(tmpdir(), 'vspi-release-producer-'));
+  cleanups.push(() => rm(directory, { recursive: true, force: true }));
+  const packageJsonPath = join(directory, 'package.json');
+  const assetPath = join(directory, `vspi-${version}.tgz`);
+  const latestAssetPath = join(directory, 'vspi-latest.tgz');
+  const checksumsPath = join(directory, 'SHA256SUMS');
+  const metadataPath = join(directory, 'metadata.json');
+  const assetBytes = Buffer.from('offline-vspi-package');
+  await writeFile(packageJsonPath, JSON.stringify({ name: 'vspi', version }));
+  await writeFile(assetPath, assetBytes);
+  await writeFile(latestAssetPath, assetBytes);
+  const checksum = sha256(assetBytes);
+  await writeFile(checksumsPath, `${checksum}  vspi-${version}.tgz\n${checksum}  vspi-latest.tgz\n`);
+  return { packageJsonPath, assetPath, latestAssetPath, checksumsPath, metadataPath, assetBytes };
+}
+
+function environment(overrides = {}) {
+  return {
+    GITHUB_REF_NAME: 'v2.0.3',
+    GITHUB_API_URL: 'https://api.github.test',
+    GITHUB_REPOSITORY: 'example/vspi',
+    GITHUB_TOKEN: 'test-github-token',
+    GITLAB_API_URL: 'https://gitlab.vsplab.cn/api/v4',
+    GITLAB_PROJECT_ID: '42',
+    GITLAB_PROJECT_URL: 'https://gitlab.vsplab.cn/heyx/vspi',
+    GITLAB_TOKEN: 'test-gitlab-token',
+    ...overrides,
+  };
+}
+
+function sha256(bytes) {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+function githubRelease(bytes, overrides = {}) {
+  const checksum = sha256(bytes);
+  return {
+    id: 7,
+    tag_name: 'v2.0.3',
+    name: 'VSPi 2.0.3',
+    body: `SHA-256: \`${checksum}\``,
+    draft: false,
+    prerelease: false,
+    upload_url: 'https://uploads.github.test/releases/7/assets{?name,label}',
+    assets: [
+      { name: 'vspi-2.0.3.tgz', url: 'https://api.github.test/assets/1' },
+      { name: 'vspi-latest.tgz', url: 'https://api.github.test/assets/2' },
+      { name: 'SHA256SUMS', url: 'https://api.github.test/assets/3' },
+    ],
+    ...overrides,
+  };
+}
+
+function mockGitHubProducer(bytes, initialRelease) {
+  const requests = [];
+  let release = initialRelease;
+  let nextAssetId = 1;
+  const assetBytes = new Map();
+  if (release) {
+    for (const asset of release.assets ?? []) {
+      assetBytes.set(
+        asset.url,
+        asset.name === 'SHA256SUMS'
+          ? Buffer.from(`${sha256(bytes)}  vspi-2.0.3.tgz\n${sha256(bytes)}  vspi-latest.tgz\n`)
+          : bytes,
+      );
+    }
+  }
+  const fetch = async (urlValue, init = {}) => {
+    const url = String(urlValue);
+    const method = init.method ?? 'GET';
+    requests.push({ url, method, headers: init.headers, body: init.body });
+    if (url === 'https://api.github.test/repos/example/vspi/releases/tags/v2.0.3' && method === 'GET') {
+      return release && !release.draft ? Response.json(release) : new Response('', { status: 404 });
+    }
+    if (url === 'https://api.github.test/repos/example/vspi/releases?per_page=100' && method === 'GET') {
+      return Response.json(release ? [release] : []);
+    }
+    if (url === 'https://api.github.test/repos/example/vspi/releases' && method === 'POST') {
+      const payload = JSON.parse(init.body);
+      release = { id: 7, ...payload, upload_url: 'https://uploads.github.test/releases/7/assets{?name,label}', assets: [] };
+      return Response.json(release, { status: 201 });
+    }
+    if (url.startsWith('https://uploads.github.test/releases/7/assets?name=') && method === 'POST') {
+      const name = new URL(url).searchParams.get('name');
+      const assetUrl = `https://api.github.test/assets/${nextAssetId++}`;
+      release.assets.push({ name, url: assetUrl });
+      assetBytes.set(assetUrl, Buffer.from(init.body));
+      return Response.json(release.assets.at(-1), { status: 201 });
+    }
+    if (url === 'https://api.github.test/repos/example/vspi/releases/7' && method === 'PATCH') {
+      release = { ...release, ...JSON.parse(init.body) };
+      return Response.json(release);
+    }
+    if (assetBytes.has(url) && method === 'GET') {
+      assert.equal(init.headers.accept, 'application/octet-stream');
+      return new Response(assetBytes.get(url));
+    }
+    return new Response('', { status: 500 });
+  };
+  return { requests, fetch, release: () => release, assetBytes };
+}
+
+function gitlabRelease(checksum) {
+  return {
+    tag_name: 'v2.0.3',
+    name: 'VSPi 2.0.3',
+    description: `SHA-256: \`${checksum}\``,
+    assets: {
+      links: [{
+        name: 'vspi-2.0.3.tgz',
+        url: 'https://gitlab.vsplab.cn/api/v4/projects/42/packages/generic/vspi/2.0.3/vspi-2.0.3.tgz',
+        direct_asset_path: '/vspi-2.0.3.tgz',
+        link_type: 'package',
+        direct_asset_url: 'https://gitlab.vsplab.cn/heyx/vspi/-/releases/v2.0.3/downloads/vspi-2.0.3.tgz',
+      }],
+    },
+  };
+}
+
+function mockMirror(bytes, options = {}) {
+  const requests = [];
+  let release = options.release;
+  let packageBytes = options.packageBytes;
+  const github = githubRelease(bytes, options.githubOverrides);
+  const fetch = async (urlValue, init = {}) => {
+    const url = String(urlValue);
+    const method = init.method ?? 'GET';
+    requests.push({ url, method, headers: init.headers, body: init.body });
+    if (url === 'https://github.test/downloads/v2.0.3/vspi-2.0.3.tgz') {
+      return new Response(options.versionedBytes ?? bytes);
+    }
+    if (url === 'https://github.test/downloads/v2.0.3/vspi-latest.tgz') {
+      return new Response(options.latestBytes ?? bytes);
+    }
+    if (url === 'https://api.github.test/repos/example/vspi/releases/tags/v2.0.3') return Response.json(github);
+    if (url === 'https://api.github.test/assets/1') return new Response(options.versionedBytes ?? bytes);
+    if (url === 'https://api.github.test/assets/2') return new Response(options.latestBytes ?? bytes);
+    if (url.endsWith('/projects/42/releases/v2.0.3') && method === 'GET') {
+      return release ? Response.json(release) : new Response('', { status: 404 });
+    }
+    if (url.endsWith('/projects/42/releases') && method === 'POST') {
+      const payload = JSON.parse(init.body);
+      release = {
+        ...payload,
+        assets: { links: [{ ...payload.assets.links[0], direct_asset_url: 'https://gitlab.vsplab.cn/heyx/vspi/-/releases/v2.0.3/downloads/vspi-2.0.3.tgz' }] },
+      };
+      return Response.json(release, { status: options.postStatus ?? 201 });
+    }
+    if (url.includes('/packages/generic/vspi/2.0.3/vspi-2.0.3.tgz')) {
+      if (method === 'PUT') {
+        if (!packageBytes) packageBytes = Buffer.from(init.body);
+        return new Response('', { status: options.uploadStatus ?? 201 });
+      }
+      return packageBytes ? new Response(packageBytes) : new Response('', { status: 404 });
+    }
+    if (url === 'https://gitlab.vsplab.cn/heyx/vspi/-/releases/v2.0.3/downloads/vspi-2.0.3.tgz') {
+      return packageBytes ? new Response(packageBytes) : new Response('', { status: 404 });
+    }
+    return new Response('', { status: 500 });
+  };
+  return { requests, fetch, release: () => release, packageBytes: () => packageBytes };
+}
+
+void test('prepares the exact GitHub release contract and rejects non-identical assets', async () => {
+  const files = await fixture();
+  const prepared = await prepareGitHubRelease({ environment: environment(), ...files });
+  assert.equal(prepared.title, 'VSPi 2.0.3');
+  assert.equal(prepared.body, `SHA-256: \`${sha256(files.assetBytes)}\``);
+  assert.deepEqual(prepared.assets.map(({ name }) => name), ['vspi-2.0.3.tgz', 'vspi-latest.tgz', 'SHA256SUMS']);
+  await writeFile(files.latestAssetPath, 'different');
+  await assert.rejects(prepareGitHubRelease({ environment: environment(), ...files }), /identical bytes/);
+});
+
+void test('creates one draft GitHub release, uploads the verified assets, and publishes it', async () => {
+  const files = await fixture();
+  const github = mockGitHubProducer(files.assetBytes);
+  const metadata = await produceGitHubRelease({ environment: environment(), fetch: github.fetch, ...files });
+  assert.deepEqual(metadata, { tag: 'v2.0.3', checksum: sha256(files.assetBytes), assets: ['vspi-2.0.3.tgz', 'vspi-latest.tgz', 'SHA256SUMS'] });
+  assert.equal(github.requests.filter(({ method }) => method === 'POST').length, 4);
+  assert.equal(github.requests.filter(({ method }) => method === 'PATCH').length, 1);
+  assert.equal(github.release().draft, false);
+  assert.equal(github.release().prerelease, false);
+  assert.ok(github.assetBytes.get('https://api.github.test/assets/1').equals(files.assetBytes));
+  assert.ok(github.assetBytes.get('https://api.github.test/assets/2').equals(files.assetBytes));
+  assert.equal(
+    github.assetBytes.get('https://api.github.test/assets/3').toString('utf8'),
+    `${sha256(files.assetBytes)}  vspi-2.0.3.tgz\n${sha256(files.assetBytes)}  vspi-latest.tgz\n`,
+  );
+});
+
+void test('reuses an exact GitHub release and refuses metadata or asset conflicts', async () => {
+  const files = await fixture();
+  const exact = mockGitHubProducer(files.assetBytes, githubRelease(files.assetBytes));
+  await produceGitHubRelease({ environment: environment(), fetch: exact.fetch, ...files });
+  assert.equal(exact.requests.filter(({ method }) => method === 'POST' || method === 'PATCH').length, 0);
+  const wrongTitle = mockGitHubProducer(files.assetBytes, githubRelease(files.assetBytes, { name: 'Other' }));
+  await assert.rejects(produceGitHubRelease({ environment: environment(), fetch: wrongTitle.fetch, ...files }), /title conflicts/);
+  const wrongBytes = mockGitHubProducer(Buffer.from('different'), githubRelease(files.assetBytes));
+  await assert.rejects(produceGitHubRelease({ environment: environment(), fetch: wrongBytes.fetch, ...files }), /local asset bytes/);
+});
+
+void test('reads only a published stable GitHub release with two identical checksum-verified assets', async () => {
+  const bytes = Buffer.from('source');
+  const valid = mockMirror(bytes);
+  const source = await readGitHubSource({ environment: environment(), fetch: valid.fetch });
+  assert.equal(source.checksum, sha256(bytes));
+  assert.ok(source.assetBytes.equals(bytes));
+  await assert.rejects(readGitHubSource({ environment: environment(), fetch: mockMirror(bytes, { latestBytes: Buffer.from('other') }).fetch }), /identical bytes/);
+  await assert.rejects(readGitHubSource({ environment: environment(), fetch: mockMirror(bytes, { githubOverrides: { body: `SHA-256: \`${'0'.repeat(64)}\`` } }).fetch }), /checksum conflicts/);
+  await assert.rejects(readGitHubSource({ environment: environment(), fetch: mockMirror(bytes, { githubOverrides: { assets: [githubRelease(bytes).assets[0]] } }).fetch }), /assets conflict/);
+  const anonymous = mockMirror(bytes);
+  await readGitHubSource({
+    environment: environment({ GITHUB_TOKEN: undefined }),
+    fetch: anonymous.fetch,
+  });
+  assert.ok(anonymous.requests.every(({ headers }) => headers?.authorization === undefined));
+  const direct = mockMirror(bytes);
+  const directSource = await readGitHubSource({
+    environment: environment({
+      GITHUB_TOKEN: undefined,
+      GITHUB_API_URL: undefined,
+      GITHUB_REPOSITORY: undefined,
+      GITHUB_RELEASE_BASE_URL: 'https://github.test/downloads',
+    }),
+    fetch: direct.fetch,
+  });
+  assert.equal(directSource.checksum, sha256(bytes));
+});
+
+void test('mirrors GitHub bytes to GitLab and emits updater-compatible minimal metadata', async () => {
+  const files = await fixture();
+  const mirror = mockMirror(files.assetBytes);
+  const metadata = await mirrorGitLabRelease({ environment: environment(), fetch: mirror.fetch, metadataPath: files.metadataPath });
+  assert.deepEqual(metadata, {
+    version: '2.0.3',
+    checksum: sha256(files.assetBytes),
+    downloadUrl: 'https://gitlab.vsplab.cn/heyx/vspi/-/releases/v2.0.3/downloads/vspi-2.0.3.tgz',
+  });
+  assert.deepEqual(JSON.parse(await readFile(files.metadataPath, 'utf8')), metadata);
+  assert.ok(mirror.packageBytes().equals(files.assetBytes));
+  assert.equal(mirror.release().assets.links.length, 1);
+  assert.equal(mirror.requests.filter(({ method }) => method === 'PUT').length, 1);
+  assert.equal(mirror.requests.filter(({ method }) => method === 'POST').length, 1);
+  const gitlabMutations = mirror.requests.filter(({ method }) => method === 'PUT' || method === 'POST');
+  assert.ok(gitlabMutations.every(({ headers }) => headers['PRIVATE-TOKEN'] === 'test-gitlab-token'));
+});
+
+void test('mirrors with a GitLab CI job token and accepts an omitted direct asset path', async () => {
+  const files = await fixture();
+  const checksum = sha256(files.assetBytes);
+  const release = gitlabRelease(checksum);
+  delete release.assets.links[0].direct_asset_path;
+  const mirror = mockMirror(files.assetBytes, {
+    packageBytes: files.assetBytes,
+    release,
+  });
+
+  await mirrorGitLabRelease({
+    environment: environment({ GITLAB_TOKEN: undefined, CI_JOB_TOKEN: 'test-job-token' }),
+    fetch: mirror.fetch,
+    metadataPath: files.metadataPath,
+  });
+
+  const gitlabRequests = mirror.requests.filter(({ url }) =>
+    url.includes('gitlab.vsplab.cn/api/v4/'),
+  );
+  assert.ok(gitlabRequests.every(({ headers }) => headers?.['JOB-TOKEN'] === 'test-job-token'));
+});
+
+void test('reuses an exact GitLab mirror and rejects package or release conflicts without mutation', async () => {
+  const files = await fixture();
+  const checksum = sha256(files.assetBytes);
+  const exact = mockMirror(files.assetBytes, { packageBytes: files.assetBytes, release: gitlabRelease(checksum) });
+  await mirrorGitLabRelease({ environment: environment(), fetch: exact.fetch, metadataPath: files.metadataPath });
+  assert.equal(exact.requests.filter(({ method }) => method === 'PUT' || method === 'POST').length, 0);
+  const wrongPackage = mockMirror(files.assetBytes, { packageBytes: Buffer.from('different') });
+  await assert.rejects(mirrorGitLabRelease({ environment: environment(), fetch: wrongPackage.fetch, metadataPath: files.metadataPath }), /GitHub release bytes/);
+  assert.equal(wrongPackage.requests.filter(({ method }) => method === 'PUT' || method === 'POST').length, 0);
+  const wrongRelease = mockMirror(files.assetBytes, { packageBytes: files.assetBytes, release: { ...gitlabRelease(checksum), name: 'Other' } });
+  await assert.rejects(mirrorGitLabRelease({ environment: environment(), fetch: wrongRelease.fetch, metadataPath: files.metadataPath }), /title conflicts/);
+  assert.equal(wrongRelease.requests.filter(({ method }) => method === 'PUT' || method === 'POST').length, 0);
+});

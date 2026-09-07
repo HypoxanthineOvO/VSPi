@@ -1,85 +1,67 @@
 {
-  "name": "vspi",
-  "version": "1.4.5",
-  "description": "A Chinese terminal UI for Pi coding agents with optional read-only Hypo-Workflow integration.",
-  "homepage": "https://github.com/HypoxanthineOvO/VSPi",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/HypoxanthineOvO/VSPi.git"
-  },
-  "bugs": {
-    "url": "https://github.com/HypoxanthineOvO/VSPi/issues"
-  },
+  "name": "@moonshot-ai/monorepo",
+  "version": "0.1.1",
+  "private": true,
+  "license": "MIT",
   "type": "module",
-  "bin": {
-    "vspi": "dist/index.js"
-  },
-  "files": [
-    "dist",
-    "THIRD_PARTY_NOTICES.md",
-    "README.md",
-    "Docs/usage.md",
-    "Docs/tui-v1.md",
-    "Docs/testing-and-debugging.md",
-    "Docs/harness",
-    "scripts/patch-pi-brace-expansion.mjs",
-    "scripts/patch-pi-editor-performance.mjs",
-    "scripts/trim-pi-docs.mjs",
-    "skills"
-  ],
   "scripts": {
-    "dev": "tsx src/index.ts",
-    "start": "node dist/index.js",
-    "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json && chmod +x dist/index.js",
-    "prepack": "npm run build",
-    "postinstall": "node scripts/patch-pi-brace-expansion.mjs && node scripts/patch-pi-editor-performance.mjs && node scripts/trim-pi-docs.mjs",
-    "patch:pi-editor": "node scripts/patch-pi-editor-performance.mjs",
-    "pretest": "npm run build",
-    "check": "tsc --noEmit && biome check src test scripts",
-    "check:fix": "biome check --write src test scripts",
-    "harness:check": "tsx scripts/harness-check.ts",
-    "mock:terminal": "tsx scripts/terminal-mock.ts",
-    "mock:working": "tsx scripts/working-mock.ts",
+    "check:vspi": "node scripts/check-vspi.mjs",
+    "postinstall": "node scripts/fix-node-pty-perms.mjs",
+    "build": "pnpm -r run build",
+    "build:packages": "pnpm -r --filter './packages/*' run build",
+    "dev:cli": "pnpm -C apps/kimi-code run dev",
+    "dev:cli:legacy": "KIMI_CODE_LEGACY_FLAG=1 pnpm -C apps/kimi-code run dev",
+    "dev:cli:marketplace": "KIMI_CODE_DEV_MARKETPLACE_URL=https://code.kimi.com/kimi-code/plugins/marketplace.json pnpm -C apps/kimi-code run dev",
+    "dev:server": "pnpm -C apps/kimi-code run dev:server",
+    "dev:kap-server": "pnpm -C apps/kimi-code run dev:kap-server",
+    "dev:v2": "pnpm -C apps/kimi-code run dev:kap-server:multi",
+    "build:plugin-marketplace": "pnpm -C apps/kimi-code run build:plugin-marketplace",
+    "vis": "pnpm -C apps/vis run dev",
+    "dev:docs": "pnpm -C docs install --ignore-workspace && pnpm -C docs run dev",
+    "typecheck": "pnpm run build:packages && pnpm -r --filter './packages/*' run typecheck && pnpm --filter @moonshot-ai/kimi-code run typecheck && pnpm --filter kimi-code run typecheck && pnpm --filter @moonshot-ai/vis-server run typecheck && pnpm --filter @moonshot-ai/vis-web run typecheck",
+    "lint": "node scripts/check-no-comments.mjs && oxlint --type-aware",
+    "lint:fix": "pnpm run lint --fix",
+    "lint:pkg": "pnpm --filter @moonshot-ai/kimi-code exec publint && npm_config_cache=${TMPDIR:-/tmp}/kimi-code-npm-cache pnpm --filter @moonshot-ai/kimi-code exec attw --pack . --profile node16",
+    "sherif": "sherif -i @agentclientprotocol/sdk",
     "test": "vitest run",
-    "test:pty": "vitest run test/pty-fullscreen.test.ts test/pty-scrollback.test.ts test/pty-continuity.test.ts",
     "test:watch": "vitest",
-    "smoke": "VSPi_FIXTURE=1 VSPi_REDUCED_MOTION=1 tsx src/index.ts --render-once"
-  },
-  "engines": {
-    "node": ">=22.19.0"
-  },
-  "keywords": [
-    "ai",
-    "coding-agent",
-    "terminal",
-    "tui"
-  ],
-  "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.84.3",
-    "@earendil-works/pi-tui": "0.84.3",
-    "brace-expansion": "5.0.9",
-    "chalk": "5.6.2",
-    "grok-mermaid": "0.2.2",
-    "highlight.js": "10.7.3",
-    "marked": "18.0.5",
-    "typebox": "1.3.7"
+    "test:coverage": "vitest run --coverage",
+    "clean": "pnpm -r run clean",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "version:release": "changeset version",
+    "publish": "pnpm run typecheck && pnpm run lint && pnpm run sherif && pnpm run test && pnpm run build && pnpm run lint:pkg && changeset publish",
+    "prepare": "simple-git-hooks"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.2.0",
-    "@homebridge/node-pty-prebuilt-multiarch": "0.14.1",
-    "@types/node": "24.1.0",
-    "@xterm/headless": "6.0.0",
-    "tsx": "4.20.3",
-    "typescript": "5.9.2",
-    "vitest": "3.2.7"
+    "@arethetypeswrong/cli": "0.18.2",
+    "@changesets/changelog-github": "0.7.0",
+    "@changesets/cli": "2.30.0",
+    "@microsoft/api-extractor": "7.58.7",
+    "@types/node": "^22.15.3",
+    "@vitest/coverage-v8": "4.1.4",
+    "lint-staged": "16.4.0",
+    "oxlint": "1.59.0",
+    "oxlint-tsgolint": "0.20.0",
+    "pkg-pr-new": "0.0.75",
+    "publint": "0.3.18",
+    "sherif": "1.11.1",
+    "simple-git-hooks": "2.13.1",
+    "tsdown": "0.22.0",
+    "tsx": "^4.21.0",
+    "typescript": "6.0.2",
+    "vitest": "4.1.4"
   },
-  "overrides": {
-    "brace-expansion": "5.0.9"
+  "simple-git-hooks": {
   },
-  "license": "Apache-2.0",
-  "main": "index.js",
-  "directories": {
-    "test": "test"
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}": [
+      "oxlint --fix --quiet",
+      "oxlint --type-aware --quiet"
+    ]
   },
-  "author": ""
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "packageManager": "pnpm@10.33.0"
 }

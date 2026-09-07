@@ -1,0 +1,63 @@
+name: VSPi Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+concurrency:
+  group: vspi-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish GitHub release
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run release quality gates
+        run: |
+          node --input-type=module -e 'import { checkoutReleaseIdentity } from "./scripts/vspi-release-identity.mjs"; await checkoutReleaseIdentity(process.env.GITHUB_REF_NAME)'
+          pnpm check:vspi
+          node scripts/check-nix-workspace.mjs
+
+      - name: Build and verify the staging tarball once
+        run: |
+          pnpm --filter vspi package:pack
+          VERSION=$(node -p 'require("./apps/vspi/package.json").version')
+          ASSET="vspi-${VERSION}.tgz"
+          ASSET_PATH="$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/$ASSET"
+          pnpm --filter vspi package:verify "$ASSET_PATH"
+          cp "$ASSET_PATH" "$RUNNER_TEMP/vspi-latest.tgz"
+          cmp "$ASSET_PATH" "$RUNNER_TEMP/vspi-latest.tgz"
+          sha256sum "$ASSET_PATH" "$RUNNER_TEMP/vspi-latest.tgz"
+          CHECKSUM=$(sha256sum "$RUNNER_TEMP/vspi-latest.tgz" | cut -d' ' -f1)
+          printf '%s  %s\n%s  vspi-latest.tgz\n' "$CHECKSUM" "$ASSET" "$CHECKSUM" > "$RUNNER_TEMP/SHA256SUMS"
+          echo "VSPI_ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
+
+      - name: Publish the GitHub release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          node scripts/github-release-producer.mjs
+          "$VSPI_ASSET_PATH"
+          "$RUNNER_TEMP/vspi-latest.tgz"
+          "$RUNNER_TEMP/SHA256SUMS"
+          "$RUNNER_TEMP/vspi-github-release.json"
