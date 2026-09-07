@@ -45,6 +45,7 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
 
+      - run: sudo apt-get update && sudo apt-get install -y zip
       - run: pnpm install --frozen-lockfile
       - run: pnpm run test --shard=${{ matrix.shard }}/5
 
