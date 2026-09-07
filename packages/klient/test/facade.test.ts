@@ -311,6 +311,29 @@ describe('agent task routing', () => {
       },
     ]);
   });
+
+  it('routes detachTask through the agent scope and normalizes the service result to void', async () => {
+    const channel = new FakeChannel();
+    const agent = createKlientFromChannel(channel).session('s1').agent('main');
+    channel.result = {
+      kind: 'agent' as const,
+      taskId: 'task-1',
+      description: 'Inspect repository',
+      status: 'running' as const,
+      startedAt: 1,
+      endedAt: null,
+    };
+
+    await expect(agent.detachTask({ taskId: 'task-1' })).resolves.toBeUndefined();
+    expect(channel.calls).toEqual([
+      {
+        scope: { sessionId: 's1', agentId: 'main' },
+        service: 'agentTaskService',
+        method: 'detach',
+        args: ['task-1'],
+      },
+    ]);
+  });
 });
 
 describe('agent cron routing', () => {
