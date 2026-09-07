@@ -1,70 +1,47 @@
-workflow:
-  rules:
-    - if: '$CI_COMMIT_TAG'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - when: never
-
 stages:
-  - quality
-  - package
+  - test
   - release
 
 default:
-  image:
-    name: gitlab.vsplab.cn:5050/heyx/vspi/ci-node:22.22.0-3@sha256:851dd7ad97ef3937761bdff450e349c08ac5d173e9b7ecc1bb01ca875c40f491
   tags:
     - vspi-docker
-  interruptible: true
-  before_script:
-    - node --version
-    - npm --version
-    - npm ci --no-audit --no-fund
 
-variables:
-  npm_config_cache: "/cache/vspi/npm"
-  npm_config_fetch_retries: "5"
-  npm_config_fetch_retry_maxtimeout: "120000"
-  npm_config_fetch_retry_mintimeout: "10000"
-
-quality:
-  stage: quality
+gitlab-release-contract:
+  stage: test
+  image: node:24.15.0
   script:
-    - npm run check
-    - npm test
+    - node --check scripts/github-release-producer.mjs
+    - node --check scripts/gitlab-release-producer.mjs
+    - node --check scripts/gitlab-release-producer.test.mjs
+    - node --test scripts/gitlab-release-producer.test.mjs
 
-package:
-  stage: package
+vspi-quality:
+  stage: test
+  image: node:24.15.0
   rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_COMMIT_TAG'
-    - when: never
   script:
-    - mkdir -p .artifacts
-    - npm pack --json --pack-destination .artifacts > .artifacts/pack.json
-    - node scripts/ci/verify-package.mjs .artifacts/pack.json
-    - sha256sum ".artifacts/vspi-$(node -p "require('./package.json').version").tgz" > .artifacts/SHA256SUMS
-  artifacts:
-    name: "vspi-${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}"
-    when: on_success
-    paths:
-      - .artifacts/
-    expire_in: 1 week
+    - apt-get update
+    - apt-get install -y zip
+    - corepack enable
+    - pnpm install --frozen-lockfile
+    - pnpm check:vspi
 
-release:
+mirror-vspi-release:
   stage: release
-  interruptible: false
-  needs:
-    - job: package
-      artifacts: true
-  before_script:
-    - node --version
-  script:
-    - export VERSION="$(node -p "require('./package.json').version")"
-    - export FILENAME="vspi-${VERSION}.tgz"
-    - export PACKAGE_URL="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/vspi/$VERSION/$FILENAME"
-    - export LATEST_PACKAGE_URL="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/vspi/$VERSION/vspi-latest.tgz"
-    - export RELEASE_TITLE="VSPi $VERSION"
-    - export RELEASE_NOTES_PATH="Docs/releases/v$VERSION.md"
-    - node scripts/ci/publish-release.mjs .artifacts/SHA256SUMS ".artifacts/$FILENAME"
+  image: node:24.15.0
   rules:
-    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/'
-    - when: never
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+  variables:
+    GITHUB_RELEASE_BASE_URL: https://github.com/HypoxanthineOvO/VSPi/releases/download
+    GITHUB_REF_NAME: $CI_COMMIT_TAG
+    GITLAB_API_URL: $CI_API_V4_URL
+    GITLAB_PROJECT_ID: $CI_PROJECT_ID
+    GITLAB_PROJECT_URL: $CI_PROJECT_URL
+  script:
+    - node scripts/gitlab-release-producer.mjs vspi-release-metadata.json
+  artifacts:
+    paths:
+      - vspi-release-metadata.json

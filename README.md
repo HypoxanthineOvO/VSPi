@@ -1,96 +1,126 @@
-<div align="center">
+# Kimi Code CLI
 
-# VSPi
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![Docs](https://img.shields.io/badge/docs-online-blue)](https://moonshotai.github.io/kimi-code/en/) <br>
+[Documentation](https://moonshotai.github.io/kimi-code/en/) · [Issues](https://github.com/MoonshotAI/kimi-code/issues) · [中文](README.zh-CN.md)
 
-[![Release](https://img.shields.io/github/v/release/HypoxanthineOvO/VSPi?display_name=tag&sort=semver)](https://github.com/HypoxanthineOvO/VSPi/releases/latest)
-[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.19.0-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
-[![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+![Demo of using Kimi Code](./docs/media/intro.gif)
 
-</div>
+## What is Kimi Code CLI
 
-VSPi 是基于 [Pi](https://github.com/earendil-works/pi-coding-agent) 开发的终端 Coding Agent。它保留了 Pi 的简洁内核和全部 Provider 协议支持，在此之上重点打磨了四件事：
+Kimi Code CLI is an AI coding agent that runs in your terminal — it can read and edit code, run shell commands, search files, fetch web pages, and choose the next step based on the feedback it receives. It works out of the box with Moonshot AI’s Kimi models and can also be configured to use other compatible providers.
 
-- **更舒服的人机交互**：内置 Question Tool，当 Agent 需要你做决策时，会弹出结构化的选择面板（单选 / 多选 / 排序 / 自由输入），而不是让你在一大段文字里找问题、再手动敲回复；更舒适的瀑布流，区分任务执行、思维链和模型输出；更清晰的界面显示：除了模型、上下文和路径等常规内容之外，提供吞吐量、缓存命中率、Token 计费等统计信息。
-- **更好的渲染效果**：对终端里的 Markdown 做了深度优化——标题、代码块高亮、LaTeX 公式、Mermaid 图表，长回复也能清爽可读。
-- **前缀缓存机制**：精心设计的上下文结构让稳定前缀最大化命中 Provider 的 Prompt Cache，长会话的 Token 成本和首 Token 延迟显著下降。
-- **DeepSeek Harness**：集成了 DeepSeek Harness 极简版工具调用（persistent bash + str_replace editor），自动识别 DeepSeek 模型并注入官方推荐的工具与 Persona，激发最强 DeepSeek。
+## Install
 
-> 需要 Node.js `>=22.19.0`。
+Install with the official script. No Node.js required.
 
-## 安装
+- **macOS or Linux**:
 
-```bash
-npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/latest/download/vspi-latest.tgz"
+```sh
+curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash
 ```
 
-<details>
-<summary>其他安装方式（Linux curl）</summary>
+- **Windows (PowerShell)**:
 
-Linux / macOS：
-
-```bash
-curl -fL 'https://github.com/HypoxanthineOvO/VSPi/releases/latest/download/vspi-latest.tgz' -o /tmp/vspi-latest.tgz && npm install -g /tmp/vspi-latest.tgz
+```powershell
+irm https://code.kimi.com/kimi-code/install.ps1 | iex
 ```
 
-</details>
+> On Windows, install [Git for Windows](https://gitforwindows.org/) before first launch because Kimi Code CLI uses the bundled Git Bash as its shell environment. If Git Bash is installed in a custom location, set `KIMI_SHELL_PATH` to the absolute path of `bash.exe`.
 
-安装后检查：
+Then, run it with a new shell session:
 
-```bash
-vspi --version
+```sh
+kimi --version
 ```
 
-## 快速开始
+For npm install, upgrade, uninstall, see [Getting Started](https://moonshotai.github.io/kimi-code/en/guides/getting-started).
 
-运行配置入口，选择内置服务或任意自定义中转站（自动从 `/models` 发现模型）：
+## Quick Start
 
-```bash
-vspi config
+Open a project and start the interactive UI:
+
+```sh
+cd your-project
+kimi
 ```
 
-然后开聊：
+On first launch, run `/login` inside Kimi Code CLI and choose either Kimi Code OAuth or a Moonshot AI Open Platform API key. After login, try your first task:
 
-```bash
-vspi                      # 开始新对话
-vspi continue             # 继续最近一次对话
-vspi exec "解释这段代码"   # 单次任务，直接输出结果（非交互）
-vspi exec resume "继续"   # 非交互续接最近会话
-vspi control status       # 非接管式查看运行中的 VSPi Session
-vspi control send "检查当前改动" # 向运行中的 Session 提交消息
+```
+Take a look at this project and explain its main directories.
 ```
 
-交互模式可用 `/cron wake 2h` 在模型额度预计恢复后自动唤醒当前 Session；`/cron` 面板持续显示 scheduled/failed 状态。VSPi 进程需要保持运行。
+## Key Features
 
-## 功能一览
+- **Single-binary distribution.** Install with one command: no Node.js setup, PATH gymnastics, or global module conflicts.
+- **Blazing-fast startup.** The TUI is ready in milliseconds, so starting a session never feels heavy.
+- **Purpose-built TUI.** A carefully tuned interface, optimized end to end for long, focused agent sessions.
+- **Video input.** Drop a screen recording or demo clip into the chat and let the agent watch what is hard to describe in words — turn a reference clip into a LUT, a long video into a short, a screen recording into working code, and more.
+- **AI-native MCP configuration.** Add, edit, and authenticate Model Context Protocol servers conversationally with `/mcp-config`, without hand-editing JSON.
+- **Rich plugin ecosystem.** Install skills, MCP servers, and data sources from the marketplace or any GitHub repo, with each install's trust level surfaced up front.
+- **Subagents for focused, parallel work.** Dispatch built-in `coder`, `explore`, and `plan` subagents in isolated contexts while keeping the main conversation clean.
+- **Lifecycle hooks.** Run local commands at key points to gate risky tool calls, audit decisions, trigger desktop notifications, or connect to your own automation.
+- **Editor & IDE integration (ACP).** Drive a Kimi Code CLI session straight from Zed, JetBrains, or any [Agent Client Protocol](https://agentclientprotocol.com/) client with `kimi acp`.
 
-| 功能             | 说明                                                                   |
-| ---------------- | ---------------------------------------------------------------------- |
-| Question Tool    | Agent 主动发起结构化提问，面板式作答，决策不再靠打字                   |
-| Markdown 渲染    | 标题 / 代码高亮 / LaTeX / Mermaid，终端里的完整渲染                    |
-| 前缀缓存         | 稳定前缀命中 Prompt Cache，省钱、降延迟                                |
-| DeepSeek Harness | 检测到 DeepSeek 模型自动启用极简工具集，释放模型上限                   |
-| 多协议支持       | 继承 Pi 的全部 Provider 协议，任意 OpenAI / Anthropic 兼容端点皆可接入 |
-| 图片输入         | `Ctrl+V` / `Alt+V` 直接粘贴剪贴板截图发给模型                          |
-| 会话管理         | `vspi continue` / `vspi resume` 续接历史对话                           |
-| 计划与目标       | `/plan`、`/goal` 跟踪多步任务进度                                      |
-| 安全策略         | Safe / Standard / YOLO / Auto 四档执行策略，`/policy` 随时切换         |
-| 自更新           | `vspi update` 一键升级到最新稳定版（SHA-256 校验）                     |
+## Use it in your editor (ACP)
 
-输入 `/` 查看所有可用命令；`Tab` 补全命令，`Shift+Tab` 在面板间切换，`Ctrl+C` 中断当前任务。
+Kimi Code CLI speaks the [Agent Client Protocol](https://agentclientprotocol.com/), so ACP-compatible editors and IDEs (Zed, JetBrains, …) can drive a session over stdio. Log in once, then point your editor at the `kimi acp` subcommand — no extra login needed.
 
-## 更新
+For Zed, add this to `~/.config/zed/settings.json`:
 
-```bash
-vspi update
+```json
+{
+  "agent_servers": {
+    "Kimi Code CLI": {
+      "type": "custom",
+      "command": "kimi",
+      "args": ["acp"],
+      "env": {}
+    }
+  }
+}
 ```
 
-## 参与贡献
+Then open a new conversation in Zed's Agent panel. See [Using in IDEs](https://moonshotai.github.io/kimi-code/en/guides/ides) for JetBrains setup and troubleshooting, and the [`kimi acp` reference](https://moonshotai.github.io/kimi-code/en/reference/kimi-acp) for the full capability matrix.
 
-欢迎提交 PR！提 PR（或 GitLab MR）前请先阅读[贡献指南](CONTRIBUTING.md)：包含开发环境、Commit 规范、分支命名、PR Checklist 与发布流程。
+## Docs
 
-## 详细文档
+- [Getting Started](https://moonshotai.github.io/kimi-code/en/guides/getting-started)
+- [Interaction and approvals](https://moonshotai.github.io/kimi-code/en/guides/interaction)
+- [Sessions](https://moonshotai.github.io/kimi-code/en/guides/sessions)
+- [Using in IDEs (ACP)](https://moonshotai.github.io/kimi-code/en/guides/ides)
+- [Configuration](https://moonshotai.github.io/kimi-code/en/configuration/config-files)
+- [Command reference](https://moonshotai.github.io/kimi-code/en/reference/kimi-command)
 
-- [使用手册](Docs/usage.md)
-- [TUI 设计与响应式规范](Docs/tui-v1.md)
-- [测试与调试](Docs/testing-and-debugging.md)
-- [各模型 Harness 说明](Docs/harness/README.md)
+## Develop
+
+Requirements: Node.js ≥ 24.15.0, pnpm 10.33.0.
+
+```sh
+git clone https://github.com/MoonshotAI/kimi-code.git
+cd kimi-code
+pnpm install
+```
+
+```sh
+pnpm dev:cli    # run the CLI in dev mode
+pnpm test       # run tests
+pnpm typecheck  # TypeScript check
+pnpm lint       # oxlint
+pnpm build      # build all packages
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full contribution guide.
+
+## Community
+
+- [Issues](https://github.com/MoonshotAI/kimi-code/issues)
+- For security vulnerabilities, see [SECURITY.md](SECURITY.md).
+
+## Acknowledgements
+
+Our TUI is built on top of [`pi-tui`](https://github.com/earendil-works/pi-mono/tree/main/packages/tui). We thank the authors of `pi-tui` for their valuable work.
+
+## License
+
+Released under the [MIT License](LICENSE).

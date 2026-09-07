@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noPropertyAccessFromIndexSignature": false
+  },
+  "include": ["src/main.ts", "test", "../../packages/agent-core-v2/src/env.d.ts"]
+}
