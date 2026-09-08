@@ -537,6 +537,23 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		});
 	});
 
+	it("removes the lifecycle label after a steer message completes", () => {
+		const output = renderTranscriptMessage(
+			{
+				id: "steer-completed",
+				role: "user",
+				kind: "text",
+				text: "继续处理",
+				delivery: "steer",
+				deliveryState: "completed",
+			},
+			90,
+			theme,
+		).map(stripTerminalSequences).join("\n");
+		expect(output).toContain("继续处理");
+		expect(output).not.toContain("已完成");
+	});
+
 	it("detaches the newest foreground task without cancelling it", async () => {
 		const detachAgentTask = vi.fn(async () => undefined);
 		const cancel = vi.fn();

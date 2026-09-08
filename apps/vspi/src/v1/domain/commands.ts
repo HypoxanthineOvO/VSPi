@@ -31,6 +31,7 @@ export type ActionHandler =
 	| "tasks"
 	| "cron"
 	| "usage"
+	| "copy"
 	| "theme"
 	| "tui"
 	| "quit"
@@ -250,6 +251,15 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
 		description: "查看上下文与费用",
 		group: "VSPi",
 		handler: "usage",
+		availability: "enabled",
+	},
+	{
+		id: "copy",
+		aliases: [],
+		label: "/copy",
+		description: "复制最近一条正式回复",
+		group: "VSPi",
+		handler: "copy",
 		availability: "enabled",
 	},
 	{

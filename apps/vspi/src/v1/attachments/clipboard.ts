@@ -12,6 +12,31 @@ export interface CommandResult {
 
 export type ClipboardCommandRunner = (command: string, args: string[], timeout?: number) => CommandResult;
 
+export function writeClipboardText(
+  text: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (!text || env.TERMUX_VERSION) return false;
+  const input = Buffer.from(text, "utf8");
+  if (platform === "darwin") return writeTextWithCommand("pbcopy", [], input);
+  if (platform !== "linux") return false;
+  if (env.WAYLAND_DISPLAY || env.XDG_SESSION_TYPE === "wayland") {
+    return writeTextWithCommand("wl-copy", [], input) || writeTextWithCommand("xclip", ["-selection", "clipboard"], input);
+  }
+  return writeTextWithCommand("xclip", ["-selection", "clipboard"], input) || writeTextWithCommand("wl-copy", [], input);
+}
+
+function writeTextWithCommand(command: string, args: string[], input: Buffer): boolean {
+  const result = spawnSync(command, args, {
+    input,
+    timeout: 3000,
+    windowsHide: true,
+    shell: false,
+  });
+  return !result.error && result.status === 0;
+}
+
 function run(command: string, args: string[], timeout = 3000): CommandResult {
   const result = spawnSync(command, args, { timeout, maxBuffer: 25 * 1024 * 1024, windowsHide: true, shell: false });
   if (result.error || result.status !== 0) return { ok: false, stdout: Buffer.alloc(0) };

@@ -14,6 +14,7 @@ import {
 } from "@moonshot-ai/pi-tui";
 import type { AgentRole } from "../agents/types.js";
 import type { AttachmentService } from "../attachments/service.js";
+import { writeClipboardText } from "../attachments/clipboard.js";
 import type {
 	BackendSubscription,
 	ChatBackend,
@@ -2576,6 +2577,19 @@ export class VspiApp implements Component, Focusable {
 		}
 		if (action.handler === "cancelAndExit") {
 			this.options.onExit("cancel");
+			return;
+		}
+		if (action.handler === "copy") {
+			const latest = [...this.messages]
+				.reverse()
+				.find((message) => message.kind === "text" && message.role === "assistant" && !message.streaming && message.text.trim());
+			this.panels.close();
+			if (!latest || latest.kind !== "text") {
+				this.showNotice("当前没有可复制的正式回复", "warning");
+				return;
+			}
+			if (writeClipboardText(latest.text)) this.showNotice("已复制最近一条回复", "success");
+			else this.showNotice("复制失败：当前环境没有可用的系统剪贴板", "error");
 			return;
 		}
 		if (action.handler === "newSession") {

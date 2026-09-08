@@ -596,7 +596,6 @@ function deliverySummary(
 	if (message.deliveryState === "started") return "〔模型步骤已开始〕";
 	if (message.deliveryState === "responding") return "〔正在回复〕";
 	if (message.deliveryState === "failed") return "〔回复失败〕";
-	if (message.deliveryState === "completed") return "〔已完成〕";
 	return "";
 }
 
