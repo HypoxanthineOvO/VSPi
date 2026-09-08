@@ -5,7 +5,7 @@
  * differs per file.
  */
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -688,6 +688,45 @@ export function defineKlientConformance(
         });
       } finally {
         await target.klient.session(created.id).close();
+      }
+    });
+
+    it('detachTask releases a foreground shell command while its process keeps running', async () => {
+      const workDir = process.cwd();
+      const created = await target.klient.global.sessions.create({
+        workDir,
+        title: 'conformance foreground detach',
+      });
+      const agent = target.klient.session(created.id).agent('main');
+      const commandId = 'conformance-detach';
+      let taskId: string | undefined;
+      let foreground: ReturnType<typeof agent.runShellCommand> | undefined;
+      try {
+        foreground = agent.runShellCommand({
+          command: `exec '${process.execPath.replaceAll("'", "'\\''")}' -e 'setInterval(() => {}, 60000)'`,
+          commandId,
+        });
+        void foreground.catch(() => {});
+        await vi.waitFor(async () => {
+          const tasks = await agent.getTasks({ activeOnly: true });
+          const task = tasks.find((item) => item.kind === 'process' && item.detached === false);
+          expect(task).toMatchObject({ status: 'running', detached: false });
+          taskId = task?.taskId;
+        });
+        if (taskId === undefined) throw new Error('foreground task was not registered');
+
+        await expect(agent.detachTask({ taskId })).resolves.toBeUndefined();
+
+        await expect(foreground).resolves.toMatchObject({ backgrounded: true, isError: false });
+        expect(await agent.getTask(taskId)).toMatchObject({ status: 'running', detached: true });
+      } finally {
+        try {
+          await agent.cancelShellCommand({ commandId });
+          if (taskId !== undefined) await agent.stopTask({ taskId });
+          await foreground?.catch(() => {});
+        } finally {
+          await target.klient.session(created.id).close();
+        }
       }
     });
 
