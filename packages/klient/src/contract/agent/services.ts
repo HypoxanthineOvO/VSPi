@@ -161,6 +161,7 @@ export const agentTaskContract = {
     input: z.tuple([z.string(), z.string().optional()]),
     output: maybe(agentTaskInfoSchema),
   },
+  detach: { input: z.tuple([z.string()]), output: maybe(agentTaskInfoSchema) },
   readOutput: {
     input: z.tuple([z.string(), z.number().optional()]),
     output: z.string(),

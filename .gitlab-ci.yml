@@ -23,8 +23,9 @@ vspi-quality:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_COMMIT_TAG'
   script:
-    - apt-get update
-    - apt-get install -y zip
+    - sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources
+    - apt-get -o Acquire::Retries=2 -o Acquire::https::Timeout=30 update
+    - apt-get -o Acquire::Retries=2 -o Acquire::https::Timeout=30 install -y --no-install-recommends zip
     - corepack enable
     - pnpm install --frozen-lockfile
     - pnpm check:vspi

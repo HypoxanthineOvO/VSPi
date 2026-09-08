@@ -311,6 +311,49 @@ describe('agent task routing', () => {
       },
     ]);
   });
+
+  it('routes detachTask through the registered agent contract', async () => {
+    const channel = new FakeChannel();
+    const agent = createKlientFromChannel(channel).session('s1').agent('main');
+    channel.result = {
+      kind: 'agent' as const,
+      taskId: 'task-1',
+      description: 'Inspect repository',
+      status: 'running' as const,
+      startedAt: 1,
+      endedAt: null,
+    };
+
+    await expect(agent.detachTask({ taskId: 'task-1' })).resolves.toBeUndefined();
+    expect(channel.calls).toEqual([
+      {
+        scope: { sessionId: 's1', agentId: 'main' },
+        service: 'agentTaskService',
+        method: 'detach',
+        args: ['task-1'],
+      },
+    ]);
+  });
+
+  it.each([null, undefined])('accepts a missing detach result of %s', async (result) => {
+    const channel = new FakeChannel();
+    channel.result = result;
+    const agent = createKlientFromChannel(channel).session('s1').agent('main');
+
+    await expect(agent.detachTask({ taskId: 'missing' })).resolves.toBeUndefined();
+    expect(channel.calls).toHaveLength(1);
+  });
+
+  it('rejects a non-string detach task id before sending a request', async () => {
+    const channel = new FakeChannel();
+    const agent = createKlientFromChannel(channel).session('s1').agent('main');
+
+    await expect(agent.detachTask({ taskId: 42 as unknown as string })).rejects.toMatchObject({
+      phase: 'input',
+      procedure: 'agentTaskService.detach',
+    });
+    expect(channel.calls).toHaveLength(0);
+  });
 });
 
 describe('agent cron routing', () => {
