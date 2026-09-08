@@ -145,6 +145,22 @@ describe('queryAvailableModels', () => {
     expect(() => mergeRelayCatalog({}, 'relay', {}, { models: [{ id: 'same' }, { id: 'same' }] })).toThrow();
   });
 
+  it('treats declared effortLevels as authoritative over the builtin catalog', () => {
+    const records = { m: { provider: 'relay', model: 'gpt-5.4', thinking: { availability: 'always', canDisable: false, controls: ['effort'], efforts: ['low', 'high'], defaultEffort: 'high' } } };
+    const result = mergeRelayCatalog(records, 'relay', { type: 'openai_responses' }, { models: [
+      { id: 'gpt-5.4', reasoning: true, effortLevels: ['off', 'medium', 'xhigh'], defaultEffort: 'xhigh' },
+    ] });
+    expect(result.m?.thinking).toMatchObject({
+      availability: 'dynamic',
+      canDisable: true,
+      controls: ['toggle', 'effort'],
+      efforts: ['medium', 'xhigh'],
+      defaultEffort: 'xhigh',
+    });
+    expect(result.m?.supportEfforts).toEqual(['medium', 'xhigh']);
+    expect(result.m?.defaultEffort).toBe('xhigh');
+  });
+
   it('preserves missing prices and accepts explicitly free rates', () => {
     const records = { m: { provider: 'relay', model: 'example', pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 8, cacheReadUsdPerMillion: 0.2 } } };
     const partial = mergeRelayCatalog(records, 'relay', {}, { models: [{ id: 'example', cost: { input: 3 } }] });

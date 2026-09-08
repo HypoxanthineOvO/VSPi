@@ -20,6 +20,7 @@ const entrySchema = z.object({
   input: z.array(z.string()).optional(),
   reasoning: z.boolean().optional(),
   effortLevels: z.array(z.string().min(1)).min(1).optional(),
+  defaultEffort: z.string().trim().min(1).optional(),
   thinkingLevelMap: z.record(z.string(), z.union([z.string().min(1), z.null()])).optional(),
   cost: costSchema.optional(),
   curated: z.boolean().optional(), hidden: z.boolean().optional(),
@@ -76,17 +77,20 @@ export function mergeRelayCatalog(
       const thinking = { ...nativeThinking, ...old?.thinking };
       if (remote.reasoning === false) record.thinking = { availability: 'none', canDisable: false, controls: [] };
       else if (remote.effortLevels !== undefined) {
-        const allowed = remote.effortLevels.filter((level) => !nativeThinking || (level === 'off' ? nativeThinking.canDisable : nativeThinking.efforts?.includes(level)) || typeof remote.thinkingLevelMap?.[level] === 'string');
-        const enabled = allowed.filter((level) => level !== 'off' && remote.thinkingLevelMap?.[level] !== null);
-        const canDisable = allowed.includes('off') && remote.thinkingLevelMap?.['off'] !== null;
+        const enabled = remote.effortLevels.filter((level) => level !== 'off' && remote.thinkingLevelMap?.[level] !== null);
+        const canDisable = remote.effortLevels.includes('off') && remote.thinkingLevelMap?.['off'] !== null;
+        const declaredDefault = remote.defaultEffort ?? thinking.defaultEffort;
+        const defaultEffort = enabled.includes(declaredDefault ?? '') ? declaredDefault : enabled.includes('medium') ? 'medium' : enabled[0];
         record.thinking = {
           ...thinking,
           availability: enabled.length ? canDisable ? 'dynamic' : 'always' : 'none',
           canDisable,
           controls: enabled.length ? canDisable ? ['toggle', 'effort'] : ['effort'] : [],
           efforts: enabled,
-          defaultEffort: enabled.includes(thinking.defaultEffort ?? '') ? thinking.defaultEffort : enabled.includes('medium') ? 'medium' : enabled[0],
+          defaultEffort,
         };
+        record.supportEfforts = enabled.length > 0 ? [...enabled] : undefined;
+        record.defaultEffort = defaultEffort;
       } else if (remote.reasoning === true) record.thinking = { ...thinking, availability: thinking.availability === 'always' ? 'always' : 'dynamic' };
       if (remote.thinkingLevelMap !== undefined) record.effortMapping = { ...old?.effortMapping, ...remote.thinkingLevelMap };
       if (remote.cost !== undefined) {
