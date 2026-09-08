@@ -78,6 +78,8 @@ const GREP_TIMEOUT_MS = 30_000;
 const SUGGEST_TIMEOUT_MS = 10_000;
 const SUGGEST_WALK_ABORTED = new Error('suggest walk aborted');
 const WALK_MAX_DEPTH = 64;
+const LIST_MAX_DIR_ENTRIES = 10_000;
+const WALK_MAX_NODES = 200_000;
 
 interface SuggestRoot {
   readonly dir: string;
@@ -175,7 +177,12 @@ export class WorkspaceFsService implements IWorkspaceFsService {
       const entry = queue.shift()!;
       let names: readonly string[];
       try {
-        names = (await this.hostFs.readdir(this.absOf(entry.relPath))).map((e) => e.name);
+        const listing = await this.hostFs.readdirCapped(
+          this.absOf(entry.relPath),
+          LIST_MAX_DIR_ENTRIES,
+        );
+        if (listing.truncated) truncated = true;
+        names = listing.entries.map((e) => e.name);
       } catch (err) {
         if (entry.relPath === (rel === '.' ? '' : rel)) {
           throw mapFsError(err, req.path);
@@ -477,7 +484,7 @@ export class WorkspaceFsService implements IWorkspaceFsService {
     const candidates: FsSearchHit[] = [];
     const queryLower = req.query.toLowerCase();
 
-    await this.walk(this.workDir, '', matcher, async (relPath, name, kind) => {
+    const walkedAll = await this.walk(this.workDir, '', matcher, async (relPath, name, kind) => {
       const score = computeFuzzyScore(name, queryLower);
       if (score <= 0) return;
       if (req.include_globs && !matchesAnyGlob(relPath, req.include_globs)) {
@@ -501,7 +508,7 @@ export class WorkspaceFsService implements IWorkspaceFsService {
     });
 
     const effectiveCap = Math.min(req.limit, SEARCH_HARD_CAP);
-    const truncated = candidates.length > effectiveCap;
+    const truncated = candidates.length > effectiveCap || !walkedAll;
     return { items: candidates.slice(0, effectiveCap), truncated };
   }
 
@@ -602,7 +609,9 @@ export class WorkspaceFsService implements IWorkspaceFsService {
       const matcher = req.follow_gitignore ? await this.matcherFor(root.dir) : undefined;
       let entries: readonly HostDirEntry[];
       try {
-        entries = await this.hostFs.readdir(root.dir);
+        const listing = await this.hostFs.readdirCapped(root.dir, LIST_MAX_DIR_ENTRIES);
+        if (listing.truncated) capped = true;
+        entries = listing.entries;
       } catch (err) {
         throw mapFsError(err, root.dir);
       }
@@ -807,10 +816,11 @@ export class WorkspaceFsService implements IWorkspaceFsService {
     const top = new SuggestTopHeap(cap);
     const seenPaths = new Set<string>();
     let matched = 0;
+    let walkedAll = true;
     try {
       for (const root of roots) {
         const matcher = query.followGitignore ? await this.matcherFor(root.dir) : undefined;
-        await this.walk(root.dir, '', matcher, async (relPath, _name, kind) => {
+        const rootComplete = await this.walk(root.dir, '', matcher, async (relPath, _name, kind) => {
           if (signal.aborted) throw SUGGEST_WALK_ABORTED;
           if (multi) {
             const pathKey = `${root.real}/${relPath}`;
@@ -822,6 +832,7 @@ export class WorkspaceFsService implements IWorkspaceFsService {
           matched += 1;
           top.push(this.displayCandidate(root, candidate));
         });
+        walkedAll = walkedAll && rootComplete;
       }
     } catch (err) {
       if (err !== SUGGEST_WALK_ABORTED) throw err;
@@ -833,7 +844,7 @@ export class WorkspaceFsService implements IWorkspaceFsService {
       score: candidate.score,
       match_positions: [...candidate.positions],
     }));
-    return { items, truncated: matched > cap || signal.aborted };
+    return { items, truncated: matched > cap || signal.aborted || !walkedAll };
   }
 
   async grep(req: FsGrepRequest): Promise<FsGrepResponse> {
@@ -959,15 +970,15 @@ export class WorkspaceFsService implements IWorkspaceFsService {
     const files: FsGrepFileHit[] = [];
     let filesScanned = 0;
     let totalMatches = 0;
-    let truncated = false;
 
     const filePaths: string[] = [];
-    await this.walk(this.workDir, '', matcher, async (rel, _name, kind) => {
+    const walkedAll = await this.walk(this.workDir, '', matcher, async (rel, _name, kind) => {
       if (kind !== 'file') return;
       if (req.include_globs && !matchesAnyGlob(rel, req.include_globs)) return;
       if (req.exclude_globs && matchesAnyGlob(rel, req.exclude_globs)) return;
       filePaths.push(rel);
     });
+    let truncated = !walkedAll;
 
     for (const rel of filePaths) {
       if (signal.aborted) {
@@ -1030,15 +1041,25 @@ export class WorkspaceFsService implements IWorkspaceFsService {
       kind: 'file' | 'directory' | 'symlink',
     ) => Promise<void>,
     depth = 0,
-  ): Promise<void> {
-    if (depth > WALK_MAX_DEPTH) return;
+    budget: { remaining: number } = { remaining: WALK_MAX_NODES },
+  ): Promise<boolean> {
+    if (depth > WALK_MAX_DEPTH) return true;
     let entries: readonly HostDirEntry[];
+    let dirTruncated = false;
     try {
-      entries = await this.hostFs.readdir(rootRel === '' ? baseAbs : this.path.join(baseAbs, rootRel));
+      const listing = await this.hostFs.readdirCapped(
+        rootRel === '' ? baseAbs : this.path.join(baseAbs, rootRel),
+        LIST_MAX_DIR_ENTRIES,
+      );
+      entries = listing.entries;
+      dirTruncated = listing.truncated;
     } catch {
-      return;
+      return true;
     }
+    let complete = !dirTruncated;
     for (const entry of entries) {
+      if (budget.remaining <= 0) return false;
+      budget.remaining -= 1;
       const { name } = entry;
       if (name === '.git') continue;
       const childRel = rootRel === '' ? name : `${rootRel}/${name}`;
@@ -1054,9 +1075,11 @@ export class WorkspaceFsService implements IWorkspaceFsService {
           : 'file';
       await visit(childRel, name, kind);
       if (isDir) {
-        await this.walk(baseAbs, childRel, matcher, visit, depth + 1);
+        const childComplete = await this.walk(baseAbs, childRel, matcher, visit, depth + 1, budget);
+        if (!childComplete) complete = false;
       }
     }
+    return complete;
   }
 
   private async matcherFor(rootDir: string): Promise<Ignore | undefined> {

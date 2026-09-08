@@ -148,10 +148,18 @@ async function withTimeout<T>(
 	}
 }
 
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(resolve, ms);
+		timer.unref();
+	});
+}
+
 export class KlientChatBackend implements ChatBackend {
 	readonly kind = "runtime" as const;
 	supportsVision = false;
 	private events: ChatBackendEvents | undefined;
+	private connection: RuntimeConnection;
 	private session: SessionHandle | undefined;
 	private agent: AgentHandle | undefined;
 	private meta: SessionMeta | undefined;
@@ -177,6 +185,8 @@ export class KlientChatBackend implements ChatBackend {
 	private towerPoll: NodeJS.Timeout | undefined;
 	private busy = false;
 	private connectionFailed = false;
+	private recovering = false;
+	private disposed = false;
 	private draftModelAlias: string | undefined;
 	private draftPermission: "auto" | "yolo" | "manual" | undefined;
 	private sessionCreation: Promise<void> | undefined;
@@ -194,10 +204,18 @@ export class KlientChatBackend implements ChatBackend {
 	private subagentModelWrite: Promise<unknown> = Promise.resolve();
 
 	constructor(
-		private readonly connection: RuntimeConnection,
+		connection: RuntimeConnection,
 		private readonly cwd: string,
 		private readonly startupMode: SessionStartupMode,
-	) {}
+		private readonly reconnectRuntime?: () => Promise<RuntimeConnection>,
+		private readonly recoveryDelays: readonly number[] = [1_000, 2_000, 4_000, 8_000, 16_000],
+	) {
+		this.connection = connection;
+	}
+
+	get runtimeConnection(): RuntimeConnection {
+		return this.connection;
+	}
 
 	get modelLabel(): string {
 		if (!this.currentModelLabel) return "未选择模型";
@@ -955,6 +973,7 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	async dispose(): Promise<void> {
+		this.disposed = true;
 		this.submissionEpoch += 1;
 		await this.sessionCreation?.catch(() => {});
 		this.clearBindings();
@@ -1130,7 +1149,46 @@ export class KlientChatBackend implements ChatBackend {
 		this.queuedPrompts.clear();
 		this.publishQueueState();
 		this.setBusy(false);
+		if (this.reconnectRuntime && !this.disposed) {
+			void this.recoverConnection();
+			return;
+		}
 		this.events?.onSessionError?.(error);
+	}
+
+	private async recoverConnection(): Promise<void> {
+		if (this.recovering) return;
+		this.recovering = true;
+		const delays = this.recoveryDelays;
+		try {
+			for (let attempt = 1; attempt <= delays.length; attempt += 1) {
+				if (this.disposed) return;
+				await delay(delays[attempt - 1]!);
+				if (this.disposed) return;
+				this.events?.onRuntimeConnectionState?.("reconnecting", attempt);
+				try {
+					const connection = await this.reconnectRuntime!();
+					for (const subscription of this.globalSubscriptions) subscription.dispose();
+					this.globalSubscriptions = [];
+					this.clearBindings();
+					await this.connection.close().catch(() => {});
+					this.connection = connection;
+					this.connectionFailed = false;
+					this.submissionEpoch += 1;
+					this.subscribeGlobalCatalog();
+					void this.refreshRelayCatalogs();
+					if (this.meta) await this.bindSession(this.meta, "resume");
+					else await this.prepareDraft("startup");
+					this.events?.onRuntimeConnectionState?.("reconnected", attempt);
+					return;
+				} catch {
+					continue;
+				}
+			}
+			this.events?.onRuntimeConnectionState?.("failed", delays.length);
+		} finally {
+			this.recovering = false;
+		}
 	}
 
 	private subscribe(): void {

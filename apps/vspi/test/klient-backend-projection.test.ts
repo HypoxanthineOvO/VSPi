@@ -74,7 +74,10 @@ const provider = (id: string) => ({
 	models: [],
 });
 
-function draftBackendFixture() {
+function draftBackendFixture(
+	reconnectRuntime?: () => Promise<RuntimeConnection>,
+	recoveryDelays: readonly number[] = [10, 10, 10, 10, 10],
+) {
 	const listeners = new Map<string, (event: Record<string, unknown>) => void>();
 	let connectionError: ((error: Error) => void) | undefined;
 	const events = { on: vi.fn((name: string, handler: (event: Record<string, unknown>) => void) => { listeners.set(name, handler); return { dispose: vi.fn() }; }), onError: vi.fn((handler: (error: Error) => void) => { connectionError = handler; return { dispose: vi.fn() }; }) };
@@ -90,15 +93,16 @@ function draftBackendFixture() {
 	const create = vi.fn(async () => ({ id: "new-session" }));
 	const remove = vi.fn(async () => undefined);
 	const getConfig = vi.fn(async (section: string): Promise<unknown> => section === "defaultModel" ? "example/code" : undefined);
-	const connection = { klient: { events, session: () => ({ agent: () => agent, events, delete: remove, restore: async () => true, get: async () => ({ id: "old-session" }) }), global: {
+	const connection = { close: vi.fn(async () => undefined), klient: { events, session: () => ({ agent: () => agent, events, delete: remove, restore: async () => true, get: async () => ({ id: "old-session" }) }), global: {
 		workspaces: { createOrTouch: vi.fn(async () => ({ id: "workspace" })) }, sessions: { create },
 		config: { get: getConfig },
 		kosong: { listModels: vi.fn(async () => models), listProviders: vi.fn(async () => [provider("example")]), getProvider: vi.fn(async () => provider("example")), queryAvailableModels: vi.fn(async () => ({ modelIds: ["example/code"] })), setDefaultModel: vi.fn(async () => ({ model: models[0] })) },
 	} } } as unknown as RuntimeConnection;
-	const backend = new KlientChatBackend(connection, "/workspace", "new");
+	const backend = new KlientChatBackend(connection, "/workspace", "new", reconnectRuntime, recoveryDelays);
 	const reset = vi.fn();
-	const start = () => backend.start({ onMessage: vi.fn(), onMessageUpdate: vi.fn(), onBusy: vi.fn(), onUsage: vi.fn(), onNotice: vi.fn(), onSessionReset: reset });
-	return { backend, create, remove, agent, reset, start, listeners, getConfig, disconnect: () => connectionError?.(new Error("ipc closed")) };
+	const connectionStates: Array<{ state: string; attempt: number }> = [];
+	const start = () => backend.start({ onMessage: vi.fn(), onMessageUpdate: vi.fn(), onBusy: vi.fn(), onUsage: vi.fn(), onNotice: vi.fn(), onSessionReset: reset, onRuntimeConnectionState: (state, attempt) => { connectionStates.push({ state, attempt }); } });
+	return { backend, connection, create, remove, agent, reset, start, listeners, getConfig, connectionStates, disconnect: () => connectionError?.(new Error("ipc closed")) };
 }
 
 afterEach(() => {
@@ -140,6 +144,43 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 				throw new Error("ipc closed");
 			});
 			await expect(fixture.backend.send("first", { attachments: [], effort: "off", behavior: "prompt" })).rejects.toThrow("ipc closed");
+		} finally { await fixture.backend.dispose(); }
+	});
+
+	it("recovers automatically when the runtime ipc connection closes", async () => {
+		const replacement = draftBackendFixture();
+		const fixture = draftBackendFixture(() => Promise.resolve(replacement.connection));
+		try {
+			await fixture.start();
+			fixture.disconnect();
+			await vi.waitFor(() => {
+				expect(fixture.connectionStates).toContainEqual({ state: "reconnected", attempt: 1 });
+			}, { timeout: 4_000 });
+			expect(fixture.connectionStates[0]).toEqual({ state: "reconnecting", attempt: 1 });
+			expect(fixture.backend.runtimeConnection).toBe(replacement.connection);
+			expect(fixture.backend.isSessionReady()).toBe(false);
+			await expect(fixture.backend.send("after recovery", { attachments: [], effort: "off", behavior: "prompt" })).resolves.toEqual({ status: "completed" });
+			expect(replacement.create).toHaveBeenCalledOnce();
+		} finally {
+			await fixture.backend.dispose();
+			await replacement.backend.dispose();
+		}
+	});
+
+	it("reports failed recovery after exhausting reconnect attempts", async () => {
+		let attempts = 0;
+		const fixture = draftBackendFixture(async () => {
+			attempts += 1;
+			throw new Error("runtime unreachable");
+		});
+		try {
+			await fixture.start();
+			fixture.disconnect();
+			await vi.waitFor(() => {
+				expect(fixture.connectionStates.at(-1)?.state).toBe("failed");
+			}, { timeout: 4_000 });
+			expect(attempts).toBe(5);
+			expect(fixture.connectionStates[0]).toEqual({ state: "reconnecting", attempt: 1 });
 		} finally { await fixture.backend.dispose(); }
 	});
 

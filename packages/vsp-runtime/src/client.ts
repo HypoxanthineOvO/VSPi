@@ -27,6 +27,13 @@ export async function inspectRuntime(homeDir?: string): Promise<RuntimeState | u
   const state = await readRuntimeState(paths.statePath);
   if (state === undefined) return undefined;
   if (isProcessAlive(state.pid)) return state;
+  await appendFile(paths.logPath, `${JSON.stringify({
+    event: 'runtime.stale-state-removed',
+    time: new Date().toISOString(),
+    previousPid: state.pid,
+    previousVersion: state.version,
+    previousStartedAt: state.startedAt,
+  })}\n`, { mode: 0o600 }).catch(() => {});
   await removeRuntimeState(paths.statePath, state.pid);
   return undefined;
 }

@@ -317,6 +317,10 @@ export interface ChatBackendEvents {
 	onSessionWait?: (waiting: boolean) => void;
 	onSessionReady?: () => void;
 	onRuntimeCatalogChanged?: () => void;
+	onRuntimeConnectionState?: (
+		state: "reconnecting" | "reconnected" | "failed",
+		attempt: number,
+	) => void;
 	onSessionError?: (error: Error) => void;
 	onSessionOwnerRecovery?: (
 		owner: SessionLeaseOwner,

@@ -1,5 +1,6 @@
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -64,6 +65,7 @@ async function main(): Promise<void> {
 		if (process.stdin.isTTY && process.stdout.isTTY) {
 			await runVspiTui(connection, {
 				startupMode: resolveSessionStartupMode(args[0]),
+				reconnect: () => ensureConnection(),
 			});
 			return;
 		}
@@ -197,10 +199,13 @@ async function ensureConnection(homeDir?: string): Promise<RuntimeConnection> {
 	const connection = await ensureRuntime({
 		homeDir: expected.homeDir,
 		spawn: ({ homeDir: runtimeHomeDir, logPath }) => {
-			mkdirSync(resolveRuntimePaths(runtimeHomeDir).serverDir, {
+			const runtimePaths = resolveRuntimePaths(runtimeHomeDir);
+			const diagnosticDir = join(runtimePaths.serverDir, "diagnostics");
+			mkdirSync(runtimePaths.serverDir, {
 				recursive: true,
 				mode: 0o700,
 			});
+			mkdirSync(diagnosticDir, { recursive: true, mode: 0o700 });
 			const logFd = openSync(logPath, "a", 0o600);
 			try {
 				const entry = import.meta.filename;
@@ -208,6 +213,9 @@ async function ensureConnection(homeDir?: string): Promise<RuntimeConnection> {
 					process.execPath,
 					[
 						...process.execArgv,
+						"--report-on-fatalerror",
+						`--diagnostic-dir=${diagnosticDir}`,
+						"--heapsnapshot-near-heap-limit=3",
 						entry,
 						"daemon",
 						"serve",
@@ -216,6 +224,7 @@ async function ensureConnection(homeDir?: string): Promise<RuntimeConnection> {
 					],
 					{
 						detached: true,
+						cwd: runtimePaths.serverDir,
 						stdio: ["ignore", logFd, logFd],
 						env: daemonEnvironment(process.env),
 					},

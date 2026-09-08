@@ -124,6 +124,40 @@ function fakeFs(
     }
     throw enoent(p);
   };
+  const readdirEntries = async (p: string): Promise<readonly HostDirEntry[]> => {
+    if (!isDir(p)) throw enoent(p);
+    const prefix = `${p}/`;
+    const children = new Map<string, HostDirEntry>();
+    const addDir = (name: string): void => {
+      if (!children.has(name)) {
+        children.set(name, { name, isFile: false, isDirectory: true });
+      }
+    };
+    const addFile = (name: string): void => {
+      if (!children.has(name)) {
+        children.set(name, { name, isFile: true, isDirectory: false });
+      }
+    };
+    const addSymlink = (name: string): void => {
+      if (!children.has(name)) {
+        children.set(name, { name, isFile: false, isDirectory: false, isSymbolicLink: true });
+      }
+    };
+    const visit = (key: string, kind: 'file' | 'dir' | 'symlink'): void => {
+      if (key === p || !key.startsWith(prefix)) return;
+      const rest = key.slice(prefix.length);
+      const first = rest.split('/')[0];
+      if (first === undefined || first.length === 0) return;
+      if (rest.includes('/')) addDir(first);
+      else if (kind === 'symlink') addSymlink(first);
+      else if (kind === 'file') addFile(first);
+      else addDir(first);
+    };
+    for (const d of dirSet) visit(d, 'dir');
+    for (const f of fileMap.keys()) visit(f, 'file');
+    for (const s of symlinkSet) visit(s, 'symlink');
+    return [...children.values()];
+  };
   return {
     _serviceBrand: undefined,
     readText: async (p) => {
@@ -153,39 +187,12 @@ function fakeFs(
       }
       return lstatImpl(cur);
     },
-    readdir: async (p) => {
-      if (!isDir(p)) throw enoent(p);
-      const prefix = `${p}/`;
-      const children = new Map<string, HostDirEntry>();
-      const addDir = (name: string): void => {
-        if (!children.has(name)) {
-          children.set(name, { name, isFile: false, isDirectory: true });
-        }
-      };
-      const addFile = (name: string): void => {
-        if (!children.has(name)) {
-          children.set(name, { name, isFile: true, isDirectory: false });
-        }
-      };
-      const addSymlink = (name: string): void => {
-        if (!children.has(name)) {
-          children.set(name, { name, isFile: false, isDirectory: false, isSymbolicLink: true });
-        }
-      };
-      const visit = (key: string, kind: 'file' | 'dir' | 'symlink'): void => {
-        if (key === p || !key.startsWith(prefix)) return;
-        const rest = key.slice(prefix.length);
-        const first = rest.split('/')[0];
-        if (first === undefined || first.length === 0) return;
-        if (rest.includes('/')) addDir(first);
-        else if (kind === 'symlink') addSymlink(first);
-        else if (kind === 'file') addFile(first);
-        else addDir(first);
-      };
-      for (const d of dirSet) visit(d, 'dir');
-      for (const f of fileMap.keys()) visit(f, 'file');
-      for (const s of symlinkSet) visit(s, 'symlink');
-      return [...children.values()];
+    readdir: readdirEntries,
+    readdirCapped: async (p, maxEntries) => {
+      const entries = await readdirEntries(p);
+      return entries.length <= maxEntries
+        ? { entries, truncated: false }
+        : { entries: entries.slice(0, maxEntries), truncated: true };
     },
     mkdir: async (p, options) => {
       const recursive = options?.recursive ?? false;
@@ -1373,6 +1380,23 @@ describe('WorkspaceFsService.list', () => {
         include_git_status: false,
       }),
     ).rejects.toMatchObject({ code: 'fs.path_escapes' });
+  });
+
+  it('marks the listing truncated when a directory exceeds the readdir cap', async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 10_050; i += 1) files[`f${i}.txt`] = '';
+    const fs = makeSession(files, emptyHandler);
+    const result = await fs.list({
+      path: '.',
+      depth: 1,
+      limit: 20_000,
+      show_hidden: false,
+      follow_gitignore: false,
+      sort: 'name_asc',
+      include_git_status: false,
+    });
+    expect(result.truncated).toBe(true);
+    expect(result.items.length).toBe(10_000);
   });
 });
 

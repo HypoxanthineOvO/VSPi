@@ -151,6 +151,13 @@ export class AcpHostFileSystem implements IHostFileSystem {
     return this.inner.readdir(path);
   }
 
+  readdirCapped(
+    path: string,
+    maxEntries: number,
+  ): Promise<{ readonly entries: readonly HostDirEntry[]; readonly truncated: boolean }> {
+    return this.inner.readdirCapped(path, maxEntries);
+  }
+
   mkdir(path: string, options?: { readonly recursive?: boolean }): Promise<void> {
     return this.inner.mkdir(path, options);
   }

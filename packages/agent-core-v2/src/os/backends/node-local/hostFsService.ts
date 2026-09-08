@@ -2,6 +2,7 @@ import {
   appendFile,
   lstat,
   open,
+  opendir,
   readFile,
   readdir,
   mkdir,
@@ -225,6 +226,41 @@ export class HostFileSystem implements IHostFileSystem {
     } catch (error) {
       throw toHostFsError(error, { path, op: 'readdir' });
     }
+  }
+
+  async readdirCapped(
+    path: string,
+    maxEntries: number,
+  ): Promise<{ readonly entries: readonly HostDirEntry[]; readonly truncated: boolean }> {
+    let dir: Awaited<ReturnType<typeof opendir>>;
+    try {
+      dir = await opendir(path);
+    } catch (error) {
+      throw toHostFsError(error, { path, op: 'readdir' });
+    }
+    const entries: HostDirEntry[] = [];
+    let truncated = false;
+    try {
+      for (;;) {
+        const entry = await dir.read();
+        if (entry === null) break;
+        if (entries.length >= maxEntries) {
+          truncated = true;
+          break;
+        }
+        entries.push({
+          name: entry.name,
+          isFile: entry.isFile(),
+          isDirectory: entry.isDirectory(),
+          isSymbolicLink: entry.isSymbolicLink(),
+        });
+      }
+    } catch (error) {
+      throw toHostFsError(error, { path, op: 'readdir' });
+    } finally {
+      await dir.close().catch(() => undefined);
+    }
+    return { entries, truncated };
   }
 
   async mkdir(path: string, options?: { readonly recursive?: boolean }): Promise<void> {

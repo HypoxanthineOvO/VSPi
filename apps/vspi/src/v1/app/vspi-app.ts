@@ -656,6 +656,20 @@ export class VspiApp implements Component, Focusable {
 						.then(() => this.requestRender())
 						.catch((error) => this.handleRuntimeError(error));
 				},
+				onRuntimeConnectionState: (state, attempt) => {
+					if (state === "reconnecting")
+						this.showNotice(
+							`运行时连接已断开，正在自动恢复（第 ${String(attempt)} 次）…`,
+							"warning",
+						);
+					else if (state === "reconnected")
+						this.showNotice("运行时连接已恢复", "success");
+					else
+						this.showNotice(
+							`运行时连接已断开且自动恢复失败（已重试 ${String(attempt)} 次），请退出并重新启动 VSPi`,
+							"error",
+						);
+				},
 				onSessionError: (error) => this.handleRuntimeError(error),
 				onSessionOwnerRecovery: (
 					owner: SessionLeaseOwner,

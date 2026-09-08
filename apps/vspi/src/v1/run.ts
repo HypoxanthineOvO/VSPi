@@ -30,7 +30,10 @@ import { VspiTuiAltScreen } from "./ui/tui-frame-pacer.js";
 
 export async function runVspiTui(
 	connection: RuntimeConnection,
-	options: { readonly startupMode?: SessionStartupMode } = {},
+	options: {
+		readonly startupMode?: SessionStartupMode;
+		readonly reconnect?: () => Promise<RuntimeConnection>;
+	} = {},
 ): Promise<void> {
 	const settings = await loadSettings(process.cwd(), undefined, {
 		trustedProject: true,
@@ -48,7 +51,12 @@ export async function runVspiTui(
 	);
 	const theme = createTheme(capabilities, settings.theme);
 	const startupMode = options.startupMode ?? "new";
-	const backend = new KlientChatBackend(connection, process.cwd(), startupMode);
+	const backend = new KlientChatBackend(
+		connection,
+		process.cwd(),
+		startupMode,
+		options.reconnect,
+	);
 	const attachments = new AttachmentService(randomUUID(), theme);
 	let closing = false;
 	let resolveExit!: () => void;
@@ -63,18 +71,19 @@ export async function runVspiTui(
 		startupRuntimeDiagnostic: connection.migrationWarning
 			? formatRuntimeMigrationWarning(connection.migrationWarning.reason)
 			: undefined,
-		runtimeDefaultsFactory: () => ({
-			load: async () => {
-				const [defaultModel, thinking, models, providers] = await Promise.all([
-					connection.klient.global.config.get<string | undefined>(
-						"defaultModel",
-					),
-					connection.klient.global.config.get<{ effort?: string } | undefined>(
-						"thinking",
-					),
-					connection.klient.global.kosong.listModels(),
-					connection.klient.global.kosong.listProviders(),
-				]);
+			runtimeDefaultsFactory: () => ({
+				load: async () => {
+					const klient = backend.runtimeConnection.klient;
+					const [defaultModel, thinking, models, providers] = await Promise.all([
+						klient.global.config.get<string | undefined>(
+							"defaultModel",
+						),
+						klient.global.config.get<{ effort?: string } | undefined>(
+							"thinking",
+						),
+						klient.global.kosong.listModels(),
+						klient.global.kosong.listProviders(),
+					]);
 				const selected =
 					defaultModel === undefined
 						? undefined
@@ -112,11 +121,11 @@ export async function runVspiTui(
 				};
 			},
 			save: async (_scope, value) => {
-				await connection.klient.global.config.replace({
+				await backend.runtimeConnection.klient.global.config.replace({
 					domain: "thinking",
 					value: { effort: value.effort },
 				});
-				return connection.env.configPath;
+				return backend.runtimeConnection.env.configPath;
 			},
 		}),
 		onExit: (mode = "detach") => {

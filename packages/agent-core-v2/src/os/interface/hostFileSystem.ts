@@ -36,6 +36,10 @@ export interface IHostFileSystem {
   stat(path: string): Promise<HostFileStat>;
   lstat(path: string): Promise<HostFileStat>;
   readdir(path: string): Promise<readonly HostDirEntry[]>;
+  readdirCapped(
+    path: string,
+    maxEntries: number,
+  ): Promise<{ readonly entries: readonly HostDirEntry[]; readonly truncated: boolean }>;
   mkdir(path: string, options?: { readonly recursive?: boolean }): Promise<void>;
   remove(path: string): Promise<void>;
   realpath(path: string): Promise<string>;
