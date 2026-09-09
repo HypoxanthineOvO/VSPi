@@ -16,6 +16,7 @@ import {
 import { dispatchCliCommand } from "./cli-command.js";
 import {
 	daemonEnvironment,
+	prepareDaemonEnvironment,
 	parseDaemonHomeDir,
 } from "./daemon-environment.js";
 import { dispatchExecCommand } from "./exec.js";
@@ -142,10 +143,16 @@ async function daemonCommand(args: readonly string[]): Promise<void> {
 async function serveDaemon(homeDir?: string): Promise<void> {
 	configurePackagedRuntimeWorkers(import.meta.url);
 	const expected = await expectedRuntimeIdentity(homeDir);
+	const environment = await prepareDaemonEnvironment(process.env, {
+		homeDir: expected.homeDir,
+		entryPath: import.meta.filename,
+		nodePath: process.execPath,
+	});
+	process.env.PATH = environment.PATH;
 	const daemon = await startRuntimeDaemon({
 		homeDir: expected.homeDir,
 		hostIdentity: identity,
-		env: daemonEnvironment(process.env),
+		env: environment,
 		skillDirs: [fileURLToPath(new URL("../skills", import.meta.url))],
 	});
 	try {

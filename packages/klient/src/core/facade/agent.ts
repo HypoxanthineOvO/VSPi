@@ -88,6 +88,7 @@ export interface AgentFacade {
   getThinking(): Promise<ThinkingLevel>;
   setThinking(level: string): Promise<void>;
   setPermission(mode: PermissionMode): Promise<void>;
+  getPermission(): Promise<PermissionMode>;
   getUsage(): Promise<UsageStatus>;
   getGoal(): Promise<GoalToolResult>;
   pauseGoal(input?: GoalReasonInput): Promise<GoalSnapshot>;
@@ -156,6 +157,8 @@ export function createAgentFacade(call: ScopedCaller, scope: ScopeRef): AgentFac
       call(scope, 'agentProfileService', 'setThinking', [level]) as Promise<void>,
     setPermission: (mode) =>
       call(scope, 'agentPermissionModeService', 'setModeAndBroadcast', [mode]) as Promise<void>,
+    getPermission: () =>
+      call(scope, 'agentPermissionModeService', 'getMode', []) as Promise<PermissionMode>,
     getUsage: () => call(scope, 'agentUsageService', 'status', []) as Promise<UsageStatus>,
     getGoal: () =>
       call(scope, 'agentGoalViewService', 'getGoal', []) as Promise<GoalToolResult>,

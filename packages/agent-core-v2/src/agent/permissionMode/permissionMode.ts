@@ -11,6 +11,7 @@ export interface IAgentPermissionModeService {
   readonly _serviceBrand: undefined;
 
   readonly mode: PermissionMode;
+  getMode(): PermissionMode;
   setMode(mode: PermissionMode): void;
   setModeAndBroadcast(mode: PermissionMode): void;
 

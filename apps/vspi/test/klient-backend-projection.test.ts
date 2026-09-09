@@ -83,9 +83,16 @@ function draftBackendFixture(
 	const events = { on: vi.fn((name: string, handler: (event: Record<string, unknown>) => void) => { listeners.set(name, handler); return { dispose: vi.fn() }; }), onError: vi.fn((handler: (error: Error) => void) => { connectionError = handler; return { dispose: vi.fn() }; }) };
 	const models = [model("example", "code")];
 	let thinking = "off";
+	let permission: "auto" | "yolo" | "manual" = "auto";
 	const agent = {
 		events, setModel: vi.fn(async () => undefined), getModel: vi.fn(async () => "example/code"),
 		setThinking: vi.fn(async (value: string) => { thinking = value; }), getThinking: vi.fn(async () => thinking),
+		getPermission: vi.fn(async () => permission),
+		setPermission: vi.fn(async (mode: "auto" | "yolo" | "manual") => {
+			const previousMode = permission;
+			permission = mode;
+			listeners.get("permission.mode.changed")?.({ mode, previousMode });
+		}),
 		getGoal: vi.fn(async () => ({})), getTasks: vi.fn(async () => []), getCronTasks: vi.fn(async () => []),
 		getUsage: vi.fn(async () => { throw new Error("no usage"); }), getContext: vi.fn(async () => ({ history: [], tokenCount: 0 })),
 		prompt: vi.fn(async ({ promptId }: { promptId: string }) => { listeners.get("prompt.completed")?.({ promptId, reason: "completed" }); }),
@@ -102,8 +109,9 @@ function draftBackendFixture(
 	const backend = new KlientChatBackend(connection, "/workspace", "new", reconnectRuntime, recoveryDelays);
 	const reset = vi.fn();
 	const connectionStates: Array<{ state: string; attempt: number }> = [];
-	const start = () => backend.start({ onMessage: vi.fn(), onMessageUpdate: vi.fn(), onBusy: vi.fn(), onUsage: vi.fn(), onNotice: vi.fn(), onSessionReset: reset, onRuntimeConnectionState: (state, attempt) => { connectionStates.push({ state, attempt }); } });
-	return { backend, connection, create, remove, restore, agent, reset, start, listeners, getConfig, connectionStates, disconnect: () => connectionError?.(new Error("ipc closed")) };
+	const policies: string[] = [];
+	const start = () => backend.start({ onMessage: vi.fn(), onMessageUpdate: vi.fn(), onBusy: vi.fn(), onUsage: vi.fn(), onNotice: vi.fn(), onSessionReset: reset, onPolicySnapshot: (snapshot) => { policies.push(snapshot.policy); }, onRuntimeConnectionState: (state, attempt) => { connectionStates.push({ state, attempt }); } });
+	return { backend, connection, create, remove, restore, agent, reset, start, listeners, getConfig, policies, connectionStates, disconnect: () => connectionError?.(new Error("ipc closed")) };
 }
 
 afterEach(() => {
@@ -111,6 +119,106 @@ afterEach(() => {
 });
 
 describe("Klient backend projection (Core wire to VSPi UI)", () => {
+	it("keeps a user permission reduction made while the first session is initializing", async () => {
+		const fixture = draftBackendFixture();
+		let release: ((value: unknown) => void) | undefined;
+		try {
+			await fixture.start();
+			await fixture.backend.setPolicy("YOLO");
+			fixture.getConfig.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+			const sent = fixture.backend.send("first", { attachments: [], effort: "off", behavior: "prompt" });
+			await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+			await fixture.backend.setPolicy("Safe");
+			release!(undefined);
+			await sent;
+			expect(await fixture.agent.getPermission()).toBe("manual");
+			expect(fixture.policies.at(-1)).toBe("Safe");
+		} finally { release?.(undefined); await fixture.backend.dispose(); }
+	});
+
+	it("does not overwrite a newer policy event with a delayed session snapshot", async () => {
+		const fixture = draftBackendFixture();
+		let release: ((mode: "auto" | "yolo" | "manual") => void) | undefined;
+		try {
+			await fixture.start();
+			await fixture.agent.setPermission("manual");
+			fixture.agent.getPermission.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+			const binding = fixture.backend.switchSession("old-session");
+			await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+			await fixture.agent.setPermission("auto");
+			release!("manual");
+			await binding;
+			expect(fixture.policies.at(-1)).toBe("Auto");
+		} finally { release?.("manual"); await fixture.backend.dispose(); }
+	});
+
+	it("retains a draft selection made before the default permission read completes", async () => {
+		const fixture = draftBackendFixture();
+		let release: ((mode: string) => void) | undefined;
+		fixture.getConfig.mockImplementation(async (section) => section === "defaultPermissionMode"
+			? new Promise((resolve) => { release = resolve; })
+			: section === "defaultModel" ? "example/code" : undefined);
+		try {
+			const starting = fixture.start();
+			await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+			await fixture.backend.setPolicy("Safe");
+			release!("auto");
+			await starting;
+			expect(fixture.policies.at(-1)).toBe("Safe");
+		} finally { release?.("auto"); await fixture.backend.dispose(); }
+	});
+
+	it("preserves a newer daemon policy when rebinding an existing session", async () => {
+		const fixture = draftBackendFixture();
+		try {
+			await fixture.start();
+			await fixture.backend.switchSession("old-session");
+			await fixture.backend.setPolicy("Safe");
+			await fixture.agent.setPermission("auto");
+			await fixture.backend.switchSession("old-session");
+			expect(await fixture.agent.getPermission()).toBe("auto");
+			expect(fixture.policies.at(-1)).toBe("Auto");
+		} finally { await fixture.backend.dispose(); }
+	});
+
+	it("applies a draft policy only to the newly created session", async () => {
+		const fixture = draftBackendFixture();
+		try {
+			await fixture.start();
+			await fixture.backend.setPolicy("YOLO");
+			await fixture.backend.send("first", { attachments: [], effort: "off", behavior: "prompt" });
+			expect(await fixture.agent.getPermission()).toBe("yolo");
+			await fixture.agent.setPermission("manual");
+			await fixture.backend.switchSession("old-session");
+			expect(await fixture.agent.getPermission()).toBe("manual");
+			expect(fixture.policies.at(-1)).toBe("Standard");
+		} finally { await fixture.backend.dispose(); }
+	});
+
+	it("publishes permission changes made through another controller", async () => {
+		const fixture = draftBackendFixture();
+		try {
+			await fixture.start();
+			await fixture.backend.switchSession("old-session");
+			await fixture.agent.setPermission("manual");
+			expect(fixture.policies.at(-1)).toBe("Standard");
+			await fixture.agent.setPermission("auto");
+			expect(fixture.policies.at(-1)).toBe("Auto");
+		} finally { await fixture.backend.dispose(); }
+	});
+
+	it("does not retain a permission change rejected by the daemon", async () => {
+		const fixture = draftBackendFixture();
+		try {
+			await fixture.start();
+			await fixture.backend.switchSession("old-session");
+			fixture.agent.setPermission.mockRejectedValueOnce(new Error("permission update failed"));
+			await expect(fixture.backend.setPolicy("Safe")).rejects.toThrow("permission update failed");
+			await fixture.backend.switchSession("old-session");
+			expect(await fixture.agent.getPermission()).toBe("auto");
+			expect(fixture.policies.at(-1)).toBe("Auto");
+		} finally { await fixture.backend.dispose(); }
+	});
 	it("creates no session for opening, model settings, empty submission or /new", async () => {
 		const fixture = draftBackendFixture();
 		try {
@@ -566,6 +674,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			events: eventSource,
 			setThinking: vi.fn().mockResolvedValue(undefined),
 			getThinking: vi.fn().mockResolvedValue("off"),
+			getPermission: vi.fn().mockResolvedValue("auto"),
 			setModel,
 			getGoal,
 			getContext: vi.fn().mockRejectedValue(new Error("not loaded")),

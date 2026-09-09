@@ -42,6 +42,7 @@ jobs:
           ASSET="vspi-${VERSION}.tgz"
           ASSET_PATH="$GITHUB_WORKSPACE/apps/vspi/.tmp/package-artifacts/$ASSET"
           pnpm --filter vspi package:verify "$ASSET_PATH"
+          VSPI_PACKAGE_SMOKE_ENTRY="$GITHUB_WORKSPACE/apps/vspi/.tmp/package-stage/dist/main.mjs" pnpm --filter vspi exec vitest run test/daemon-environment.test.ts
           cp "$ASSET_PATH" "$RUNNER_TEMP/vspi-latest.tgz"
           cmp "$ASSET_PATH" "$RUNNER_TEMP/vspi-latest.tgz"
           sha256sum "$ASSET_PATH" "$RUNNER_TEMP/vspi-latest.tgz"

@@ -189,6 +189,9 @@ export class KlientChatBackend implements ChatBackend {
 	private disposed = false;
 	private draftModelAlias: string | undefined;
 	private draftPermission: "auto" | "yolo" | "manual" | undefined;
+	private policyRevision = 0;
+	private policy: PolicyLevel = "Auto";
+	private permissionWrite: Promise<void> = Promise.resolve();
 	private sessionCreation: Promise<void> | undefined;
 	private submissionEpoch = 0;
 	private subagentTimeoutSeconds = 0;
@@ -266,12 +269,16 @@ export class KlientChatBackend implements ChatBackend {
 		this.session = undefined;
 		this.agent = undefined;
 		this.meta = undefined;
-		const [alias, thinking, models, providers] = await Promise.all([
+		this.draftPermission = undefined;
+		const policyRevision = ++this.policyRevision;
+		const [alias, thinking, models, providers, permission] = await Promise.all([
 			this.connection.klient.global.config.get<string | undefined>("defaultModel"),
 			this.connection.klient.global.config.get<{ effort?: string } | undefined>("thinking"),
 			this.connection.klient.global.kosong.listModels(),
 			this.connection.klient.global.kosong.listProviders(),
+			this.connection.klient.global.config.get<"auto" | "yolo" | "manual" | undefined>("defaultPermissionMode"),
 		]);
+		if (this.policyRevision === policyRevision) this.publishPolicy(permission ?? "auto");
 		const selected = models.find((model) => model.model === alias);
 		this.draftModelAlias = selected?.model;
 		this.applyModel(selected?.provider ?? "", selected ? displayModelId(selected.provider, selected.model) : "", selected?.capabilities ?? [], selected?.display_name);
@@ -750,15 +757,48 @@ export class KlientChatBackend implements ChatBackend {
 	async setPolicy(policy: PolicyLevel): Promise<PolicySnapshot> {
 		const mode =
 			policy === "Auto" ? "auto" : policy === "YOLO" ? "yolo" : "manual";
-		this.draftPermission = mode;
-		await this.agent?.setPermission(mode);
+		if (!this.agent) {
+			this.draftPermission = mode;
+			return this.publishPolicy(mode, policy);
+		}
+		const agent = this.agent;
+		await this.writePermission(agent, mode);
+		return this.refreshPolicy(agent, policy);
+	}
+
+	private writePermission(agent: AgentHandle, mode: "auto" | "yolo" | "manual"): Promise<void> {
+		const write = this.permissionWrite.catch(() => {}).then(async () => {
+			if (this.agent !== agent || this.disposed) return;
+			await agent.setPermission(mode);
+		});
+		this.permissionWrite = write;
+		return write;
+	}
+
+	private policySnapshot(): PolicySnapshot {
 		return {
-			policy,
+			policy: this.policy,
 			boundary: "Host",
 			sandboxed: false,
 			recovery: false,
 			sessionAllowlist: [],
 		};
+	}
+
+	private publishPolicy(mode: "auto" | "yolo" | "manual", preferred?: PolicyLevel): PolicySnapshot {
+		const manual = preferred ?? this.policy;
+		this.policy = mode === "auto" ? "Auto" : mode === "yolo" ? "YOLO" : manual === "Safe" ? "Safe" : "Standard";
+		this.policyRevision += 1;
+		const snapshot = this.policySnapshot();
+		this.events?.onPolicySnapshot?.(snapshot);
+		return snapshot;
+	}
+
+	private async refreshPolicy(agent: AgentHandle, preferred?: PolicyLevel): Promise<PolicySnapshot> {
+		const revision = this.policyRevision;
+		const mode = await agent.getPermission();
+		if (this.agent !== agent || this.policyRevision !== revision) return this.policySnapshot();
+		return this.publishPolicy(mode, preferred);
 	}
 
 	stopAgentTask(taskId: string): Promise<void> {
@@ -986,9 +1026,14 @@ export class KlientChatBackend implements ChatBackend {
 		reason: "startup" | "new" | "resume" | "fork" | "created",
 	): Promise<void> {
 		this.clearBindings();
+		const draftPermission = reason === "created" ? this.draftPermission : undefined;
+		this.draftPermission = undefined;
+		this.policyRevision += 1;
+		if (reason !== "created") this.policy = "Standard";
 		this.meta = meta;
 		this.session = this.connection.klient.session(meta.id);
 		this.agent = this.session.agent("main");
+		if (draftPermission !== undefined) await this.writePermission(this.agent, draftPermission);
 		let thinking = await this.connection.klient.global.config.get<
 			{ effort?: string } | undefined
 		>("thinking");
@@ -1048,7 +1093,7 @@ export class KlientChatBackend implements ChatBackend {
 			this.supportsVision = false;
 		}
 		this.subscribe();
-		if (this.draftPermission) await this.agent.setPermission(this.draftPermission);
+		await this.refreshPolicy(this.agent);
 		this.events?.onSessionReset?.({ id: meta.id, reason, effort: this.effort });
 		await this.publishRuntimeGoalStatus();
 		if (reason !== "created") await this.publishHistory();
@@ -1212,6 +1257,9 @@ export class KlientChatBackend implements ChatBackend {
 		const agent = this.requireAgent();
 		const session = this.requireSession();
 		this.subscriptions.push(
+			agent.events.on("permission.mode.changed", ({ mode }) => {
+				if (this.agent === agent) this.publishPolicy(mode);
+			}),
 			agent.events.on("turn.started", (event) => {
 				this.outputSpeed.reset();
 				this.turn = { ...turnState(event.turnId, 0), effort: this.effort };

@@ -3664,7 +3664,7 @@ export class PanelController {
 			rows.push(
 				theme.muted(
 					padLine(
-						"Safe 最严格 · Standard 日常开发 · YOLO 仅高风险询问 · Auto 不询问",
+					"Safe/Standard 对应手动审批 · YOLO 高风险询问 · Auto 自动审批；计划限制与拒绝规则仍生效",
 						width,
 					),
 				),

@@ -17,6 +17,7 @@ import { VirtualTerminal } from "../../../packages/pi-tui/test/virtual-terminal.
 import { AttachmentService } from "../src/v1/attachments/service.js";
 import type { ChatBackend, ChatBackendEvents } from "../src/v1/backend/types.js";
 import { ScrollbackTUI } from "../src/v1/ui/scrollback-terminal.js";
+import type { PolicyLevel, PolicySnapshot } from "../src/v1/policy/execution-policy.js";
 import type {
 	AgentRunSnapshot,
 	AgentSnapshot,
@@ -182,11 +183,24 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		const terminal = new VirtualTerminal(80, 24);
 		const tui = new ScrollbackTUI(terminal);
 		let events: ChatBackendEvents;
-		const backend = {
+		const setPolicy = vi.fn(async (policy: PolicyLevel): Promise<PolicySnapshot> => ({
+			policy, boundary: "Host" as const, sandboxed: false as const, recovery: false, sessionAllowlist: [],
+		}));
+		const backend: ChatBackend = {
+			kind: "runtime",
+			modelId: "example/code",
+			supportsVision: false,
 			modelLabel: "Example",
 			start: async (listener: ChatBackendEvents) => { events = listener; },
 			dispose: async () => {},
-		} as ChatBackend;
+			setPolicy,
+			send: async () => {},
+			cancel: async () => {},
+			compact: async () => false,
+			newSession: async () => {},
+			listSessions: async () => [],
+			switchSession: async () => {},
+		};
 		const app = new VspiApp(tui, theme, backend, {
 			cwd: "/workspace",
 			settings: { ...DEFAULT_SETTINGS, summarizeSessionTitleOnExit: false },
@@ -195,8 +209,60 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		});
 		tui.addChild(app);
 		tui.setFocus(app);
-		return { terminal, tui, app, events: () => events };
+		return { terminal, tui, app, events: () => events, setPolicy };
 	}
+
+	it("keeps a confirmed policy in the status footer when the policy panel is reopened", async () => {
+		const { app, setPolicy } = renderFixture();
+		try {
+			app.composer.setText("/policy");
+			app.handleInput("\r");
+			for (let i = 0; i < 3; i += 1) app.handleInput("\u001b[A");
+			app.handleInput("\r");
+			await vi.waitFor(() => expect(app.startupStatus().policy).toBe("Safe"));
+			app.composer.setText("/policy");
+			app.handleInput("\r");
+			app.handleInput("\r");
+			await vi.waitFor(() => expect(setPolicy).toHaveBeenCalledTimes(2));
+			expect(setPolicy).toHaveBeenLastCalledWith("Safe");
+		} finally { await app.dispose(); }
+	});
+
+	it("shows a daemon policy update instead of the frontend default", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-policy-test-"));
+		const { app, events } = renderFixture(home);
+		try {
+			await app.start();
+			events().onPolicySnapshot?.({ policy: "Standard", boundary: "Host", sandboxed: false, recovery: false, sessionAllowlist: [] });
+			expect(app.startupStatus().policy).toBe("Standard");
+		} finally {
+			await app.dispose();
+			await rm(home, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps a newer daemon policy when an older policy request completes late", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-policy-race-"));
+		const { app, events, setPolicy } = renderFixture(home);
+		let release: ((snapshot: PolicySnapshot) => void) | undefined;
+		try {
+			await app.start();
+			setPolicy.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+			app.composer.setText("/policy");
+			app.handleInput("\r");
+			app.handleInput("\u001b[A");
+			app.handleInput("\r");
+			await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+			events().onPolicySnapshot?.({ policy: "Standard", boundary: "Host", sandboxed: false, recovery: false, sessionAllowlist: [] });
+			release!({ policy: "YOLO", boundary: "Host", sandboxed: false, recovery: false, sessionAllowlist: [] });
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("Policy 已切换为 Standard"));
+			expect(app.startupStatus().policy).toBe("Standard");
+		} finally {
+			release?.({ policy: "Standard", boundary: "Host", sandboxed: false, recovery: false, sessionAllowlist: [] });
+			await app.dispose();
+			await rm(home, { recursive: true, force: true });
+		}
+	});
 
 	it("offers Goal argument candidates after /goal ", async () => {
 		const empty = await GOAL_SLASH_COMMAND.getArgumentCompletions?.("");

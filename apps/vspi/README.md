@@ -7,7 +7,7 @@ VSPi is a daemon-backed terminal coding assistant. Sessions and background work 
 Requires **Node.js >=22.19.0**. Use a recent patch release of Node.js 22 or 24.
 
 ```sh
-npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.2.1/vspi-2.2.1.tgz"
+npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.2.2/vspi-2.2.2.tgz"
 vspi --version
 vspi init
 vspi
@@ -28,6 +28,8 @@ Configuration defaults to `~/.vspi/config.toml`. Set `VSPI_HOME` to isolate conf
 Run `vspi update`, then restart the client. An incompatible daemon is not silently replaced: finish its work before explicitly stopping it, or use an isolated `VSPI_HOME` for a different build.
 
 Version 2.2.1 bounds large-directory previews and listings, avoids whole-workspace enumeration for known configuration watch targets, improves IPC session recovery, and keeps short regular-mode input surfaces near the bottom. Recovery does **not** replay interrupted prompts or tool calls automatically.
+
+Version 2.2.2 synchronizes displayed permissions with the daemon and preserves existing session permissions across rebinds and reconnects. Safe and Standard both map to the backend's manual mode; restored manual mode is displayed as Standard. Plan restrictions and explicit deny rules remain enforced. Nested `vspi` commands use the daemon's Node and executable, with its home as the default unless explicitly overridden.
 
 `vspi web` prints the local runtime address; this package does not include a standalone browser frontend.
 

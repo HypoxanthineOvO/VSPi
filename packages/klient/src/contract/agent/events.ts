@@ -1,6 +1,6 @@
 /**
  * Klient-level agent-scope events — the public, typed, namespaced event
- * surface of one agent. All registrations filter the per-agent `events`
+ * surface of one agent. Stream registrations filter the per-agent `events`
  * scope stream by `type`; the payload is the whole flat `{ type, ... }`
  * event (schemas keep the `type` literal so listeners receive it intact).
  * Payload shapes mirror `protocol/src/events.ts`; events that are loose in
@@ -10,7 +10,7 @@
 import { z } from 'zod';
 
 import type { EventRegistration } from '../types.js';
-import { goalChangeSchema, goalSnapshotSchema } from './schemas.js';
+import { goalChangeSchema, goalSnapshotSchema, permissionModeSchema } from './schemas.js';
 
 /**
  * Scope-stream registration (`kind: 'stream'`). Declared structurally here
@@ -258,7 +258,13 @@ export const goalUpdatedEventSchema = goalUpdatedPayloadSchema
 // ── registrations ───────────────────────────────────────────────────────────
 
 /** Public event name → payload type. Keys must stay in sync with `agentEvents`. */
+export const permissionModeChangedSchema = z.object({
+  mode: permissionModeSchema,
+  previousMode: permissionModeSchema,
+});
+
 export interface AgentEventPayloads {
+  'permission.mode.changed': z.infer<typeof permissionModeChangedSchema>;
   'turn.started': z.infer<typeof turnStartedEventSchema>;
   'turn.ended': z.infer<typeof turnEndedEventSchema>;
   'assistant.delta': z.infer<typeof assistantDeltaEventSchema>;
@@ -289,6 +295,12 @@ export type AgentEventName = keyof AgentEventPayloads;
 
 /** Public event name → stream binding + payload schema. */
 export const agentEvents = {
+  'permission.mode.changed': {
+    kind: 'emitter',
+    service: 'agentPermissionModeService',
+    event: 'onDidChangeMode',
+    schema: permissionModeChangedSchema,
+  },
   'turn.started': { kind: 'stream', name: 'events', type: 'turn.started', schema: turnStartedEventSchema },
   'turn.ended': { kind: 'stream', name: 'events', type: 'turn.ended', schema: turnEndedEventSchema },
   'assistant.delta': { kind: 'stream', name: 'events', type: 'assistant.delta', schema: assistantDeltaEventSchema },

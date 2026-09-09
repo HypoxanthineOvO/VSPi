@@ -66,6 +66,41 @@ export function defineKlientConformance(
       expect(env.clientVersion.length).toBeGreaterThan(0);
     });
 
+    it('reads the effective permission mode after changing it', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'klient-permission-'));
+      await mkdir(join(workDir, '.git'));
+      const created = await target.klient.global.sessions.create({ workDir, title: 'permission conformance' });
+      try {
+        const agent = target.klient.session(created.id).agent('main');
+        await agent.setPermission('auto');
+        expect(await agent.getPermission()).toBe('auto');
+        await agent.setPermission('manual');
+        expect(await agent.getPermission()).toBe('manual');
+      } finally {
+        await target.klient.session(created.id).close();
+        await rm(workDir, { recursive: true, force: true });
+      }
+    });
+
+    it('publishes permission changes through the typed event surface', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'klient-permission-events-'));
+      await mkdir(join(workDir, '.git'));
+      const created = await target.klient.global.sessions.create({ workDir, title: 'permission events' });
+      const agent = target.klient.session(created.id).agent('main');
+      const events: Array<{ mode: string; previousMode: string }> = [];
+      await agent.setPermission('auto');
+      const subscription = agent.events.on('permission.mode.changed', (event) => { events.push(event); });
+      try {
+        await agent.getPermission();
+        await agent.setPermission('manual');
+        await vi.waitFor(() => expect(events).toContainEqual({ mode: 'manual', previousMode: 'auto' }));
+      } finally {
+        subscription.dispose();
+        await target.klient.session(created.id).close();
+        await rm(workDir, { recursive: true, force: true });
+      }
+    });
+
     it('workspaces round-trip through create/get/update/list/delete', async () => {
       const workspaces = target.klient.global.workspaces;
       const created = await workspaces.createOrTouch({ root: process.cwd(), name: 'conformance' });
