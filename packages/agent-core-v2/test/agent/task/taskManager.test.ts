@@ -1127,25 +1127,29 @@ describe('AgentTaskService', () => {
 
   it('persists graceful process shutdown as killed when stop was requested', async () => {
     const sessionDir = await mkdtemp(join(tmpdir(), 'kimi-bg-stop-race-'));
+    let writer: TaskServiceFixture | undefined;
+    let reader: TaskServiceFixture | undefined;
     try {
-      const writer = createAgentTaskService({ sessionDir }).manager;
+      writer = createAgentTaskService({ sessionDir });
       const { proc, resolve } = manuallyResolvedProcess();
-      const taskId = registerProcess(writer, proc, 'sleep 60', 'persisted race');
+      const taskId = registerProcess(writer.manager, proc, 'sleep 60', 'persisted race');
 
-      const stopPromise = writer.stop(taskId, 'user requested');
+      const stopPromise = writer.manager.stop(taskId, 'user requested');
       resolve(0);
       await stopPromise;
 
-      const reader = createAgentTaskService({ sessionDir }).manager;
-      await reader.loadFromDisk();
+      reader = createAgentTaskService({ sessionDir });
+      await reader.manager.loadFromDisk();
 
-      expect(reader.getTask(taskId)).toMatchObject({
+      expect(reader.manager.getTask(taskId)).toMatchObject({
         kind: 'process',
         status: 'killed',
         exitCode: 0,
         stopReason: 'user requested',
       });
     } finally {
+      await reader?.ctx.dispose();
+      await writer?.ctx.dispose();
       await rm(sessionDir, { recursive: true, force: true });
     }
   });

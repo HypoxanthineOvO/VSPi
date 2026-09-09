@@ -3,7 +3,7 @@ import { rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'pathe';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DisposableStore } from '#/_base/di/lifecycle';
 import { createServices } from '#/_base/di/test';
@@ -11,6 +11,7 @@ import { Emitter } from '#/_base/event';
 import { ILogService } from '#/_base/log/log';
 import { IBootstrapService } from '#/app/bootstrap/bootstrap';
 import { HostFileSystem } from '#/os/backends/node-local/hostFsService';
+import { HostFsWatchService } from '#/os/backends/node-local/hostFsWatchService';
 import { IHostEnvironment } from '#/os/interface/hostEnvironment';
 import { IHostFileSystem } from '#/os/interface/hostFileSystem';
 import {
@@ -75,7 +76,7 @@ describe('WorkspaceInstructionsService', () => {
     }
   }
 
-  function createService(): {
+  function createService(watcher = fsWatchStub()): {
     service: IWorkspaceInstructionsService;
     states: IWorkspaceStateService;
   } {
@@ -87,7 +88,7 @@ describe('WorkspaceInstructionsService', () => {
         reg.defineInstance(IHostFileSystem, new HostFileSystem());
         reg.definePartialInstance(IHostEnvironment, { homeDir: osHomeDir });
         reg.definePartialInstance(IBootstrapService, { homeDir: brandHomeDir });
-        reg.defineInstance(IHostFsWatchService, fsWatchStub());
+        reg.defineInstance(IHostFsWatchService, watcher);
         reg.defineInstance(ILogService, stubLog());
         reg.define(IWorkspaceInstructionsService, WorkspaceInstructionsService);
       },
@@ -141,6 +142,32 @@ describe('WorkspaceInstructionsService', () => {
     const changes = await changed;
 
     expect(changes).toEqual([{ path: file, action: 'modified', kind: 'file' }]);
+  });
+
+  it.each(['modified', 'deleted'] as const)('projects a %s instruction file through real targeted watcher signals', async (action) => {
+    const file = join(workDir, 'AGENTS.md');
+    await writeFile(file, 'old instructions', 'utf8');
+    const watcher = new HostFsWatchService();
+    const readiness: Promise<void>[] = [];
+    const { service } = createService({
+      _serviceBrand: undefined,
+      watch: (path, options) => {
+        const handle = watcher.watch(path, options);
+        readiness.push(handle.ready);
+        return handle;
+      },
+    });
+    await service.ready;
+    await vi.waitFor(() => expect(readiness.length).toBeGreaterThan(0));
+    await Promise.all(readiness);
+    const changes: HostFsChange[] = [];
+    disposables.add(service.sessionProvider().onDidChange((events) => changes.push(...events)));
+
+    if (action === 'deleted') await rm(file);
+    else await writeFile(file, 'new instructions', 'utf8');
+
+    await vi.waitFor(() => expect(changes).toContainEqual({ path: file, action, kind: 'file' }));
+    expect(changes.every((change) => change.kind === 'file')).toBe(true);
   });
 
   it('refreshes the snapshot and fires onDidChange when a watched file changes', async () => {

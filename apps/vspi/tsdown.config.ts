@@ -13,6 +13,8 @@ const main = defineConfig({
   clean: true,
   dts: false,
   hash: false,
+  platform: 'node',
+  target: 'node22.19',
   banner: { js: '#!/usr/bin/env node' },
   plugins: [rawTextPlugin()],
   deps: {
@@ -52,7 +54,7 @@ function worker(name: string, entry: string) {
     dts: false,
     hash: false,
     platform: 'node',
-    target: 'node24',
+    target: 'node22.19',
     sourcemap: false,
     minify: false,
     silent: true,

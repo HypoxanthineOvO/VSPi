@@ -31,11 +31,16 @@ describe('VSPi startup runtime warning', () => {
 });
 
 describe('VSPi runtime identity', () => {
-  it('enforces the repository Node.js floor', () => {
+  it('accepts the VSPi Node.js runtime floor and newer releases', () => {
+    expect(() => assertSupportedNodeVersion('22.19.0')).not.toThrow();
+    expect(() => assertSupportedNodeVersion('22.22.3')).not.toThrow();
+    expect(() => assertSupportedNodeVersion('24.0.0')).not.toThrow();
     expect(() => assertSupportedNodeVersion('24.15.0')).not.toThrow();
     expect(() => assertSupportedNodeVersion('25.0.0')).not.toThrow();
-    expect(() => assertSupportedNodeVersion('24.14.9')).toThrow(/requires Node\.js >=24\.15\.0/u);
-    expect(() => assertSupportedNodeVersion('22.22.3')).toThrow(/current version is 22\.22\.3/u);
+  });
+
+  it.each(['20.20.0', '22.18.9', 'invalid'])('rejects unsupported Node.js %s with the runtime requirement', (version) => {
+    expect(() => assertSupportedNodeVersion(version)).toThrow(`VSPi requires Node.js >=22.19.0; current version is ${version}`);
   });
 
   it('binds daemon reuse to the executable bytes, Node version, and VSPI_HOME', async () => {

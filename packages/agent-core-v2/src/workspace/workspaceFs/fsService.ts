@@ -158,6 +158,7 @@ export class WorkspaceFsService implements IWorkspaceFsService {
     const items: FsEntry[] = [];
     const childrenByPath: Record<string, FsEntry[]> = {};
     let truncated = false;
+    let remainingNodes = WALK_MAX_NODES;
 
     interface QueueEntry {
       readonly relPath: string;
@@ -174,13 +175,18 @@ export class WorkspaceFsService implements IWorkspaceFsService {
     }
 
     while (queue.length > 0) {
+      if (remainingNodes <= 0) {
+        truncated = true;
+        break;
+      }
       const entry = queue.shift()!;
       let names: readonly string[];
       try {
         const listing = await this.hostFs.readdirCapped(
           this.absOf(entry.relPath),
-          LIST_MAX_DIR_ENTRIES,
+          Math.min(LIST_MAX_DIR_ENTRIES, remainingNodes),
         );
+        remainingNodes -= listing.entries.length;
         if (listing.truncated) truncated = true;
         names = listing.entries.map((e) => e.name);
       } catch (err) {
@@ -1044,12 +1050,13 @@ export class WorkspaceFsService implements IWorkspaceFsService {
     budget: { remaining: number } = { remaining: WALK_MAX_NODES },
   ): Promise<boolean> {
     if (depth > WALK_MAX_DEPTH) return true;
+    if (budget.remaining <= 0) return false;
     let entries: readonly HostDirEntry[];
     let dirTruncated = false;
     try {
       const listing = await this.hostFs.readdirCapped(
         rootRel === '' ? baseAbs : this.path.join(baseAbs, rootRel),
-        LIST_MAX_DIR_ENTRIES,
+        Math.min(LIST_MAX_DIR_ENTRIES, budget.remaining),
       );
       entries = listing.entries;
       dirTruncated = listing.truncated;
@@ -1417,4 +1424,3 @@ function toWireError(err: unknown): { code: number; msg: string } {
     msg: err instanceof Error ? err.message : 'internal error',
   };
 }
-

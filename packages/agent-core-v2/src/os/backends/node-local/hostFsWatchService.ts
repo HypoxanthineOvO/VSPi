@@ -1,5 +1,6 @@
 import { watch as fsWatch } from 'node:fs';
-import { basename, isAbsolute, join, relative } from 'node:path';
+import { stat } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { FSWatcher } from 'chokidar';
 
@@ -129,6 +130,118 @@ class HostFsWatchHandle implements IHostFsWatchHandle {
   }
 }
 
+class TargetSignalWatchHandle implements IHostFsWatchHandle {
+  readonly ready: Promise<void>;
+  readonly onDidChange: Event<HostFsChange>;
+
+  private readonly emitter = new Emitter<HostFsChange>();
+  private readonly readiness = createWatchReadiness();
+  private readonly parents = new Map<string, NativeFsWatcher>();
+  private readonly subtrees = new Map<string, HostFsWatchHandle>();
+  private readonly targets: readonly string[];
+  private refreshTail: Promise<void>;
+  private refreshQueued = false;
+  private disposed = false;
+
+  constructor(private readonly root: string, private readonly options: HostFsWatchOptions) {
+    this.onDidChange = this.emitter.event;
+    this.targets = [...new Set(options.targets?.map((target) => resolve(target)))];
+    this.refreshTail = (options.ignoredReady ?? Promise.resolve()).then(() => this.refresh());
+    this.ready = this.readiness.promise;
+    void this.refreshTail.then(() => this.readiness.resolve(), (error: unknown) => this.readiness.reject(error));
+    void this.ready.catch(onUnexpectedError);
+  }
+
+  private invalidate(path: string, rearm = false): void {
+    if (this.disposed || (path !== this.root && this.options.ignored?.(path))) return;
+    if (rearm) {
+      for (const [watched, watcher] of this.parents) {
+        if (clampToRoot(path, watched) === watched) { watcher.close(); this.parents.delete(watched); }
+      }
+      for (const [watched, watcher] of this.subtrees) {
+        if (clampToRoot(path, watched) === watched) { watcher.dispose(); this.subtrees.delete(watched); }
+      }
+    }
+    this.emitter.fire({ path: this.root, action: 'modified', kind: 'directory' });
+    if (this.refreshQueued) return;
+    this.refreshQueued = true;
+    this.refreshTail = this.refreshTail.catch(() => undefined).then(async () => {
+      this.refreshQueued = false;
+      await this.refresh();
+      if (!this.disposed) this.emitter.fire({ path: this.root, action: 'modified', kind: 'directory' });
+    });
+    void this.refreshTail.catch(onUnexpectedError);
+  }
+
+  private async refresh(): Promise<void> {
+    if (this.disposed) return;
+    const parents = new Set<string>();
+    const subtrees = new Set<string>();
+    if (dirname(this.root) !== this.root) {
+      parents.add(dirname(this.root));
+      this.watchParent(dirname(this.root));
+    }
+    for (const target of this.targets) {
+      if (clampToRoot(this.root, target) !== target) continue;
+      const chain: string[] = [];
+      for (let parent = dirname(target);; parent = dirname(parent)) {
+        chain.push(parent);
+        if (parent === this.root) break;
+      }
+      for (const parent of chain.reverse()) {
+        const info = await stat(parent).catch(() => undefined);
+        if (this.disposed) return;
+        if (!info?.isDirectory()) break;
+        parents.add(parent);
+        this.watchParent(parent);
+      }
+      const info = await stat(target).catch(() => undefined);
+      if (this.disposed) return;
+      if (!info?.isDirectory()) continue;
+      subtrees.add(target);
+      if (this.subtrees.has(target)) continue;
+      const watcher = new HostFsWatchHandle(target, this.options);
+      watcher.onDidChange((event) => this.invalidate(event.path));
+      this.subtrees.set(target, watcher);
+      await watcher.ready;
+      if (this.disposed) return;
+    }
+    for (const [path, watcher] of this.parents) {
+      if (!parents.has(path)) { watcher.close(); this.parents.delete(path); }
+    }
+    for (const [path, watcher] of this.subtrees) {
+      if (!subtrees.has(path)) { watcher.dispose(); this.subtrees.delete(path); }
+    }
+  }
+
+  private watchParent(parent: string): void {
+    if (this.parents.has(parent)) return;
+    const watcher = fsWatch(parent, { persistent: false }, (type, filename) => {
+      const path = resolveNativeSignalPath(parent, filename);
+      if (parent !== this.root && parent === dirname(this.root) && path !== this.root && path !== parent) return;
+      this.invalidate(path === parent ? this.root : path, type === 'rename');
+    });
+    watcher.on('error', (error) => {
+      watcher.close();
+      this.parents.delete(parent);
+      onUnexpectedError(error);
+      this.invalidate(this.root);
+    });
+    this.parents.set(parent, watcher);
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.readiness.resolve();
+    for (const watcher of this.parents.values()) watcher.close();
+    for (const watcher of this.subtrees.values()) watcher.dispose();
+    this.parents.clear();
+    this.subtrees.clear();
+    this.emitter.dispose();
+  }
+}
+
 class SignalWatchHandle implements IHostFsWatchHandle {
   readonly ready: Promise<void>;
   readonly onDidChange: Event<HostFsChange>;
@@ -236,6 +349,9 @@ export class HostFsWatchService implements IHostFsWatchService {
   constructor(private readonly runtime: HostFsWatchRuntime = NODE_HOST_FS_WATCH_RUNTIME) {}
 
   watch(path: string, options?: HostFsWatchOptions): IHostFsWatchHandle {
+    if (options?.signal && options.targets !== undefined && !options.targets.some((target) => resolve(target) === resolve(path))) {
+      return new TargetSignalWatchHandle(resolve(path), options);
+    }
     if (useNativeRecursive(options, this.runtime.platform)) {
       return new SignalWatchHandle(path, options, this.runtime);
     }

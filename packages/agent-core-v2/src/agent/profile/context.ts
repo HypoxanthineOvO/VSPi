@@ -9,6 +9,7 @@ export const AGENTS_MD_RECOMMENDED_MAX_BYTES = 32 * 1024;
 
 export const LIST_DIR_ROOT_WIDTH = 30;
 export const LIST_DIR_CHILD_WIDTH = 10;
+const LIST_DIR_SCAN_LIMIT = 10_000;
 
 interface ProfileContextDeps {
   readonly fs: IHostFileSystem;
@@ -357,21 +358,23 @@ async function collectEntries(
   deps: ProfileContextDeps,
   dirPath: string,
   maxWidth: number,
-): Promise<{ entries: Entry[]; total: number; readable: boolean }> {
+): Promise<{ entries: Entry[]; total: number; readable: boolean; truncated: boolean }> {
   const all: Entry[] = [];
+  let truncated = false;
   try {
-    const dirents = await deps.fs.readdir(dirPath);
-    for (const d of dirents) {
+    const listing = await deps.fs.readdirCapped(dirPath, LIST_DIR_SCAN_LIMIT);
+    truncated = listing.truncated;
+    for (const d of listing.entries) {
       all.push({ name: d.name, isDir: d.isDirectory });
     }
   } catch {
-    return { entries: [], total: 0, readable: false };
+    return { entries: [], total: 0, readable: false, truncated: false };
   }
   all.sort((a, b) => {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
-  return { entries: all.slice(0, maxWidth), total: all.length, readable: true };
+  return { entries: all.slice(0, maxWidth), total: all.length + Number(truncated), readable: true, truncated };
 }
 
 function shouldCollapseDirectory(entry: Entry, options: ListDirectoryOptions): boolean {
@@ -384,7 +387,7 @@ async function listDirectory(
   options: ListDirectoryOptions = {},
 ): Promise<string> {
   const lines: string[] = [];
-  const { entries, total, readable } = await collectEntries(deps, workDir, LIST_DIR_ROOT_WIDTH);
+  const { entries, total, readable, truncated } = await collectEntries(deps, workDir, LIST_DIR_ROOT_WIDTH);
   if (!readable) return '[not readable]';
   const remaining = total - entries.length;
 
@@ -415,7 +418,7 @@ async function listDirectory(
         lines.push(`${childPrefix}${cConnector}${ce.name}${suffix}`);
       }
       if (childRemaining > 0) {
-        lines.push(`${childPrefix}└── ... and ${String(childRemaining)} more`);
+        lines.push(`${childPrefix}└── ... and ${child.truncated ? 'at least ' : ''}${String(childRemaining)} more${child.truncated ? ' (directory scan limit reached)' : ''}`);
       }
     } else {
       lines.push(`${connector}${name}`);
@@ -423,7 +426,7 @@ async function listDirectory(
   }
 
   if (remaining > 0) {
-    lines.push(`└── ... and ${String(remaining)} more entries`);
+    lines.push(`└── ... and ${truncated ? 'at least ' : ''}${String(remaining)} more entries${truncated ? ' (directory scan limit reached)' : ''}`);
   }
 
   return lines.length > 0 ? lines.join('\n') : '(empty directory)';

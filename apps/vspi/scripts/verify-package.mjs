@@ -39,7 +39,7 @@ try {
   assert(manifest.license === 'MIT', 'package license must be MIT');
   assert(manifest.type === 'module', 'package type must be module');
   assert(manifest.bin?.vspi === 'dist/main.mjs', 'package bin must point to dist/main.mjs');
-  assert(manifest.engines?.node === '>=24.15.0', 'package Node.js engine must be >=24.15.0');
+  assert(manifest.engines?.node === '>=22.19.0', 'package Node.js engine must be >=22.19.0');
   for (const field of ['private', 'dependencies', 'optionalDependencies', 'peerDependencies', 'devDependencies']) {
     assert(!(field in manifest), `package manifest must not contain ${field}`);
   }
@@ -84,6 +84,21 @@ try {
   assert(help.stdout.startsWith('Usage: vspi exec [options]'), 'vspi exec --help must print exec usage');
   const vspiHomeEntries = await readdir(environment.VSPI_HOME).catch(() => []);
   assert(vspiHomeEntries.length === 0, 'vspi exec --help must not start or initialize the daemon');
+  const workspace = join(temporaryRoot, 'workspace');
+  await mkdir(join(workspace, '.git'), { recursive: true });
+  const runtimeOptions = { env: environment, cwd: workspace, timeout: 30_000 };
+  try {
+    const started = await exec(executable, ['daemon', 'start'], runtimeOptions);
+    assert(started.stdout.includes('VSP runtime started at pid '), 'installed vspi must start its daemon');
+    const status = await exec(executable, ['daemon', 'status'], runtimeOptions);
+    assert(status.stdout.includes('VSP runtime is ready'), 'installed vspi must connect to its daemon');
+    const runtimeIdentity = JSON.parse(await readFile(join(environment.VSPI_HOME, 'server', 'vspi-runtime.json'), 'utf8'));
+    assert(runtimeIdentity.nodeVersion === process.versions.node, 'daemon must run under the Node.js version being verified');
+    assert(runtimeIdentity.version === sourceManifest.version, 'daemon must run the installed VSPi version');
+    await exec(executable, ['config', 'reload'], runtimeOptions);
+  } finally {
+    await exec(executable, ['daemon', 'stop'], runtimeOptions);
+  }
   process.stdout.write(`verified ${basename(tarball)} (${sourceManifest.version}) with isolated prefix ${prefix}\n`);
 } finally {
   await rm(temporaryRoot, { recursive: true, force: true });

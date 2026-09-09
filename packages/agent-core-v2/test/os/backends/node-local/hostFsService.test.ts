@@ -52,3 +52,23 @@ describe('HostFileSystem stat / lstat', () => {
     expect((await fs.lstat(link)).isSymbolicLink).toBe(true);
   });
 });
+
+describe('HostFileSystem bounded directory reads', () => {
+  it('returns a truncated prefix when the entry limit is exceeded', async () => {
+    await Promise.all(['one', 'two', 'three'].map((name) => writeFile(join(dir, name), '')));
+
+    const result = await fs.readdirCapped(dir, 2);
+
+    expect(result.entries).toHaveLength(2);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('does not mark a directory truncated when its size equals the limit', async () => {
+    await Promise.all(['one', 'two'].map((name) => writeFile(join(dir, name), '')));
+
+    const result = await fs.readdirCapped(dir, 2);
+
+    expect(result.entries.map((entry) => entry.name).sort()).toEqual(['one', 'two']);
+    expect(result.truncated).toBe(false);
+  });
+});

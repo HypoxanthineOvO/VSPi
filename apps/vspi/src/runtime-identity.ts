@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 
 import { resolveRuntimePaths, type RuntimeConnection, type RuntimeState } from '@vsp/vsp-runtime';
 
-export const MINIMUM_NODE_VERSION = '24.15.0';
+export const MINIMUM_NODE_VERSION = '22.19.0';
 
 export interface ExpectedRuntimeIdentity {
   readonly productName: string;

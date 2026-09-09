@@ -13,7 +13,7 @@ const packageManifest = {
   license: manifest.license,
   type: 'module',
   bin: { vspi: 'dist/main.mjs' },
-  engines: { node: '>=24.15.0' },
+  engines: manifest.engines,
 };
 
 await rm(stagingRoot, { recursive: true, force: true });

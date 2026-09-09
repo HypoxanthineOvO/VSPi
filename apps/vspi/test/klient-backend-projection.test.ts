@@ -1,6 +1,6 @@
 /**
  * Scenario: Kimi Core wire values are projected into the VSPi product surface.
- * Responsibilities: Plan, Agent task, Runtime Goal, usage, and model-price projection.
+ * Responsibilities: runtime recovery, Plan, Agent task, Runtime Goal, usage, and model-price projection.
  * Wiring: edge translators and focused Klient-shaped backend fixtures.
  * Run: pnpm -C apps/vspi test
  */
@@ -92,8 +92,9 @@ function draftBackendFixture(
 	};
 	const create = vi.fn(async () => ({ id: "new-session" }));
 	const remove = vi.fn(async () => undefined);
+	const restore = vi.fn(async () => true);
 	const getConfig = vi.fn(async (section: string): Promise<unknown> => section === "defaultModel" ? "example/code" : undefined);
-	const connection = { close: vi.fn(async () => undefined), klient: { events, session: () => ({ agent: () => agent, events, delete: remove, restore: async () => true, get: async () => ({ id: "old-session" }) }), global: {
+	const connection = { close: vi.fn(async () => undefined), klient: { events, session: (id: string) => ({ agent: () => agent, events, delete: remove, restore, get: async () => ({ id }) }), global: {
 		workspaces: { createOrTouch: vi.fn(async () => ({ id: "workspace" })) }, sessions: { create },
 		config: { get: getConfig },
 		kosong: { listModels: vi.fn(async () => models), listProviders: vi.fn(async () => [provider("example")]), getProvider: vi.fn(async () => provider("example")), queryAvailableModels: vi.fn(async () => ({ modelIds: ["example/code"] })), setDefaultModel: vi.fn(async () => ({ model: models[0] })) },
@@ -102,7 +103,7 @@ function draftBackendFixture(
 	const reset = vi.fn();
 	const connectionStates: Array<{ state: string; attempt: number }> = [];
 	const start = () => backend.start({ onMessage: vi.fn(), onMessageUpdate: vi.fn(), onBusy: vi.fn(), onUsage: vi.fn(), onNotice: vi.fn(), onSessionReset: reset, onRuntimeConnectionState: (state, attempt) => { connectionStates.push({ state, attempt }); } });
-	return { backend, connection, create, remove, agent, reset, start, listeners, getConfig, connectionStates, disconnect: () => connectionError?.(new Error("ipc closed")) };
+	return { backend, connection, create, remove, restore, agent, reset, start, listeners, getConfig, connectionStates, disconnect: () => connectionError?.(new Error("ipc closed")) };
 }
 
 afterEach(() => {
@@ -153,10 +154,10 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		try {
 			await fixture.start();
 			fixture.disconnect();
+			expect(fixture.connectionStates[0]).toEqual({ state: "reconnecting", attempt: 1 });
 			await vi.waitFor(() => {
 				expect(fixture.connectionStates).toContainEqual({ state: "reconnected", attempt: 1 });
 			}, { timeout: 4_000 });
-			expect(fixture.connectionStates[0]).toEqual({ state: "reconnecting", attempt: 1 });
 			expect(fixture.backend.runtimeConnection).toBe(replacement.connection);
 			expect(fixture.backend.isSessionReady()).toBe(false);
 			await expect(fixture.backend.send("after recovery", { attachments: [], effort: "off", behavior: "prompt" })).resolves.toEqual({ status: "completed" });
@@ -182,6 +183,67 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			expect(attempts).toBe(5);
 			expect(fixture.connectionStates[0]).toEqual({ state: "reconnecting", attempt: 1 });
 		} finally { await fixture.backend.dispose(); }
+	});
+
+	it("restores the existing session after reconnecting to a fresh daemon", async () => {
+		const replacement = draftBackendFixture();
+		let restored = false;
+		replacement.restore.mockImplementation(async () => { restored = true; return true; });
+		replacement.agent.getModel.mockImplementation(async () => {
+			if (!restored) throw new Error("Session is not loaded");
+			return "example/code";
+		});
+		const fixture = draftBackendFixture(async () => replacement.connection, [0]);
+		try {
+			await fixture.start();
+			await fixture.backend.send("before disconnect", { attachments: [], effort: "off", behavior: "prompt" });
+			fixture.disconnect();
+			await vi.waitFor(() => expect(fixture.connectionStates.at(-1)?.state).toBe("reconnected"));
+			expect(fixture.reset).toHaveBeenLastCalledWith(expect.objectContaining({ id: "new-session", reason: "resume" }));
+			await expect(fixture.backend.send("after recovery", { attachments: [], effort: "off", behavior: "prompt" })).resolves.toEqual({ status: "completed" });
+			expect(replacement.create).not.toHaveBeenCalled();
+		} finally {
+			await fixture.backend.dispose();
+			await replacement.backend.dispose();
+		}
+	});
+
+	it("closes a late reconnect result when the frontend was disposed", async () => {
+		const replacement = draftBackendFixture();
+		let release!: (connection: RuntimeConnection) => void;
+		const reconnect = new Promise<RuntimeConnection>((resolve) => { release = resolve; });
+		const connect = vi.fn(() => reconnect);
+		const fixture = draftBackendFixture(connect, [0]);
+		try {
+			await fixture.start();
+			fixture.disconnect();
+			await vi.waitFor(() => expect(connect).toHaveBeenCalledOnce());
+			await fixture.backend.dispose();
+			release(replacement.connection);
+			await vi.waitFor(() => expect(replacement.connection.close).toHaveBeenCalledOnce());
+			expect(fixture.connectionStates.some(({ state }) => state === "reconnected")).toBe(false);
+		} finally {
+			release(replacement.connection);
+			await fixture.backend.dispose();
+			await replacement.backend.dispose();
+		}
+	});
+
+	it("reports failed recovery when the original session no longer exists", async () => {
+		const replacement = draftBackendFixture();
+		replacement.restore.mockResolvedValue(false);
+		const fixture = draftBackendFixture(async () => replacement.connection, [0]);
+		try {
+			await fixture.start();
+			await fixture.backend.switchSession("old-session");
+			fixture.disconnect();
+			await vi.waitFor(() => expect(fixture.connectionStates.at(-1)?.state).toBe("failed"));
+			expect(replacement.create).not.toHaveBeenCalled();
+			expect(fixture.connectionStates.some(({ state }) => state === "reconnected")).toBe(false);
+		} finally {
+			await fixture.backend.dispose();
+			await replacement.backend.dispose();
+		}
 	});
 
 	it("cancels a pending initial creation without submitting or retaining an empty session", async () => {
