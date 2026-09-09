@@ -781,8 +781,11 @@ describe('AgentTaskService', () => {
 
   it('does not cap a detached subagent result larger than the process output limit', async () => {
     const sessionDir = await mkdtemp(join(tmpdir(), 'kimi-bg-limit-agent-'));
+    let ctx: TestAgentContext | undefined;
     try {
-      const { manager } = createAgentTaskService({ sessionDir });
+      const fixture = createAgentTaskService({ sessionDir });
+      ctx = fixture.ctx;
+      const { manager } = fixture;
       const result = 'y'.repeat(20 * MiB);
       const taskId = manager.registerTask(
         agentTask(Promise.resolve({ result }), 'big subagent result'),
@@ -795,6 +798,7 @@ describe('AgentTaskService', () => {
       expect(info).toMatchObject({ status: 'completed' });
       expect(output.outputSizeBytes).toBe(Buffer.byteLength(result));
     } finally {
+      await ctx?.dispose();
       await rm(sessionDir, { recursive: true, force: true });
     }
   });

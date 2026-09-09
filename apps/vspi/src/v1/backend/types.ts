@@ -317,6 +317,7 @@ export interface ChatBackendEvents {
 	onSessionWait?: (waiting: boolean) => void;
 	onSessionReady?: () => void;
 	onRuntimeCatalogChanged?: () => void;
+	onPolicySnapshot?: (snapshot: PolicySnapshot) => void;
 	onRuntimeConnectionState?: (
 		state: "reconnecting" | "reconnected" | "failed",
 		attempt: number,

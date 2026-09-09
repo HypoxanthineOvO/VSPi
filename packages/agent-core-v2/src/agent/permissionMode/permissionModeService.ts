@@ -47,6 +47,10 @@ export class AgentPermissionModeService extends Service implements IAgentPermiss
     return this.agentState.get(permissionModeKey);
   }
 
+  getMode(): PermissionMode {
+    return this.mode;
+  }
+
   setMode(mode: PermissionMode): void {
     const previousMode = this.mode;
     const changed = mode !== previousMode;

@@ -2344,6 +2344,7 @@ function createPermissionModeService(initialMode: PermissionMode): IAgentPermiss
     get mode() {
       return mode;
     },
+    getMode: () => mode,
     setMode: (nextMode) => {
       mode = nextMode;
     },

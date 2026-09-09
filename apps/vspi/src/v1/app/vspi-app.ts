@@ -408,6 +408,8 @@ export class VspiApp implements Component, Focusable {
 	private providerOptions: ProviderOption[] = [];
 	private authDialog: AuthDialog | undefined;
 	private readonly executionPolicy: ExecutionPolicyUi;
+	private backendPolicySnapshot: PolicySnapshot | undefined;
+	private backendPolicyRevision = 0;
 	private readonly yoloAcknowledgementBroker: YoloAcknowledgementBroker;
 	private pendingQuestion: PendingQuestion | undefined;
 	private ownerRecoveryPromptActive = false;
@@ -672,6 +674,12 @@ export class VspiApp implements Component, Focusable {
 							"error",
 						);
 				},
+				onPolicySnapshot: (snapshot) => {
+					this.backendPolicyRevision += 1;
+					this.backendPolicySnapshot = structuredClone(snapshot);
+					this.panels.setPolicySnapshot(snapshot);
+					this.requestRender();
+				},
 				onSessionError: (error) => this.handleRuntimeError(error),
 				onSessionOwnerRecovery: (
 					owner: SessionLeaseOwner,
@@ -750,7 +758,7 @@ export class VspiApp implements Component, Focusable {
 						: undefined;
 					if (this.currentModelIdentity)
 						this.panels.confirmModelSelection(this.currentModelIdentity);
-					this.panels.setPolicySnapshot(this.executionPolicy.snapshot());
+					this.panels.setPolicySnapshot(this.currentPolicySnapshot());
 					if (this.backend.getAgentSnapshot) {
 						const snapshot = this.backend.getAgentSnapshot();
 						this.panels.setAgentSnapshot(snapshot);
@@ -1252,7 +1260,7 @@ export class VspiApp implements Component, Focusable {
 		if (this.sessionTransition) return;
 		const panelKind = this.panels.kind;
 		const event = this.panels.handleInput(data);
-		const policy = this.executionPolicy.snapshot();
+		const policy = this.currentPolicySnapshot();
 		const confirmedYolo =
 			panelKind === "policy" &&
 			matchesKey(data, Key.enter) &&
@@ -1267,7 +1275,7 @@ export class VspiApp implements Component, Focusable {
 	}
 
 	startupStatus(): StartupStatus {
-		const policy = this.executionPolicy.snapshot();
+		const policy = this.currentPolicySnapshot();
 		return {
 			model: this.modelLabel,
 			backend: "VSP Runtime",
@@ -1276,6 +1284,10 @@ export class VspiApp implements Component, Focusable {
 			version: VSPI_VERSION,
 			...(policy.recovery ? { recovery: true } : {}),
 		};
+	}
+
+	private currentPolicySnapshot(): PolicySnapshot {
+		return this.backendPolicySnapshot ?? this.executionPolicy.snapshot();
 	}
 
 	setStartupSurface(lines: readonly string[]): void {
@@ -2106,7 +2118,7 @@ export class VspiApp implements Component, Focusable {
 					),
 				];
 			} else {
-				const policy = this.executionPolicy.snapshot();
+				const policy = this.currentPolicySnapshot();
 				const mode =
 					this.workspaceFocus === "transcript"
 						? "Inspect"
@@ -2931,7 +2943,7 @@ export class VspiApp implements Component, Focusable {
 			}
 		} else if (action.handler === "usage") this.panels.open("usage");
 		else if (action.handler === "policy") {
-			this.panels.setPolicySnapshot(this.executionPolicy.snapshot());
+			this.panels.setPolicySnapshot(this.currentPolicySnapshot());
 			this.panels.open("policy");
 		} else if (action.handler === "theme") this.panels.open("theme");
 		else if (action.handler === "tui") await this.toggleTuiMode();
@@ -3419,18 +3431,24 @@ export class VspiApp implements Component, Focusable {
 			this.completeOneShotPanel();
 		} else if (event.type === "policyChange") {
 			try {
+				const revision = this.backendPolicyRevision;
 				const snapshot = this.backend.setPolicy
 					? await this.backend.setPolicy(event.policy)
 					: await this.executionPolicy.switchPolicy(event.policy);
-				this.panels.setPolicySnapshot(snapshot);
+				if (this.backend.setPolicy && revision === this.backendPolicyRevision) {
+					this.backendPolicySnapshot = structuredClone(snapshot);
+					this.backendPolicyRevision += 1;
+				}
+				const confirmed = this.currentPolicySnapshot();
+				this.panels.setPolicySnapshot(confirmed);
 				this.completeOneShotPanel();
 				this.showNotice(
-					snapshot.persistenceWarning ??
-						`Policy 已切换为 ${snapshot.policy} · ${snapshot.boundary}`,
-					snapshot.persistenceWarning ? "warning" : "success",
+					confirmed.persistenceWarning ??
+						`Policy 已切换为 ${confirmed.policy} · ${confirmed.boundary}`,
+					confirmed.persistenceWarning ? "warning" : "success",
 				);
 			} catch (error) {
-				this.panels.setPolicySnapshot(this.executionPolicy.snapshot());
+				this.panels.setPolicySnapshot(this.currentPolicySnapshot());
 				this.showNotice(
 					`Policy 切换失败：${error instanceof Error ? error.message : "未知错误"}`,
 					"error",

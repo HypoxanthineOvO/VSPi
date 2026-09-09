@@ -63,6 +63,7 @@ function permissionMode(): IAgentPermissionModeService {
   return {
     _serviceBrand: undefined,
     mode: 'auto',
+    getMode: () => 'auto',
     setMode: () => {},
     setModeAndBroadcast: () => {},
     onDidChangeMode: () => ({ dispose: () => {} }),

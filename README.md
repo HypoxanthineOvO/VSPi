@@ -10,10 +10,10 @@ VSPi 是基于 Kimi Code 引擎演进的终端编码助手。它用独立的常�
 
 **运行安装包：Node.js ≥ 22.19.0。** 建议使用 Node.js 22 或 24 的最新补丁版本。安装包与源码构建的版本要求不同，开发要求见下文。
 
-安装 2.2.1：
+安装 2.2.2：
 
 ```sh
-npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.2.1/vspi-2.2.1.tgz"
+npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.2.2/vspi-2.2.2.tgz"
 vspi --version
 ```
 
@@ -114,7 +114,15 @@ vspi config reload
 
 `inspect` 和 `diagnostics` 只读连接已有 daemon；`reload` 才会重新读取磁盘配置。命令行配置 section 使用 `defaultModel` 等 Core 名称，TOML 使用 `default_model` 等磁盘字段名。`config get/inspect` 的输出会隐藏凭据，不要把脱敏后的整段值写回；修改少数字段优先使用 `config patch`，完整语法见 `vspi config --help`。
 
-## 2.2.1 的可靠性修复
+## 2.2.2 的权限与嵌套调用修复
+
+- **权限显示跟随后端**：状态栏和权限面板同步当前 Agent 的实际权限，其他客户端修改权限时也会更新，不再将前端默认的 Auto 当成后端状态。
+- **恢复不重放旧权限**：草稿权限只用于首次创建会话；切换、恢复和重连已有会话时读取持久化权限，不把旧的前端选择写回。初始化期间更新权限和迟到的状态响应也有回归保护。
+- **固定嵌套 CLI 入口**：daemon 内的 `vspi` 调用固定使用其启动 Node 和程序文件，默认连接该 daemon 的 `VSPI_HOME`；调用者显式指定的 `VSPI_HOME` 仍会保留。避免多份安装或项目本地依赖让诊断命令误执行旧版程序。
+
+后端权限模式为 `auto`、`manual`、`yolo`。当前界面的 Safe 与 Standard 都映射到 `manual`，不是两套不同的服务端权限；恢复已有会话时，`manual` 统一显示为 Standard。计划模式和显式拒绝规则仍然可以限制工具，不能将它们等同于权限模式自动降级。
+
+## 2.2.1 的目录扫描修复
 
 `ipc closed` 表示本机连接已经关闭，不是根因名称。此前记录中出现过目录扫描期间的 V8 堆内存耗尽。2.2.1 同时处理过量分配的路径和连接丢失后的前端恢复：
 
