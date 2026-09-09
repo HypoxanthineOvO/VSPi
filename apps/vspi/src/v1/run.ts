@@ -176,6 +176,7 @@ export async function runVspiTui(
 		process.off("SIGTERM", terminate);
 		process.off("SIGHUP", terminate);
 		if (!closing) await shutdown();
+		await backend.runtimeConnection.close();
 	}
 }
 

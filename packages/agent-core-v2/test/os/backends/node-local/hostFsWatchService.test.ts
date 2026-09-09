@@ -1,15 +1,16 @@
 import { readdirSync } from 'node:fs';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   resetUnexpectedErrorHandler,
   setUnexpectedErrorHandler,
 } from '#/_base/errors/unexpectedError';
 import { HostFsWatchService } from '#/os/backends/node-local/hostFsWatchService';
+import { subtreeWatchFilter } from '#/_base/utils/paths';
 import type {
   HostFsChange,
   IHostFsWatchHandle,
@@ -166,6 +167,102 @@ describe('host filesystem change notifications', () => {
     await handle.ready;
     return events;
   }
+
+  it('invalidates a named file without scanning unrelated sibling entries', async () => {
+    root = await mkdtemp(join(tmpdir(), 'watch-target-'));
+    const file = join(root, 'config.toml');
+    await writeFile(file, 'one');
+    await writeFile(join(root, 'unrelated.txt'), 'ignored');
+    const visited: string[] = [];
+    const events: HostFsChange[] = [];
+    const filter = subtreeWatchFilter(root, [file]);
+    handle = new HostFsWatchService().watch(root, {
+      signal: true, targets: [file],
+      ignored: (path) => { visited.push(path); return filter(path); },
+    });
+    handle.onDidChange((event) => events.push(event));
+    await handle.ready;
+
+    expect(visited).not.toContain(join(root, 'unrelated.txt'));
+    await writeFile(file, 'two');
+
+    await vi.waitFor(() => expect(events).toContainEqual({ path: root, action: 'modified', kind: 'directory' }));
+  });
+
+  it('follows a named file when its missing parent is created', async () => {
+    root = await mkdtemp(join(tmpdir(), 'watch-target-created-'));
+    const file = join(root, 'config', 'local.toml');
+    const events: HostFsChange[] = [];
+    handle = new HostFsWatchService().watch(root, {
+      signal: true, targets: [file], ignored: subtreeWatchFilter(root, [file]),
+    });
+    handle.onDidChange((event) => events.push(event));
+    await handle.ready;
+
+    await mkdir(dirname(file));
+    await writeFile(file, 'one');
+    await vi.waitFor(() => expect(events.length).toBeGreaterThan(0));
+    await wait(100);
+    events.length = 0;
+    await writeFile(file, 'two');
+
+    await vi.waitFor(() => expect(events.length).toBeGreaterThan(0));
+  });
+
+  it('rearms a named subtree after it is deleted and recreated', async () => {
+    root = await mkdtemp(join(tmpdir(), 'watch-target-recreated-'));
+    const target = join(root, 'skills');
+    await mkdir(target);
+    const events: HostFsChange[] = [];
+    handle = new HostFsWatchService().watch(root, {
+      signal: true, targets: [target], ignored: subtreeWatchFilter(root, [target]),
+    });
+    handle.onDidChange((event) => events.push(event));
+    await handle.ready;
+
+    await rm(target, { recursive: true });
+    await mkdir(target);
+    await vi.waitFor(() => expect(events.length).toBeGreaterThan(0));
+    await wait(100);
+    events.length = 0;
+    await writeFile(join(target, 'SKILL.md'), 'new skill');
+
+    await vi.waitFor(() => expect(events.length).toBeGreaterThan(0));
+  });
+
+  it('rearms named targets when the watched root is recreated', async () => {
+    root = await mkdtemp(join(tmpdir(), 'watch-root-recreated-'));
+    const watchedRoot = join(root, 'project');
+    await mkdir(watchedRoot);
+    const target = join(watchedRoot, 'config.toml');
+    const events: HostFsChange[] = [];
+    handle = new HostFsWatchService().watch(watchedRoot, {
+      signal: true, targets: [target], ignored: subtreeWatchFilter(watchedRoot, [target]),
+    });
+    handle.onDidChange((event) => events.push(event));
+    await handle.ready;
+
+    await rm(watchedRoot, { recursive: true });
+    await wait(100);
+    await mkdir(watchedRoot);
+    await writeFile(target, 'one');
+    await wait(100);
+    events.length = 0;
+    await writeFile(target, 'two');
+
+    await vi.waitFor(() => expect(events.length).toBeGreaterThan(0));
+  });
+
+  it('settles target watch readiness when disposed before ignore rules load', async () => {
+    root = await mkdtemp(join(tmpdir(), 'watch-target-dispose-'));
+    handle = new HostFsWatchService().watch(root, {
+      signal: true, targets: [join(root, 'config.toml')], ignoredReady: new Promise<void>(() => {}),
+    });
+
+    handle.dispose();
+
+    await expect(handle.ready).resolves.toBeUndefined();
+  });
 
   it('emits a coarse root invalidation when a native signal path changes', () => {
     const rig = signalRig();

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, normalize } from 'pathe';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HostFileSystem } from '#/os/backends/node-local/hostFsService';
 import type { IHostFileSystem } from '#/os/interface/hostFileSystem';
@@ -30,6 +30,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await rm(homeDir, { recursive: true, force: true });
   await rm(workDir, { recursive: true, force: true });
   await Promise.all(extraDirs.map((dir) => rm(dir, { recursive: true, force: true })));
@@ -212,6 +213,40 @@ describe('prepareSystemPromptContext AGENTS.md size warning', () => {
     const result = await prepareSystemPromptContext({ fs, homeDir }, workDir, brandHome);
 
     expect(result.agentsMdWarning).toBeUndefined();
+  });
+});
+
+describe('prepareSystemPromptContext bounded directory listings', () => {
+  it('reports a lower bound when the root directory scan is truncated', async () => {
+    vi.spyOn(fs, 'readdirCapped').mockResolvedValue({
+      entries: Array.from({ length: 32 }, (_, index) => ({
+        name: `file-${String(index).padStart(2, '0')}.txt`, isFile: true, isDirectory: false,
+      })),
+      truncated: true,
+    });
+
+    const result = await prepareSystemPromptContext({ fs, homeDir }, workDir);
+
+    expect(result.cwdListing).toContain('at least 3 more entries (directory scan limit reached)');
+    expect(result.cwdListing?.split('\n')).toHaveLength(31);
+  });
+
+  it('reports a lower bound when a child directory scan is truncated', async () => {
+    await mkdir(join(workDir, 'child'));
+    const readDirectory = fs.readdirCapped.bind(fs);
+    vi.spyOn(fs, 'readdirCapped').mockImplementation((path, limit) => path === join(workDir, 'child')
+      ? Promise.resolve({
+        entries: Array.from({ length: 12 }, (_, index) => ({
+          name: `file-${index}.txt`, isFile: true, isDirectory: false,
+        })),
+        truncated: true,
+      })
+      : readDirectory(path, limit));
+
+    const result = await prepareSystemPromptContext({ fs, homeDir }, workDir);
+
+    expect(result.cwdListing).toContain('child/');
+    expect(result.cwdListing).toContain('at least 3 more (directory scan limit reached)');
   });
 });
 

@@ -1,3 +1,5 @@
+import { isAbsolute, relative } from 'pathe';
+
 import { Disposable } from '#/_base/di/lifecycle';
 import { Emitter, type Event } from '#/_base/event';
 import { ILogService } from '#/_base/log/log';
@@ -81,13 +83,30 @@ export class WorkspaceInstructionsService
       const changed =
         next.agentsMd !== this.current.agentsMd ||
         next.agentsMdWarning !== this.current.agentsMdWarning;
+      const previousPaths = new Set(this.current.agentsMdPaths ?? []);
+      const nextPaths = new Set(next.agentsMdPaths ?? []);
+      const changes = new Map<string, HostFsChange>();
+      for (const change of this.pendingChanges.values()) {
+        if (change.kind !== 'directory') {
+          changes.set(change.path, change);
+          continue;
+        }
+        for (const path of new Set([...previousPaths, ...nextPaths])) {
+          const rel = relative(change.path, path);
+          if (isAbsolute(rel) || rel === '..' || rel.startsWith('../')) continue;
+          changes.set(path, {
+            path,
+            action: !nextPaths.has(path) ? 'deleted' : previousPaths.has(path) ? 'modified' : 'created',
+            kind: 'file',
+          });
+        }
+      }
       this.current = next;
-      const changes = [...this.pendingChanges.values()];
       this.pendingChanges.clear();
       const loaded = this.loaded;
       this.loaded = true;
       if (changed && loaded) {
-        this.onDidChangeEmitter.fire(changes);
+        this.onDidChangeEmitter.fire([...changes.values()]);
       }
     });
     this.reloadTail = tail;
@@ -123,6 +142,8 @@ export class WorkspaceInstructionsService
     for (const { root, candidates } of plan) {
       try {
         const handle = this.fsWatch.watch(root, {
+          targets: candidates,
+          signal: true,
           ignored: subtreeWatchFilter(root, candidates),
         });
         this._register(handle);
@@ -142,4 +163,3 @@ export class WorkspaceInstructionsService
     }
   }
 }
-

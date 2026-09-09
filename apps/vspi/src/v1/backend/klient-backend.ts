@@ -1163,22 +1163,39 @@ export class KlientChatBackend implements ChatBackend {
 		try {
 			for (let attempt = 1; attempt <= delays.length; attempt += 1) {
 				if (this.disposed) return;
+				this.events?.onRuntimeConnectionState?.("reconnecting", attempt);
 				await delay(delays[attempt - 1]!);
 				if (this.disposed) return;
-				this.events?.onRuntimeConnectionState?.("reconnecting", attempt);
 				try {
 					const connection = await this.reconnectRuntime!();
+					if (this.disposed) {
+						await connection.close().catch(() => {});
+						return;
+					}
 					for (const subscription of this.globalSubscriptions) subscription.dispose();
 					this.globalSubscriptions = [];
 					this.clearBindings();
 					await this.connection.close().catch(() => {});
+					if (this.disposed) {
+						await connection.close().catch(() => {});
+						return;
+					}
 					this.connection = connection;
-					this.connectionFailed = false;
+					this.providerAvailability.clear();
+					this.modelOptionsPromise = undefined;
 					this.submissionEpoch += 1;
 					this.subscribeGlobalCatalog();
 					void this.refreshRelayCatalogs();
-					if (this.meta) await this.bindSession(this.meta, "resume");
+					if (this.meta) await this.switchSession(this.meta.id);
 					else await this.prepareDraft("startup");
+					if (this.disposed) {
+						this.clearBindings();
+						for (const subscription of this.globalSubscriptions) subscription.dispose();
+						this.globalSubscriptions = [];
+						await connection.close().catch(() => {});
+						return;
+					}
+					this.connectionFailed = false;
 					this.events?.onRuntimeConnectionState?.("reconnected", attempt);
 					return;
 				} catch {

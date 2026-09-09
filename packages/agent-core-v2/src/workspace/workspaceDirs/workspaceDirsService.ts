@@ -164,6 +164,8 @@ export class WorkspaceDirsService extends Disposable implements IWorkspaceDirs {
   private watchLocalToml(): void {
     try {
       const handle = this.fsWatch.watch(this.projectRoot, {
+        targets: [this.configPath],
+        signal: true,
         recursive: true,
         ignored: subtreeWatchFilter(this.projectRoot, [this.configPath]),
       });
@@ -195,4 +197,3 @@ export class WorkspaceDirsService extends Disposable implements IWorkspaceDirs {
 function sameStringList(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
-

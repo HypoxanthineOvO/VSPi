@@ -1,12 +1,15 @@
 {
   "name": "vspi",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "private": true,
   "description": "VSPi client for the VSP agent runtime.",
   "license": "MIT",
   "type": "module",
   "bin": {
     "vspi": "dist/main.mjs"
+  },
+  "engines": {
+    "node": ">=22.19.0"
   },
   "scripts": {
     "build": "tsdown",

@@ -1,108 +1,173 @@
 # VSPi
 
-VSPi 是一个 daemon 驱动的终端 AI 编码 agent：常驻运行时承载多个并行会话与后台任务，TUI / 非交互执行 / Web 界面共享同一套会话与配置。它衍生自 Kimi Code（`kimi-upstream` 远端保持同步），在此之上按我们自己的需求演进。
+**把会话和后台工作留在运行时，把交互留在终端。**
 
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE) · [Releases](https://github.com/HypoxanthineOvO/VSPi/releases)
+VSPi 是基于 Kimi Code 引擎演进的终端编码助手。它用独立的常驻进程（daemon）承载会话、模型配置与任务，终端界面通过本机 IPC 接入：可以开始新会话、续接已有工作，也可以用非交互命令接入脚本。
 
-## 安装
+[发布版本](https://github.com/HypoxanthineOvO/VSPi/releases) · [许可证](LICENSE) · [仓库开发约定](AGENTS.md)
 
-需要 Node.js ≥ 24.15.0。
+## 安装与首次使用
+
+**运行安装包：Node.js ≥ 22.19.0。** 建议使用 Node.js 22 或 24 的最新补丁版本。安装包与源码构建的版本要求不同，开发要求见下文。
+
+安装 2.2.1：
 
 ```sh
-VERSION=2.2.0
-npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v${VERSION}/vspi-${VERSION}.tgz"
+npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.2.1/vspi-2.2.1.tgz"
+vspi --version
 ```
+
+进入项目目录，在交互式终端中选择服务商（Provider）、配置凭据与默认模型，然后启动：
 
 ```sh
-vspi            # 交互式 TUI
-vspi update     # 自更新到最新发布版
+vspi init
+vspi
 ```
 
-## 架构：daemon 承载一切
+已有配置时可以直接运行 `vspi`。之后使用 `vspi config` 调整 Provider，用 `vspi login <provider>` 登录账号或配置 API Key；界面内也提供 `/providers`、`/login`、`/model` 和 `/effort`。
 
-TUI 不是唯一入口，而是 daemon 的一个前端。会话、任务、模型目录都活在 `vspi daemon` 里，终端退出不打断工作：
+升级使用 `vspi update`，安装完成后重新启动客户端。**更新客户端不会自动终止旧 daemon 的任务**；不同版本、构建或 Node 版本的客户端不会静默接管不兼容的 daemon。遇到身份不匹配时，先确认原任务已结束，再显式停止旧 daemon；也可以用独立 `VSPI_HOME` 并存测试新版本。
 
-- **多会话并行** —— `vspi continue` / `vspi resume` 无损续接；一个工作区多个会话互相独立。
-- **后台任务** —— 运行中的任务可 `Ctrl+B` 转后台，退出 TUI 后由 daemon 继续执行，随时接管回来。
-- **非交互执行** —— `vspi exec "<prompt>"` 单发执行，`resume` 续接既有会话，适合脚本与流水线。
-- **只读检查** —— `vspi inspect [paths|models|session <id>]` 不惊动运行中的任务。
-- **Web runtime** —— `vspi web` 输出本机 Web 界面地址，浏览器里继续同一个会话。
+## 日常工作流
 
-### 可靠性（2.2.0）
+### 会话与后台任务
 
-daemon 与前端之间走本机 IPC（token 鉴权 + 归属校验）。针对历史上 daemon 崩溃导致前端卡死的问题，2.2.0 做了三层加固：
+```sh
+vspi                   # 新的交互会话，首次提交时创建会话记录
+vspi continue          # 继续当前工作区最近的会话
+vspi resume            # 打开会话选择界面
+```
 
-- **目录扫描限额**：工作区文件列举改为流式读取（`opendir`），单目录 1 万条、整次遍历 20 万节点封顶，超限目录跳过并标记截断——彻底消除"巨型目录把 daemon 撑爆（OOM）"这一类崩溃源。
-- **断线自动恢复**：TUI 遇到 `ipc closed` 时按退避策略自动重连；daemon 已死则原地重新拉起（版本身份校验通过后无缝恢复当前会话），连续 5 次失败才提示手动重启。
-- **崩溃取证**：daemon 带 `--report-on-fatalerror` 与近堆顶 heap snapshot 诊断参数启动，报告落在 `~/.vspi/server/diagnostics/`；发现前次异常退出时会在 runtime 日志记录 `runtime.stale-state-removed` 事件。
+终端是运行时的前端，不是任务进程本身。在 TUI 中，`/quit` 默认断开前端，不取消正在执行的工作；`/cancel-and-exit` 才是取消并退出。`Ctrl+B` 可将当前支持的前台任务转到后台。
 
-> 传输层选型说明：klient 的 IPC 通道保持"断开即终态"的简单语义，可恢复连接由前端连接管理层负责（即上面的自动恢复）。跨机器访问走 daemon 的 REST/WS 面（`vspi web`）。
+三个界面分工不同：
 
-## 长程自治
+| 入口 | 用途 |
+| --- | --- |
+| `/sessions` | 浏览、切换会话与分支 |
+| `/agents` | 浏览 Subagent 的状态与按时间排列的子对话；不展示 thinking |
+| `/tasks` | 集中查看 Agent jobs、进程与问题，不展开子对话 |
 
-- **`/goal` 持久目标** —— 目标契约固化（轮数 / token 预算 / 验收约束），模型只能通过 checkpoint / block / complete 工具汇报进度，不可自行宣告完成；支持 pause / resume / accept。
-- **Tower 任务** —— 多任务任务面板，任务状态实时投影到 TUI。
-- **`/cron` 定时任务** —— 定时触发 prompt，一次性和周期任务统一管理。
-- **Subagent 模型池** —— 子 agent 可配置独立模型与超时，`/agents` 面板统一查看。
+运行中的 Subagent 状态显示在停靠区和 `/agents` 中，不向主对话重复插入活动卡片。子任务可配置独立模型；模型可用性与支持的思考档位由当前 Provider 目录决定。
 
-## VSPLab 中转站生态
+### 计划、目标与定时提示
 
-VSPi 与 VSPLab 复合中转站深度协同（也可完全脱离它使用任意兼容端点）：
+- `/plan` 查看当前计划；`/goal` 创建、查看或续跑持久目标，并提供暂停、恢复和接受结果的操作。
+- `/cron` 查看、创建或取消定时提示。
+- `/skills` 管理、安装或导入技能；安装包附带 `vspi-self`，便于在授权范围内读取自身配置与诊断信息。
+- `/import` 导入 Codex 或 Claude Code 的外部历史。它是会话转换入口，不意味着外部工具的运行状态也能继续执行。
 
-- **远程模型目录** —— 启动时拉取中转站的 `/vsp/models` 静态目录（[Golden 标准数据](ops/vsplab/model-catalog.json)，逐模型对照官方文档核实），新模型上线不需要发新版客户端；每 6 小时自动刷新。
-- **effortLevels 契约** —— 中转站声明的思考档位即权威：VSPi 不再用本地内置目录做交集。例如 GLM-5.3 如实呈现 `low/high/max` 三档（默认 `max`），Claude 系呈现 `low…max`（无 `minimal`）。
-- **多家族协议路由** —— 同一端点后按模型家族选择 OpenAI / Anthropic / Gemini 协议，内置 DeepSeek、Moonshot/Kimi、智谱、MiniMax、小米 MiMo 等国内外主流 Provider。
-- **自定义中转站向导** —— `vspi config` 三分钟接入任意 OpenAI 兼容端点：名称 + Base URL + API Key，自动发现模型列表。
+### 终端交互
 
-## TUI 体验
+常规模式使用终端原生滚动历史，全屏模式提供应用内滚动；可用 `/tui` 切换。输入区支持多行文本，生成时可以插话改向（steer）或排队追问（follow-up）。
 
-- **Question 卡片** —— 模型主动提问时以结构化选项卡片呈现，选择即回填。
-- **Steer 与追问队列** —— 生成中途可以直接插话改向（steer）或排队追问（follow-up），不丢上下文。
-- **状态栏** —— 模型 / effort / 上下文占用、输出速度、缓存命中率、累计费用一目了然。
-- **Todo / Plan 双层面板** —— 任务清单与计划步骤分层投影，`/tasks`、`/goal` 面板随时唤出。
-- **`/copy`** —— 一键复制最近一条正式回复（X11 / Wayland / macOS 自适配）。
+| 命令 | 用途 |
+| --- | --- |
+| `/copy` | 复制最近一条已完成的正式回复 |
+| `/compact` | 压缩当前上下文 |
+| `/usage` | 查看用量信息 |
+| `/policy` | 查看或切换权限策略 |
+| `/settings`、`/theme`、`/thinking` | 调整界面、主题和思考内容展示 |
+| `/reload` | 重新启动前端并续接当前会话 |
 
-## 会话资产
+自动化能力不等于无条件授权。执行前应确认工作目录、权限策略与模型配置，尤其是涉及文件修改、进程和外部服务的任务。
 
-- **`/import` 会话导入** —— 把 Codex / Claude Code 的历史会话转换为原生 VSPi 会话（保留可见对话与压缩点，丢弃工具噪音，凭据脱敏）。
-- **`vspi-self` 内置 skill** —— 模型可自助读取自身配置与诊断信息，配合用户完成自配置、自调试。
-- **独立 HOME** —— `VSPI_HOME` 环境变量隔离整套配置与会话存储，多版本并存互不干扰。
+### 脚本与非交互执行
 
-## 配置速览
+```sh
+vspi exec "说明当前仓库的测试入口"
+vspi exec --output json "总结当前改动"
+vspi exec resume latest "继续检查遗漏的测试"
+vspi exec --help
+```
 
-配置文件 `~/.vspi/config.toml`（TOML，改后重启生效）：
+`exec` 支持选择模型、思考档位、工作目录和会话，以及 `text`、`json`、`jsonl` 输出。它不提供交互式审批界面：需要人工批准、回答问题或调用交互式用户工具的场景，不应期待它像 TUI 一样等待输入。
+
+## 模型与配置
+
+VSPi 支持内置 Provider 和自定义兼容端点。VSPLab 中转站集成可补充远程模型目录，让客户端读取模型能力、上下文大小、价格与思考档位；可用模型仍取决于端点和账号权限，不能仅凭目录条目保证调用成功。
+
+中转站明确声明的 `effortLevels` 会作为该模型的思考档位依据，不再被本地内置目录错误地缩减。仓库中的[模型目录快照](ops/vsplab/model-catalog.json)是可审阅的数据，而不是永不变化的模型能力保证。
+
+配置默认位于 `~/.vspi/config.toml`。用 `vspi config path` 查询实际路径；设置 `VSPI_HOME` 可隔离配置、会话与 daemon。示意配置如下，模型 ID 和地址需要换成实际可用的值：
 
 ```toml
-default_model = "vsplab/glm-5.3"
+default_model = "example/YOUR_MODEL_ID"
 
-[providers.vsplab]
-base_url = "https://api.vsplab.cn/v1"
+[providers.example]
 type = "openai"
+base_url = "https://api.example.com/v1"
 
-[models."vsplab/glm-5.3"]
-provider = "vsplab"
-model = "glm-5.3"
-max_context_size = 1000000
+[models."example/YOUR_MODEL_ID"]
+provider = "example"
+model = "YOUR_MODEL_ID"
 ```
 
-凭据用 `vspi login <provider>` 交互配置；`vspi config` 查看分层配置与诊断。常用命令面：`vspi exec / inspect / web / daemon <start|status|stop|logs> / update`。
-
-## 开发
+通过 `vspi login example` 配置凭据，不要把真实密钥提交到仓库。使用与模型匹配的协议和目录参数，不要随意填写上下文容量或价格。
 
 ```sh
-pnpm install
-pnpm -C apps/vspi test     # 前端测试
-pnpm -C packages/agent-core-v2 test
-pnpm run lint
+vspi config path
+vspi config inspect defaultModel
+vspi config diagnostics
+vspi config reload
 ```
 
-- `apps/vspi` —— VSPi 前端（TUI、命令注册、目录投影），见 `apps/vspi/AGENTS.md`。
-- `packages/vsp-runtime` —— daemon 生命周期、租约、连接与配置迁移。
-- `packages/agent-core-v2` / `kap-server` / `klient` —— DI × Scope agent 引擎、服务面与客户端 SDK。
-- `ops/vsplab/` —— 中转站 Golden 模型目录与部署说明。
+`inspect` 和 `diagnostics` 只读连接已有 daemon；`reload` 才会重新读取磁盘配置。命令行配置 section 使用 `defaultModel` 等 Core 名称，TOML 使用 `default_model` 等磁盘字段名。`config get/inspect` 的输出会隐藏凭据，不要把脱敏后的整段值写回；修改少数字段优先使用 `config patch`，完整语法见 `vspi config --help`。
 
-发布走 tag 触发（`v*` → GitHub Release），与上游 Kimi Code 的变更流互不干扰。
+## 2.2.1 的可靠性修复
+
+`ipc closed` 表示本机连接已经关闭，不是根因名称。此前记录中出现过目录扫描期间的 V8 堆内存耗尽。2.2.1 同时处理过量分配的路径和连接丢失后的前端恢复：
+
+- **有界目录读取**：目录预览不再先加载整个目录再截取少量显示项。工作区列举和预览的单目录读取上限为 1 万项，多层列表与遍历共享 20 万节点预算；结果超限会明确标记截断，预览不会把数量下界冒充精确总数。
+- **定向监听**：指令、MCP 配置和技能等已知候选路径通过浅层父目录监听接入，避免多个监听器为少量配置文件反复枚举整个工作区根目录；保留目录删除重建与指令文件变更提醒。
+- **恢复原会话**：交互前端按退避策略重连，必要时重新启动已死亡的 daemon，再恢复原持久化会话。连续 5 次失败后提示人工处理；退出期间迟到的连接会被关闭。
+- **输入区靠底**：修复常规模式下短内容、窗口放大和多行输入缩短时输入区偏到上方的问题。
+
+验证使用了含 20 万个长文件名的隔离目录：旧预览代码在 64 MiB 堆限制下 OOM，修复后在 Node 22、24 下各完成 30 轮；真实安装包在 256 MiB 堆限制下完成会话创建和 10 轮关闭/恢复，测试期间工作区根目录的全量 `readdir` 调用数为 0。堆上限与整个进程的 RSS 是不同指标。
+
+**这些验证覆盖本轮复现的扫描与初始化路径，不代表所有 OOM 都已消除。** 恢复连接不会自动重放崩溃时中断的提示或工具调用；需要判断任务停在哪里，再决定如何继续。
+
+### 诊断与运行边界
+
+```sh
+vspi inspect paths
+vspi inspect models
+vspi daemon status
+vspi daemon logs
+```
+
+`inspect` 不会启动、重启 daemon 或恢复会话。`daemon logs` 输出日志文件路径；运行时诊断文件位于对应 `VSPI_HOME` 的 `server/diagnostics/`。日志、堆快照和诊断报告可能包含敏感信息，分享前需要检查与脱敏。
+
+`vspi daemon stop` 是显式停止运行时的操作，会影响它承载的工作，请勿把它当作无副作用的排查命令。
+
+`vspi web` 当前输出本机 runtime 地址。**VSPi 安装包不附带独立浏览器前端，也不自动开放远程访问**；不要把这个命令等同于部署完整 Web UI 或公网服务。
+
+## 从源码开发
+
+源码构建需要 **Node.js ≥ 24.15.0、pnpm 10.33.0**。先安装依赖，再使用 VSPi 自己的入口：
+
+```sh
+pnpm install --frozen-lockfile
+pnpm --filter vspi build
+node apps/vspi/dist/main.mjs --help
+pnpm --filter vspi test
+pnpm run check:vspi
+pnpm --filter vspi package:pack
+pnpm --filter vspi package:verify
+```
+
+当前推荐先构建，再通过 `node apps/vspi/dist/main.mjs` 使用与安装包一致的入口。直接执行 TypeScript 的现有 `dev` 脚本仍有跨包装饰器转换限制，不作为本次发行验证通过的开发入口。调试时使用独立 `VSPI_HOME`，不要反复重启承载日常任务的 daemon。
+
+| 目录 | 职责 |
+| --- | --- |
+| `apps/vspi/src/v1` | TUI、命令、面板与 Klient 数据投影 |
+| `packages/vsp-runtime` | daemon 生命周期、租约、连接与配置迁移 |
+| `packages/agent-core-v2` | 共享 agent 引擎与工作区能力 |
+| `packages/kap-server`、`packages/klient` | 服务端接口与客户端 SDK |
+| `packages/pi-tui` | 终端组件与渲染基础 |
+
+VSPi 按独立版本 tag 发布到 GitHub Releases，不覆盖已发布的同名 tag 或资产。浏览器前端源码不在本仓库；修改 VSPi 的终端界面应从 `apps/vspi` 开始，而不是 `apps/kimi-code`。
 
 ## 致谢
 
-VSPi 衍生自 [Moonshot AI 的 Kimi Code](https://github.com/MoonshotAI/kimi-code) 并持续同步上游引擎改进；产品形态、中转站生态与自治能力由 VSPi 独立演进。TUI 基座来自 [`pi-tui`](https://github.com/earendil-works/pi-mono/tree/main/packages/tui)，感谢上游作者。
+VSPi 衍生自 [Moonshot AI 的 Kimi Code](https://github.com/MoonshotAI/kimi-code)，并使用来自 [pi-mono 的终端组件](https://github.com/earendil-works/pi-mono/tree/main/packages/tui)。感谢上游项目与贡献者。

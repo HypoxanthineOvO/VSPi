@@ -1,15 +1,22 @@
 /**
  * Scenario: the daemon-backed build preserves the accepted VSPi presentation primitives.
- * Responsibilities: splash identity, user surface width, assistant markdown, status chrome.
- * Wiring: original VSPi renderers with literal messages and no runtime stubs.
+ * Responsibilities: splash identity, surface width, markdown, status, composer anchoring, recovery notices.
+ * Wiring: real VSPi renderers and xterm terminal emulation; a backend boundary fixture for runtime events.
  * Run: pnpm -C apps/vspi test
  */
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   CombinedAutocompleteProvider,
   stripTerminalSequences,
   visibleWidth,
 } from "@moonshot-ai/pi-tui";
 import { describe, expect, it, vi } from "vitest";
+import { VirtualTerminal } from "../../../packages/pi-tui/test/virtual-terminal.js";
+import { AttachmentService } from "../src/v1/attachments/service.js";
+import type { ChatBackend, ChatBackendEvents } from "../src/v1/backend/types.js";
+import { ScrollbackTUI } from "../src/v1/ui/scrollback-terminal.js";
 import type {
 	AgentRunSnapshot,
 	AgentSnapshot,
@@ -90,6 +97,106 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		LANG: "zh_CN.UTF-8",
 	});
 	const theme = createTheme(capabilities, "VSPi Dark");
+
+	it("anchors a short regular-mode composer near the bottom of the terminal", async () => {
+		const { terminal, tui, app } = renderFixture();
+		app.composer.setText("COMPOSER_ANCHOR");
+		tui.start();
+		try {
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getCursorPosition().y).toBeGreaterThanOrEqual(18);
+				expect(terminal.getViewport()[terminal.getCursorPosition().y]).toContain("COMPOSER_ANCHOR");
+			});
+		} finally {
+			tui.stop();
+			await app.dispose();
+		}
+	});
+
+	it("keeps the composer anchored when the terminal grows", async () => {
+		const { terminal, tui, app } = renderFixture();
+		app.composer.setText("RESIZED_COMPOSER");
+		tui.start();
+		try {
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getViewport().join("\n")).toContain("RESIZED_COMPOSER");
+			});
+			terminal.resize(100, 40);
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getCursorPosition().y).toBeGreaterThanOrEqual(34);
+				expect(terminal.getViewport()[terminal.getCursorPosition().y]).toContain("RESIZED_COMPOSER");
+			});
+		} finally {
+			tui.stop();
+			await app.dispose();
+		}
+	});
+
+	it("returns a shortened multiline composer to the bottom", async () => {
+		const { terminal, tui, app } = renderFixture();
+		app.composer.setText(Array.from({ length: 12 }, (_, index) => `INPUT_${index}`).join("\n"));
+		tui.start();
+		try {
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getViewport().join("\n")).toContain("INPUT_11");
+			});
+			app.composer.setText("SHORT_INPUT");
+			tui.requestRender();
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getCursorPosition().y).toBeGreaterThanOrEqual(18);
+				expect(terminal.getViewport()[terminal.getCursorPosition().y]).toContain("SHORT_INPUT");
+				expect(terminal.getViewport().join("\n")).not.toContain("INPUT_11");
+			});
+		} finally {
+			tui.stop();
+			await app.dispose();
+		}
+	});
+
+	it.each([
+		{ state: "reconnecting" as const, expected: "正在自动恢复" },
+		{ state: "reconnected" as const, expected: "运行时连接已恢复" },
+		{ state: "failed" as const, expected: "自动恢复失败" },
+	])("preserves the $state notice when a stale IPC request rejects", async ({ state, expected }) => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-notice-test-"));
+		const { app, events } = renderFixture(home);
+		try {
+			await app.start();
+			events().onRuntimeConnectionState?.(state, 1);
+			events().onSessionError?.(new Error("ipc closed"));
+			const output = app.render(160).map(stripTerminalSequences).join("\n");
+			expect(output).toContain(expected);
+			if (state !== "failed") expect(output).not.toContain("请退出并重新启动");
+		} finally {
+			await app.dispose();
+			await rm(home, { recursive: true, force: true });
+		}
+	});
+
+	function renderFixture(home?: string) {
+		const terminal = new VirtualTerminal(80, 24);
+		const tui = new ScrollbackTUI(terminal);
+		let events: ChatBackendEvents;
+		const backend = {
+			modelLabel: "Example",
+			start: async (listener: ChatBackendEvents) => { events = listener; },
+			dispose: async () => {},
+		} as ChatBackend;
+		const app = new VspiApp(tui, theme, backend, {
+			cwd: "/workspace",
+			settings: { ...DEFAULT_SETTINGS, summarizeSessionTitleOnExit: false },
+			attachments: new AttachmentService("layout-test", theme, { home }),
+			onExit: () => {},
+		});
+		tui.addChild(app);
+		tui.setFocus(app);
+		return { terminal, tui, app, events: () => events };
+	}
 
 	it("offers Goal argument candidates after /goal ", async () => {
 		const empty = await GOAL_SLASH_COMMAND.getArgumentCompletions?.("");

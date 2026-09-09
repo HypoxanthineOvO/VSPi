@@ -1382,6 +1382,24 @@ describe('WorkspaceFsService.list', () => {
     ).rejects.toMatchObject({ code: 'fs.path_escapes' });
   });
 
+  it('bounds combined child listings when a wide tree exceeds the traversal budget', async () => {
+    const files: Record<string, string> = {};
+    for (let directory = 0; directory < 21; directory += 1) {
+      for (let file = 0; file < 10_000; file += 1) files[`dir-${directory}/file-${file}.txt`] = '';
+    }
+    const fs = makeSession(files, emptyHandler);
+
+    const result = await fs.list({
+      path: '.', depth: 2, limit: 1000, show_hidden: false,
+      follow_gitignore: false, sort: 'name_asc', include_git_status: false,
+    });
+
+    expect(result.truncated).toBe(true);
+    expect(result.items).toHaveLength(21);
+    const childCount = Object.values(result.children_by_path ?? {}).reduce((sum, entries) => sum + entries.length, 0);
+    expect(childCount).toBe(199_979);
+  });
+
   it('marks the listing truncated when a directory exceeds the readdir cap', async () => {
     const files: Record<string, string> = {};
     for (let i = 0; i < 10_050; i += 1) files[`f${i}.txt`] = '';

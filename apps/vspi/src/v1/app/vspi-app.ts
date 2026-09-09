@@ -391,6 +391,7 @@ export class VspiApp implements Component, Focusable {
 	private startupSurface: string[] = [];
 	private backendSessionReady = false;
 	private runtimeSurfacePromise: Promise<void> | undefined;
+	private runtimeConnectionState: "reconnecting" | "reconnected" | "failed" | undefined;
 	private sessionEpoch = 0;
 	private sessionTransition = false;
 	private sessionResetObserved = false;
@@ -657,6 +658,7 @@ export class VspiApp implements Component, Focusable {
 						.catch((error) => this.handleRuntimeError(error));
 				},
 				onRuntimeConnectionState: (state, attempt) => {
+					this.runtimeConnectionState = state;
 					if (state === "reconnecting")
 						this.showNotice(
 							`运行时连接已断开，正在自动恢复（第 ${String(attempt)} 次）…`,
@@ -867,9 +869,10 @@ export class VspiApp implements Component, Focusable {
 	}
 
 	private handleRuntimeError(error: unknown): void {
+		const message = error instanceof Error ? error.message : "未知错误";
+		if (message.includes("ipc closed") && this.runtimeConnectionState !== undefined) return;
 		this.compaction = undefined;
 		this.setRunActive(false);
-		const message = error instanceof Error ? error.message : "未知错误";
 		this.showNotice(
 			message.includes("ipc closed")
 				? "运行时连接已断开，请退出并重新启动 VSPi"
@@ -1285,7 +1288,13 @@ export class VspiApp implements Component, Focusable {
 
 	render(width: number): string[] {
 		const sections = this.buildRenderSections(width);
-		return [...sections.body, ...sections.dock];
+		const rows = Number.isFinite(this.tui.terminal.rows)
+			? this.tui.terminal.rows
+			: 24;
+		const padding = this.tui.mode === "regular"
+			? Math.max(0, Math.floor(rows) - sections.body.length - sections.dock.length)
+			: 0;
+		return [...sections.body, ...new Array<string>(padding).fill(""), ...sections.dock];
 	}
 
 	private renderFullscreenBody(width: number): string[] {

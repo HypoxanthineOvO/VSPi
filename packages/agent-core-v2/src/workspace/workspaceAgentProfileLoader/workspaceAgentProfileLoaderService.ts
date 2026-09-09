@@ -66,6 +66,8 @@ export class WorkspaceAgentProfileLoaderService
       (message) => this.log.warn(message),
     );
     const handle = this.fsWatch.watch(projectRoot, {
+      targets: candidates,
+      signal: true,
       ignored: subtreeWatchFilter(projectRoot, candidates),
     });
     this._register(handle);
@@ -80,4 +82,3 @@ export class WorkspaceAgentProfileLoaderService
     );
   }
 }
-

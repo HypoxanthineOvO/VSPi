@@ -49,6 +49,19 @@ jobs:
           printf '%s  %s\n%s  vspi-latest.tgz\n' "$CHECKSUM" "$ASSET" "$CHECKSUM" > "$RUNNER_TEMP/SHA256SUMS"
           echo "VSPI_ASSET_PATH=$ASSET_PATH" >> "$GITHUB_ENV"
 
+      - name: Setup minimum supported VSPi runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22.19.0'
+
+      - name: Verify the same tarball on Node.js 22
+        run: node apps/vspi/scripts/verify-package.mjs "$VSPI_ASSET_PATH"
+
+      - name: Restore build Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
       - name: Publish the GitHub release
         env:
           GITHUB_TOKEN: ${{ github.token }}
