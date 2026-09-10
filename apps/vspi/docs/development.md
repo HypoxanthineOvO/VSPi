@@ -78,7 +78,7 @@ vspi update
 
 ### 发布
 
-全部通过后，在 Linux 工作机生成校验和并发布（`GITHUB_TOKEN` 需要 `contents:write` 权限的 PAT）：
+全部通过后，在 Linux 工作机生成校验和并发布（`GITHUB_TOKEN` 需要 `contents:write` 权限的 PAT；本机网络需代理出网时，加 `NODE_USE_ENV_PROXY=1` 让 Node 的 fetch 走 `http_proxy`/`https_proxy`）：
 
 ```sh
 VERSION=$(node -p 'require("./apps/vspi/package.json").version')
@@ -86,7 +86,7 @@ cd apps/vspi/.tmp/package-artifacts
 cp "vspi-${VERSION}.tgz" vspi-latest.tgz
 sha256sum "vspi-${VERSION}.tgz" vspi-latest.tgz > SHA256SUMS
 cd -
-GITHUB_REF_NAME="v${VERSION}" \
+NODE_USE_ENV_PROXY=1 GITHUB_REF_NAME="v${VERSION}" \
 GITHUB_API_URL="https://api.github.com" \
 GITHUB_REPOSITORY="HypoxanthineOvO/VSPi" \
 GITHUB_TOKEN="<PAT>" \
