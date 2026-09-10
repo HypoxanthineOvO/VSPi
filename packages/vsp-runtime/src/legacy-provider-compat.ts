@@ -141,6 +141,25 @@ export async function migrateLegacyVspiProviders(
     diagnostics.push(`model ${alias}: repaired GPT context and output limits`);
   }
 
+  for (const [providerId, value] of Object.entries(providers)) {
+    const provider = record(value);
+    if (provider === undefined) continue;
+    const baseUrl = rewriteVsplabBaseUrl(stringValue(provider['base_url']));
+    if (baseUrl === undefined || baseUrl === provider['base_url']) continue;
+    providers[providerId] = { ...provider, base_url: baseUrl };
+    providerCount += 1;
+    diagnostics.push(`provider ${providerId}: base_url migrated from api.vsplab.cn to api.vsplab.tech`);
+  }
+  for (const [alias, value] of Object.entries(models)) {
+    const model = record(value);
+    if (model === undefined) continue;
+    const baseUrl = rewriteVsplabBaseUrl(stringValue(model['base_url']));
+    if (baseUrl === undefined || baseUrl === model['base_url']) continue;
+    models[alias] = { ...model, base_url: baseUrl };
+    modelCount += 1;
+    diagnostics.push(`model ${alias}: base_url migrated from api.vsplab.cn to api.vsplab.tech`);
+  }
+
   if (Object.keys(providers).length > 0) config['providers'] = providers;
   else delete config['providers'];
   if (Object.keys(models).length > 0) config['models'] = models;
@@ -246,6 +265,18 @@ function credentialMap(value: unknown): Map<string, LegacyCredential> {
   }));
 }
 
+function rewriteVsplabBaseUrl(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.hostname !== 'api.vsplab.cn') return value;
+    url.hostname = 'api.vsplab.tech';
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
 function toProviderConfig(
   provider: LegacyProvider,
   credential: LegacyCredential | undefined,
@@ -264,7 +295,7 @@ function toProviderConfig(
     : resolveLegacyApiKey(provider.apiKey, env);
   return compact({
     type: protocol,
-    base_url: stringValue(provider.baseUrl) ?? stringValue(firstModel?.baseUrl),
+    base_url: rewriteVsplabBaseUrl(stringValue(provider.baseUrl) ?? stringValue(firstModel?.baseUrl)),
     custom_headers: stringRecord(provider.headers),
     api_key: apiKey,
   });
@@ -310,7 +341,7 @@ function toModelConfig(
     provider: providerId,
     model: modelId,
     protocol,
-    base_url: stringValue(model.baseUrl),
+    base_url: rewriteVsplabBaseUrl(stringValue(model.baseUrl)),
     display_name: stringValue(model.name) ?? modelId,
     max_context_size: positiveInteger(model.contextWindow) ?? 128_000,
     max_output_size: positiveInteger(model.maxTokens),

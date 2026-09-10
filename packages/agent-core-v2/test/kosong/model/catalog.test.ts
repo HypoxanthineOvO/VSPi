@@ -1183,6 +1183,32 @@ describe('ModelCatalog enumeration', () => {
     }
   });
 
+  it('exposes the builtin VSPLab relay and configures it without static model records', async () => {
+    const { host, catalog, models, providers } = createHost();
+    try {
+      const builtin = await catalog.listBuiltinProviders();
+      expect(builtin[0]).toMatchObject({
+        id: 'vsplab',
+        type: 'openai',
+        base_url: 'https://api.vsplab.tech/v1',
+        has_api_key: false,
+        models: [],
+      });
+      await catalog.configureBuiltinProvider('vsplab', 'relay-key');
+      expect(providers.get('vsplab')).toMatchObject({
+        type: 'openai',
+        baseUrl: 'https://api.vsplab.tech/v1',
+        apiKey: 'relay-key',
+      });
+      expect(models.list()).toEqual({});
+      expect(models.getDefaultModel()).toBeUndefined();
+      await catalog.configureBuiltinProvider('vsplab', 'replacement-key');
+      expect(providers.get('vsplab')).toMatchObject({ apiKey: 'replacement-key', baseUrl: 'https://api.vsplab.tech/v1' });
+    } finally {
+      host.dispose();
+    }
+  });
+
   it('lists configured models as selectable aliases', async () => {
     const { host, catalog } = createHost(catalogSections);
     try {

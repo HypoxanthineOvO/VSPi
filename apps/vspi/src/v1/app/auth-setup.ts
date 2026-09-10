@@ -510,6 +510,7 @@ function customEntry(): SetupEntry {
 
 function compareEntries(left: SetupEntry, right: SetupEntry): number {
 	const priority = [
+		"vsplab",
 		"kimi",
 		"deepseek",
 		"xiaomi",

@@ -16,10 +16,12 @@ VSPi 是基于 Kimi Code 引擎演进的终端编码助手。常驻进程（daem
 
 ## 快速开始
 
-运行安装包需要 **Node.js ≥ 22.19.0**。
+### 新安装
+
+运行安装包需要 **Node.js ≥ 22.19.0**，支持 Linux、macOS 与 Windows（Windows 上 npm 会生成 `vspi.cmd`，daemon 通过命名管道 IPC 通信）。
 
 ```sh
-npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.2.3/vspi-2.2.3.tgz"
+npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.2.4/vspi-2.2.4.tgz"
 vspi --version
 ```
 
@@ -30,7 +32,19 @@ vspi init
 vspi
 ```
 
-已有配置时直接运行 `vspi`。用 `vspi config` 调整服务商，在界面内用 `/model` 和 `/effort` 选择模型及思考档位。
+已有配置时直接运行 `vspi`。用 `vspi config` 调整服务商，在界面内用 `/model` 和 `/effort` 选择模型及思考档位。首次配置时可直接选择内置的 VSPLab 中转站（默认接入 `api.vsplab.tech`）。
+
+### 更新
+
+已安装用户升级到最新发布版：
+
+```sh
+vspi update
+```
+
+`vspi update` 从 GitHub Release 获取 `vspi-latest.tgz`，校验 SHA-256 后经 npm/Volta 安装；升级完成后重启前端即可。要固定安装或降级到某个版本，重新执行对应版本的新安装命令。
+
+升级不会自动停止旧 daemon：正在运行的任务保持原版本继续执行；前端重连遇到版本不匹配时，先确认原任务结束，再显式运行 `vspi daemon stop` 切换到新版本运行时。
 
 ## 常用操作
 
@@ -44,7 +58,7 @@ vspi update                           # 更新到最新发布版
 
 界面内用 `/agents` 浏览子对话，`/tasks` 查看后台任务，`/goal` 管理目标；其他操作见[使用指南](apps/vspi/docs/usage.md)和 `vspi --help`。
 
-**`/quit` 只断开前端，`/cancel-and-exit` 才取消当前运行并退出。** 升级不会自动停止旧 daemon；遇到版本不匹配，先确认原任务结束，再显式停止旧运行时。
+**`/quit` 只断开前端，`/cancel-and-exit` 才取消当前运行并退出。**
 
 ## 配置与文档
 

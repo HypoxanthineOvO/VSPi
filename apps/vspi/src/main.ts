@@ -234,6 +234,7 @@ async function ensureConnection(homeDir?: string): Promise<RuntimeConnection> {
 						cwd: runtimePaths.serverDir,
 						stdio: ["ignore", logFd, logFd],
 						env: daemonEnvironment(process.env),
+						windowsHide: true,
 					},
 				);
 				child.unref();

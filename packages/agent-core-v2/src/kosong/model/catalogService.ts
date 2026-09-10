@@ -192,33 +192,56 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
   }
 
   async listBuiltinProviders(): Promise<readonly ProviderCatalogItem[]> {
-    return listPiProviders().map((provider) => ({
-      id: provider.id,
-      type: provider.id,
-      base_url: provider.baseUrl,
-      has_api_key: false,
-      status: 'unconfigured' as const,
-      models: provider.models.map((model) => `${provider.id}/${model.id}`),
-    }));
+    const relayBaseUrl = getProviderDefinition('vsplab')?.endpoint?.defaultBaseUrl;
+    return [
+      ...(relayBaseUrl === undefined
+        ? []
+        : [
+            {
+              id: 'vsplab',
+              type: 'openai',
+              base_url: relayBaseUrl,
+              has_api_key: false,
+              status: 'unconfigured' as const,
+              models: [] as string[],
+            },
+          ]),
+      ...listPiProviders().map((provider) => ({
+        id: provider.id,
+        type: provider.id,
+        base_url: provider.baseUrl,
+        has_api_key: false,
+        status: 'unconfigured' as const,
+        models: provider.models.map((model) => `${provider.id}/${model.id}`),
+      })),
+    ];
   }
 
   async configureBuiltinProvider(providerId: string, apiKey: string): Promise<void> {
-    const builtin = listPiProviders().find((provider) => provider.id === providerId);
-    if (builtin === undefined || apiKey.trim().length === 0) {
+    const relayBaseUrl = getProviderDefinition('vsplab')?.endpoint?.defaultBaseUrl;
+    const relay = providerId === 'vsplab' && relayBaseUrl !== undefined
+      ? { protocol: 'openai' as const, baseUrl: relayBaseUrl }
+      : undefined;
+    const piBuiltin = listPiProviders().find((provider) => provider.id === providerId);
+    const registration = relay ?? (piBuiltin === undefined
+      ? undefined
+      : { protocol: piBuiltin.protocol, baseUrl: piBuiltin.baseUrl });
+    if (registration === undefined || apiKey.trim().length === 0) {
       throw new Error2(CONFIG_INVALID_ERROR_CODE, 'A known provider and non-empty API key are required');
     }
     const previous = this.providers.get(providerId);
     await this.providers.set(providerId, {
       ...previous,
-      type: previous?.type ?? providerId,
-      baseUrl: previous?.baseUrl ?? builtin.baseUrl,
+      type: previous?.type ?? (providerId === 'vsplab' ? registration.protocol : providerId),
+      baseUrl: previous?.baseUrl ?? registration.baseUrl,
       apiKey,
       oauth: undefined,
     });
+    if (piBuiltin === undefined) return;
     const current = this.models.list();
     await this.models.replaceAll({ ...listPiModelRecords(providerId), ...current });
     if (this.models.getDefaultModel() === undefined) {
-      const first = builtin.models[0];
+      const first = piBuiltin.models[0];
       if (first !== undefined) await this.models.setDefaultModel(`${providerId}/${first.id}`);
     }
   }

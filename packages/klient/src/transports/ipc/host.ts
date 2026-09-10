@@ -54,11 +54,14 @@ export async function serveKlientIpc(options: ServeKlientIpcOptions): Promise<Kl
   const dispatcher = createMemoryDispatcher(options.scope);
 
   // Best-effort cleanup of a stale socket file; ignore everything but a real
-  // leftover (ENOENT = nothing to remove).
-  try {
-    await unlink(options.socketPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  // leftover (ENOENT = nothing to remove). Windows named pipes are not
+  // filesystem objects, so there is never a stale file to remove there.
+  if (!options.socketPath.startsWith('\\\\.\\pipe\\')) {
+    try {
+      await unlink(options.socketPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
   }
 
   const connections = new Set<Socket>();
@@ -235,6 +238,10 @@ export async function serveKlientIpc(options: ServeKlientIpcOptions): Promise<Kl
       connections.clear();
       return new Promise<void>((resolve) => {
         server.close(() => {
+          if (options.socketPath.startsWith('\\\\.\\pipe\\')) {
+            resolve();
+            return;
+          }
           void unlink(options.socketPath).then(
             () => {
               resolve();

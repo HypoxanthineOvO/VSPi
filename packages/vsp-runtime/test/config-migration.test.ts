@@ -314,6 +314,53 @@ describe('pre-bootstrap config migration', () => {
     });
   });
 
+  it('rewrites VSPLab base URLs from the retired .cn domain to .tech', async () => {
+    const { root, homeDir, agentDir } = await fixture();
+    await writeFile(join(homeDir, 'config.toml'), [
+      '[providers.vsplab]',
+      'type = "openai"',
+      'base_url = "https://api.vsplab.cn/v1"',
+      'api_key = "target-key"',
+      '',
+      '[providers.moonshot]',
+      'type = "openai"',
+      'base_url = "https://api.moonshot.cn/v1"',
+      '',
+      '[models."vsplab/gpt-5.6"]',
+      'provider = "vsplab"',
+      'model = "gpt-5.6"',
+      'protocol = "openai"',
+      'base_url = "https://api.vsplab.cn/v1"',
+      'max_context_size = 200000',
+      '',
+    ].join('\n'));
+    await writeLegacy(agentDir, {
+      providers: {
+        vsplab: {
+          api: 'openai-completions',
+          baseUrl: 'https://api.vsplab.cn/v1',
+          models: [{ id: 'glm-5.3', contextWindow: 200_000, baseUrl: 'https://api.vsplab.cn/v1' }],
+        },
+      },
+    });
+
+    const result = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
+    const config = parse(await readFile(resolveRuntimePaths(homeDir).configPath, 'utf8')) as Record<string, unknown>;
+    const providers = config['providers'] as Record<string, Record<string, unknown>>;
+    const models = config['models'] as Record<string, Record<string, unknown>>;
+
+    expect(result.status).toBe('migrated');
+    expect(providers['vsplab']?.['base_url']).toBe('https://api.vsplab.tech/v1');
+    expect(providers['moonshot']?.['base_url']).toBe('https://api.moonshot.cn/v1');
+    expect(models['vsplab/gpt-5.6']?.['base_url']).toBe('https://api.vsplab.tech/v1');
+    expect(models['vsplab/glm-5.3']?.['base_url']).toBe('https://api.vsplab.tech/v1');
+    expect(result.report?.diagnostics).toContain('provider vsplab: base_url migrated from api.vsplab.cn to api.vsplab.tech');
+    expect(result.report?.diagnostics).toContain('model vsplab/gpt-5.6: base_url migrated from api.vsplab.cn to api.vsplab.tech');
+
+    const again = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
+    expect(again.status).toBe('unchanged');
+  });
+
   it('repairs known VSPLab GPT limits without overriding unrelated models', async () => {
     const { root, homeDir, agentDir } = await fixture();
     const aliases = [

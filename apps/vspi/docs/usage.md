@@ -52,7 +52,7 @@ vspi exec --help
 
 VSPi 支持内置 Provider 和自定义兼容端点。首次使用运行 `vspi init`；之后用 `vspi config` 调整 Provider，用 `vspi login <provider>` 登录账号或配置 API Key。界面内也提供 `/providers`、`/login` 和 `/logout`。
 
-VSPLab 中转站集成可补充模型能力、上下文大小、价格和思考档位。中转站明确声明的 `effortLevels` 会作为该模型的档位依据，不再被本地内置目录错误缩减。可用模型仍取决于端点和账号权限，不能仅凭目录条目保证调用成功。
+VSPLab 中转站是内置 Provider：`vspi init` 时选择 VSPLab 并配置 API Key 即可，默认接入 `https://api.vsplab.tech/v1`（可用 `VSPLAB_BASE_URL` 环境变量或 `base_url` 覆盖；旧配置里的 `api.vsplab.cn` 地址会在 daemon 启动时自动迁移）。中转站目录可补充模型能力、上下文大小、价格和思考档位，明确声明的 `effortLevels` 会作为该模型的档位依据，不再被本地内置目录错误缩减。可用模型仍取决于端点和账号权限，不能仅凭目录条目保证调用成功。
 
 [模型目录快照](../../../ops/vsplab/model-catalog.json)是可审阅的数据，而不是永不变化的能力保证。使用与模型匹配的协议和目录参数，不要随意填写上下文容量或价格。
 

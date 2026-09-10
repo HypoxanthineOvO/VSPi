@@ -2,6 +2,21 @@
 
 [返回项目首页](../../../README.md) · [下载发行包](https://github.com/HypoxanthineOvO/VSPi/releases)
 
+自 2.2.4 起发行包改为本地构建并经 Windows 实机验证后直接发布，发版流程见[开发指南](development.md#发布)；此前版本未做 Windows 实机验证，相关表述以各条目记录为准。
+
+## 2.2.4 — VSPLab 域名迁移与 Windows 支持
+
+[发行包](https://github.com/HypoxanthineOvO/VSPi/releases/tag/v2.2.4)
+
+- VSPLab 成为内置 Provider：`vspi init` 列表置顶可选，配置后默认接入 `api.vsplab.tech`（可用 `VSPLAB_BASE_URL` 或 `base_url` 覆盖）；旧配置里的 `api.vsplab.cn` 地址在 daemon 启动迁移时自动改写，迁移前自动备份。
+- Windows 安装与升级适配：打包与安装验证脚本跨平台化（`vspi.cmd`/`npm.cmd` 经 cmd 调用，npm 验证环境隔离 `USERPROFILE`）；detached daemon 隐藏控制台窗口；命名管道路径不再误执行文件 unlink。
+- 发行流程改为本地构建、Windows 实机验证后直接发布，不再依赖 GitHub Actions；`vspi update` 与安装命令不变。
+- VSPLab 模型目录：DeepSeek V4.1 Flash 转正（移除内测 `expires-on-0910` 后缀并补充发布日期），flash 系列价格按官方 9 月 10 日新定价（空闲时段、7.2 汇率）修正，目录与线上部署内容逐字节对齐。
+
+### 验证范围
+
+Linux 侧 `check:vspi` 全量通过（agent-core-v2 / kap-server / vsp-runtime / vspi 共约 7600 项，klient 有 2 项与本版无关的本机环境预存失败），安装包在 Node 24 与 22.19 下完成隔离安装与真实 daemon 启停回归。Windows 实机按源码构建与 tarball 两条路径验证（构建打包、隔离安装、named-pipe daemon 启停、全局安装与 `vspi update`），过程记录见开发指南发版清单。
+
 ## 2.2.3 — 文档整理
 
 [发行包](https://github.com/HypoxanthineOvO/VSPi/releases/tag/v2.2.3)

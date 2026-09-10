@@ -31,6 +31,17 @@ registerProviderDefinition({
   ],
 });
 
+registerProviderDefinition({
+  id: 'vsplab',
+  baseProtocol: 'openai',
+  traits: [],
+  endpoint: {
+    apiKeyEnv: 'VSPLAB_API_KEY',
+    baseUrlEnv: 'VSPLAB_BASE_URL',
+    defaultBaseUrl: 'https://api.vsplab.tech/v1',
+  },
+});
+
 for (const provider of listPiProviders()) {
   if (hasProviderDefinition(provider.id)) continue;
   registerProviderDefinition({

@@ -1,6 +1,6 @@
 {
   "name": "vspi",
-  "version": "2.2.3",
+  "version": "2.2.4",
   "private": true,
   "description": "VSPi client for the VSP agent runtime.",
   "license": "MIT",
@@ -17,9 +17,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "package:stage": "node scripts/stage-package.mjs .tmp/package-stage",
-    "package:pack": "pnpm run build && pnpm run package:stage && mkdir -p .tmp/package-artifacts && npm pack .tmp/package-stage --pack-destination .tmp/package-artifacts",
+    "package:pack": "pnpm run build && pnpm run package:stage && node -e \"require('fs').mkdirSync('.tmp/package-artifacts', { recursive: true })\" && npm pack .tmp/package-stage --pack-destination .tmp/package-artifacts",
     "package:verify": "node scripts/verify-package.mjs",
-    "clean": "rm -rf dist .tmp/package-stage .tmp/package-artifacts"
+    "clean": "node -e \"for (const p of ['dist', '.tmp/package-stage', '.tmp/package-artifacts']) require('fs').rmSync(p, { recursive: true, force: true })\""
   },
   "dependencies": {
     "@moonshot-ai/kap-server": "workspace:^",

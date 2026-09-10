@@ -471,7 +471,9 @@ export function defineKlientConformance(
       for (const provider of providers) {
         expect(provider.has_api_key).toBe(false);
         expect(provider.status).toBe('unconfigured');
-        expect(provider.models?.length).toBeGreaterThan(0);
+        if (provider.id !== 'vsplab') {
+          expect(provider.models?.length).toBeGreaterThan(0);
+        }
         expect(provider).not.toHaveProperty('apiKey');
         expect(provider).not.toHaveProperty('oauth');
       }
