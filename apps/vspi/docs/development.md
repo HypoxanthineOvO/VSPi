@@ -36,12 +36,13 @@ pnpm --filter vspi package:verify
 
 ## 发布
 
-VSPi 不通过 GitHub Actions 构建或验证发行包。发布前在本地完成全部验证，再用 `scripts/github-release-producer.mjs` 直接创建 GitHub Release——发布产物与验证过的 tarball 逐字节一致（SHA256SUMS 由被验证文件生成）。
+VSPi 不通过 GitHub Actions 构建或验证发行包。发布前在本地完成声明范围内的验证，再用 `scripts/github-release-producer.mjs` 直接创建 GitHub Release——发布产物与验证过的 tarball 逐字节一致（SHA256SUMS 由被验证文件生成）。2.3.0 经确认采用 Linux 先行、Windows 验收后置；不得把未验收的平台写成已通过。
 
 ### 发版前清单：Linux 工作机
 
 ```sh
 pnpm run check:vspi
+node --test scripts/github-release-producer.test.mjs
 pnpm --filter vspi package:pack
 pnpm --filter vspi package:verify
 VSPI_PACKAGE_SMOKE_ENTRY="$PWD/apps/vspi/.tmp/package-stage/dist/main.mjs" \
@@ -97,4 +98,6 @@ node scripts/github-release-producer.mjs \
   ".tmp/vspi-github-release.json"
 ```
 
-版本号、tag 与 `apps/vspi/package.json` 的一致性由 `vspi-release-identity.mjs` 校验；producer 不会覆盖已发布的同名 tag 或资产。`vspi update` 从 GitHub Release 的 `vspi-latest.tgz` 与 `SHA256SUMS` 发现并校验更新。版本修复及验证范围记录在[版本记录](releases.md)。
+版本号、tag 与 `apps/vspi/package.json` 的一致性由 `vspi-release-identity.mjs` 校验；producer 不会覆盖已发布的同名 tag 或资产。`vspi update` 从共享 `latest` 标签定位版本化 tgz，并校验 `SHA256SUMS`。版本修复及验证范围记录在[版本记录](releases.md)。
+
+`GITHUB_RELEASE_NOTES` 提供包含适用平台、安装说明与风险的发布正文（校验和仍自动添加）。若未来明确需要独立于共享更新通道发布，可设置 `GITHUB_RELEASE_MAKE_LATEST=false`；2.3.0 按最后确认的要求走普通正式发布，不使用该分流选项，Windows 未验收风险直接写入发布说明。

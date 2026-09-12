@@ -49,6 +49,9 @@ export interface ModelRequestParams {
   readonly usedContextTokens?: number;
   readonly maxContextTokens?: number;
   readonly onTraceId?: (traceId: string | null) => void;
+  readonly onProtocolProgress?: (stage: 'start' | 'headers' | 'body') => void;
+  readonly idleTimeoutMs?: number;
+  readonly deadlineAt?: number;
 }
 
 export interface ModelRequester {

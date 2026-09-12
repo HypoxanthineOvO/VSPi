@@ -7,7 +7,7 @@ export function subagentModelPreferences(section: Record<string, unknown> | unde
 	const models = raw && typeof raw === "object" && !Array.isArray(raw)
 		? Object.fromEntries(Object.entries(raw).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
 		: defaultModel ? { [defaultModel]: "" } : {};
-	return { models, defaultModel };
+	return { models, defaultModel, force: section?.["force"] === true ? true : undefined };
 }
 
 export function editSubagentModels(current: SubagentModelPreferences, edit: SubagentModelEdit): SubagentModelPreferences {

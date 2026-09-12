@@ -2,6 +2,9 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { applyModelEffortProfile } from '@moonshot-ai/agent-core-v2/kosong/model/effortProfiles';
+import { EFFORT_PROFILE_REVISION, modelEffortProfile } from '@moonshot-ai/agent-core-v2/kosong/provider/effortProfiles';
+import { defaultRelayProtocol } from '@moonshot-ai/agent-core-v2/kosong/model/relayDefaults';
 
 import {
   preserveThinkingEffort,
@@ -43,6 +46,7 @@ interface LegacyRuntimeDefaults {
 type Protocol = 'anthropic' | 'openai' | 'openai_responses' | 'google-genai';
 
 export interface LegacyProviderMigrationOptions {
+  readonly cleanProtocolDefaults?: boolean;
   readonly osHomeDir?: string;
   readonly agentDir?: string;
   readonly env?: NodeJS.ProcessEnv;
@@ -158,6 +162,57 @@ export async function migrateLegacyVspiProviders(
     models[alias] = { ...model, base_url: baseUrl };
     modelCount += 1;
     diagnostics.push(`model ${alias}: base_url migrated from api.vsplab.cn to api.vsplab.tech`);
+  }
+
+  for (const [alias, value] of Object.entries(models)) {
+    const model = record(value);
+    const providerId = stringValue(model?.['provider']);
+    const provider = providerId === undefined ? undefined : record(providers[providerId]);
+    const name = stringValue(model?.['model']);
+    const profile = name === undefined ? undefined : modelEffortProfile(name);
+    if (!model || !provider || !providerId || !name || !profile) continue;
+    if (providerId !== 'vsplab' && provider['type'] !== 'vsplab' && record(provider['source'])?.['kind'] !== 'vsp-models') continue;
+    if (alias !== `${providerId}/${name}`) continue;
+    const refreshEffort = (positiveInteger(model['effort_profile_revision']) ?? 0) < EFFORT_PROFILE_REVISION;
+    if (!refreshEffort && options.cleanProtocolDefaults === false) continue;
+    if (model['api_key'] !== undefined || model['oauth'] !== undefined || model['name'] !== undefined ||
+        model['base_url'] !== undefined && model['base_url'] !== provider['base_url']) continue;
+    const baseline = applyModelEffortProfile({}, profile);
+    const next = { ...model };
+    if (refreshEffort) {
+      next['thinking'] = compact({
+        availability: baseline.thinking?.availability,
+        can_disable: baseline.thinking?.canDisable,
+        controls: baseline.thinking?.controls,
+        efforts: baseline.thinking?.efforts,
+        default_effort: baseline.thinking?.defaultEffort,
+      });
+      if (baseline.supportEfforts) next['support_efforts'] = baseline.supportEfforts;
+      else delete next['support_efforts'];
+      if (baseline.defaultEffort) next['default_effort'] = baseline.defaultEffort;
+      else delete next['default_effort'];
+      delete next['off_effort'];
+      next['effort_mapping'] = baseline.effortMapping;
+      next['effort_profile_revision'] = EFFORT_PROFILE_REVISION;
+    }
+    const protocol = defaultRelayProtocol(name);
+    const legacy = legacyProviders.get(providerId);
+    const legacyModel = legacy?.models.find((entry) => stringValue(entry.id) === name);
+    const inherited = typeof model['protocol'] === 'string' && legacyModel !== undefined && legacyModel.api === undefined &&
+      model['protocol'] === protocolFor(legacy?.protocol ?? legacy?.api);
+    if (protocol !== undefined && options.cleanProtocolDefaults !== false) {
+      next['default_protocol'] = protocol;
+      if (typeof model['protocol'] === 'string' && (model['protocol'] === protocol || inherited)) {
+        delete next['protocol'];
+        diagnostics.push(`model ${alias}: removed generated or redundant protocol override`);
+      } else if (model['protocol'] !== undefined) {
+        diagnostics.push(`model ${alias}: preserved unproven explicit protocol override`);
+      }
+    }
+    if (JSON.stringify(next) === JSON.stringify(model)) continue;
+    models[alias] = next;
+    modelCount += 1;
+    if (refreshEffort) diagnostics.push(`model ${alias}: refreshed documented effort profile`);
   }
 
   if (Object.keys(providers).length > 0) config['providers'] = providers;
@@ -337,10 +392,12 @@ function toModelConfig(
     ...(input.includes('image') ? ['image_in'] : []),
     ...(model.reasoning === true ? ['thinking'] : []),
   ];
+  const inheritedRelayProtocol = providerId === 'vsplab' && model.api === undefined ? defaultRelayProtocol(modelId) : undefined;
   return compact({
     provider: providerId,
     model: modelId,
-    protocol,
+    protocol: inheritedRelayProtocol === undefined ? protocol : undefined,
+    default_protocol: inheritedRelayProtocol,
     base_url: rewriteVsplabBaseUrl(stringValue(model.baseUrl)),
     display_name: stringValue(model.name) ?? modelId,
     max_context_size: positiveInteger(model.contextWindow) ?? 128_000,

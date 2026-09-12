@@ -13,6 +13,21 @@ const PROVIDER_ALIASES: Readonly<Record<string, string>> = {
 
 const providers = builtinProviders();
 
+export function relayNativeProvider(name: string): string | undefined {
+  const id = name.split('/').at(-1)?.toLowerCase() ?? '';
+  if (/^(?:gpt-|o\d(?:-|$))/.test(id)) return 'openai';
+  if (id.startsWith('claude-')) return 'anthropic';
+  if (/^(?:kimi-|k[23](?:-|$))/.test(id)) return 'moonshotai';
+  if (id.startsWith('glm-')) return 'zai';
+  if (id.startsWith('deepseek-')) return 'deepseek';
+  if (id.startsWith('mimo-')) return 'xiaomi';
+  if (id.startsWith('minimax-')) return 'minimax';
+  if (id.startsWith('gemini-')) return 'google';
+  if (id.startsWith('qwen')) return 'alibaba';
+  if (id.startsWith('hy4')) return 'tencent';
+  return undefined;
+}
+
 export function piProtocolForApi(api: Api): Protocol | undefined {
   switch (api) {
     case 'openai-completions': return 'openai';
@@ -40,12 +55,13 @@ export function listPiProviders() {
   });
 }
 
-export function findPiModel(providerType: string | undefined, modelName: string, protocol?: Protocol): Model<Api> | undefined {
+export function findPiModel(providerType: string | undefined, modelName: string, protocol?: Protocol, options: { allowFallback?: boolean } = {}): Model<Api> | undefined {
   const provider = PROVIDER_ALIASES[providerType ?? ''] ?? providerType;
   const compatible = (model: Model<Api>) => model.id === modelName &&
     (protocol === undefined || piProtocolForApi(model.api) === protocol);
   const exact = listPiProviders().find((entry) => entry.id === provider)?.models.find(compatible);
   if (exact !== undefined) return structuredClone(exact);
+  if (options.allowFallback === false) return undefined;
   const candidates = listPiProviders().flatMap((entry) => entry.models.filter(compatible));
   const direct = candidates.filter((model) => !['openrouter', 'vercel-ai-gateway', 'github-copilot', 'opencode', 'opencode-go'].includes(model.provider));
   const picked = direct[0] ?? candidates[0];

@@ -1,4 +1,4 @@
-import { abortable } from '#/_base/utils/abort';
+import { abortError } from '#/_base/utils/abort';
 
 export const DEFAULT_MAX_RETRY_ATTEMPTS = 10;
 
@@ -43,17 +43,19 @@ export function retryBackoffDelays(
 export function readRetryAfterMs(error: unknown): number | null {
   if (typeof error !== 'object' || error === null) return null;
   const value = (error as { retryAfterMs?: unknown }).retryAfterMs;
-  return typeof value === 'number' && value > 0 ? value : null;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 export async function sleepForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
   signal?.throwIfAborted();
-  const sleepPromise = sleep(delayMs);
-  if (signal === undefined) {
-    await sleepPromise;
-    return;
-  }
-  await abortable(sleepPromise, signal);
+  if (!Number.isFinite(delayMs) || delayMs < 0 || delayMs > 2 ** 31 - 1) throw new RangeError('Retry delay exceeds the supported timer range');
+  await new Promise<void>((resolve, reject) => {
+    const finish = () => { cleanup(); resolve(); };
+    const onAbort = () => { cleanup(); reject(signal?.reason ?? abortError()); };
+    const timer = setTimeout(finish, delayMs);
+    const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 export function retryErrorFields(error: unknown): RetryErrorFields {
@@ -62,12 +64,6 @@ export function retryErrorFields(error: unknown): RetryErrorFields {
     errorMessage: error instanceof Error ? error.message : String(error),
     statusCode: maybeStatusCode(error),
   };
-}
-
-function sleep(delayMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, delayMs);
-  });
 }
 
 function maybeStatusCode(error: unknown): number | undefined {

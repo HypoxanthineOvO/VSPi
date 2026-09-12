@@ -161,6 +161,36 @@ describe('queryAvailableModels', () => {
     expect(result['m']?.defaultEffort).toBe('xhigh');
   });
 
+  it('does not replace a documented profile with old unversioned generic relay levels', () => {
+    const result = mergeRelayCatalog({}, 'vsplab', { type: 'openai' }, { models: [{ id: 'glm-5.3', reasoning: true, effortLevels: ['off', 'minimal', 'medium', 'high'] }] });
+    expect(result['vsplab/glm-5.3']?.thinking).toMatchObject({ efforts: ['low', 'high', 'max'], defaultEffort: 'max', canDisable: false });
+  });
+
+  it('accepts a complete versioned relay update while removing stale provider mappings', () => {
+    const records: Record<string, ModelRecord> = { model: { provider: 'vsplab', model: 'kimi-k3', thinking: { providerEfforts: { openai: ['medium'] } }, effortMapping: { max: null } } };
+    const result = mergeRelayCatalog(records, 'vsplab', { type: 'openai' }, { models: [{ id: 'kimi-k3', effortRevision: 2, effortLevels: ['low', 'high', 'max'], defaultEffort: 'max' }] });
+    expect(result['model']?.thinking).toMatchObject({ efforts: ['low', 'high', 'max'] });
+    expect(result['model']?.thinking?.providerEfforts).toBeUndefined();
+    expect(result['model']?.effortMapping?.['max']).toBe('max');
+  });
+
+  it('does not downgrade a newer versioned effort contract from an older response', () => {
+    const records: Record<string, ModelRecord> = { model: { provider: 'vsplab', model: 'kimi-k3', effortProfileRevision: 3, thinking: { efforts: ['provider-next'], defaultEffort: 'provider-next' } } };
+    const result = mergeRelayCatalog(records, 'vsplab', { type: 'openai' }, { models: [{ id: 'kimi-k3', effortRevision: 2, effortLevels: ['low', 'high', 'max'] }] });
+    expect(result['model']?.thinking?.efforts).toEqual(['provider-next']);
+  });
+
+  it('updates a relay protocol default without overwriting an explicit model route', () => {
+    const records: Record<string, ModelRecord> = { m: { provider: 'relay', model: 'example', protocol: 'openai' } };
+    const first = mergeRelayCatalog(records, 'relay', {}, { models: [{ id: 'example', protocol: 'anthropic' }] });
+    const second = mergeRelayCatalog(first, 'relay', {}, { models: [{ id: 'example', protocol: 'openai_responses' }] });
+    expect(second['m']).toMatchObject({ protocol: 'openai', defaultProtocol: 'openai_responses' });
+  });
+
+  it('rejects unsupported relay protocol declarations', () => {
+    expect(() => mergeRelayCatalog({}, 'relay', {}, { models: [{ id: 'example', protocol: 'execute-code' }] })).toThrow();
+  });
+
   it('preserves missing prices and accepts explicitly free rates', () => {
     const records = { m: { provider: 'relay', model: 'example', pricing: { inputUsdPerMillion: 1, outputUsdPerMillion: 8, cacheReadUsdPerMillion: 0.2 } } };
     const partial = mergeRelayCatalog(records, 'relay', {}, { models: [{ id: 'example', cost: { input: 3 } }] });

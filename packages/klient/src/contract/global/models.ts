@@ -34,6 +34,8 @@ const modelBaseSchema = z.object({
   oauth: oAuthRefSchema.optional(),
 
   protocol: protocolSchema.optional(),
+  defaultProtocol: protocolSchema.optional(),
+  effortProfileRevision: z.number().int().positive().optional(),
 
   name: z.string().optional(),
   aliases: z.array(z.string()).optional(),
@@ -73,7 +75,9 @@ const modelOverrideSchema = modelBaseSchema
     baseUrl: true,
     apiKey: true,
     oauth: true,
-    protocol: true,
+  protocol: true,
+  defaultProtocol: true,
+  effortProfileRevision: true,
     name: true,
     aliases: true,
     provider: true,

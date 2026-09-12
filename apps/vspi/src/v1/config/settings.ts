@@ -123,6 +123,14 @@ async function readOptional(path: string): Promise<unknown> {
 	}
 }
 
+function projectSettings(input: unknown, global: AppSettings): AppSettings {
+	return {
+		...normalizeSettings(input, global),
+		scope: "project",
+		thinkingTranslationEndpoint: global.thinkingTranslationEndpoint,
+	};
+}
+
 export function settingsPaths(cwd: string, home = homedir()) {
 	return {
 		global: join(home, ".config", "vspi", "settings.json"),
@@ -142,10 +150,7 @@ export async function loadSettings(
 	});
 	if (!trust.trustedProject) return global;
 	await inspectProjectPath(cwd, "settings.json");
-	return normalizeSettings(await readOptional(paths.project), {
-		...global,
-		scope: "project",
-	});
+	return projectSettings(await readOptional(paths.project), global);
 }
 
 export async function loadSettingsLayers(
@@ -163,7 +168,7 @@ export async function loadSettingsLayers(
 	const rawProject = await readOptional(paths.project);
 	return {
 		global,
-		project: normalizeSettings(rawProject, { ...global, scope: "project" }),
+		project: projectSettings(rawProject, global),
 		projectInherited: rawProject === undefined,
 	};
 }
@@ -178,6 +183,14 @@ export async function saveSettings(
 	if (settings.scope === "project" && !trust.trustedProject) {
 		throw new Error("项目 trust 尚未授予，拒绝保存 project settings");
 	}
+	if (settings.scope === "project") {
+		const global = await loadSettings(cwd, home);
+		if (settings.thinkingTranslationEndpoint !== global.thinkingTranslationEndpoint) {
+			throw new Error("思考翻译会向服务端发送内容，请在全局设置中配置翻译地址");
+		}
+	}
+	const saved: Partial<AppSettings> = { ...settings };
+	if (settings.scope === "project") delete saved.thinkingTranslationEndpoint;
 	const target = settings.scope === "global" ? paths.global : paths.project;
 	const projectScope =
 		settings.scope === "project"
@@ -193,7 +206,7 @@ export async function saveSettings(
 	const temporary = `${target}.${process.pid}-${randomUUID()}.tmp`;
 	if (projectScope)
 		await assertProjectEntrySafe(temporary, "project settings temporary file");
-	await writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, {
+	await writeFile(temporary, `${JSON.stringify(saved, null, 2)}\n`, {
 		mode: 0o600,
 		flag: "wx",
 	});

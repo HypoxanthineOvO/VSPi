@@ -13,6 +13,9 @@ import { findPiModel, piModelRecord } from '../provider/pi/catalog';
 
 import type { ModelRecord } from './model';
 import type { ResolvedModelAuthMaterial } from './model.types';
+import { defaultRelayProtocol, isRelayModel } from './relayDefaults';
+import { applyModelEffortProfile } from './effortProfiles';
+import { EFFORT_PROFILE_REVISION, modelEffortProfile } from '#/kosong/provider/effortProfiles';
 
 export function resolveModelAuthMaterial(
   args: {
@@ -80,8 +83,16 @@ export function resolveModelAuthMaterial(
 export function effectiveModelConfig(
   model: ModelRecord,
   providerType?: string,
+  provider?: ProviderConfig,
 ): ModelRecord {
-  const { overrides, ...base } = model;
+  const profile = modelEffortProfile(model.name ?? model.model ?? '');
+  const providerId = model.providerId ?? model.provider ?? '';
+  const customEndpoint = model.baseUrl !== undefined && model.baseUrl !== provider?.baseUrl;
+  const managed = !customEndpoint && model.apiKey === undefined && model.oauth === undefined &&
+    (isRelayModel(model, provider) || profile?.providers.includes(providerId));
+  const resolved = profile && managed && (model.effortProfileRevision ?? 0) < EFFORT_PROFILE_REVISION
+    ? applyModelEffortProfile(model, profile) : model;
+  const { overrides, ...base } = resolved;
   const piModel = findPiModel(providerType ?? base.providerId ?? base.provider, base.name ?? base.model ?? '', base.protocol);
   const defaults = piModel === undefined ? undefined : {
     ...piModelRecord(piModel, base.providerId ?? base.provider ?? piModel.provider),
@@ -178,6 +189,13 @@ export function resolveModelProtocol(
 ): ModelProtocolResolution | undefined {
   if (model.protocol !== undefined) {
     return { protocol: model.protocol, source: { kind: 'config', detail: 'model.protocol' } };
+  }
+  if (model.defaultProtocol !== undefined) {
+    return { protocol: model.defaultProtocol, source: { kind: 'config', detail: 'model.defaultProtocol (catalog default)' } };
+  }
+  const relayProtocol = isRelayModel(model, provider) ? defaultRelayProtocol(model.name ?? model.model ?? '') : undefined;
+  if (relayProtocol !== undefined) {
+    return { protocol: relayProtocol, source: { kind: 'builtin', detail: 'relay model-family protocol default' } };
   }
   const providerType = provider?.type;
   if (providerType !== undefined) {

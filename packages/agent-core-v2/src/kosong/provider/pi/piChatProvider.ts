@@ -28,6 +28,7 @@ import type {
 } from '#/kosong/contract/provider';
 import type { Tool } from '#/kosong/contract/tool';
 import type { ProtocolAdapterConfig } from '#/kosong/protocol/protocol';
+import { modelEffortProfile } from '#/kosong/provider/effortProfiles';
 import { resolveProviderEndpoint } from '#/kosong/provider/providerDefinition';
 import { classifyKimiQuotaError } from '#/kosong/provider/providers/kimi/kimi-errors';
 import { kimiOpenAITrait, kimiAnthropicTrait } from '#/kosong/provider/providers/kimi/kimi.contrib';
@@ -157,7 +158,7 @@ function rawThinkingOptions(api: Api, effort: string): ProviderStreamOptions {
     return {
       thinking: {
         enabled: effort !== 'off',
-        level: Number.isFinite(budget) ? undefined : effort,
+        level: Number.isFinite(budget) ? undefined : effort.toUpperCase(),
         budgetTokens: Number.isFinite(budget) ? budget : undefined,
       },
     };
@@ -184,17 +185,18 @@ export class PiChatProvider implements ChatProvider {
     this.modelName = config.modelName;
     this.maxCompletionTokens =
       config.providerOptions?.defaultMaxTokens ?? model?.maxTokens ?? 32768;
-    const thinkingLevelMap: ThinkingLevelMap = { ...model?.thinkingLevelMap, ...config.effortMapping };
+    const nativeMapping = config.providerOptions?.relay ? undefined : model?.thinkingLevelMap;
+    const thinkingLevelMap: ThinkingLevelMap = { ...nativeMapping, ...config.effortMapping };
     if (config.thinking !== undefined) {
       const efforts = thinkingEffortsForProvider(config.thinking, config.providerType);
       for (const level of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const) {
         if (efforts.length > 0)
           thinkingLevelMap[level] = efforts.includes(level)
-            ? (config.effortMapping && Object.hasOwn(config.effortMapping, level) ? config.effortMapping[level] : model?.thinkingLevelMap?.[level] ?? (level === 'xhigh' || level === 'max' ? level : undefined))
+            ? (config.effortMapping && Object.hasOwn(config.effortMapping, level) ? config.effortMapping[level] : nativeMapping?.[level] ?? (level === 'xhigh' || level === 'max' ? level : undefined))
             : null;
       }
       thinkingLevelMap.off = config.thinking.canDisable
-        ? (config.effortMapping?.['off'] ?? config.providerOptions?.offEffort ?? model?.thinkingLevelMap?.off)
+        ? (config.effortMapping?.['off'] ?? config.providerOptions?.offEffort ?? nativeMapping?.off)
         : null;
     } else if (config.providerOptions?.offEffort !== undefined) {
       thinkingLevelMap.off = config.providerOptions.offEffort;
@@ -294,7 +296,9 @@ export class PiChatProvider implements ChatProvider {
         configuredEfforts[Math.floor(configuredEfforts.length / 2)] ??
         (levels.includes('medium') ? 'medium' : (levels.find((level) => level !== 'off') ?? 'off'));
       const effort = options.thinking?.effort ?? defaultEffort;
-      const selectedEffort = effort === 'on' ? defaultEffort : effort;
+      const fixedThinking = this.config.thinking !== undefined && this.config.thinking.availability !== 'none' &&
+        !this.config.thinking.controls.includes('effort') && !this.config.thinking.controls.includes('budget');
+      const selectedEffort = fixedThinking && effort !== 'off' ? 'high' : effort === 'on' ? defaultEffort : effort;
       const headers: Record<string, string | null> = {
         ...this.config.defaultHeaders,
         ...options.auth?.headers,
@@ -324,9 +328,21 @@ export class PiChatProvider implements ChatProvider {
           model.api === 'google-generative-ai' || model.api === 'google-vertex'
             ? undefined
             : async (input, init) => {
+                options.onProtocolProgress?.('start');
                 const received = await fetch(input, init);
+                options.onProtocolProgress?.('headers');
                 response.status = received.status;
                 response.headers = Object.fromEntries(received.headers.entries());
+                if (options.onProtocolProgress !== undefined && received.body !== null) {
+                  const tracked = new Response(received.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+                    transform(chunk, target) {
+                      if (received.ok && chunk.byteLength > 0) options.onProtocolProgress?.('body');
+                      target.enqueue(chunk);
+                    },
+                  })), { status: received.status, statusText: received.statusText, headers: received.headers });
+                  Object.defineProperty(tracked, 'url', { value: received.url });
+                  return tracked;
+                }
                 return received;
               },
         onResponse: (received) => {
@@ -374,11 +390,33 @@ export class PiChatProvider implements ChatProvider {
               delete payload['betaFeatures'];
             }
           }
+          if (fixedThinking) {
+            delete payload['reasoning_effort'];
+            const id = this.model.id.split('/').at(-1)?.toLowerCase() ?? '';
+            if (this.model.api === 'openai-completions' || this.model.api === 'anthropic-messages') {
+              if (id.startsWith('mimo-')) payload['thinking'] = { type: selectedEffort === 'off' ? 'disabled' : 'enabled' };
+              if (id.startsWith('minimax-')) payload['thinking'] = { type: selectedEffort === 'off' ? 'disabled' : 'adaptive' };
+              if (id.startsWith('mimo-') || id.startsWith('minimax-')) delete payload['output_config'];
+            }
+          }
+          const modelId = this.model.id.split('/').at(-1)?.toLowerCase() ?? '';
+          if (this.model.api === 'openai-completions' && /^qwen3\.8-(?:max|flash)$/.test(modelId)) {
+            payload['enable_thinking'] = selectedEffort !== 'off';
+            if (selectedEffort === 'off') delete payload['reasoning_effort'];
+            else if (modelEffortProfile(modelId)?.efforts.includes(selectedEffort)) {
+              payload['reasoning_effort'] = this.config.effortMapping?.[selectedEffort] ?? selectedEffort;
+              delete payload['thinking_budget'];
+            }
+          }
           options.onRequestSent?.();
           return payload;
         },
       };
-      const source =
+      const exactGoogleLevel = (this.model.api === 'google-generative-ai' || this.model.api === 'google-vertex') &&
+        modelEffortProfile(this.model.id)?.efforts.includes(selectedEffort) === true;
+      const source = exactGoogleLevel
+        ? this.provider.stream(model, context, { ...common, ...rawThinkingOptions(this.model.api, selectedEffort) })
+        :
         selectedEffort === undefined || selectedEffort === 'off' || isThinkingLevel(selectedEffort)
           ? this.provider.streamSimple(model, context, {
               ...common,

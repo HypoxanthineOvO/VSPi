@@ -176,7 +176,7 @@ export async function mirrorAgentRun(
     });
     return result;
   } catch (error) {
-    if (!isAbortError(error) && !shouldSuppressFailure(options, error)) {
+    if (!options.signal.aborted && !isAbortError(error) && !shouldSuppressFailure(options, error)) {
       void dispatcher?.dispatch(
         new SubagentFailed({
           subagentId: run.agentId,

@@ -15,6 +15,7 @@ const MIGRATION_VERSION = 1;
 
 interface ConfigMigrationMarker {
   readonly version: number;
+  readonly modelDefaultsVersion?: number;
   readonly sourceFingerprint: string;
   readonly targetFingerprint: string;
   readonly completedAt: string;
@@ -101,13 +102,16 @@ export async function migrateRuntimeConfig(
       repaired = true;
     }
   }
-  const migration = await migrateLegacyVspiProviders(target, options);
+  const marker = parseMarker(originalMarker);
+  const migration = await migrateLegacyVspiProviders(target, {
+    ...options,
+    cleanProtocolDefaults: options.cleanProtocolDefaults ?? ((marker?.modelDefaultsVersion ?? 0) < 1),
+  });
   const targetBytes = Buffer.from(`${stringify(migration.config)}\n`);
   const targetFingerprint = fingerprint(targetBytes);
-  const marker = parseMarker(originalMarker);
   const report = parseReport(originalReport);
   if (
-    !repaired && original !== undefined && original.equals(targetBytes) &&
+    !repaired && original !== undefined && original.equals(targetBytes) && (marker?.modelDefaultsVersion ?? 0) >= 1 &&
     completionMatches(marker, report, migration.sourceFingerprint, targetFingerprint)
   ) {
     return { status: 'unchanged', targetFingerprint };
@@ -196,6 +200,7 @@ async function writeCompletionFiles(
   };
   const marker: ConfigMigrationMarker = {
     version: MIGRATION_VERSION,
+    modelDefaultsVersion: 1,
     sourceFingerprint: migration.sourceFingerprint,
     targetFingerprint,
     completedAt,
@@ -313,6 +318,7 @@ function parseMarker(value: Buffer | undefined): ConfigMigrationMarker | undefin
     const parsed = JSON.parse(value.toString('utf8')) as Partial<ConfigMigrationMarker>;
     if (
       parsed.version !== MIGRATION_VERSION || typeof parsed.sourceFingerprint !== 'string' ||
+      parsed.modelDefaultsVersion !== undefined && (!Number.isInteger(parsed.modelDefaultsVersion) || parsed.modelDefaultsVersion < 0) ||
       typeof parsed.targetFingerprint !== 'string' || typeof parsed.completedAt !== 'string'
     ) return undefined;
     return parsed as ConfigMigrationMarker;

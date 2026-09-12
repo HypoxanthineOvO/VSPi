@@ -121,6 +121,20 @@ afterEach(() => {
 });
 
 describe('Model assembly (pure data)', () => {
+  it.each([
+    ['gpt-6-astra', 'openai_responses', 'https://relay.example.test/v1'],
+    ['claude-opus-5', 'anthropic', 'https://relay.example.test'],
+    ['kimi-k3', 'openai', 'https://relay.example.test/v1'],
+    ['glm-5.3', 'openai', 'https://relay.example.test/v1'],
+    ['deepseek-v4-pro', 'openai', 'https://relay.example.test/v1'],
+  ])('assembles the relay model %s with its protocol default and retained endpoint', (name, protocol, baseUrl) => {
+    const { host } = createHost({ providers: { vsplab: { type: 'openai', apiKey: 'YOUR_API_KEY', baseUrl: 'https://relay.example.test/v1' } }, models: { target: { provider: 'vsplab', model: name, maxContextSize: 131072 } } });
+    try {
+      const model = host.app.accessor.get(IModelCatalog).get('target');
+      expect(model).toMatchObject({ protocol, baseUrl, providerOptions: { relay: true } });
+    } finally { host.dispose(); }
+  });
+
   it('assembles a kimi model: protocol resolves to the vendor base, never a vendor', () => {
     const { host, catalog } = createHost(kimiSections);
     try {
@@ -943,6 +957,7 @@ describe('wire projection (pure)', () => {
       const record = (catalogSections['models'] as Record<string, ModelRecord>)['k2']!;
       expect(toProtocolModel(catalog.get('k2'), record, 'kimi')).toEqual({
         provider: 'kimi',
+        protocol: 'openai',
         model: 'k2',
         display_name: 'Kimi K2',
         max_context_size: 131072,
@@ -973,6 +988,7 @@ describe('wire projection (pure)', () => {
     };
     expect(toProtocolModelFallback('k2', record, 'kimi')).toEqual({
       provider: 'kimi',
+      protocol: 'openai',
       model: 'k2',
       display_name: 'Kimi K2',
       max_context_size: 131072,

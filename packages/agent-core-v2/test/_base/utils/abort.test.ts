@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { getEventListeners } from 'node:events';
+import { readRetryAfterMs, sleepForRetry } from '#/_base/utils/retry';
 
 import {
   abortError,
@@ -32,6 +34,13 @@ describe('userCancellationReason', () => {
 });
 
 describe('abortable', () => {
+  it('removes its abort listener when cancellation wins over an unfinished operation', async () => {
+    const controller = new AbortController();
+    const operation = abortable(new Promise<never>(() => {}), controller.signal);
+    controller.abort();
+    await expect(operation).rejects.toMatchObject({ name: 'AbortError' });
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+  });
   it('rejects with the signal reason when already aborted', async () => {
     const controller = new AbortController();
     const reason = userCancellationReason();
@@ -69,5 +78,27 @@ describe('abortable', () => {
       name: 'AbortError',
       message: 'Aborted',
     });
+  });
+});
+
+describe('retry waiting', () => {
+  it('removes the timer and abort listener when a retry wait is cancelled', async () => {
+    const controller = new AbortController();
+    const before = process.getActiveResourcesInfo().filter(type => type === 'Timeout').length;
+    const wait = sleepForRetry(1_800_000, controller.signal);
+    controller.abort(userCancellationReason());
+    await expect(wait).rejects.toMatchObject({ name: 'AbortError' });
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+    expect(process.getActiveResourcesInfo().filter(type => type === 'Timeout')).toHaveLength(before);
+  });
+
+  it.each([Infinity, NaN, -1, 2 ** 31])('rejects invalid retry delay %s without creating a timer', async (delay) => {
+    const before = process.getActiveResourcesInfo().filter(type => type === 'Timeout').length;
+    await expect(sleepForRetry(delay)).rejects.toBeInstanceOf(RangeError);
+    expect(process.getActiveResourcesInfo().filter(type => type === 'Timeout')).toHaveLength(before);
+  });
+
+  it.each([Infinity, NaN, -1, 0])('does not accept invalid Retry-After milliseconds %s', (retryAfterMs) => {
+    expect(readRetryAfterMs({ retryAfterMs })).toBeNull();
   });
 });

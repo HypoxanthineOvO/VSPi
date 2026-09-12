@@ -65,6 +65,7 @@ import type { ResolvedModelAuthMaterial } from './model.types';
 import type { ModelRequester } from './modelRequester';
 import { ModelRequesterImpl } from './modelRequesterImpl';
 import { findPiModel, listPiProviders, listPiModelRecords } from '../provider/pi/catalog';
+import { isRelayModel } from './relayDefaults';
 
 type MutableProtocolProviderOptions = {
   -readonly [K in keyof ProtocolProviderOptions]: ProtocolProviderOptions[K];
@@ -329,6 +330,7 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
     const model = effectiveModelConfig(
       configuredModel,
       providerConfig?.type ?? configuredModel.protocol,
+      providerConfig,
     );
     trace.capture(TRACE.effectiveModel, model);
     const wireName = model.name ?? model.model;
@@ -573,6 +575,7 @@ function buildProtocolProviderOptions(
   baseUrl: string | undefined,
 ): ProtocolProviderOptions | undefined {
   const options: MutableProtocolProviderOptions = {};
+  if (isRelayModel(model, provider)) options.relay = true;
 
   switch (protocol) {
     case 'anthropic': {

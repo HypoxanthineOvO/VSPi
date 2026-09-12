@@ -2,6 +2,9 @@ import { z } from 'zod';
 import { findPiModel, piThinking } from '#/kosong/provider/pi/catalog';
 import type { ModelRecord } from '#/kosong/model/model';
 import type { ProviderConfig } from '#/kosong/provider/provider';
+import { ProtocolSchema } from '#/kosong/protocol/protocol';
+import { applyModelEffortProfile } from '#/kosong/model/effortProfiles';
+import { EFFORT_PROFILE_REVISION, modelEffortProfile } from '#/kosong/provider/effortProfiles';
 
 const costRate = z.number().finite().nonnegative();
 const costSchema = z.object({
@@ -15,17 +18,20 @@ const costSchema = z.object({
 const entrySchema = z.object({
   id: z.string().trim().min(1).max(200),
   name: z.string().trim().min(1).max(300).optional(),
+  protocol: ProtocolSchema.optional(),
   contextWindow: z.number().int().positive().optional(),
   maxTokens: z.number().int().positive().optional(),
   input: z.array(z.string()).optional(),
   reasoning: z.boolean().optional(),
   effortLevels: z.array(z.string().min(1)).min(1).optional(),
+  effortRevision: z.number().int().positive().optional(),
+  effortMode: z.enum(['effort', 'toggle']).optional(),
   defaultEffort: z.string().trim().min(1).optional(),
   thinkingLevelMap: z.record(z.string(), z.union([z.string().min(1), z.null()])).optional(),
   cost: costSchema.optional(),
   curated: z.boolean().optional(), hidden: z.boolean().optional(),
   releasedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-}).passthrough();
+}).passthrough().refine((entry) => entry.effortRevision === undefined || entry.effortLevels !== undefined || entry.reasoning === false, 'Versioned effort declarations must include the supported levels');
 export const relayCatalogSchema = z.object({ version: z.literal(1).optional(), models: z.array(entrySchema).max(10000), pricingBasis: z.object({ purpose: z.string() }).passthrough().optional() });
 
 export function isRelayCatalogProvider(id: string, provider: ProviderConfig): boolean {
@@ -51,13 +57,14 @@ export function mergeRelayCatalog(
   const result = { ...records };
   for (const remote of models) {
     const aliases = Object.entries(records).filter(([, record]) => (record.providerId ?? record.provider) === providerId && (record.name ?? record.model) === remote.id).map(([alias]) => alias);
-    if (!aliases.length && remote.hidden) continue;
-    if (!aliases.length) aliases.push(`${providerId}/${remote.id}`);
+    if (aliases.length === 0 && remote.hidden) continue;
+    if (aliases.length === 0) aliases.push(`${providerId}/${remote.id}`);
     const native = findPiModel(provider.type, remote.id);
     const nativeThinking = native ? piThinking(native) : undefined;
     for (const alias of aliases) {
       const old = records[alias];
       const record: ModelRecord = { ...old, provider: providerId, model: remote.id };
+      if (remote.protocol !== undefined) record.defaultProtocol = remote.protocol;
       if (remote.name !== undefined) record.displayName = remote.name;
       if (remote.contextWindow !== undefined) record.maxContextSize = remote.contextWindow;
       else if (!record.maxContextSize) record.maxContextSize = native?.contextWindow ?? 131072;
@@ -74,25 +81,47 @@ export function mergeRelayCatalog(
         }
       }
       if (remote.input !== undefined) record.capabilities = [...capabilities];
-      const thinking = { ...nativeThinking, ...old?.thinking };
-      if (remote.reasoning === false) record.thinking = { availability: 'none', canDisable: false, controls: [] };
-      else if (remote.effortLevels !== undefined) {
-        const enabled = remote.effortLevels.filter((level) => level !== 'off' && remote.thinkingLevelMap?.[level] !== null);
-        const canDisable = remote.effortLevels.includes('off') && remote.thinkingLevelMap?.['off'] !== null;
-        const declaredDefault = remote.defaultEffort ?? thinking.defaultEffort;
-        const defaultEffort = enabled.includes(declaredDefault ?? '') ? declaredDefault : enabled.includes('medium') ? 'medium' : enabled[0];
-        record.thinking = {
-          ...thinking,
-          availability: enabled.length ? canDisable ? 'dynamic' : 'always' : 'none',
-          canDisable,
-          controls: enabled.length ? canDisable ? ['toggle', 'effort'] : ['effort'] : [],
-          efforts: enabled,
-          defaultEffort,
-        };
-        record.supportEfforts = enabled.length > 0 ? [...enabled] : undefined;
-        record.defaultEffort = defaultEffort;
-      } else if (remote.reasoning === true) record.thinking = { ...thinking, availability: thinking.availability === 'always' ? 'always' : 'dynamic' };
-      if (remote.thinkingLevelMap !== undefined) record.effortMapping = { ...old?.effortMapping, ...remote.thinkingLevelMap };
+      const profile = modelEffortProfile(remote.id);
+      const revision = remote.effortRevision ?? 0;
+      const currentRevision = old?.effortProfileRevision ?? 0;
+      if (!profile || revision >= Math.max(EFFORT_PROFILE_REVISION, currentRevision)) {
+        const thinking = { ...nativeThinking, ...old?.thinking };
+        if (revision > 0) {
+          record.offEffort = undefined;
+          record.supportEfforts = undefined;
+          record.defaultEffort = undefined;
+          record.effortMapping = {};
+        }
+        if (remote.reasoning === false) record.thinking = { availability: 'none', canDisable: false, controls: [] };
+        else if (remote.effortMode === 'toggle') {
+          const canDisable = remote.effortLevels?.includes('off') === true;
+          record.thinking = { availability: canDisable ? 'dynamic' : 'always', canDisable, controls: ['toggle'] };
+          record.supportEfforts = undefined;
+          record.defaultEffort = undefined;
+          record.effortMapping = {};
+        }
+        else if (remote.effortLevels !== undefined) {
+          const enabled = remote.effortLevels.filter((level) => level !== 'off' && remote.thinkingLevelMap?.[level] !== null);
+          const canDisable = remote.effortLevels.includes('off') && remote.thinkingLevelMap?.['off'] !== null;
+          const declaredDefault = remote.defaultEffort ?? profile?.defaultEffort ?? thinking.defaultEffort;
+          const defaultEffort = enabled.includes(declaredDefault ?? '') ? declaredDefault : enabled.includes('medium') ? 'medium' : enabled[0];
+          record.thinking = {
+            ...(revision > 0 ? {} : thinking),
+            availability: enabled.length > 0 ? canDisable ? 'dynamic' : 'always' : 'none',
+            canDisable,
+            controls: enabled.length > 0 ? canDisable ? ['toggle', 'effort'] : ['effort'] : [],
+            efforts: enabled,
+            defaultEffort,
+          };
+          record.supportEfforts = enabled.length > 0 ? [...enabled] : undefined;
+          record.defaultEffort = defaultEffort;
+          if (revision > 0) record.effortMapping = Object.fromEntries(enabled.map((level) => [level, level]));
+        } else if (remote.reasoning === true) record.thinking = { ...thinking, availability: thinking.availability === 'always' ? 'always' : 'dynamic' };
+        if (remote.thinkingLevelMap !== undefined) record.effortMapping = { ...(revision > 0 ? {} : old?.effortMapping), ...remote.thinkingLevelMap };
+        if (revision > 0) record.effortProfileRevision = revision;
+      } else if (currentRevision < EFFORT_PROFILE_REVISION) {
+        Object.assign(record, applyModelEffortProfile(record, profile));
+      }
       if (remote.cost !== undefined) {
         record.pricingSource = pricingBasis?.purpose === 'official-equivalent-usage' ? 'official' : 'provider';
         const base = old?.pricing ?? (native ? { inputUsdPerMillion: native.cost.input, outputUsdPerMillion: native.cost.output, cacheReadUsdPerMillion: native.cost.cacheRead, cacheWriteUsdPerMillion: native.cost.cacheWrite } : undefined);

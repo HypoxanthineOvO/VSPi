@@ -11,6 +11,9 @@ import {
 import { ISessionTokenCountingService } from '#/session/tokenCounting/sessionTokenCounting';
 import { IAgentProfileService, type ProfileModelContext } from '#/agent/profile/profile';
 import { IAgentStateService } from '#/agent/state/agentState';
+import { stepRetryRecoveryDeadlineKey } from '#/agent/stepRetry/stepRetry';
+import { LoopError } from '#/agent/loop/loop';
+import { LoopErrors } from '#/agent/loop/errors';
 import { IAgentToolRegistryService } from '#/agent/toolRegistry/toolRegistry';
 import { IAgentToolSelectService } from '#/agent/toolSelect/toolSelect';
 import { IAgentMediaResolverService } from '#/agent/media/mediaResolver';
@@ -76,7 +79,7 @@ import {
   type LlmRequestPayload,
   type LlmRequestToolSchema,
 } from './llmRequestOps';
-import { isAbortError } from '#/_base/utils/abort';
+import { abortable, isAbortError, linkAbortSignal } from '#/_base/utils/abort';
 import { parseBooleanEnv } from '#/_base/utils/env';
 import { ErrorCodes, Error2, unwrapErrorCause } from '#/errors';
 import {
@@ -242,19 +245,37 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
     signal?.throwIfAborted();
     const startedAt = Date.now();
     trace.set(undefined);
+    const deadline = overrides.source?.type === 'turn' && this.states.has(stepRetryRecoveryDeadlineKey)
+      ? this.states.get(stepRetryRecoveryDeadlineKey) : undefined;
+    const budget = deadline === undefined ? undefined : new AbortController();
+    const unlink = signal && budget ? linkAbortSignal(signal, budget) : () => {};
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await this.runRequest(
+      if (budget && deadline !== undefined) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new LoopError(LoopErrors.codes.LOOP_RETRY_BUDGET_EXCEEDED, 'Provider retry recovery budget exhausted; this turn has stopped.');
+        timer = setTimeout(() => {
+          budget.abort(new LoopError(LoopErrors.codes.LOOP_RETRY_BUDGET_EXCEEDED, 'Provider retry recovery budget exhausted; this turn has stopped.'));
+        }, remaining);
+        timer.unref();
+      }
+      const request = this.runRequest(
         this.resolveRequest(overrides),
         onPart,
-        signal,
+        budget?.signal ?? signal,
         (traceId) => {
           trace.set(traceId);
         },
+        budget ? () => { if (timer !== undefined) clearTimeout(timer); timer = undefined; } : undefined,
       );
+      return await (budget ? abortable(request, budget.signal) : request);
     } catch (error) {
       this.logRequestFailure(error, overrides, signal);
       trace.set(this.trackApiError(error, startedAt, signal, overrides.source, trace.traceId));
       throw error;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      unlink();
     }
   }
 
@@ -322,6 +343,7 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
     onPart: AgentLLMRequestPartHandler,
     signal: AbortSignal | undefined,
     onRequestTrace: (traceId: string | undefined) => void,
+    onProtocolBody?: () => void,
   ): Promise<AgentLLMRequestFinish> {
     this.toolCallIdNormalizer.seedFrom(this.context.get());
     const shaped = this.toolSelect.shapeHistory(request.messages);
@@ -381,12 +403,19 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
       };
 
       try {
+        const deadlineAt = request.source?.type === 'turn' && this.states.has(stepRetryRecoveryDeadlineKey)
+          ? this.states.get(stepRetryRecoveryDeadlineKey) : undefined;
+        if (deadlineAt !== undefined && Date.now() >= deadlineAt) throw new LoopError(LoopErrors.codes.LOOP_RETRY_BUDGET_EXCEEDED, 'Provider retry recovery budget exhausted; this turn has stopped.');
         for await (const event of request.requester.request(input, signal, {
           ...request.params,
           onTraceId: setTraceId,
+          onProtocolProgress: onProtocolBody === undefined ? undefined : stage => { if (stage === 'body') onProtocolBody(); },
+          idleTimeoutMs: this.config.get<LoopControl>(LOOP_CONTROL_SECTION)?.requestIdleTimeoutMs,
+          deadlineAt,
         })) {
           switch (event.type) {
             case 'part':
+              onProtocolBody?.();
               await onPart(this.normalizeStreamPart(toolCallIds, event.part));
               break;
             case 'usage':
@@ -493,6 +522,7 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
   }
 
   private get infiniteRetryEnabled(): boolean {
+    if (this.config.get<LoopControl>(LOOP_CONTROL_SECTION)?.retryBudgetMs !== undefined) return false;
     return parseBooleanEnv(this.bootstrap.getEnv(KIMI_CODE_INFINITE_RETRY_ENV)) === true;
   }
 

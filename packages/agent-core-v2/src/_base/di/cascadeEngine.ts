@@ -119,7 +119,7 @@ export class CascadeTree {
   orchestrator: object | undefined;
   private readonly _inFlight = new PairIndex<true>();
   private _settleWaiters: Array<() => void> = [];
-  private readonly _scopeSeq = new Map<object, number>();
+  private readonly _scopeSeq = new WeakMap<object, number>();
   private _nextScopeSeq = 0;
   private readonly _onDidAddEngine = new Emitter<CascadeEngine>();
   readonly onDidAddEngine: Event<CascadeEngine> = this._onDidAddEngine.event;

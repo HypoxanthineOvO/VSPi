@@ -2001,6 +2001,45 @@ describe('Agent tool execution contract', () => {
     expect(result.output).not.toContain('[secondary_model.models]');
   });
 
+  it.each(['Timed out', new Error('Stopped by user')])('does not mirror a subagent failure when its execution signal aborts with %s', async (reason) => {
+    ctx = createTestAgent();
+    const requester = ctx.get(IAgentLifecycleService).handleOf('main');
+    if (requester === undefined) throw new Error('Missing requester');
+    const controller = new AbortController();
+    const completion = new Promise<never>((_resolve, reject) => {
+      controller.signal.addEventListener('abort', () => {
+        reject(controller.signal.reason);
+      }, { once: true });
+    });
+    const mirrored = mirrorAgentRun(requester, {
+      agentId: 'agent-child',
+      turn: {} as AgentRunHandle['turn'],
+      completion,
+    }, { profileName: 'coder', signal: controller.signal });
+
+    controller.abort(reason);
+
+    await expect(mirrored).rejects.toBe(reason);
+    expect(ctx.allEvents.filter(event => event.type === '[rpc]' && event.event === 'subagent.failed')).toEqual([]);
+  });
+
+  it('mirrors an actual subagent failure when its execution signal is not aborted', async () => {
+    ctx = createTestAgent();
+    const requester = ctx.get(IAgentLifecycleService).handleOf('main');
+    if (requester === undefined) throw new Error('Missing requester');
+    const error = new Error('Provider request failed');
+
+    await expect(mirrorAgentRun(requester, {
+      agentId: 'agent-child',
+      turn: {} as AgentRunHandle['turn'],
+      completion: Promise.reject(error),
+    }, { profileName: 'coder', signal: new AbortController().signal })).rejects.toBe(error);
+
+    expect(ctx.allEvents.filter(event => event.type === '[rpc]' && event.event === 'subagent.failed')).toEqual([
+      expect.objectContaining({ args: expect.objectContaining({ subagentId: 'agent-child', error: 'Provider request failed' }) }),
+    ]);
+  });
+
   it('mirrors v1-compatible subagent lifecycle event fields', async () => {
     const lifecycle = createAgentLifecycleStub();
     const events: Event2[] = [];

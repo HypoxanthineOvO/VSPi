@@ -47,11 +47,12 @@ import {
 	resolveCommand,
 } from "../domain/commands.js";
 import { DEFAULT_USAGE } from "../domain/defaults.js";
-import { effortLabel } from "../domain/effort.js";
+import { effortLabel, preferredVisibleEffort } from "../domain/effort.js";
 import type {
 	AppSettings,
 	Attachment,
 	EffortLevel,
+	ModelOption,
 	ProviderOption,
 	Question,
 	SessionOption,
@@ -139,7 +140,6 @@ import { VspiTuiAltScreen } from "../ui/tui-frame-pacer.js";
 import { type SelfUpdateResult, updateVspi } from "../update/self-update.js";
 import { VSPI_VERSION } from "../version.js";
 import type { WorkflowAdapter, WorkflowSnapshot } from "../workflow/types.js";
-import { spawnReloadChild } from "./reload-launcher.js";
 
 export interface VspiAppOptions {
 	cwd: string;
@@ -234,6 +234,7 @@ type NoticeTone = "info" | "success" | "warning" | "error";
 
 const BUSY_SAFE_ACTIONS = new Set<ActionHandler>([
 	"models",
+	"subagentModels",
 	"effort",
 	"policy",
 	"settings",
@@ -337,6 +338,8 @@ export class VspiApp implements Component, Focusable {
 	private effort: EffortLevel = "medium";
 	private modelLabel: string;
 	private pendingModelLabel: string | undefined;
+	private pendingModelSelection: { model: ModelOption; epoch: number } | undefined;
+	private modelSelectionCommitting = false;
 	private busy = false;
 	private runActive = false;
 	private compaction: CompactionPresentationState | undefined;
@@ -530,9 +533,23 @@ export class VspiApp implements Component, Focusable {
 	async start(): Promise<void> {
 		try {
 			await this.backend.start({
+				onHistory: (messages, prepend) => {
+					const ids = new Set(messages.map(message => message.id));
+					const current = this.messages.filter(message => !ids.has(message.id));
+					const history = messages.map(message => this.withThinkingDisplayDefault(message));
+					this.messages = prepend ? [...history, ...current] : history;
+					if (this.messages.length > 1000) {
+						this.messages = [...this.messages.slice(0, 899), { id: 'history-window-gap', role: 'assistant', kind: 'session', text: '中间历史已移出显示窗口；/history latest 返回最近记录，完整记录未删除。' }, ...this.messages.slice(-100)];
+					}
+					this.committedMessageCount = 0;
+					this.transcriptRenderCache.clear();
+					this.requestRender();
+				},
 				onMessage: (message) => {
 					if (this.sessionTransition && !this.sessionResetObserved) return;
-					this.messages.push(this.withThinkingDisplayDefault(message));
+					const index = this.messages.findIndex(item => item.id === message.id);
+					if (index >= 0) this.messages[index] = this.withThinkingDisplayDefault(message);
+					else this.messages.push(this.withThinkingDisplayDefault(message));
 					this.requestRender();
 				},
 				onMessageUpdate: (id, patch) => {
@@ -561,7 +578,7 @@ export class VspiApp implements Component, Focusable {
 					this.requestRender();
 				},
 				onBusy: (busy) => {
-					if (this.sessionTransition) return;
+					if (this.sessionTransition && !this.sessionResetObserved) return;
 					this.setBusy(busy);
 				},
 				onQueueUpdate: (queue) => {
@@ -592,6 +609,13 @@ export class VspiApp implements Component, Focusable {
 					this.syncActivityPresentation();
 				},
 				onNotice: (text, tone) => this.showNotice(text, tone),
+				onModelChanged: (effort) => {
+					this.effort = effort;
+					this.modelLabel = this.backend.modelLabel;
+					this.currentModelIdentity = this.backend.modelProvider ? { provider: this.backend.modelProvider, id: this.backend.modelId } : undefined;
+					if (this.currentModelIdentity) this.panels.confirmModelSelection(this.currentModelIdentity);
+					this.requestRender();
+				},
 				onQuestion: (questions, signal) =>
 					this.requestQuestions(questions, signal),
 				onPlanItems: (items) => {
@@ -832,8 +856,6 @@ export class VspiApp implements Component, Focusable {
 				? { provider: this.backend.modelProvider, id: this.backend.modelId }
 				: undefined;
 			this.panels.setModels(models, groups, backendModelIdentity);
-			const subagentPreferences = await this.backend.getSubagentModelPreferences?.();
-			if (subagentPreferences) this.panels.setSubagentModelPreferences(subagentPreferences);
 			this.modelOptions = structuredClone(models);
 			this.providerConfig = this.options.providerConfigFactory?.(
 				this.backend.isProjectTrusted?.() ?? false,
@@ -858,7 +880,8 @@ export class VspiApp implements Component, Focusable {
 			this.runtimeDefaults = this.options.runtimeDefaultsFactory?.(
 				this.backend.isProjectTrusted?.() ?? false,
 			);
-			await this.applyRuntimeDefaults({
+			if (backendModelIdentity) this.currentModelIdentity = backendModelIdentity;
+			if (!this.backend.isSessionReady?.()) await this.applyRuntimeDefaults({
 				applyModel: !this.backend.consumeResolvedModelFallback?.(),
 			});
 			if (this.attachmentSessionId)
@@ -1257,7 +1280,7 @@ export class VspiApp implements Component, Focusable {
 	}
 
 	private handlePanelInput(data: string): void {
-		if (this.sessionTransition) return;
+		if (this.sessionTransition || this.modelSelectionCommitting) return;
 		const panelKind = this.panels.kind;
 		const event = this.panels.handleInput(data);
 		const policy = this.currentPolicySnapshot();
@@ -2672,6 +2695,10 @@ export class VspiApp implements Component, Focusable {
 		}
 		if (action.handler === "update") {
 			this.panels.close();
+			if (this.backend.kind === 'runtime' && !this.options.selfUpdate) {
+				this.showNotice('请先退出当前客户端，再在终端运行 vspi update；升级会检查活跃任务并安全切换 Daemon。', 'info');
+				return;
+			}
 			this.showProgress("正在检查 VSPi 更新…");
 			this.requestRender();
 			try {
@@ -2700,15 +2727,14 @@ export class VspiApp implements Component, Focusable {
 				);
 				return;
 			}
-			const launch = this.options.reloadLauncher ?? spawnReloadChild;
+			if (!this.options.reloadLauncher || !this.options.onReloadSpawned) {
+				this.showNotice('为避免终端接管冲突，当前禁用热重载；请退出当前客户端后运行 vspi continue。退出客户端不会停止后台 Daemon。', 'warning');
+				return;
+			}
+			const launch = this.options.reloadLauncher;
 			try {
 				await launch();
-				// 续接进程已接管同一 TTY：旧进程立即静默，停止读取 stdin 与终端恢复，
-				// 避免 setRawMode(false) 把续接进程已设好的 raw 终端打回 cooked+ECHO。
 				this.options.onReloadSpawned?.();
-				// 新进程接管 lease 后本进程会走 onTakeover 退出；兜底：3 秒仍未移交则直接退出。
-				const fallback = setTimeout(() => this.options.onExit(), 3_000);
-				fallback.unref?.();
 			} catch (error) {
 				this.showNotice(
 					`/reload 失败：${error instanceof Error ? error.message : "未知错误"}`,
@@ -2747,9 +2773,12 @@ export class VspiApp implements Component, Focusable {
 		}
 		if (action.handler === "models") {
 			this.panels.open("models");
+		} else if (action.handler === "subagentModels") {
 			try {
-				const preferences = await this.backend.getSubagentModelPreferences?.();
-				if (preferences) this.panels.setSubagentModelPreferences(preferences);
+				if (!this.backend.getSubagentModelPreferences || !this.backend.updateSubagentModelPreferences) throw new Error("当前后端不支持 secondary_model 配置");
+				const preferences = await this.backend.getSubagentModelPreferences();
+				this.panels.setSubagentModelPreferences(preferences);
+				this.panels.open("subagentModels");
 			} catch (error) { this.showNotice(`子模型配置读取失败：${error instanceof Error ? error.message : String(error)}`, "error"); }
 		}
 		else if (action.handler === "providers") this.panels.open("providers");
@@ -2880,6 +2909,9 @@ export class VspiApp implements Component, Focusable {
 			return;
 		} else if (action.handler === "prompt") {
 			await this.executePromptCommand(raw);
+		} else if (action.handler === "history") {
+			try { await this.backend.loadOlderHistory?.(/\blatest\s*$/u.test(raw)); }
+			catch (error) { this.showNotice(`历史读取失败：${error instanceof Error ? error.message : String(error)}`, 'error'); }
 		} else if (action.handler === "sessions") {
 			try {
 				this.panels.setSessions(await this.backend.listSessions());
@@ -2957,6 +2989,13 @@ export class VspiApp implements Component, Focusable {
 			return;
 		}
 		if (event.type === "close") {
+			if (this.pendingModelSelection) {
+				this.pendingModelSelection = undefined;
+				this.panels.returnToModels();
+				this.showNotice("已取消模型切换，当前模型与 Effort 保持不变", "info");
+				this.requestRender();
+				return;
+			}
 			if (this.composer.getText() === "/") this.composer.setText("");
 			if (this.pendingApproval) {
 				const pending = this.pendingApproval;
@@ -3033,59 +3072,23 @@ export class VspiApp implements Component, Focusable {
 				if (!this.backend.updateSubagentModelPreferences) throw new Error("当前后端不支持子模型配置");
 				const preferences = await this.backend.updateSubagentModelPreferences(event.edit);
 				this.panels.setSubagentModelPreferences(preferences);
-				this.showNotice("子模型候选配置已保存", "success");
+				this.showNotice("secondary_model 已保存，对后续创建的 Subagent 生效", "success");
 			} catch (error) { this.showNotice(`子模型配置未保存：${error instanceof Error ? error.message : String(error)}`, "error"); }
 		} else if (event.type === "model") {
-			const switchingDuringActivity = this.activityActive();
+			const selection = { model: event.model, epoch: this.sessionEpoch };
+			this.pendingModelSelection = selection;
 			try {
 				if (!this.backend.selectModel || !event.model.provider)
 					throw new Error("该模型缺少 runtime Provider identity");
-				const selected = await this.backend.selectModel(
-					event.model.provider,
-					event.model.id,
-				);
-				this.modelLabel = this.backend.modelLabel;
-				if (switchingDuringActivity && this.activityActive())
-					this.pendingModelLabel = this.modelLabel;
-				this.currentModelIdentity = {
-					provider: event.model.provider,
-					id: selected.modelId,
-				};
-				this.effort = selected.effort;
-				this.refreshModelPresentation();
-				this.panels.confirmModelSelection({
-					provider: event.model.provider,
-					id: selected.modelId,
-				});
-				const defaultsSaved = await this.persistRuntimeDefaults();
-				const catalogEffortLevels =
-					event.model.efforts.length > 0
-						? event.model.efforts
-						: (["off"] as EffortLevel[]);
-				let effortLevels = catalogEffortLevels;
-				if (this.backend.getEffortOptions) {
-					try {
-						effortLevels = await this.backend.getEffortOptions();
-					} catch {
-						effortLevels = catalogEffortLevels;
-					}
-				}
-				this.panels.openEffort(this.effort, effortLevels);
-				if (defaultsSaved) {
-					const threshold = Math.max(0, selected.contextWindow - 16_384);
-					const needsCompaction =
-						selected.contextWindow > 0 &&
-						(this.usage.contextTokens ?? 0) > threshold;
-					this.showNotice(
-						switchingDuringActivity
-							? needsCompaction
-								? `下一次模型调用将使用 ${this.modelLabel}；上下文超过目标安全阈值，将先自动压缩；请选择 Effort`
-								: `下一次模型调用将使用 ${this.modelLabel}；请选择 Effort`
-							: `模型已切换为 ${this.modelLabel}；请选择 Effort`,
-						needsCompaction ? "warning" : "success",
-					);
-				}
+				const preferred = await this.backend.getPreferredModelEffort?.(event.model.provider, event.model.id);
+				if (this.pendingModelSelection !== selection || selection.epoch !== this.sessionEpoch) return;
+				const catalog = this.modelOptions.find((model) => model.provider === event.model.provider && model.id === event.model.id);
+				const effort = preferred?.effort ?? preferredVisibleEffort(undefined, { options: event.model.efforts, defaultEffort: catalog?.defaultEffort ?? "medium" });
+				this.panels.openEffort(effort, event.model.efforts);
+				this.showNotice(preferred?.warning ?? `为 ${event.model.label} 选择 Effort；确认后切换，Esc 返回`, preferred?.warning ? "warning" : "info");
 			} catch (error) {
+				if (this.pendingModelSelection !== selection || selection.epoch !== this.sessionEpoch) return;
+				this.pendingModelSelection = undefined;
 				this.showNotice(
 					`模型切换失败：${error instanceof Error ? error.message : "未知错误"}`,
 					"error",
@@ -3119,8 +3122,7 @@ export class VspiApp implements Component, Focusable {
 					model.id,
 				);
 				if (model.efforts.includes(role.effort)) {
-					await this.backend.setEffort(role.effort);
-					selected.effort = role.effort;
+					selected.effort = await this.backend.setEffort(role.effort) ?? role.effort;
 				}
 				this.modelLabel = this.backend.modelLabel;
 				if (switchingDuringActivity && this.activityActive())
@@ -3377,10 +3379,10 @@ export class VspiApp implements Component, Focusable {
 				});
 				this.panels.confirmSettings(settings);
 				let requestedTuiMode: TuiMode | undefined;
+				const endpointChanged =
+					settings.scope === "global" &&
+					this.options.settings.thinkingTranslationEndpoint !== settings.thinkingTranslationEndpoint;
 				if (this.options.settings.scope === settings.scope) {
-					const endpointChanged =
-						this.options.settings.thinkingTranslationEndpoint !==
-						settings.thinkingTranslationEndpoint;
 					const tuiModeChanged =
 						this.options.settings.tuiMode !== settings.tuiMode;
 					this.options.settings = { ...settings };
@@ -3389,6 +3391,12 @@ export class VspiApp implements Component, Focusable {
 					this.fullscreenScrollView.setScrollbar(settings.fullscreenScrollbar);
 					if (tuiModeChanged) requestedTuiMode = settings.tuiMode;
 					this.syncActivityPresentation();
+				} else if (endpointChanged) {
+					this.options.settings = {
+						...this.options.settings,
+						thinkingTranslationEndpoint: settings.thinkingTranslationEndpoint,
+					};
+					this.applyThinkingTranslationEndpoint();
 				}
 				this.completeOneShotPanel();
 				if (requestedTuiMode && !this.switchTuiMode(requestedTuiMode)) {
@@ -3405,16 +3413,20 @@ export class VspiApp implements Component, Focusable {
 				);
 			}
 		} else if (event.type === "effort") {
+			if (this.pendingModelSelection) {
+				await this.confirmPendingModel(event.effort);
+				return;
+			}
 			try {
 				if (!this.backend.setEffort)
 					throw new Error("当前后端不支持 Effort 切换");
-				await this.backend.setEffort(event.effort);
-				this.effort = event.effort;
+				this.effort = await this.backend.setEffort(event.effort) ?? event.effort;
 				const defaultsSaved = await this.persistRuntimeDefaults();
 				this.completeOneShotPanel();
-				if (defaultsSaved)
+				if (this.effort !== event.effort) this.showNotice(`所选 Effort ${effortLabel(event.effort)} 被配置约束为 ${effortLabel(this.effort)}`, "warning");
+				else if (defaultsSaved)
 					this.showNotice(
-						`Effort 已切换为 ${effortLabel(event.effort)}`,
+						event.effort === "off" ? "已确认模型固定配置" : `Effort 已切换为 ${effortLabel(event.effort)}`,
 						"success",
 					);
 			} catch (error) {
@@ -4597,6 +4609,40 @@ export class VspiApp implements Component, Focusable {
 		}
 	}
 
+	private async confirmPendingModel(effort: EffortLevel): Promise<void> {
+		const selection = this.pendingModelSelection;
+		if (!selection?.model.provider || !this.backend.selectModel || this.modelSelectionCommitting) return;
+		this.modelSelectionCommitting = true;
+		const switchingDuringActivity = this.activityActive();
+		this.showProgress(`正在应用 ${selection.model.label} · ${effort === "off" ? "固定配置" : effortLabel(effort)}…`);
+		this.requestRender();
+		try {
+			const selected = await this.backend.selectModel(selection.model.provider, selection.model.id, effort);
+			if (selection.epoch !== this.sessionEpoch) return;
+			this.pendingModelSelection = undefined;
+			this.modelLabel = this.backend.modelLabel;
+			if (switchingDuringActivity && this.activityActive()) this.pendingModelLabel = this.modelLabel;
+			this.currentModelIdentity = { provider: selection.model.provider, id: selected.modelId };
+			this.effort = selected.effort;
+			this.refreshModelPresentation();
+			this.panels.confirmModelSelection(this.currentModelIdentity);
+			const saved = await this.persistRuntimeDefaults();
+			if (selection.epoch !== this.sessionEpoch) return;
+			this.completeOneShotPanel();
+			if (selected.warning) this.showNotice(selected.warning, "warning");
+			else if (saved) {
+				const needsCompaction = selected.contextWindow > 0 && (this.usage.contextTokens ?? 0) > Math.max(0, selected.contextWindow - 16_384);
+				const level = this.effort === "off" ? "固定配置" : effortLabel(this.effort);
+				this.showNotice(`${switchingDuringActivity ? "下一次模型调用将使用" : "已切换为"} ${this.modelLabel} · ${level}${needsCompaction ? "；上下文超出目标阈值，将自动压缩" : ""}`, needsCompaction ? "warning" : "success");
+			}
+		} catch (error) {
+			if (selection.epoch === this.sessionEpoch) this.showNotice(`模型与 Effort 未完成切换：${error instanceof Error ? error.message : String(error)}`, "error");
+		} finally {
+			this.modelSelectionCommitting = false;
+			this.requestRender();
+		}
+	}
+
 	private async persistRuntimeDefaults(): Promise<boolean> {
 		if (!this.runtimeDefaults) return true;
 		try {
@@ -4650,13 +4696,12 @@ export class VspiApp implements Component, Focusable {
 		if (this.backend.setEffort) {
 			try {
 				const levels = await this.backend.getEffortOptions?.();
-				if (levels && !levels.includes(defaults.value.effort)) {
+				if (levels && !levels.includes(defaults.value.effort) && !(levels.length === 0 && defaults.value.effort === "off")) {
 					diagnostics.push(
 						`默认 Effort ${effortLabel(defaults.value.effort)} 不受当前模型支持，已保留当前档位`,
 					);
 				} else {
-					await this.backend.setEffort(defaults.value.effort);
-					this.effort = defaults.value.effort;
+					this.effort = await this.backend.setEffort(defaults.value.effort) ?? defaults.value.effort;
 				}
 			} catch (error) {
 				diagnostics.push(
@@ -5294,6 +5339,7 @@ export class VspiApp implements Component, Focusable {
 
 	private resetSessionState(): number {
 		this.sessionEpoch += 1;
+		this.pendingModelSelection = undefined;
 		this.cancelPendingQuestion(
 			"Question cancelled because the session changed",
 		);

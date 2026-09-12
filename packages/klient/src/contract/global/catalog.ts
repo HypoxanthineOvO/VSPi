@@ -22,6 +22,7 @@ export const thinkingCapabilitySchema = z.object({
 });
 
 export const modelCatalogItemSchema = z.object({
+  protocol: z.enum(['anthropic', 'openai', 'openai_responses', 'google-genai']).optional(),
   pricing_source: z.enum(['official', 'provider']).optional(),
   curated: z.boolean().optional(),
   released_at: z.string().optional(),

@@ -17,8 +17,9 @@ import type {
   ScopeRef,
 } from '../../core/channel.js';
 import { RPCError } from '../../core/errors.js';
+import { PAYLOAD_TOO_LARGE } from '../json.js';
 import { trimTrailingUndefined } from '../args.js';
-import { encodeFrame, NdjsonDecoder, type IpcFrame } from './codec.js';
+import { DEFAULT_HANDSHAKE_TIMEOUT_MS, DEFAULT_MAX_FRAME_BYTES, encodeFrame, NdjsonDecoder, positiveLimit, type IpcFrame } from './codec.js';
 
 const DEFAULT_CALL_TIMEOUT_MS = 30_000;
 
@@ -27,6 +28,9 @@ export interface IpcChannelOptions {
   readonly token?: string;
   /** Per-call deadline (ms). Default `30000`; `0` disables. */
   readonly callTimeoutMs?: number;
+  /** Deadline for connecting and completing hello, independently of RPC deadlines. */
+  readonly handshakeTimeoutMs?: number;
+  readonly maxFrameBytes?: number;
 }
 
 interface PendingCall {
@@ -37,8 +41,7 @@ interface PendingCall {
 
 /**
  * Async queue for streaming responses. The server pushes chunks via
- * `stream_data` frames; the client pulls them with `next()`. Back-pressure
- * is implicit: the queue buffers until the consumer drains.
+ * `stream_data` frames; slow consumers are cancelled when the bounded queue fills.
  */
 interface PendingStream {
   push(chunk: unknown): void;
@@ -55,7 +58,9 @@ function scopeKindOf(scope: ScopeRef): 'core' | 'workspace' | 'session' | 'agent
 
 export class IpcChannel implements KlientChannel {
   private readonly socket: Socket;
-  private readonly decoder = new NdjsonDecoder();
+  private readonly decoder: NdjsonDecoder;
+  private readonly maxFrameBytes: number;
+  private readonly handshakeTimer: ReturnType<typeof setTimeout>;
   private readonly callTimeoutMs: number;
   private readonly pending = new Map<string, PendingCall>();
   private readonly streams = new Map<string, PendingStream>();
@@ -72,6 +77,9 @@ export class IpcChannel implements KlientChannel {
 
   constructor(options: IpcChannelOptions) {
     this.callTimeoutMs = options.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+    const handshakeTimeoutMs = positiveLimit(options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS);
+    this.maxFrameBytes = positiveLimit(options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES);
+    this.decoder = new NdjsonDecoder(this.maxFrameBytes);
     this.socket = createConnection(options.socketPath);
     this.ready = new Promise<unknown>((resolve, reject) => {
       this.resolveReady = resolve;
@@ -81,15 +89,26 @@ export class IpcChannel implements KlientChannel {
       this.send({ type: 'hello', token: options.token });
     });
     this.ready.catch(() => {});
+    this.handshakeTimer = setTimeout(() => {
+      this.terminate(new Error(`IPC handshake timed out after ${handshakeTimeoutMs}ms`));
+    }, handshakeTimeoutMs);
+    this.handshakeTimer.unref();
 
     this.socket.on('data', (chunk) => {
-      for (const frame of this.decoder.push(chunk.toString('utf8'))) {
-        this.onFrame(frame);
+      try {
+        for (const frame of this.decoder.push(chunk)) {
+          if (this.closed || this.socket.destroyed) break;
+          this.onFrame(frame);
+        }
+      } catch (error) {
+        this.terminate(error instanceof Error ? error : new Error('Invalid IPC response'));
       }
     });
     this.socket.on('close', () => {
       const unexpected = !this.closed;
       this.closed = true;
+      clearTimeout(this.handshakeTimer);
+      this.decoder.clear();
       const error = new Error('ipc closed');
       this.rejectReady(error);
       this.failAll(error);
@@ -115,7 +134,8 @@ export class IpcChannel implements KlientChannel {
     options?: CallOptions,
   ): Promise<unknown> {
     await this.ready;
-    if (this.closed) throw new Error('ipc closed');
+    if (this.closed || this.socket.destroyed) throw new Error('ipc closed');
+    if (this.pending.size >= 32) throw new RPCError(42901, 'IPC request capacity reached; wait for pending operations');
     const timeoutMs = options?.timeoutMs ?? this.callTimeoutMs;
     const id = this.nextId();
     const promise = new Promise<unknown>((resolve, reject) => {
@@ -150,7 +170,8 @@ export class IpcChannel implements KlientChannel {
         // Simple queue: push/pull with deferred promises. `buffer` holds
         // already-received chunks waiting for a `next()` call; `waiters`
         // holds unresolved `next()` calls waiting for a chunk.
-        const buffer: Array<IteratorResult<unknown>> = [];
+        const buffer: Array<{ result: IteratorResult<unknown>; bytes: number }> = [];
+        let bufferedBytes = 0;
         const waiters: Array<{
           resolve: (result: IteratorResult<unknown>) => void;
           reject: (err: Error) => void;
@@ -159,14 +180,21 @@ export class IpcChannel implements KlientChannel {
         let streamId: string | undefined;
 
         const pending: PendingStream = {
-          push(chunk: unknown) {
+          push: (chunk: unknown) => {
             if (done) return;
             const result: IteratorResult<unknown> = { done: false, value: chunk };
             const waiter = waiters.shift();
             if (waiter !== undefined) {
               waiter.resolve(result);
             } else {
-              buffer.push(result);
+              const bytes = Buffer.byteLength(JSON.stringify(chunk) ?? 'null');
+              if (bufferedBytes + bytes > this.maxFrameBytes || buffer.length >= 1024) {
+                if (streamId !== undefined) this.send({ type: 'stream_cancel', id: streamId });
+                pending.error(new Error('IPC stream buffer limit exceeded'));
+                return;
+              }
+              bufferedBytes += bytes;
+              buffer.push({ result, bytes });
             }
           },
           end: () => {
@@ -178,7 +206,7 @@ export class IpcChannel implements KlientChannel {
             if (waiter !== undefined) {
               waiter.resolve(terminal);
             } else {
-              buffer.push(terminal);
+              buffer.push({ result: terminal, bytes: 0 });
             }
             // Resolve remaining waiters with done
             for (const w of waiters) {
@@ -190,12 +218,14 @@ export class IpcChannel implements KlientChannel {
             if (done) return;
             done = true;
             if (streamId !== undefined) this.streams.delete(streamId);
+            buffer.length = 0;
+            bufferedBytes = 0;
             const waiter = waiters.shift();
             if (waiter !== undefined) {
               waiter.reject(err);
             } else {
               // Store as a throwing result
-              buffer.push({ done: true, value: err } as IteratorResult<unknown>);
+              buffer.push({ result: { done: true, value: err }, bytes: 0 });
             }
             for (const w of waiters) {
               w.reject(err);
@@ -210,6 +240,7 @@ export class IpcChannel implements KlientChannel {
           if (started) return;
           started = true;
           void this.ready.then(() => {
+            if (done) return;
             if (this.closed) {
               pending.error(new Error('ipc closed'));
               return;
@@ -227,7 +258,7 @@ export class IpcChannel implements KlientChannel {
               sessionId: scope.sessionId,
               agentId: scope.agentId,
             });
-          });
+          }, (error: Error) => { pending.error(error); });
         };
 
         return {
@@ -236,10 +267,11 @@ export class IpcChannel implements KlientChannel {
             const buffered = buffer.shift();
             if (buffered !== undefined) {
               // Check if this is an error stored as { done: true, value: Error }
-              if (buffered.done && buffered.value instanceof Error) {
-                return Promise.reject(buffered.value);
+              bufferedBytes -= buffered.bytes;
+              if (buffered.result.done && buffered.result.value instanceof Error) {
+                return Promise.reject(buffered.result.value);
               }
-              return Promise.resolve(buffered);
+              return Promise.resolve(buffered.result);
             }
             if (done) return Promise.resolve({ done: true, value: undefined });
             return new Promise((resolve, reject) => {
@@ -247,6 +279,8 @@ export class IpcChannel implements KlientChannel {
             });
           },
           return: (): Promise<IteratorResult<unknown>> => {
+            buffer.length = 0;
+            bufferedBytes = 0;
             if (!done) {
               done = true;
               if (streamId !== undefined) {
@@ -313,11 +347,13 @@ export class IpcChannel implements KlientChannel {
   close(): Promise<void> {
     if (this.closed) return Promise.resolve();
     this.closed = true;
+    clearTimeout(this.handshakeTimer);
+    this.decoder.clear();
     const error = new Error('ipc closed');
     this.rejectReady(error);
     this.failAll(error);
     this.listens.clear();
-    this.socket.end();
+    this.socket.destroy();
     return Promise.resolve();
   }
 
@@ -334,6 +370,7 @@ export class IpcChannel implements KlientChannel {
       case 'ready':
         return;
       case 'hello_result':
+        clearTimeout(this.handshakeTimer);
         this.resolveReady(frame.data);
         return;
       case 'result': {
@@ -347,7 +384,7 @@ export class IpcChannel implements KlientChannel {
           frame.msg ?? 'error',
         );
         if (id === 'hello') {
-          this.rejectReady(error);
+          this.terminate(error);
           return;
         }
         const p = this.take(id);
@@ -417,9 +454,25 @@ export class IpcChannel implements KlientChannel {
   private send(frame: IpcFrame): void {
     if (this.closed || this.socket.destroyed) return;
     try {
-      this.socket.write(encodeFrame(frame));
-    } catch {
-      // best-effort; the close handler handles teardown
+      const encoded = encodeFrame(frame, this.maxFrameBytes);
+      if (this.socket.writableLength + Buffer.byteLength(encoded) > 2 * this.maxFrameBytes) {
+        throw new Error('IPC write buffer limit exceeded');
+      }
+      this.socket.write(encoded);
+    } catch (error) {
+      if (error instanceof RPCError && error.code === PAYLOAD_TOO_LARGE && frame.id) {
+        this.take(frame.id)?.reject(error);
+        this.streams.get(frame.id)?.error(error);
+        return;
+      }
+      this.terminate(error instanceof Error ? error : new Error('IPC write failed'));
     }
+  }
+
+  private terminate(error: Error): void {
+    clearTimeout(this.handshakeTimer);
+    this.rejectReady(error);
+    this.failAll(error);
+    this.socket.destroy();
   }
 }

@@ -3,11 +3,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   APIConnectionError,
   APIProviderRateLimitError,
+  APIProviderQuotaExhaustedError,
   APIStatusError,
+  ChatProviderError,
 } from '#/kosong/contract/errors';
 import { emptyUsage } from '#/kosong/contract/usage';
 import { IEventBus } from '#/app/event/eventBus';
-import { retryBackoffDelays } from '#/_base/utils/retry';
+import { retryBackoffDelays, sleepForRetry } from '#/_base/utils/retry';
 import { IAgentLoopService } from '#/agent/loop/loop';
 import { ContinuationStepRequest } from '#/agent/loop/stepRequest';
 import { TurnStarted } from '#/agent/loop/turnEvents';
@@ -68,6 +70,133 @@ describe('stepRetry plugin', () => {
     }
     return resultPromise;
   }
+
+  async function runBoundedTurn(signal?: AbortSignal) {
+    await ctx.dispatcher.dispatch(new TurnStarted({ agentId: 'main', turnId: 1, origin: { kind: 'user' } }));
+    const loop = ctx.get(IAgentLoopService);
+    loop.enqueue(new ContinuationStepRequest());
+    return loop.run({ turnId: 1, signal });
+  }
+
+  it('stops after three transient failures when finite recovery is configured despite the legacy infinite switch', async () => {
+    vi.stubEnv('KIMI_CODE_INFINITE_RETRY', '1');
+    let calls = 0;
+    ctx = createTestAgent(
+      { initialConfig: { loopControl: { maxAttemptsPerStep: 3, retryBudgetMs: 120_000, retryInitialDelayMs: 0 } } },
+      llmGenerateServices(async () => { calls++; throw new APIStatusError(503, 'temporarily unavailable'); }),
+    );
+    expect((await runBoundedTurn()).type).toBe('failed');
+    expect(calls).toBe(3);
+    expect(rpcEvents('turn.step.retrying')).toHaveLength(2);
+  });
+
+  it.each([400, 401, 403, 404, 422])('does not retry HTTP %s when finite transient-only recovery is configured', async (status) => {
+    vi.stubEnv('KIMI_CODE_INFINITE_RETRY', '1');
+    let calls = 0;
+    ctx = createTestAgent(
+      { initialConfig: { loopControl: { maxAttemptsPerStep: 3, retryBudgetMs: 120_000, retryInitialDelayMs: 0 } } },
+      llmGenerateServices(async () => { calls++; throw new APIStatusError(status, 'permanent failure'); }),
+    );
+    expect((await runBoundedTurn()).type).toBe('failed');
+    expect(calls).toBe(1);
+    expect(rpcEvents('turn.step.retrying')).toEqual([]);
+  });
+
+  it('does not retry an unclassified provider configuration error under finite recovery', async () => {
+    let calls = 0;
+    ctx = createTestAgent(
+      { initialConfig: { loopControl: { maxAttemptsPerStep: 3, retryBudgetMs: 120_000 } } },
+      llmGenerateServices(async () => { calls++; throw new ChatProviderError('Unsupported model configuration'); }),
+    );
+    expect((await runBoundedTurn()).type).toBe('failed');
+    expect(calls).toBe(1);
+  });
+
+  it('does not retry exhausted provider quota under finite recovery', async () => {
+    let calls = 0;
+    ctx = createTestAgent(
+      { initialConfig: { loopControl: { maxAttemptsPerStep: 3, retryBudgetMs: 120_000 } } },
+      llmGenerateServices(async () => { calls++; throw new APIProviderQuotaExhaustedError('quota exhausted'); }),
+    );
+    expect((await runBoundedTurn()).type).toBe('failed');
+    expect(calls).toBe(1);
+  });
+
+  it('ends an unresponsive retry when the recovery budget expires', async () => {
+    let calls = 0;
+    let retrySignal: AbortSignal | undefined;
+    ctx = createTestAgent(
+      { initialConfig: { loopControl: { maxAttemptsPerStep: 3, retryBudgetMs: 30, retryInitialDelayMs: 0 } } },
+      llmGenerateServices(async (_provider, _system, _tools, _history, _callbacks, options) => {
+        if (++calls === 1) throw new APIConnectionError('disconnected');
+        retrySignal = options?.signal;
+        return new Promise<never>(() => {});
+      }),
+    );
+    const result = await runBoundedTurn();
+    expect(result).toMatchObject({ type: 'failed', error: { code: 'loop.retry_budget_exceeded' } });
+    expect(calls).toBe(2);
+    expect(retrySignal?.aborted).toBe(true);
+  });
+
+  it('does not cut off a retry that resumes protocol content and completes after its original recovery window', async () => {
+    let calls = 0;
+    ctx = createTestAgent(
+      { initialConfig: { loopControl: { maxAttemptsPerStep: 3, retryBudgetMs: 30, retryInitialDelayMs: 0 } } },
+      llmGenerateServices(async (_provider, _system, _tools, _history, callbacks, options) => {
+        if (++calls === 1) throw new APIConnectionError('disconnected');
+        options?.onProtocolProgress?.('body');
+        await callbacks?.onMessagePart?.({ type: 'think', think: 'protocol progress' });
+        await sleepForRetry(50, options?.signal);
+        await callbacks?.onMessagePart?.({ type: 'text', text: 'recovered' });
+        return { id: 'recovered', message: { role: 'assistant', content: [{ type: 'text', text: 'recovered' }], toolCalls: [] }, usage: emptyUsage(), finishReason: 'completed', rawFinishReason: 'stop' };
+      }),
+    );
+    expect(await runBoundedTurn()).toEqual({ type: 'completed', steps: 2, truncated: false });
+    expect(calls).toBe(2);
+  });
+
+  it('does not start another retry if a recovered stream fails after the original recovery window', async () => {
+    let calls = 0;
+    ctx = createTestAgent(
+      { initialConfig: { loopControl: { maxAttemptsPerStep: 3, retryBudgetMs: 30, retryInitialDelayMs: 0 } } },
+      llmGenerateServices(async (_provider, _system, _tools, _history, callbacks, options) => {
+        if (++calls === 1) throw new APIConnectionError('disconnected');
+        options?.onProtocolProgress?.('body');
+        await callbacks?.onMessagePart?.({ type: 'think', think: 'protocol progress' });
+        await sleepForRetry(50, options?.signal);
+        throw new APIConnectionError('disconnected again');
+      }),
+    );
+    expect(await runBoundedTurn()).toMatchObject({ type: 'failed', error: { code: 'loop.retry_budget_exceeded' } });
+    expect(calls).toBe(2);
+  });
+
+  it('ends recovery without retrying early when Retry-After exceeds the remaining budget', async () => {
+    let calls = 0;
+    ctx = createTestAgent(
+      { initialConfig: { loopControl: { maxAttemptsPerStep: 3, retryBudgetMs: 100 } } },
+      llmGenerateServices(async () => { calls++; throw new APIProviderRateLimitError('slow down', null, 1_800_000); }),
+    );
+    const result = await runBoundedTurn();
+    expect(result).toMatchObject({ type: 'failed', error: { code: 'loop.retry_budget_exceeded' } });
+    expect(calls).toBe(1);
+    expect(rpcEvents('turn.step.retrying')).toEqual([]);
+  });
+
+  it('does not dispatch another request when the user cancels a retry notice', async () => {
+    let calls = 0;
+    const controller = new AbortController();
+    ctx = createTestAgent(
+      { initialConfig: { loopControl: { maxAttemptsPerStep: 3, retryBudgetMs: 120_000, retryInitialDelayMs: 10_000 } } },
+      llmGenerateServices(async () => { calls++; throw new APIConnectionError('disconnected'); }),
+    );
+    const listener = ctx.get(IEventBus).subscribe(TurnStepRetrying, () => { controller.abort(); });
+    try {
+      expect((await runBoundedTurn(controller.signal)).type).toBe('cancelled');
+      expect(calls).toBe(1);
+    } finally { listener.dispose(); }
+  });
 
   it('retries a retryable provider error and resumes the same step number', async () => {
     vi.useFakeTimers();

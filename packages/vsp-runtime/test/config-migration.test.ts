@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { parse } from 'smol-toml';
+import { parse, stringify } from 'smol-toml';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -25,6 +25,62 @@ afterEach(async () => {
 });
 
 describe('pre-bootstrap config migration', () => {
+  it('backs up generated relay protocols and stale effort defaults while preserving user preferences', async () => {
+    const { root, homeDir, agentDir } = await fixture();
+    const paths = resolveRuntimePaths(homeDir);
+    const original = stringify({
+      providers: { vsplab: { type: 'openai_responses', base_url: 'https://relay.example.test/v1', api_key: 'YOUR_API_KEY' } },
+      models: { 'vsplab/kimi-k3': { provider: 'vsplab', model: 'kimi-k3', protocol: 'openai_responses', max_context_size: 1048576, support_efforts: ['off', 'minimal', 'medium', 'high'], overrides: { thinking: { efforts: ['low', 'high'], default_effort: 'high' } } } },
+      thinking: { model_efforts: { 'vsplab/kimi-k3': 'high' } },
+      secondary_model: { default_model: 'vsplab/kimi-k3', models: { 'vsplab/kimi-k3': 'Review code' } },
+    });
+    await writeFile(paths.configPath, original);
+    await writeLegacy(agentDir, { providers: { vsplab: { api: 'openai-responses', baseUrl: 'https://relay.example.test/v1', models: [{ id: 'kimi-k3', reasoning: true }] } } });
+    const result = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
+    const config = parse(await readFile(paths.configPath, 'utf8'));
+    const models = config['models'] as Record<string, Record<string, unknown>>;
+    expect(models['vsplab/kimi-k3']).not.toHaveProperty('protocol');
+    expect(models['vsplab/kimi-k3']).toMatchObject({ default_protocol: 'openai', effort_profile_revision: 2, thinking: { efforts: ['low', 'high', 'max'], default_effort: 'max' }, overrides: { thinking: { efforts: ['low', 'high'], default_effort: 'high' } } });
+    expect(config['thinking']).toEqual({ model_efforts: { 'vsplab/kimi-k3': 'high' } });
+    expect(config['secondary_model']).toEqual({ default_model: 'vsplab/kimi-k3', models: { 'vsplab/kimi-k3': 'Review code' } });
+    expect(await readFile(result.report!.backupPath, 'utf8')).toBe(original);
+    expect(JSON.stringify(result.report)).not.toContain('YOUR_API_KEY');
+  });
+
+  it('does not remove a protocol explicitly written after the one-time cleanup', async () => {
+    const { root, homeDir, agentDir } = await fixture();
+    const paths = resolveRuntimePaths(homeDir);
+    await writeLegacy(agentDir, { providers: { vsplab: { api: 'openai-responses', baseUrl: 'https://relay.example.test/v1', models: [{ id: 'kimi-k3', reasoning: true }] } } });
+    await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
+    const config = parse(await readFile(paths.configPath, 'utf8'));
+    (config['models'] as Record<string, Record<string, unknown>>)['vsplab/kimi-k3']!['protocol'] = 'openai_responses';
+    await writeFile(paths.configPath, `${stringify(config)}\n`);
+    await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
+    const after = parse(await readFile(paths.configPath, 'utf8'));
+    expect((after['models'] as Record<string, Record<string, unknown>>)['vsplab/kimi-k3']?.['protocol']).toBe('openai_responses');
+  });
+
+  it('preserves unproven explicit protocols and custom endpoint records', async () => {
+    const { root, homeDir, agentDir } = await fixture();
+    const paths = resolveRuntimePaths(homeDir);
+    const custom = { provider: 'vsplab', model: 'glm-5.3', base_url: 'https://custom.example.test/v1', protocol: 'anthropic', support_efforts: ['medium'], max_context_size: 8192 };
+    await writeFile(paths.configPath, stringify({ providers: { vsplab: { type: 'openai_responses', base_url: 'https://relay.example.test/v1' } }, models: { 'vsplab/kimi-k3': { provider: 'vsplab', model: 'kimi-k3', protocol: 'anthropic', max_context_size: 8192 }, 'vsplab/glm-5.3': custom } }));
+    const result = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
+    const models = parse(await readFile(paths.configPath, 'utf8'))['models'] as Record<string, Record<string, unknown>>;
+    expect(models['vsplab/kimi-k3']?.['protocol']).toBe('anthropic');
+    expect(models['vsplab/glm-5.3']).toEqual(custom);
+    expect(result.report?.diagnostics.some((message) => message.includes('unproven explicit protocol'))).toBe(true);
+  });
+
+  it('restores the original configuration if documented-profile migration fails after writing', async () => {
+    const { root, homeDir, agentDir } = await fixture();
+    const paths = resolveRuntimePaths(homeDir);
+    const original = stringify({ providers: { vsplab: { type: 'openai', base_url: 'https://relay.example.test/v1' } }, models: { 'vsplab/glm-5.3': { provider: 'vsplab', model: 'glm-5.3', protocol: 'openai', max_context_size: 8192 } } });
+    await writeFile(paths.configPath, original);
+    await expect(migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir, faultInjector: { reach(stage) { if (stage === 'after-target-write') throw new Error('injected profile failure'); } } })).rejects.toThrow('injected profile failure');
+    expect(await readFile(paths.configPath, 'utf8')).toBe(original);
+  });
+
   it('merges valid entries independently with target-wins and repairs a dangling default', async () => {
     const { root, homeDir, agentDir } = await fixture();
     await writeFile(join(homeDir, 'config.toml'), [
@@ -266,7 +322,7 @@ describe('pre-bootstrap config migration', () => {
     expect(firstModels['vsplab/glm-5.3-flash']).toMatchObject({
       provider: 'vsplab',
       model: 'glm-5.3-flash',
-      protocol: 'openai',
+      default_protocol: 'openai',
       display_name: 'GLM 5.3 Flash',
       max_context_size: 128_000,
     });
@@ -309,7 +365,7 @@ describe('pre-bootstrap config migration', () => {
     expect(changedModels['vsplab/glm-5.3-air']).toMatchObject({
       provider: 'vsplab',
       model: 'glm-5.3-air',
-      protocol: 'openai',
+      default_protocol: 'openai',
       max_context_size: 96_000,
     });
   });

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { createServer, type RequestListener } from 'node:http';
+import { getEventListeners } from 'node:events';
 
 import { isError2 } from '#/_base/errors/errors';
 import { APIStatusError, createAbortError } from '#/kosong/contract/errors';
@@ -16,6 +18,8 @@ import type { Model } from '#/kosong/model/catalog';
 import type { ModelRequestEvent } from '#/kosong/model/modelRequester';
 import { effectiveMaxCompletionTokens } from '#/kosong/model/modelRequester';
 import { buildStreamTiming, ModelRequesterImpl } from '#/kosong/model/modelRequesterImpl';
+import { ProtocolAdapterRegistry } from '#/kosong/provider/protocolAdapterRegistry';
+import '#/kosong/provider/providers/standard.contrib';
 
 class FakeChatProvider implements ChatProvider {
   readonly name = 'fake-base';
@@ -126,7 +130,126 @@ async function collect(stream: AsyncIterable<ModelRequestEvent>): Promise<ModelR
 
 const INPUT = { systemPrompt: 'sys', tools: [], messages: [] };
 
+async function httpRequester(listener: RequestListener) {
+  const server = createServer((request, response) => { request.resume(); listener(request, response); });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('Missing test listener');
+  const model: Model = {
+    ...modelWith(staticAuth('YOUR_API_KEY')),
+    name: 'gpt-4.1',
+    providerType: 'openai',
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+  };
+  return {
+    requester: new ModelRequesterImpl(model, new ProtocolAdapterRegistry()),
+    async close() {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close(error => {
+        if (error) reject(error);
+        else resolve();
+      }));
+    },
+  };
+}
+
 describe('ModelRequesterImpl request execution', () => {
+  it('aborts a real HTTP request when headers never arrive before the configured idle timeout', async () => {
+    let closed!: () => void;
+    const socketClosed = new Promise<void>(resolve => { closed = resolve; });
+    const rig = await httpRequester((_request, response) => { response.on('close', closed); });
+    try {
+      await expect(collect(rig.requester.request(INPUT, undefined, { idleTimeoutMs: 100 }))).rejects.toMatchObject({ name: 'APITimeoutError', message: 'Model request made no protocol progress for 100ms' });
+      await socketClosed;
+    } finally { await rig.close(); }
+  });
+
+  it('keeps a real SSE request alive through non-text protocol progress beyond one idle interval', async () => {
+    const rig = await httpRequester((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.write(': ready\n\n');
+      let count = 0;
+      const progress = setInterval(() => {
+        response.write(': progress\n\n');
+        if (++count < 8) return;
+        clearInterval(progress);
+        response.end('data: {"id":"test-response","choices":[{"index":0,"delta":{"content":"finished"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+      }, 30);
+      response.on('close', () => { clearInterval(progress); });
+    });
+    try {
+      const events = await collect(rig.requester.request(INPUT, undefined, { idleTimeoutMs: 150 }));
+      expect(events.find(event => event.type === 'finish')).toMatchObject({ message: { content: [{ type: 'text', text: 'finished' }] } });
+    } finally { await rig.close(); }
+  });
+
+  it('releases the retry deadline after body bytes resume without cutting off a healthy heartbeat stream', async () => {
+    const rig = await httpRequester((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.write(': resumed\n\n');
+      let count = 0;
+      const progress = setInterval(() => {
+        response.write(': progress\n\n');
+        if (++count < 8) return;
+        clearInterval(progress);
+        response.end('data: {"id":"test-response","choices":[{"index":0,"delta":{"content":"finished"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+      }, 30);
+      response.on('close', () => { clearInterval(progress); });
+    });
+    try {
+      const events = await collect(rig.requester.request(INPUT, undefined, { idleTimeoutMs: 150, deadlineAt: Date.now() + 100 }));
+      expect(events.find(event => event.type === 'finish')).toMatchObject({ message: { content: [{ type: 'text', text: 'finished' }] } });
+    } finally { await rig.close(); }
+  });
+
+  it('closes the real HTTP reader when its request iterator is returned early', async () => {
+    let closed!: () => void;
+    const socketClosed = new Promise<void>(resolve => { closed = resolve; });
+    const rig = await httpRequester((_request, response) => {
+      response.on('close', closed);
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.write('data: {"id":"test-response","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}\n\n');
+    });
+    const caller = new AbortController();
+    try {
+      const iterator = rig.requester.request(INPUT, caller.signal, { idleTimeoutMs: 300_000 })[Symbol.asyncIterator]();
+      expect((await iterator.next()).done).toBe(false);
+      await iterator.return?.();
+      await socketClosed;
+      expect(caller.signal.aborted).toBe(false);
+      expect(getEventListeners(caller.signal, 'abort')).toHaveLength(0);
+    } finally { await rig.close(); }
+  });
+
+  it('aborts an in-flight retry at its recovery deadline rather than waiting for the longer idle timeout', async () => {
+    let closed!: () => void;
+    const socketClosed = new Promise<void>(resolve => { closed = resolve; });
+    const rig = await httpRequester((_request, response) => {
+      response.on('close', closed);
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.flushHeaders();
+    });
+    try {
+      await expect(collect(rig.requester.request(INPUT, undefined, { deadlineAt: Date.now() + 100, idleTimeoutMs: 300_000 }))).rejects.toMatchObject({ name: 'APITimeoutError', message: 'Model retry recovery budget exhausted' });
+      await socketClosed;
+    } finally { await rig.close(); }
+  });
+
+  it('does not infer protocol inactivity from visible-text silence in an unsupported adapter', async () => {
+    const provider = new FakeChatProvider();
+    let finish!: (stream: StreamedMessage) => void;
+    let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    provider.handler = () => new Promise<StreamedMessage>(resolve => { finish = resolve; started(); });
+    const requester = new ModelRequesterImpl(modelWith(staticAuth()), registryReturning(provider));
+    const before = process.getActiveResourcesInfo().filter(type => type === 'Timeout').length;
+    const request = collect(requester.request(INPUT, undefined, { idleTimeoutMs: 1 }));
+    await ready;
+    expect(process.getActiveResourcesInfo().filter(type => type === 'Timeout')).toHaveLength(before);
+    finish(streamOf([{ type: 'text', text: 'finished' }]));
+    await expect(request).resolves.toContainEqual(expect.objectContaining({ type: 'finish' }));
+  });
+
   it('maps ModelRequestParams onto GenerateOptions 1:1', async () => {
     const provider = new FakeChatProvider();
     const requester = new ModelRequesterImpl(modelWith(staticAuth('sk-1')), registryReturning(provider));
@@ -150,7 +273,8 @@ describe('ModelRequesterImpl request execution', () => {
 
     expect(provider.calls).toHaveLength(1);
     const options = provider.calls[0]!.options;
-    expect(options?.signal).toBe(signal);
+    expect(options?.signal).toBeInstanceOf(AbortSignal);
+    expect(options?.signal?.aborted).toBe(false);
     expect(options?.auth).toEqual({ apiKey: 'sk-1' });
     expect(options?.cacheKey).toBe('session-1');
     expect(options?.sampling).toEqual({ temperature: 0.5, topP: 0.9 });

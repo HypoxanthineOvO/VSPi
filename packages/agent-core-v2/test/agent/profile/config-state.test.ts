@@ -88,6 +88,32 @@ describe('ConfigState model capabilities', () => {
     });
   });
 
+  it('binds the model and explicit effort together when both are valid', async () => {
+    kimiConfig = {
+      providers: { example: { type: 'openai', apiKey: 'YOUR_API_KEY', baseUrl: 'https://api.example.test/v1' } },
+      models: {
+        first: { provider: 'example', model: 'example-first', maxContextSize: 8192, capabilities: ['thinking'], supportEfforts: ['low', 'high'] },
+        second: { provider: 'example', model: 'example-second', maxContextSize: 8192, capabilities: ['thinking'], supportEfforts: ['high', 'max'] },
+      },
+    };
+    await profile.setModel('first', 'low');
+    await profile.setModel('second', 'max');
+    expect(profile.data()).toMatchObject({ modelAlias: 'second', thinkingLevel: 'max' });
+  });
+
+  it('preserves the existing binding when the target model rejects the requested effort', async () => {
+    kimiConfig = {
+      providers: { example: { type: 'openai', apiKey: 'YOUR_API_KEY', baseUrl: 'https://api.example.test/v1' } },
+      models: {
+        first: { provider: 'example', model: 'example-first', maxContextSize: 8192, capabilities: ['thinking'], supportEfforts: ['low', 'high'] },
+        second: { provider: 'example', model: 'example-second', maxContextSize: 8192, capabilities: ['thinking'], supportEfforts: ['high'] },
+      },
+    };
+    await profile.setModel('first', 'low');
+    await expect(profile.setModel('second', 'max')).rejects.toThrow();
+    expect(profile.data()).toMatchObject({ modelAlias: 'first', thinkingLevel: 'low' });
+  });
+
   it('republishes the model status slice on demand', () => {
     kimiConfig = {
       providers: {

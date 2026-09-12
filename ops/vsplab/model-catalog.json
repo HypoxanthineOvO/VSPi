@@ -19,11 +19,9 @@
         "cacheWrite": 0
       },
       "effortLevels": [
-        "off",
-        "minimal",
         "low",
-        "medium",
-        "high"
+        "high",
+        "max"
       ],
       "releasedAt": "2026-08-14",
       "metadataSources": {
@@ -40,7 +38,23 @@
           "model": "glm-5.3",
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
+        },
+        "effort": {
+          "source": "https://docs.z.ai/guides/capabilities/thinking",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
+      },
+      "curated": true,
+      "protocol": "openai",
+      "defaultEffort": "max",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
       }
     },
     {
@@ -54,11 +68,9 @@
       "maxTokens": 32768,
       "reasoning": true,
       "effortLevels": [
-        "off",
-        "minimal",
         "low",
-        "medium",
-        "high"
+        "high",
+        "max"
       ],
       "cost": {
         "input": 0.075,
@@ -81,7 +93,23 @@
           "model": "glm-5.3-flash",
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
+        },
+        "effort": {
+          "source": "https://docs.z.ai/guides/capabilities/thinking",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
+      },
+      "curated": true,
+      "protocol": "openai",
+      "defaultEffort": "max",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
       }
     },
     {
@@ -122,7 +150,9 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "curated": false,
+      "protocol": "openai"
     },
     {
       "id": "glm-5.1",
@@ -155,7 +185,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "protocol": "openai"
     },
     {
       "id": "glm-5",
@@ -209,7 +240,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "protocol": "openai"
     },
     {
       "id": "glm-5-turbo",
@@ -250,7 +282,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "protocol": "openai"
     },
     {
       "id": "glm-4.7",
@@ -291,7 +324,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "protocol": "openai"
     },
     {
       "id": "glm-4.6",
@@ -353,7 +387,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "protocol": "openai"
     },
     {
       "id": "glm-4.5",
@@ -415,7 +450,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "protocol": "openai"
     },
     {
       "id": "glm-4.5-air",
@@ -477,7 +513,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "protocol": "openai"
     },
     {
       "id": "kimi-for-coding",
@@ -518,7 +555,8 @@
           "verification": "unverified-existing",
           "reason": "Existing estimate retained; no verified paid first-party equivalent"
         }
-      }
+      },
+      "protocol": "openai"
     },
     {
       "id": "kimi-for-coding-highspeed",
@@ -559,7 +597,8 @@
           "verification": "unverified-existing",
           "reason": "Existing estimate retained; no verified paid first-party equivalent"
         }
-      }
+      },
+      "protocol": "openai"
     },
     {
       "id": "k3",
@@ -599,7 +638,9 @@
           "verification": "unverified-existing",
           "reason": "Existing estimate retained; no verified paid first-party equivalent"
         }
-      }
+      },
+      "curated": false,
+      "protocol": "openai"
     },
     {
       "id": "k3-256k",
@@ -612,12 +653,8 @@
       "contextWindow": 262144,
       "maxTokens": 131072,
       "effortLevels": [
-        "off",
-        "minimal",
         "low",
-        "medium",
         "high",
-        "xhigh",
         "max"
       ],
       "releasedAt": "2026-07-16",
@@ -632,7 +669,23 @@
         "cost": {
           "verification": "unknown",
           "reason": "Removed unverified zero placeholder; relay is free but equivalent model usage is not assumed free"
+        },
+        "effort": {
+          "source": "https://github.com/MoonshotAI/Kimi-K3/blob/main/README.md",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
+      },
+      "curated": false,
+      "protocol": "openai",
+      "defaultEffort": "max",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
       }
     },
     {
@@ -675,19 +728,22 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "protocol": "openai"
     },
     {
       "id": "deepseek-chat",
       "name": "DeepSeek Chat",
       "curated": false,
-      "hidden": true
+      "hidden": true,
+      "protocol": "openai"
     },
     {
       "id": "deepseek-reasoner",
       "name": "DeepSeek Reasoner",
       "curated": false,
-      "hidden": true
+      "hidden": true,
+      "protocol": "openai"
     },
     {
       "id": "deepseek-v4-flash",
@@ -706,11 +762,8 @@
       },
       "effortLevels": [
         "off",
-        "minimal",
         "low",
-        "medium",
         "high",
-        "xhigh",
         "max"
       ],
       "metadataSources": {
@@ -718,7 +771,23 @@
           "source": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
           "verification": "official-pricing-page",
           "checkedAt": "2026-09-10T12:00:00Z"
+        },
+        "effort": {
+          "source": "https://api-docs.deepseek.com/guides/thinking_mode/",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
+      },
+      "curated": false,
+      "protocol": "openai",
+      "defaultEffort": "high",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
       }
     },
     {
@@ -738,11 +807,8 @@
       },
       "effortLevels": [
         "off",
-        "minimal",
         "low",
-        "medium",
         "high",
-        "xhigh",
         "max"
       ],
       "metadataSources": {
@@ -752,7 +818,23 @@
           "model": "deepseek-v4-pro",
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
+        },
+        "effort": {
+          "source": "https://api-docs.deepseek.com/guides/thinking_mode/",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
+      },
+      "curated": true,
+      "protocol": "openai",
+      "defaultEffort": "high",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
       }
     },
     {
@@ -785,7 +867,6 @@
       },
       "effortLevels": [
         "off",
-        "minimal",
         "low",
         "medium",
         "high",
@@ -807,7 +888,25 @@
           "model": "gpt-5.6-sol",
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
+        },
+        "effort": {
+          "source": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
+      },
+      "curated": true,
+      "protocol": "openai_responses",
+      "defaultEffort": "medium",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
       }
     },
     {
@@ -817,8 +916,6 @@
       "contextWindow": 1050000,
       "maxTokens": 128000,
       "effortLevels": [
-        "off",
-        "minimal",
         "low",
         "medium",
         "high",
@@ -869,7 +966,25 @@
           "model": "gpt-6-astra",
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
+        },
+        "effort": {
+          "source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "product"
         }
+      },
+      "curated": true,
+      "protocol": "openai_responses",
+      "defaultEffort": "medium",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
       }
     },
     {
@@ -902,7 +1017,6 @@
       },
       "effortLevels": [
         "off",
-        "minimal",
         "low",
         "medium",
         "high",
@@ -924,7 +1038,25 @@
           "model": "gpt-5.6-terra",
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
+        },
+        "effort": {
+          "source": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
+      },
+      "curated": false,
+      "protocol": "openai_responses",
+      "defaultEffort": "medium",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
       }
     },
     {
@@ -957,7 +1089,6 @@
       },
       "effortLevels": [
         "off",
-        "minimal",
         "low",
         "medium",
         "high",
@@ -979,7 +1110,25 @@
           "model": "gpt-5.6-luna",
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
+        },
+        "effort": {
+          "source": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
+      },
+      "curated": true,
+      "protocol": "openai_responses",
+      "defaultEffort": "medium",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
       }
     },
     {
@@ -1034,7 +1183,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "protocol": "openai_responses"
     },
     {
       "id": "gpt-5.4-mini",
@@ -1077,7 +1227,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "protocol": "openai_responses"
     },
     {
       "id": "claude-opus-5",
@@ -1096,8 +1247,6 @@
         "cacheWrite": 6.25
       },
       "effortLevels": [
-        "off",
-        "minimal",
         "low",
         "medium",
         "high",
@@ -1119,7 +1268,25 @@
           "model": "claude-opus-5",
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
+        },
+        "effort": {
+          "source": "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
+      },
+      "curated": true,
+      "protocol": "anthropic",
+      "defaultEffort": "high",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
       }
     },
     {
@@ -1163,7 +1330,9 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "curated": false,
+      "protocol": "anthropic"
     },
     {
       "id": "claude-opus-4-7",
@@ -1204,7 +1373,9 @@
           "verification": "official-announcement",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "curated": false,
+      "protocol": "anthropic"
     },
     {
       "id": "claude-opus-4-6",
@@ -1245,7 +1416,9 @@
           "verification": "official-announcement",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "curated": false,
+      "protocol": "anthropic"
     },
     {
       "id": "claude-sonnet-5",
@@ -1288,7 +1461,9 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "curated": false,
+      "protocol": "anthropic"
     },
     {
       "id": "claude-sonnet-4-6",
@@ -1329,7 +1504,9 @@
           "verification": "official-announcement",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "curated": false,
+      "protocol": "anthropic"
     },
     {
       "id": "claude-fable-5",
@@ -1348,8 +1525,6 @@
         "cacheWrite": 12.5
       },
       "effortLevels": [
-        "off",
-        "minimal",
         "low",
         "medium",
         "high",
@@ -1371,7 +1546,25 @@
           "model": "claude-fable-5",
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
+        },
+        "effort": {
+          "source": "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
+      },
+      "curated": true,
+      "protocol": "anthropic",
+      "defaultEffort": "high",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
       }
     },
     {
@@ -1414,7 +1607,8 @@
           "verification": "official-announcement",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "protocol": "anthropic"
     },
     {
       "id": "claude-opus-4-5-20251101",
@@ -1456,7 +1650,8 @@
           "verification": "official-announcement",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "protocol": "anthropic"
     },
     {
       "id": "gpt-5.3-codex-spark",
@@ -1491,7 +1686,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "protocol": "openai_responses"
     },
     {
       "id": "kimi-k3",
@@ -1509,12 +1705,8 @@
         "cacheRead": 0.3
       },
       "effortLevels": [
-        "off",
-        "minimal",
         "low",
-        "medium",
         "high",
-        "xhigh",
         "max"
       ],
       "releasedAt": "2026-07-16",
@@ -1532,7 +1724,23 @@
           "model": "kimi-k3",
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
+        },
+        "effort": {
+          "source": "https://github.com/MoonshotAI/Kimi-K3/blob/main/README.md",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
+      },
+      "curated": true,
+      "protocol": "openai",
+      "defaultEffort": "max",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
       }
     },
     {
@@ -1546,19 +1754,31 @@
       "contextWindow": 262144,
       "maxTokens": 131072,
       "effortLevels": [
-        "off",
-        "minimal",
         "low",
-        "medium",
         "high",
-        "xhigh",
         "max"
       ],
       "metadataSources": {
         "cost": {
           "verification": "unknown",
           "reason": "Removed unverified zero placeholder; relay is free but equivalent model usage is not assumed free"
+        },
+        "effort": {
+          "source": "https://github.com/MoonshotAI/Kimi-K3/blob/main/README.md",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
+      },
+      "curated": false,
+      "protocol": "openai",
+      "defaultEffort": "max",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
       }
     },
     {
@@ -1579,11 +1799,8 @@
       },
       "effortLevels": [
         "off",
-        "minimal",
         "low",
-        "medium",
         "high",
-        "xhigh",
         "max"
       ],
       "releasedAt": "2026-08-21",
@@ -1597,7 +1814,23 @@
           "source": "https://api-docs.deepseek.com/news/news260821",
           "verification": "official-announcement",
           "checkedAt": "2026-09-06T14:08:33.645Z"
+        },
+        "effort": {
+          "source": "https://api-docs.deepseek.com/guides/thinking_mode/",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
+      },
+      "curated": false,
+      "protocol": "openai",
+      "defaultEffort": "high",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
       }
     },
     {
@@ -1611,11 +1844,8 @@
       "maxTokens": 384000,
       "effortLevels": [
         "off",
-        "minimal",
         "low",
-        "medium",
         "high",
-        "xhigh",
         "max"
       ],
       "cost": {
@@ -1635,7 +1865,23 @@
           "source": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
           "verification": "official-announcement",
           "checkedAt": "2026-09-10T12:00:00Z"
+        },
+        "effort": {
+          "source": "https://api-docs.deepseek.com/guides/thinking_mode/",
+          "checkedAt": "2026-09-12",
+          "verification": "family-default",
+          "defaultSource": "official"
         }
+      },
+      "curated": true,
+      "protocol": "openai",
+      "defaultEffort": "high",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "high": "high",
+        "max": "max"
       }
     },
     {
@@ -1676,7 +1922,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "curated": false
     },
     {
       "id": "MiniMax-M2.7-highspeed",
@@ -1716,7 +1963,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "curated": false
     },
     {
       "id": "MiniMax-M3",
@@ -1746,10 +1994,7 @@
       },
       "effortLevels": [
         "off",
-        "minimal",
-        "low",
-        "medium",
-        "high"
+        "on"
       ],
       "releasedAt": "2026-06-01",
       "metadataSources": {
@@ -1766,8 +2011,19 @@
           "model": "MiniMax-M3",
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
+        },
+        "effort": {
+          "source": "https://platform.minimax.io/docs/api-reference/text-openai-api",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
-      }
+      },
+      "curated": true,
+      "defaultEffort": "on",
+      "effortMode": "toggle",
+      "effortRevision": 2,
+      "thinkingLevelMap": {}
     },
     {
       "id": "mimo-v2.5",
@@ -1786,10 +2042,7 @@
       },
       "effortLevels": [
         "off",
-        "minimal",
-        "low",
-        "medium",
-        "high"
+        "on"
       ],
       "releasedAt": "2026-04-22",
       "metadataSources": {
@@ -1806,8 +2059,19 @@
           "model": "mimo-v2.5",
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
+        },
+        "effort": {
+          "source": "https://mimo.mi.com/docs/en-US/api/chat/responses",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
-      }
+      },
+      "curated": true,
+      "defaultEffort": "on",
+      "effortMode": "toggle",
+      "effortRevision": 2,
+      "thinkingLevelMap": {}
     },
     {
       "id": "mimo-v2.5-pro",
@@ -1825,10 +2089,7 @@
       },
       "effortLevels": [
         "off",
-        "minimal",
-        "low",
-        "medium",
-        "high"
+        "on"
       ],
       "releasedAt": "2026-04-22",
       "metadataSources": {
@@ -1845,8 +2106,19 @@
           "model": "mimo-v2.5-pro",
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
+        },
+        "effort": {
+          "source": "https://mimo.mi.com/docs/en-US/api/chat/responses",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
-      }
+      },
+      "curated": true,
+      "defaultEffort": "on",
+      "effortMode": "toggle",
+      "effortRevision": 2,
+      "thinkingLevelMap": {}
     },
     {
       "id": "hy3",
@@ -1883,7 +2155,8 @@
           "verification": "unverified-existing",
           "reason": "Existing estimate retained; no verified paid first-party equivalent"
         }
-      }
+      },
+      "curated": false
     },
     {
       "id": "qwen3.6-flash",
@@ -1924,7 +2197,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "curated": false
     },
     {
       "id": "qwen3.6-plus",
@@ -1978,7 +2252,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "curated": false
     },
     {
       "id": "qwen3.7-max",
@@ -2019,7 +2294,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "curated": false
     },
     {
       "id": "qwen3.7-plus",
@@ -2073,7 +2349,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "curated": false
     },
     {
       "id": "qwen3.8-max",
@@ -2093,12 +2370,9 @@
       },
       "effortLevels": [
         "off",
-        "minimal",
         "low",
         "medium",
-        "high",
-        "xhigh",
-        "max"
+        "xhigh"
       ],
       "releasedAt": "2026-08-03",
       "metadataSources": {
@@ -2115,7 +2389,22 @@
           "model": "qwen3.8-max",
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
+        },
+        "effort": {
+          "source": "https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
+      },
+      "curated": true,
+      "defaultEffort": "xhigh",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "medium": "medium",
+        "xhigh": "xhigh"
       }
     },
     {
@@ -2164,15 +2453,13 @@
         "cacheWrite": 12.5
       },
       "effortLevels": [
-        "off",
-        "minimal",
         "low",
         "medium",
         "high",
         "xhigh",
         "max"
       ],
-      "curated": false,
+      "curated": true,
       "releasedAt": "2026-09-01",
       "metadataSources": {
         "cost": {
@@ -2188,20 +2475,39 @@
           "model": "claude-fable-5-1",
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
+        },
+        "effort": {
+          "source": "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
+      },
+      "protocol": "anthropic",
+      "defaultEffort": "high",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
       }
     },
     {
       "id": "gpt-reserve",
       "name": "GPT Reserve",
       "curated": false,
-      "hidden": true
+      "hidden": true,
+      "protocol": "openai_responses"
     },
     {
       "id": "gpt-5.2-2025-12-11",
       "name": "GPT 5.2 (2025-12-11 快照)",
       "curated": false,
-      "hidden": true
+      "hidden": true,
+      "protocol": "openai_responses"
     },
     {
       "id": "gpt-5.2-chat-latest",
@@ -2264,19 +2570,22 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "protocol": "openai_responses"
     },
     {
       "id": "gpt-5.2-pro-2025-12-11",
       "name": "GPT 5.2 Pro (2025-12-11 快照)",
       "curated": false,
-      "hidden": true
+      "hidden": true,
+      "protocol": "openai_responses"
     },
     {
       "id": "gpt-5.4-2026-03-05",
       "name": "GPT 5.4 (2026-03-05 快照)",
       "curated": false,
-      "hidden": true
+      "hidden": true,
+      "protocol": "openai_responses"
     },
     {
       "id": "gpt-5.6",
@@ -2351,7 +2660,32 @@
           "model": "gpt-5.6",
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
+        },
+        "effort": {
+          "source": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "official"
         }
+      },
+      "protocol": "openai_responses",
+      "effortLevels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "medium",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
       }
     },
     {
@@ -2387,7 +2721,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "protocol": "openai_responses"
     },
     {
       "id": "gpt-image-1.5",
@@ -2422,7 +2757,8 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "protocol": "openai_responses"
     },
     {
       "id": "gpt-image-2",
@@ -2469,25 +2805,55 @@
           "verification": "catalog-first-party-entry",
           "checkedAt": "2026-09-06T14:08:33.645Z"
         }
-      }
+      },
+      "protocol": "openai_responses"
     },
     {
       "id": "gpt-4o-audio-preview",
       "name": "GPT 4o Audio Preview",
       "curated": false,
-      "hidden": true
+      "hidden": true,
+      "protocol": "openai_responses"
     },
     {
       "id": "gpt-4o-realtime-preview",
       "name": "GPT 4o Realtime Preview",
       "curated": false,
-      "hidden": true
+      "hidden": true,
+      "protocol": "openai_responses"
     },
     {
       "id": "gpt-6",
       "name": "GPT 6",
-      "curated": false,
-      "hidden": true
+      "curated": true,
+      "hidden": true,
+      "protocol": "openai_responses",
+      "reasoning": true,
+      "effortLevels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "medium",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "metadataSources": {
+        "effort": {
+          "source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+          "checkedAt": "2026-09-12",
+          "verification": "official-docs",
+          "defaultSource": "product"
+        }
+      }
     }
   ],
   "pricingBasis": {

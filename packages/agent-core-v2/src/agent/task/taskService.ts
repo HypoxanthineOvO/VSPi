@@ -602,7 +602,8 @@ export class AgentTaskService extends Disposable implements IAgentTaskService {
   }
 
   async readOutput(taskId: string, tail?: number): Promise<string> {
-    const output = (await this.getOutputSnapshot(taskId, Number.MAX_SAFE_INTEGER)).preview;
+    const limit = tail === undefined ? Number.MAX_SAFE_INTEGER : Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.trunc(tail)) * 4);
+    const output = (await this.getOutputSnapshot(taskId, limit)).preview;
     if (tail === undefined) return output;
     return output.slice(-Math.max(0, Math.trunc(tail)));
   }

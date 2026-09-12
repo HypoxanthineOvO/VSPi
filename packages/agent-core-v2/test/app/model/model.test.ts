@@ -181,8 +181,7 @@ describe('effectiveModelConfig', () => {
         provider: 'anthropic',
         model: 'claude-fable-5',
         maxContextSize: 200000,
-        supportEfforts: ['high', 'max'],
-        defaultEffort: 'max',
+        overrides: { supportEfforts: ['high', 'max'], defaultEffort: 'max' },
       }),
     ).toMatchObject({
       capabilities: expect.arrayContaining(['always_thinking', 'image_in']),

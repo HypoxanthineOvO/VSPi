@@ -43,6 +43,7 @@ import {
   respondSessionInteraction,
 } from '@moonshot-ai/agent-core-v2/features/interaction/sessionInteractions';
 import { IEventBus } from '@moonshot-ai/agent-core-v2/app/event/eventBus';
+import { IAgentHistoryService } from '@moonshot-ai/agent-core-v2/agent/history/history';
 import type {
   FileMeta,
   GetResult,
@@ -52,6 +53,7 @@ import { FileErrors } from '@moonshot-ai/agent-core-v2/app/file/fileService';
 import { Error2, ErrorCodes } from '@moonshot-ai/agent-core-v2/errors';
 
 import { Readable } from 'node:stream';
+import { stringifyWire } from '../json.js';
 
 import type { EventSourceRef, IDisposable, ScopeRef } from '../../core/channel.js';
 import { RPCError } from '../../core/errors.js';
@@ -68,7 +70,7 @@ export interface ScopeLike {
 /** JSON round-trip so in-process data matches wire data exactly. */
 export function wireClone<T>(value: T): T {
   if (value === undefined) return value;
-  return JSON.parse(JSON.stringify(value)) as T;
+  return JSON.parse(stringifyWire(value)) as T;
 }
 
 /**
@@ -277,8 +279,10 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
     }
     if (resolved.kind === 'agent' && name === 'events') {
       const bus = resolved.like.accessor.get(IEventBus);
+      const history = resolved.like.accessor.get(IAgentHistoryService);
       return bus.subscribe((event) => {
-        handler(wireClone(event));
+        const live = history.liveSegment();
+        handler(wireClone({ ...event.serialize(), viewRevision: history.sequenceFor(event), viewSegment: live?.segment }));
       });
     }
     throw new RPCError(REQUEST_INVALID, `unknown event stream: ${name} (${resolved.kind})`);
@@ -385,10 +389,12 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
             let source: AsyncIterator<unknown> | undefined;
             let started: Promise<void> | undefined;
             const controller = new AbortController();
+            let closed = false;
 
             const ensureStarted = (): Promise<void> => {
               started ??= (async () => {
                 const resolved = await resolveScope(scope);
+                if (closed) return;
                 const catalog = resolveService(resolved, 'modelResolver');
                 const [modelId, input, params] = args;
                 const requester = (catalog as { getRequester(id: string): { request(...a: unknown[]): AsyncIterable<unknown> } })
@@ -405,13 +411,18 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
 
             return {
               async next() {
+                if (closed) return { done: true, value: undefined };
                 await ensureStarted();
+                if (closed) return { done: true, value: undefined };
                 const result = await source!.next();
-                if (result.done) return { done: true, value: undefined };
+                if (closed || result.done) return { done: true, value: undefined };
                 return { done: false, value: wireClone(result.value) };
               },
               async return(value?: unknown) {
+                if (closed) return { done: true as const, value: undefined };
+                closed = true;
                 controller.abort();
+                await started;
                 await source?.return?.(value);
                 return { done: true as const, value: undefined };
               },
@@ -427,6 +438,7 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
         [Symbol.asyncIterator]() {
           let source: AsyncIterator<unknown> | undefined;
           let started: Promise<void> | undefined;
+          let closed = false;
 
           const ensureStarted = (): Promise<void> => {
             started ??= (async () => {
@@ -434,6 +446,7 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
                 throw new RPCError(REQUEST_INVALID, `not a streaming method: ${service}.${method}`);
               }
               const resolved = await resolveScope(scope);
+              if (closed) return;
               const instance = resolveService(resolved, service);
               const member = instance[method];
               if (member === undefined) {
@@ -454,12 +467,17 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
 
           return {
             async next() {
+              if (closed) return { done: true, value: undefined };
               await ensureStarted();
+              if (closed) return { done: true, value: undefined };
               const result = await source!.next();
-              if (result.done) return { done: true, value: undefined };
+              if (closed || result.done) return { done: true, value: undefined };
               return { done: false, value: wireClone(result.value) };
             },
             async return(value?: unknown) {
+              if (closed) return { done: true as const, value: undefined };
+              closed = true;
+              await started;
               await source?.return?.(value);
               return { done: true as const, value: undefined };
             },

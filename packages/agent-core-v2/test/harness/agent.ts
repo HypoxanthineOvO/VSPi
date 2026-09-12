@@ -2896,6 +2896,7 @@ async function generateBackedResponse(
         maxContextTokens: options?.maxContextTokens,
         responseFormat: options?.responseFormat,
         onTraceId: options?.onTraceId,
+        onProtocolProgress: options?.onProtocolProgress,
       },
     );
   } catch (error) {

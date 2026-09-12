@@ -9,13 +9,13 @@ import {
 } from '#/kosong/contract/capability';
 import type { ProviderRequestAuth } from '#/kosong/contract/provider';
 import type { TokenUsage } from '#/kosong/contract/usage';
-import type { Protocol, ProtocolProviderOptions } from '#/kosong/protocol/protocol';
+import { ProtocolSchema, type Protocol, type ProtocolProviderOptions } from '#/kosong/protocol/protocol';
 
 import type { ProviderConfig } from '../provider/provider';
 
 import type { ModelInspection } from './inspection';
 import type { ModelRecord } from './model';
-import { effectiveModelConfig } from './modelAuth';
+import { effectiveModelConfig, resolveModelProtocol } from './modelAuth';
 import type { ModelRequester } from './modelRequester';
 
 export interface AuthProvider {
@@ -79,6 +79,7 @@ const thinkingCapabilityWireSchema = z.object({
 });
 
 export const modelCatalogItemSchema = z.object({
+  protocol: ProtocolSchema.optional(),
   pricing_source: z.enum(['official', 'provider']).optional(),
   curated: z.boolean().optional(),
   released_at: z.string().optional(),
@@ -143,6 +144,7 @@ export function toProtocolModel(
   const efforts = thinkingEffortsForProvider(thinking, providerType ?? model.providerType);
   return {
     provider: model.providerName,
+    protocol: model.protocol,
     curated: effective.curated,
     pricing_source: record.pricing === undefined ? effective.pricingSource : record.pricingSource ?? 'provider',
     released_at: effective.releasedAt,
@@ -167,6 +169,7 @@ export function toProtocolModelFallback(
   const efforts = thinkingEffortsForProvider(thinking, providerType);
   return {
     provider: effective.provider ?? '',
+    protocol: resolveModelProtocol(effective, { type: providerType })?.protocol,
     pricing_source: record.pricing === undefined ? effective.pricingSource : record.pricingSource ?? 'provider',
     curated: effective.curated,
     released_at: effective.releasedAt,

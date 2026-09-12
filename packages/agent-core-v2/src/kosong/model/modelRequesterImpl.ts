@@ -1,6 +1,7 @@
 import { AsyncEventQueue } from '#/_base/asyncEventQueue';
 import type { VideoURLPart } from '#/kosong/contract/message';
-import { APIStatusError, isAbortError, VideoUploadUnsupportedError } from '#/kosong/contract/errors';
+import { APIStatusError, APITimeoutError, isAbortError, VideoUploadUnsupportedError } from '#/kosong/contract/errors';
+import { abortable, linkAbortSignal } from '#/_base/utils/abort';
 import { generate, type GenerateResult } from '#/kosong/contract/generate';
 import type {
   ChatProvider,
@@ -52,11 +53,25 @@ export class ModelRequesterImpl implements ModelRequester {
     params?: ModelRequestParams,
   ): AsyncIterable<ModelRequestEvent> {
     const queue = new AsyncEventQueue<ModelRequestEvent>();
-    void this.runRequest(input, signal, queue, params).then(
-      () => queue.end(),
-      (error) => queue.fail(error),
-    );
-    return queue;
+    const controller = new AbortController();
+    const unlink = signal === undefined ? () => {} : linkAbortSignal(signal, controller);
+    const finished = this.runRequest(input, controller, queue, params).then(
+      () => { queue.end(); },
+      (error) => { queue.fail(error); },
+    ).finally(unlink);
+    return {
+      [Symbol.asyncIterator]() {
+        return {
+          next: () => queue.next(),
+          async return() {
+            controller.abort();
+            const result = await queue.return();
+            await finished;
+            return result;
+          },
+        };
+      },
+    };
   }
 
   async uploadVideo(
@@ -77,12 +92,49 @@ export class ModelRequesterImpl implements ModelRequester {
 
   private async runRequest(
     input: ModelRequestInput,
-    signal: AbortSignal | undefined,
+    controller: AbortController,
     queue: AsyncEventQueue<ModelRequestEvent>,
     params?: ModelRequestParams,
   ): Promise<void> {
-    signal?.throwIfAborted();
+    const signal = controller.signal;
+    signal.throwIfAborted();
     const provider = this.resolveChatProvider();
+    const idleTimeoutMs = params?.idleTimeoutMs;
+    if (idleTimeoutMs !== undefined && (!Number.isSafeInteger(idleTimeoutMs) || idleTimeoutMs <= 0 || idleTimeoutMs > 2 ** 31 - 1)) throw new RangeError('Invalid model request idle timeout');
+    const remaining = params?.deadlineAt === undefined ? undefined : Math.ceil(params.deadlineAt - Date.now());
+    if (remaining !== undefined && (!Number.isSafeInteger(remaining) || remaining > 2 ** 31 - 1)) throw new RangeError('Invalid model request recovery deadline');
+    if (remaining !== undefined && remaining <= 0) throw new APITimeoutError('Model retry recovery budget exhausted');
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let receivedBody = false;
+    let stopped = false;
+    const clearTimers = () => {
+      stopped = true;
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+    };
+    let deadlineTimer = remaining === undefined ? undefined : setTimeout(() => {
+      controller.abort(new APITimeoutError('Model retry recovery budget exhausted'));
+    }, remaining);
+    deadlineTimer?.unref();
+    const bodyReceived = () => {
+      if (stopped || signal.aborted || receivedBody) return;
+      receivedBody = true;
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+      deadlineTimer = undefined;
+      params?.onProtocolProgress?.('body');
+    };
+    const progress = (stage: 'start' | 'headers' | 'body') => {
+      if (stopped || signal.aborted) return;
+      if (stage === 'body') bodyReceived();
+      else params?.onProtocolProgress?.(stage);
+      if (idleTimeoutMs === undefined) return;
+      if (idleTimer !== undefined) { idleTimer.refresh(); return; }
+      idleTimer = setTimeout(() => {
+        controller.abort(new APITimeoutError(`Model request made no protocol progress for ${String(idleTimeoutMs)}ms`));
+      }, idleTimeoutMs);
+      idleTimer.unref();
+    };
+    signal.addEventListener('abort', clearTimers, { once: true });
 
     let requestStartedAt = Date.now();
     let requestSentAt: number | undefined;
@@ -112,12 +164,13 @@ export class ModelRequesterImpl implements ModelRequester {
         decodeStats = stats;
       },
       onTraceId: params?.onTraceId,
+      onProtocolProgress: idleTimeoutMs === undefined && remaining === undefined && params?.onProtocolProgress === undefined ? undefined : progress,
       responseFormat: input.responseFormat,
     };
 
     let result: GenerateResult;
     try {
-      result = await this.runWithAuthRefresh((auth) => {
+      result = await abortable(this.runWithAuthRefresh((auth) => {
         requestStartedAt = Date.now();
         return generate(
           provider,
@@ -126,16 +179,20 @@ export class ModelRequesterImpl implements ModelRequester {
           [...input.messages],
           {
             onMessagePart: (part) => {
+              bodyReceived();
               firstChunkAt ??= Date.now();
               queue.push({ type: 'part', part });
             },
           },
           { ...options, auth },
         );
-      });
+      }), signal);
     } catch (error) {
-      if (isAbortError(error) || signal?.aborted === true) throw error;
+      if (isAbortError(error) || signal.aborted) throw error;
       throw translateProviderError(error);
+    } finally {
+      clearTimers();
+      signal.removeEventListener('abort', clearTimers);
     }
 
     if (result.usage !== undefined && result.usage !== null) {

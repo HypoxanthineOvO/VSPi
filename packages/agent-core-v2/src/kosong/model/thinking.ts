@@ -16,6 +16,7 @@ export interface ThinkingConfig {
   effort?: string;
   forcedEffort?: string;
   keep?: string;
+  modelEfforts?: Record<string, string>;
 }
 
 export function drivesThinkingThroughTraits(providerType: string | undefined): boolean {

@@ -52,6 +52,15 @@ export class AsyncEventQueue<T> implements AsyncIterable<T>, AsyncIterator<T> {
     });
   }
 
+  return(): Promise<IteratorResult<T>> {
+    this.values.length = 0;
+    this.failed = false;
+    this.error = undefined;
+    this.ended = true;
+    for (const waiter of this.waiters.splice(0)) waiter.resolve({ done: true, value: undefined });
+    return Promise.resolve({ done: true, value: undefined });
+  }
+
   [Symbol.asyncIterator](): AsyncIterator<T> {
     return this;
   }

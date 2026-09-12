@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   installVspiPackage,
+  installVspiUpdate,
   LATEST_RELEASE_URL,
   resolvePackageInstaller,
   updateVspi,
@@ -21,6 +22,30 @@ afterEach(async () => {
 });
 
 describe("VSPi GitHub self-update contract", () => {
+  it('restores a saved package after installation fails without replacing user configuration', async () => {
+    const root = await temporaryDirectory('vspi-upgrade-rollback-');
+    const packageRoot = join(root, 'package');
+    const home = join(root, 'home');
+    await mkdir(join(packageRoot, 'dist'), { recursive: true });
+    await mkdir(home);
+    const entry = join(packageRoot, 'dist', 'main.mjs');
+    await writeFile(entry, 'console.log("2.0.0")');
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({ name: 'vspi', version: '2.0.0', type: 'module' }));
+    await writeFile(join(home, 'config.toml'), '# preserved configuration\n');
+    const installed: string[] = [];
+    await expect(installVspiUpdate(join(root, 'new.tgz'), '2.1.0', {
+      entryPath: entry, homeDir: home,
+      environment: { ...process.env, HOME: root, USERPROFILE: root, npm_config_cache: join(root, 'npm-cache') },
+      install: async (path, version) => {
+        installed.push(version);
+        if (version === '2.1.0') throw new Error('injected installer failure');
+        expect(path).toContain('vspi-2.0.0.tgz');
+      },
+    })).rejects.toThrow('已恢复旧安装包');
+    expect(installed).toEqual(['2.1.0', '2.0.0']);
+    expect(await readFile(join(home, 'config.toml'), 'utf8')).toBe('# preserved configuration\n');
+    expect(await readdir(join(home, 'server', 'update-backups'))).toHaveLength(1);
+  }, 30000);
   it("discovers the latest tag without the GitHub API and verifies SHA256SUMS before install", async () => {
     const bytes = Buffer.from("package");
     const version = "2.1.0";
@@ -189,8 +214,8 @@ describe("VSPi package installer contract", () => {
       args: ["install", "--global", "--no-audit", "--no-fund", expect.stringMatching(/package\.tgz$/u)],
     });
     expect(resolvePackageInstaller("package.tgz", "C:\\vspi.cmd", { ComSpec: "cmd.exe" }, "win32")).toMatchObject({
-      command: "cmd.exe",
-      args: ["/d", "/s", "/c", "npm.cmd", "install", "--global", "--no-audit", "--no-fund", expect.any(String)],
+      command: process.execPath,
+      args: [expect.stringContaining('npm-cli.js'), "install", "--global", "--no-audit", "--no-fund", expect.any(String)],
     });
     expect(
       resolvePackageInstaller(

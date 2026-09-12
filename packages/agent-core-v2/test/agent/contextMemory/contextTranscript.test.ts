@@ -7,6 +7,7 @@ import {
 } from '#/agent/contextMemory/contextOps';
 import {
   reduceContextTranscript,
+  createContextTranscriptReducer,
   type ContextTranscript,
 } from '#/agent/contextMemory/contextTranscript';
 import {
@@ -26,6 +27,25 @@ function userMessage(text: string, origin?: PromptOrigin): ContextMessage {
     ...(origin === undefined ? {} : { origin }),
   };
 }
+
+describe('bounded transcript projection', () => {
+  it('keeps content only in the requested history window without losing its positions', () => {
+    const reducer = createContextTranscriptReducer({ maxContentChars: 10, contentOrdinals: new Set([2, 3]) });
+    for (let index = 0; index < 8; index++) reducer.add(appendMessage(userMessage(`text-${index}`, { kind: 'user' })));
+    const entries = reducer.result().entries;
+    expect(entries).toHaveLength(8);
+    expect(entries[2]?.content).toEqual([{ type: 'text', text: 'text-2' }]);
+    expect(entries[3]?.content).toEqual([{ type: 'text', text: 'text-3' }]);
+    expect(entries[0]?.content).toEqual([]);
+    expect(entries[7]?.content).toEqual([]);
+  });
+
+  it('bounds the total displayed content of a message across its parts', () => {
+    const reducer = createContextTranscriptReducer({ maxContentChars: 10, contentOrdinals: new Set([0]) });
+    reducer.add(appendMessage({ ...userMessage(''), content: [{ type: 'text', text: '12345678' }, { type: 'text', text: 'abcdefgh' }] }));
+    expect(reducer.result().entries[0]?.content).toEqual([{ type: 'text', text: '12345678' }, { type: 'text', text: 'ab[display truncated]' }]);
+  });
+});
 
 function assistantMessage(text: string): ContextMessage {
   return { role: 'assistant', content: [{ type: 'text', text }], toolCalls: [] };

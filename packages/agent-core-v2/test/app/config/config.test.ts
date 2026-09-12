@@ -1822,6 +1822,31 @@ describe('subagent config section', () => {
     disposables.dispose();
   });
 
+  it.each(['0', ' 0 '])('disables the subagent deadline when the env override is %j', async (value) => {
+    const { config, disposables } = await createConfig(
+      { [SUBAGENT_TIMEOUT_ENV]: value },
+      '[subagent]\ntimeout_ms = 5000\n',
+    );
+    try {
+      expect(resolveSubagentTimeoutMs(config)).toBe(0);
+      expect(config.inspect<SubagentConfig>(SUBAGENT_SECTION).userValue).toEqual({ timeoutMs: 5000 });
+    } finally {
+      disposables.dispose();
+    }
+  });
+
+  it.each(['', ' ', '-1', '0.5', 'invalid'])('preserves the configured subagent deadline when the env override is %j', async (value) => {
+    const { config, disposables } = await createConfig(
+      { [SUBAGENT_TIMEOUT_ENV]: value },
+      '[subagent]\ntimeout_ms = 5000\n',
+    );
+    try {
+      expect(resolveSubagentTimeoutMs(config)).toBe(5000);
+    } finally {
+      disposables.dispose();
+    }
+  });
+
   it('restores the env-owned timeout to the raw value on set() while the env var is set', async () => {
     const env: Record<string, string> = { [SUBAGENT_TIMEOUT_ENV]: '7000' };
     const { config, disposables } = await createConfig(env, '[subagent]\ntimeout_ms = 5000\n');

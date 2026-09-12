@@ -23,8 +23,8 @@ function checksum(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function releaseBody(expectedChecksum) {
-  return `SHA-256: \`${expectedChecksum}\``;
+function releaseBody(expectedChecksum, notes) {
+  return `SHA-256: \`${expectedChecksum}\`${notes?.trim() ? `\n\n${notes.trim()}` : ''}`;
 }
 
 function delay(milliseconds) {
@@ -58,6 +58,8 @@ async function responseJson(response, operation) {
 
 export async function prepareGitHubRelease({ environment, packageJsonPath, assetPath, latestAssetPath, checksumsPath }) {
   const tag = required(environment, 'GITHUB_REF_NAME');
+  const makeLatest = environment.GITHUB_RELEASE_MAKE_LATEST;
+  if (makeLatest !== undefined && !['true', 'false', 'legacy'].includes(makeLatest)) throw new Error('GITHUB_RELEASE_MAKE_LATEST must be true, false, or legacy');
   const { title: RELEASE_TITLE, assetName: VERSIONED_ASSET } = await checkoutReleaseIdentity(tag, packageJsonPath);
   if (basename(assetPath) !== VERSIONED_ASSET) throw new Error(`Release asset must be named ${VERSIONED_ASSET}`);
   if (basename(latestAssetPath) !== LATEST_ASSET) throw new Error(`Compatibility asset must be named ${LATEST_ASSET}`);
@@ -77,7 +79,8 @@ export async function prepareGitHubRelease({ environment, packageJsonPath, asset
   return {
     tag,
     title: RELEASE_TITLE,
-    body: releaseBody(expectedChecksum),
+    body: releaseBody(expectedChecksum, environment.GITHUB_RELEASE_NOTES),
+    makeLatest,
     checksum: expectedChecksum,
     assetBytes,
     assets: [
@@ -228,7 +231,7 @@ export async function produceGitHubRelease({
       {
         method: 'PATCH',
         headers: { ...headers, 'content-type': 'application/json' },
-        body: JSON.stringify({ draft: false, prerelease: false }),
+        body: JSON.stringify({ draft: false, prerelease: false, make_latest: prepared.makeLatest }),
       },
       'GitHub release publication',
     );

@@ -26,3 +26,10 @@ export async function probeKlientIpc(options: IpcChannelOptions): Promise<unknow
     await channel.close();
   }
 }
+
+export async function callKlientIpcControl(options: IpcChannelOptions, method: 'inspect' | 'shutdown', args: readonly unknown[]): Promise<unknown> {
+  const channel = new IpcChannel(options);
+  try {
+    return await channel.call({}, 'runtimeControl', method, [...args]);
+  } finally { await channel.close(); }
+}

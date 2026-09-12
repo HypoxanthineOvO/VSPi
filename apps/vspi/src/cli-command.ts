@@ -90,7 +90,7 @@ export async function dispatchCliCommand(
 		const result = await (dependencies.update ?? updateVspi)(VSPI_VERSION);
 		write(
 			result.status === "updated"
-				? `VSPi 已更新到 ${result.latestVersion}。请重启 VSPi 以使用新版本。\n`
+				? `VSPi 已安装 ${result.latestVersion}。${result.runtimeRestarted ? 'Daemon 已完成安全切换。' : '没有启动或替换运行中的 Daemon。'}请重启客户端。\n`
 				: `VSPi 当前已是最新版本 ${result.currentVersion}。\n`,
 		);
 		return true;

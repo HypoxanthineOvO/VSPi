@@ -1,6 +1,6 @@
 {
   "name": "vspi",
-  "version": "2.2.4",
+  "version": "2.3.0",
   "private": true,
   "description": "VSPi client for the VSP agent runtime.",
   "license": "MIT",

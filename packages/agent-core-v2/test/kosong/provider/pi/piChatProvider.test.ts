@@ -15,12 +15,101 @@ import { toPiContext, emptyPiUsage, encodePiSignature } from '#/kosong/provider/
 import { PiChatProvider } from '#/kosong/provider/pi/piChatProvider';
 import { PiStreamedMessage, convertPiError } from '#/kosong/provider/pi/streamedMessage';
 import { ProtocolAdapterRegistry } from '#/kosong/provider/protocolAdapterRegistry';
+import { normalizeThinkingCapability } from '#/kosong/contract/capability';
+import { applyModelEffortProfile } from '#/kosong/model/effortProfiles';
+import { modelEffortProfile } from '#/kosong/provider/effortProfiles';
 import { registerProviderDefinition } from '#/kosong/provider/providerDefinition';
 import '#/kosong/provider/bases/openai/index';
 import '#/kosong/provider/bases/anthropic/index';
 import '#/kosong/provider/providers/standard.contrib';
 
 const model = getModel('openai', 'gpt-4.1');
+
+describe('relay model request encoding', () => {
+  it.each([
+    ['mimo-v2.5', 'enabled'],
+    ['mimo-v2.5-pro', 'enabled'],
+    ['MiniMax-M3', 'adaptive'],
+  ])('uses the documented thinking switch without a fake effort field for %s', async (modelName, type) => {
+    let body: Record<string, unknown> = {};
+    const request = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      if (typeof init?.body !== 'string') throw new Error('Expected JSON');
+      body = JSON.parse(init.body) as Record<string, unknown>;
+      return new Response('{"error":{"message":"offline capture"}}', { status: 400 });
+    });
+    try {
+      const record = applyModelEffortProfile({}, modelEffortProfile(modelName)!);
+      const provider = new ProtocolAdapterRegistry().createChatProvider({ modelName, protocol: 'openai', providerType: 'openai', baseUrl: 'https://relay.example.test/v1', apiKey: 'YOUR_API_KEY', providerOptions: { relay: true }, thinking: normalizeThinkingCapability(record.thinking), effortMapping: record.effortMapping });
+      await expect(generate(provider, 'Example', [], [], undefined, { thinking: { effort: 'on' } })).rejects.toThrow('offline capture');
+      expect(body['thinking']).toEqual({ type });
+      expect(body).not.toHaveProperty('reasoning_effort');
+    } finally { request.mockRestore(); }
+  });
+
+  it('enables Qwen 3.8 thinking with its canonical xhigh effort', async () => {
+    let body: Record<string, unknown> = {};
+    const request = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      if (typeof init?.body !== 'string') throw new Error('Expected JSON');
+      body = JSON.parse(init.body) as Record<string, unknown>;
+      return new Response('{"error":{"message":"offline capture"}}', { status: 400 });
+    });
+    try {
+      const record = applyModelEffortProfile({}, modelEffortProfile('qwen3.8-max')!);
+      const provider = new ProtocolAdapterRegistry().createChatProvider({ modelName: 'qwen3.8-max', protocol: 'openai', providerType: 'openai', baseUrl: 'https://relay.example.test/v1', apiKey: 'YOUR_API_KEY', providerOptions: { relay: true }, thinking: normalizeThinkingCapability(record.thinking), effortMapping: record.effortMapping });
+      await expect(generate(provider, 'Example', [], [], undefined, { thinking: { effort: 'xhigh' } })).rejects.toThrow('offline capture');
+      expect(body).toMatchObject({ enable_thinking: true, reasoning_effort: 'xhigh' });
+      expect(body).not.toHaveProperty('thinking_budget');
+    } finally { request.mockRestore(); }
+  });
+
+  it('sends MEDIUM to Gemini 3.1 Pro instead of mapping it to HIGH', async () => {
+    let body: Record<string, unknown> = {};
+    const server = createTestHttpServer(async (request, response) => {
+      let raw = '';
+      for await (const chunk of request) raw += chunk;
+      body = JSON.parse(raw) as Record<string, unknown>;
+      response.writeHead(400, { 'content-type': 'application/json' });
+      response.end('{"error":{"code":400,"message":"offline capture","status":"INVALID_ARGUMENT"}}');
+    });
+    const baseUrl = await listen(server);
+    try {
+      const record = applyModelEffortProfile({}, modelEffortProfile('gemini-3.1-pro-preview')!);
+      const provider = new ProtocolAdapterRegistry().createChatProvider({ modelName: 'gemini-3.1-pro-preview', protocol: 'google-genai', providerType: 'google', baseUrl, apiKey: 'YOUR_API_KEY', providerOptions: { relay: true }, thinking: normalizeThinkingCapability(record.thinking), effortMapping: record.effortMapping });
+      await expect(generate(provider, 'Example', [], [{ role: 'user', content: [{ type: 'text', text: 'Example' }], toolCalls: [] }], undefined, { thinking: { effort: 'medium' } })).rejects.toThrow('offline capture');
+      expect(body['generationConfig']).toMatchObject({ thinkingConfig: { thinkingLevel: 'MEDIUM' } });
+    } finally { await close(server); }
+  });
+
+  it.each([
+    ['gpt-6-astra', 'openai_responses', '/v1/responses'],
+    ['gpt-6-astra', 'openai', '/v1/chat/completions'],
+    ['kimi-k3', 'openai', '/v1/chat/completions'],
+    ['glm-5.3', 'openai', '/v1/chat/completions'],
+    ['deepseek-v4-pro', 'openai', '/v1/chat/completions'],
+    ['claude-opus-5', 'anthropic', '/v1/messages'],
+  ] as const)('sends the selected effort for %s over %s', async (modelName, protocol, path) => {
+    let url = '';
+    let body: Record<string, unknown> = {};
+    const request = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (typeof init?.body !== 'string') throw new Error('Expected a JSON request body');
+      body = JSON.parse(init.body) as Record<string, unknown>;
+      return new Response('{"error":{"message":"offline capture"}}', { status: 400, headers: { 'content-type': 'application/json' } });
+    });
+    try {
+      const provider = new ProtocolAdapterRegistry().createChatProvider({
+        modelName, protocol, providerType: 'openai', baseUrl: protocol === 'anthropic' ? 'https://relay.example.test' : 'https://relay.example.test/v1', apiKey: 'YOUR_API_KEY',
+        providerOptions: { relay: true },
+        thinking: { availability: 'always', canDisable: false, controls: ['effort'], efforts: ['high', 'max'], defaultEffort: 'high' },
+      });
+      await expect(generate(provider, 'Example', [], [], undefined, { thinking: { effort: 'max' } })).rejects.toThrow('offline capture');
+      expect(new URL(url).pathname).toBe(path);
+      if (protocol === 'openai') expect(body['reasoning_effort']).toBe('max');
+      else if (protocol === 'openai_responses') expect(body['reasoning']).toMatchObject({ effort: 'max' });
+      else expect((body['messages'] as Array<Record<string, unknown>>).at(-1)).toMatchObject({ role: 'system', output_config: { effort: 'max' } });
+    } finally { request.mockRestore(); }
+  });
+});
 
 function createTestHttpServer(handler: (request: IncomingMessage, response: ServerResponse) => Promise<void>): Server {
   return createServer((request, response) => {

@@ -12,6 +12,8 @@ import type { IAgentCommandService } from '@moonshot-ai/agent-core-v2/agent/comm
 import type { IAgentContextMemoryService } from '@moonshot-ai/agent-core-v2/agent/contextMemory/contextMemory';
 import type { IAgentMcpService } from '@moonshot-ai/agent-core-v2/agent/mcp/mcp';
 import type { IAgentRuntimeBindingService } from '@moonshot-ai/agent-core-v2/agent/runtimeBinding/runtimeBinding';
+import type { AgentActivityState } from '@moonshot-ai/agent-core-v2/agent/activityView/activityView';
+import type { AgentHistoryPage, HistoryQuery } from '@moonshot-ai/agent-core-v2/agent/history/history';
 import type { IAgentPromptService } from '@moonshot-ai/agent-core-v2/agent/prompt/prompt';
 import type { ISessionTokenCountingService } from '@moonshot-ai/agent-core-v2/session/tokenCounting/sessionTokenCounting';
 import type { IAgentPlanService } from '@moonshot-ai/agent-core-v2/features/plan/plan';
@@ -84,7 +86,7 @@ export interface AgentFacade {
   cancelShellCommand(input: { commandId: string }): Promise<void>;
   bindProfile(input: BindProfileInput): Promise<void>;
   getModel(): Promise<string>;
-  setModel(model: string): Promise<SetModelResult>;
+  setModel(model: string, thinking?: string): Promise<SetModelResult>;
   getThinking(): Promise<ThinkingLevel>;
   setThinking(level: string): Promise<void>;
   setPermission(mode: PermissionMode): Promise<void>;
@@ -95,6 +97,9 @@ export interface AgentFacade {
   resumeGoal(input?: ResumeGoalInput): Promise<GoalSnapshot>;
   cancelGoal(input?: GoalReasonInput): Promise<GoalSnapshot>;
   getContext(): Promise<AgentContextData>;
+  getContextTokenCount(): Promise<number>;
+  getActivity(): Promise<AgentActivityState>;
+  getHistory(query?: HistoryQuery): Promise<AgentHistoryPage>;
   listCommands(): Promise<readonly AgentCommandInfo[]>;
   runCommand(input: { name: string; args?: string }): Promise<void>;
   getRuntime(): Promise<RuntimeBinding>;
@@ -149,8 +154,8 @@ export function createAgentFacade(call: ScopedCaller, scope: ScopeRef): AgentFac
     bindProfile: (input) =>
       call(scope, 'agentProfileService', 'bind', [input]) as Promise<void>,
     getModel: () => call(scope, 'agentProfileService', 'getModel', []) as Promise<string>,
-    setModel: (model) =>
-      call(scope, 'agentProfileService', 'setModel', [model]) as Promise<SetModelResult>,
+    setModel: (model, thinking) =>
+      call(scope, 'agentProfileService', 'setModel', thinking === undefined ? [model] : [model, thinking]) as Promise<SetModelResult>,
     getThinking: () =>
       call(scope, 'agentProfileService', 'getEffectiveThinkingLevel', []) as Promise<ThinkingLevel>,
     setThinking: (level) =>
@@ -192,6 +197,9 @@ export function createAgentFacade(call: ScopedCaller, scope: ScopeRef): AgentFac
       ]);
       return { history, tokenCount } as AgentContextData;
     },
+    getContextTokenCount: () => call(scope, 'agentTokenCountingService', 'statusSize', []) as Promise<number>,
+    getActivity: () => call(scope, 'agentActivityView', 'state', []) as Promise<AgentActivityState>,
+    getHistory: (query) => call(scope, 'agentHistoryService', 'page', query === undefined ? [] : [query]) as Promise<AgentHistoryPage>,
     listCommands: () =>
       call(scope, 'agentCommandService', 'list', []) as Promise<readonly AgentCommandInfo[]>,
     runCommand: (input) =>

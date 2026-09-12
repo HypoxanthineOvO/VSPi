@@ -339,18 +339,20 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
     this.publishToolPatternWarnings(profile);
   }
 
-  async setModel(alias: string): Promise<ProfileSetModelResult> {
+  async setModel(alias: string, thinking?: string): Promise<ProfileSetModelResult> {
     const model = this.modelCatalog.get(alias);
+    if (thinking !== undefined) this.assertThinkingEffortSupported(thinking, model, alias, true);
     if (this.profileName === undefined) {
-      await this.bind({ profile: DEFAULT_AGENT_PROFILE_NAME, model: alias });
+      await this.bind({ profile: DEFAULT_AGENT_PROFILE_NAME, model: alias, thinking, strictThinking: thinking !== undefined });
       this.telemetry.track2('model_switch', { model: alias });
-    } else if (this.modelAlias !== alias) {
-      this.update({ modelAlias: alias });
+    } else if (this.modelAlias !== alias || thinking !== undefined) {
+      this.update({ modelAlias: alias, thinkingLevel: thinking });
       this.telemetry.track2('model_switch', { model: alias });
     }
     return {
       model: alias,
       providerName: model.providerName,
+      thinking: thinking !== undefined ? this.getEffectiveThinkingLevel() : undefined,
     };
   }
 
@@ -373,9 +375,11 @@ export class AgentProfileService extends Disposable implements IAgentProfileServ
     requested: string,
     model: Model | undefined,
     modelAlias: string,
+    strict = false,
   ): void {
     const normalized = normalizeRequestedThinkingEffort(requested);
-    if (normalized === undefined || this.supportsThinkingEffort(normalized, model)) return;
+    if (normalized === undefined && !strict) return;
+    if (normalized !== undefined && (strict ? modelSupportsThinkingEffort(normalized, model, true) : this.supportsThinkingEffort(normalized, model))) return;
     const efforts =
       model === undefined ? [] : thinkingEffortsForProvider(this.modelThinking(model), model.providerType);
     const supported =

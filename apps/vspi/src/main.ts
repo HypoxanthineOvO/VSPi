@@ -10,6 +10,7 @@ import {
 	resolveRuntimePaths,
 	startRuntimeDaemon,
 	stopRuntime,
+	recoverRuntime,
 	type RuntimeConnection,
 } from "@vsp/vsp-runtime";
 
@@ -34,6 +35,7 @@ import {
 	type ExpectedRuntimeIdentity,
 } from "./runtime-identity.js";
 import { configurePackagedRuntimeWorkers } from "./runtime-workers.js";
+import { stageRuntimeBuild } from './runtime-build.js';
 
 const identity = {
 	productName: "vspi",
@@ -86,6 +88,12 @@ async function main(): Promise<void> {
 async function daemonCommand(args: readonly string[]): Promise<void> {
 	const homeDir = parseDaemonHomeDir(args);
 	switch (args[0] ?? "status") {
+		case "recover": {
+			if (!args.includes('--confirm-stopped')) throw new Error('Only after verifying that all daemons for this home have stopped, run vspi daemon recover --confirm-stopped');
+			await recoverRuntime(homeDir);
+			process.stdout.write('Runtime lock recovery completed; previous lock files were preserved.\n');
+			return;
+		}
 		case "serve":
 			await serveDaemon(homeDir);
 			return;
@@ -126,7 +134,9 @@ async function daemonCommand(args: readonly string[]): Promise<void> {
 			return;
 		}
 		case "stop": {
-			const stopped = await stopRuntime(homeDir);
+			const forceLegacy = args.includes('--force-legacy');
+			if (forceLegacy) process.stderr.write('Warning: permitting forced termination of an authenticated legacy daemon; all of its tasks must already be finished.\n');
+			const stopped = await stopRuntime(homeDir, 30_000, { forceLegacy });
 			process.stdout.write(
 				stopped ? "VSP runtime stopped\n" : "VSP runtime is already stopped\n",
 			);
@@ -188,6 +198,12 @@ async function serveDaemon(homeDir?: string): Promise<void> {
 		};
 		process.once("SIGINT", () => close("SIGINT"));
 		process.once("SIGTERM", () => close("SIGTERM"));
+		void daemon.closed.then(async () => {
+			clearInterval(memoryTimer);
+			await removeRuntimeIdentity(expected.homeDir, daemon.state.pid);
+			diagnostic("runtime.stopped", "shutdown");
+			resolve();
+		}).catch(reject);
 	});
 }
 
@@ -205,7 +221,7 @@ async function ensureConnection(homeDir?: string): Promise<RuntimeConnection> {
 	}
 	const connection = await ensureRuntime({
 		homeDir: expected.homeDir,
-		spawn: ({ homeDir: runtimeHomeDir, logPath }) => {
+		spawn: async ({ homeDir: runtimeHomeDir, logPath }) => {
 			const runtimePaths = resolveRuntimePaths(runtimeHomeDir);
 			const diagnosticDir = join(runtimePaths.serverDir, "diagnostics");
 			mkdirSync(runtimePaths.serverDir, {
@@ -215,14 +231,13 @@ async function ensureConnection(homeDir?: string): Promise<RuntimeConnection> {
 			mkdirSync(diagnosticDir, { recursive: true, mode: 0o700 });
 			const logFd = openSync(logPath, "a", 0o600);
 			try {
-				const entry = import.meta.filename;
+				const entry = await stageRuntimeBuild(import.meta.filename, runtimeHomeDir, expected.buildId);
 				const child = spawn(
 					process.execPath,
 					[
 						...process.execArgv,
 						"--report-on-fatalerror",
 						`--diagnostic-dir=${diagnosticDir}`,
-						"--heapsnapshot-near-heap-limit=3",
 						entry,
 						"daemon",
 						"serve",

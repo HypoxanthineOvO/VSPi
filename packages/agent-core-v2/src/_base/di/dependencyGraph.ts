@@ -83,7 +83,11 @@ export class DependencyGraph {
     const out = this._out.get(instance);
     if (out !== undefined) {
       for (const [dependency] of out.entries()) {
-        this._in.get(dependency.scope, dependency.token)?.delete(instance);
+        const inbound = this._in.get(dependency.scope, dependency.token);
+        if (inbound !== undefined) {
+          inbound.delete(instance);
+          if (inbound.size === 0) this._in.delete(dependency.scope, dependency.token);
+        }
       }
       this._out.delete(instance);
     }

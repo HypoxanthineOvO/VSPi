@@ -49,6 +49,8 @@ export interface ModelRecord {
   oauth?: OAuthRef;
 
   protocol?: Protocol;
+  defaultProtocol?: Protocol;
+  effortProfileRevision?: number;
 
   name?: string;
   aliases?: string[];

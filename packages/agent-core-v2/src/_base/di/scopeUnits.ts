@@ -1,6 +1,6 @@
 import { onUnexpectedError } from '../errors/unexpectedError';
 import type { IDisposable } from './lifecycle';
-import { Ledger } from '../lifecycle/ledger';
+import { Ledger, type LedgerEntry } from '../lifecycle/ledger';
 import type { StoredRecord } from './collection';
 import {
   FiberRuntime,
@@ -57,11 +57,15 @@ export function watchScopeUnits(container: InstantiationService, kind: ScopeKind
     }
 
     let retracted = false;
+    let providerEntry: LedgerEntry | undefined;
+    let foldEntry: LedgerEntry | undefined;
     const retract = (): void | Promise<void> => {
       if (retracted) {
         return undefined;
       }
       retracted = true;
+      providerEntry?.release();
+      foldEntry?.release();
       materialized.delete(record.id);
       return unitLedger.teardown('unload');
     };
@@ -69,10 +73,10 @@ export function watchScopeUnits(container: InstantiationService, kind: ScopeKind
       void retract();
       return;
     }
-    record.providerBook.register(() => {
+    providerEntry = record.providerBook.register(() => {
       void retract();
     }, `scope-units:${kind}`);
-    foldLedger.register(() => {
+    foldEntry = foldLedger.register(() => {
       return retract();
     }, `record:${name}`);
     materialized.set(record.id, retract);

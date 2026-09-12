@@ -18,10 +18,10 @@ VSPi 是基于 Kimi Code 引擎演进的终端编码助手。常驻进程（daem
 
 ### 新安装
 
-运行安装包需要 **Node.js ≥ 22.19.0**，支持 Linux、macOS 与 Windows（Windows 上 npm 会生成 `vspi.cmd`，daemon 通过命名管道 IPC 通信）。
+运行安装包需要 **Node.js ≥ 22.19.0**。**2.3.0 先面向 Linux 发布**；Windows 暂留 2.2.4，待本轮实机验收后再推进，macOS 本轮未做实机验证。
 
 ```sh
-npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.2.4/vspi-2.2.4.tgz"
+npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.3.0/vspi-2.3.0.tgz"
 vspi --version
 ```
 
@@ -36,15 +36,18 @@ vspi
 
 ### 更新
 
-已安装用户升级到最新发布版：
+Linux 从 2.2.x 升级：先结束任务、退出所有客户端，再停旧并安装固定版本：
 
 ```sh
-vspi update
+vspi daemon stop
+npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.3.0/vspi-2.3.0.tgz"
+vspi --version
+vspi continue
 ```
 
-`vspi update` 从 GitHub Release 获取 `vspi-latest.tgz`，校验 SHA-256 后经 npm/Volta 安装；升级完成后重启前端即可。要固定安装或降级到某个版本，重新执行对应版本的新安装命令。
+2.3.0 按普通正式版本发布到共享更新通道；本轮实测范围为 Linux，Windows 用户建议暂留[固定 2.2.4 发行包](https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.2.4/vspi-2.2.4.tgz)，等待实机验收，不要先运行 `vspi update`。新版更新器会校验 SHA-256，保存旧包和配置备份，确认运行时空闲后安装、验证并切换 Daemon。
 
-升级不会自动停止旧 daemon：正在运行的任务保持原版本继续执行；前端重连遇到版本不匹配时，先确认原任务结束，再显式运行 `vspi daemon stop` 切换到新版本运行时。
+从 2.2.x 首次升级仍需先确认任务结束并显式运行 `vspi daemon stop`，再安装新版；不要删除配置目录。旧 Windows 实例不支持新关闭协议时，需要明确确认后使用旧实例终止流程。安全升级、回退和锁恢复的边界见[使用指南](apps/vspi/docs/usage.md#升级诊断与运行边界)。
 
 ## 常用操作
 

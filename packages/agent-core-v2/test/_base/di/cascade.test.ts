@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 import type {
   CascadeEngine,
@@ -11,6 +13,64 @@ import { createDecorator } from '#/_base/di/instantiation';
 import { InstantiationService } from '#/_base/di/instantiationService';
 import { ServiceCollection } from '#/_base/di/serviceCollection';
 import type { Ledger } from '#/_base/lifecycle/ledger';
+
+describe('scope garbage collection', () => {
+  it.each(['numbering', 'dependency-index', 'scope-unit-owner'])('does not retain a released scope through %s', async (source) => {
+    const engineUrl = new URL('../../../src/_base/di/cascadeEngine.ts', import.meta.url).href;
+    const graphUrl = new URL('../../../src/_base/di/dependencyGraph.ts', import.meta.url).href;
+    const injectionUrl = new URL('../../../src/_base/di/instantiation.ts', import.meta.url).href;
+    const moduleUrl = (name: string) => new URL(`../../../src/_base/di/${name}.ts`, import.meta.url).href;
+    const script = `
+      import { CascadeTree } from ${JSON.stringify(engineUrl)};
+      import { DependencyGraph } from ${JSON.stringify(graphUrl)};
+      import { createDecorator } from ${JSON.stringify(injectionUrl)};
+      import { Scope } from ${JSON.stringify(moduleUrl('scope'))};
+      import { Service } from ${JSON.stringify(moduleUrl('service'))};
+      import { ScopeUnits } from ${JSON.stringify(moduleUrl('fiber'))};
+      import { SyncDescriptor } from ${JSON.stringify(moduleUrl('descriptors'))};
+      const graph = new DependencyGraph();
+      const tree = new CascadeTree(graph);
+      let reference;
+      let root;
+      (() => {
+        if (${JSON.stringify(source)} === 'scope-unit-owner') {
+          const token = createDecorator('example-value');
+          const pack = createDecorator('example-pack');
+          class Pack extends Service {
+            constructor() { super(); this.provide(ScopeUnits('agent'), fiber => { fiber.provide(token, { value: true }); }); }
+          }
+          root = Scope.createApp();
+          root.instantiation.provide(pack, new SyncDescriptor(Pack));
+          root.accessor.get(pack);
+          const child = root.createChild('agent', 'example');
+          reference = new WeakRef(child.instantiation);
+          child.accessor.get(token);
+          child.dispose();
+          return;
+        }
+        const scope = { label: 'released-scope' };
+        reference = new WeakRef(scope);
+        if (${JSON.stringify(source)} === 'numbering') tree.seqOf(scope);
+        else {
+          const dependency = {}, consumer = {};
+          const dep = createDecorator('example-dependency'), user = createDecorator('example-consumer');
+          graph.addInstance(dependency, scope, dep);
+          graph.addInstance(consumer, scope, user);
+          graph.addEdge(consumer, { scope, token: dep });
+          graph.removeInstance(consumer);
+          graph.removeInstance(dependency);
+        }
+      })();
+      for (let index = 0; index < 5; index++) { await new Promise(setImmediate); global.gc(); }
+      const retained = reference.deref() !== undefined;
+      root?.dispose();
+      if (retained) throw new Error('Released scope was retained');
+      console.log('collected');
+    `;
+    const result = await promisify(execFile)(process.execPath, ['--expose-gc', '--import', 'tsx', '--input-type=module', '-e', script], { timeout: 20000, maxBuffer: 128000 });
+    expect(result.stdout.trim()).toBe('collected');
+  });
+});
 
 function deferred<T = void>(): {
   promise: Promise<T>;

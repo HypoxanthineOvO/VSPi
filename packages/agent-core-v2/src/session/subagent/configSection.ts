@@ -52,8 +52,9 @@ export const DEFAULT_SUBAGENT_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 export const SUBAGENT_TIMEOUT_ENV = 'KIMI_SUBAGENT_TIMEOUT_MS';
 
 function parseTimeoutMsEnv(raw: string): number | undefined {
+  if (raw.trim().length === 0) return undefined;
   const parsed = Number(raw);
-  return Number.isInteger(parsed) && parsed >= 1 ? parsed : undefined;
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 export const subagentEnvBindings: EnvBindings<SubagentConfig> = envBindings(

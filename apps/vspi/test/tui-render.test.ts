@@ -29,6 +29,7 @@ import {
 import { resolveCommand } from "../src/v1/domain/commands.js";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/v1/domain/defaults.js";
 import { editSubagentModels } from "../src/v1/domain/subagent-models.js";
+import { isOfficialRecommendedModel } from "../src/v1/domain/recommended-models.js";
 import type { TranscriptMessage } from "../src/v1/domain/types.js";
 import { AgentsDock } from "../src/v1/ui/agents-dock.js";
 import {
@@ -89,6 +90,19 @@ function panelsAgentSnapshot(run: AgentRunSnapshot): AgentSnapshot {
 			sessionOverrides: [],
 			taskEpoch: 0,
 		},
+	};
+}
+
+function panelsFailedAgentRun(): AgentRunSnapshot {
+	return {
+		id: "task-example", agentId: "child-example", treeId: "tree-example", kind: "task", depth: 1,
+		model: "example/model", provider: "example", role: "worker", profile: "coder", modelReason: "requested",
+		effort: "high", contextMode: "isolated", contextChars: 0, task: "Example work", tools: [],
+		error: "PROVIDER_FAILURE_DIAGNOSTIC",
+		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+		budget: { runTokensUsed: 0, maxRunTokens: 0, treeTokensUsed: 0, maxTreeTokens: 0, treeCostUsd: 0, maxTreeCostUsd: 0, maxRunSeconds: 7_200, warnRunTokens: false, warnTreeTokens: false, warnTreeCost: false, warnElapsed: false },
+		timeline: [], status: "error", background: true, resumed: false,
+		startedAt: "2026-09-12T00:00:00.000Z", finishedAt: "2026-09-12T00:30:00.000Z",
 	};
 }
 
@@ -209,8 +223,106 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		});
 		tui.addChild(app);
 		tui.setFocus(app);
-		return { terminal, tui, app, events: () => events, setPolicy };
+		return { terminal, tui, app, backend, events: () => events, setPolicy };
 	}
+
+	it("opens the main model picker without reading secondary model configuration", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-main-model-isolation-"));
+		const { app, backend } = renderFixture(home);
+		const getSubagent = vi.fn(async () => ({ models: { "example/code": "Review" } }));
+		backend.getSubagentModelPreferences = getSubagent;
+		try {
+			await app.start();
+			app.composer.setText("/model");
+			app.handleInput("\r");
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("★ 官方推荐"));
+			expect(getSubagent).not.toHaveBeenCalled();
+		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("does not switch the model when effort confirmation is cancelled", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-model-confirmation-"));
+		const { app, backend } = renderFixture(home);
+		backend.getModelOptions = async () => [{ id: "target", alias: "example/target", provider: "example", brand: "Example", label: "Target", curated: true, vision: false, efforts: ["off", "high", "max"], defaultEffort: "high", price: {}, contextWindow: 8192 }];
+		backend.getPreferredModelEffort = async () => ({ effort: "max" });
+		const select = vi.fn();
+		backend.selectModel = select;
+		try {
+			await app.start();
+			app.composer.setText("/model");
+			app.handleInput("\r");
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("★ 官方推荐"));
+			app.handleInput("\r");
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("确认后切换"));
+			expect(select).not.toHaveBeenCalled();
+			app.handleInput("\u001b");
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("当前模型与 Effort 保持不变"));
+			expect(select).not.toHaveBeenCalled();
+		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("confirms a model with its remembered effort in one backend operation", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-model-effort-commit-"));
+		const { app, backend } = renderFixture(home);
+		backend.getModelOptions = async () => [{ id: "target", alias: "example/target", provider: "example", brand: "Example", label: "Target", curated: true, vision: false, efforts: ["off", "high", "max"], defaultEffort: "high", price: {}, contextWindow: 8192 }];
+		backend.getPreferredModelEffort = async () => ({ effort: "max" });
+		const select = vi.fn(async () => ({ modelId: "target", profileModelId: "target", vision: false, contextWindow: 8192, effort: "max" }));
+		backend.selectModel = select;
+		const setEffort = vi.fn();
+		backend.setEffort = setEffort;
+		try {
+			await app.start();
+			app.composer.setText("/model");
+			app.handleInput("\r");
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("★ 官方推荐"));
+			app.handleInput("\r");
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("确认后切换"));
+			app.handleInput("\r");
+			await vi.waitFor(() => expect(select).toHaveBeenCalledWith("example", "target", "max"));
+			expect(setEffort).not.toHaveBeenCalled();
+		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("omits Off from the effort picker even when the provider advertises it", () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.openEffort("max", ["off", "high", "max"]);
+		const output = panels.render(100, 12, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n");
+		expect(output).not.toContain("Off");
+		expect(panels.handleInput("\r")).toEqual({ type: "effort", effort: "max" });
+	});
+
+	it("preserves the selected effort when a model catalog refresh arrives", () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.openEffort("max", ["high", "max"]);
+		panels.setModels([{ id: "target", provider: "example", brand: "Example", label: "Target", curated: true, vision: false, efforts: ["high", "max"], price: {} }]);
+		expect(panels.handleInput("\r")).toEqual({ type: "effort", effort: "max" });
+	});
+
+	it("confirms a fixed model without presenting a fake Off option", () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.openEffort("off", ["off"]);
+		const output = panels.render(100, 12, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n");
+		expect(output).toContain("没有可调 Effort");
+		expect(output).not.toContain("Off");
+		expect(panels.handleInput("\r")).toEqual({ type: "effort", effort: "off" });
+	});
+
+	it("routes the dedicated subagent command to core candidate edits", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-subagent-model-command-"));
+		const { app, backend } = renderFixture(home);
+		backend.getModelOptions = async () => [{ id: "code", alias: "example/code", provider: "example", brand: "Example", label: "Code", vision: false, efforts: ["high"], price: {}, contextWindow: 4096 }];
+		backend.getSubagentModelPreferences = async () => ({ models: {} });
+		const update = vi.fn(async () => ({ models: { "example/code": "" }, defaultModel: "example/code" }));
+		backend.updateSubagentModelPreferences = update;
+		try {
+			await app.start();
+			app.composer.setText("/subagent-model");
+			app.handleInput("\r");
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("secondary_model"));
+			app.handleInput("\r");
+			await vi.waitFor(() => expect(update).toHaveBeenCalledWith({ action: "toggle", model: "example/code" }));
+		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
 
 	it("keeps a confirmed policy in the status footer when the policy panel is reopened", async () => {
 		const { app, setPolicy } = renderFixture();
@@ -1075,6 +1187,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(resolveCommand("/tasks")?.id).toBe("tasks");
 		expect(resolveCommand("/agents")?.id).toBe("agents");
 		expect(resolveCommand("/subagents")?.id).toBe("agents");
+		expect(resolveCommand("/subagent-model")?.id).toBe("subagent-model");
 	});
 
 	it("keeps tool calls between the transcript segments that surround them", () => {
@@ -1132,26 +1245,19 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 					provider: "vsplab",
 					brand: "VSPLab",
 					label: "GLM 5.3 Flash",
+					curated: true,
 					vision: false,
 					efforts: ["off"],
 					price: {},
 				},
 			]);
-			const internals = panels as unknown as {
-				modelSearch: string;
-				filteredModelCache: undefined;
-				filteredModels(): Array<{ id: string; provider: string }>;
-			};
-			internals.modelSearch = query;
-			internals.filteredModelCache = undefined;
-
-			expect(internals.filteredModels()).toMatchObject([
-				{ id: "glm-5.3-flash", provider: "vsplab" },
-			]);
+			panels.open("models");
+			panels.handleInput(query);
+			expect(panels.handleInput("\r")).toMatchObject({ type: "model", model: { id: "glm-5.3-flash", provider: "vsplab" } });
 		},
 	);
 
-	it("keeps the star pool small and repairs its default when removing a model", () => {
+	it("repairs the subagent pool default when its current entry is removed", () => {
 		const first = editSubagentModels({ models: {} }, { action: "toggle", model: "example/fast" });
 		expect(first).toEqual({ models: { "example/fast": "" }, defaultModel: "example/fast" });
 		const second = editSubagentModels(first, { action: "purpose", model: "example/code", purpose: " coding " });
@@ -1161,10 +1267,10 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(editSubagentModels(removed, { action: "toggle", model: "example/code" })).toEqual({ models: {}, defaultModel: undefined });
 	});
 
-	it("edits star/default/purpose without switching the main model", () => {
+	it("edits subagent candidates in their dedicated panel without switching the main model", () => {
 		const panels = new PanelController(DEFAULT_SETTINGS);
 		panels.setModels([{ id: "code", alias: "example/code", provider: "example", brand: "Example", label: "Code", vision: false, efforts: ["off"], price: {} }]);
-		panels.open("models");
+		panels.open("subagentModels");
 		expect(panels.handleInput("\u0013")).toEqual({ type: "subagentModel", edit: { action: "toggle", model: "example/code" } });
 		expect(panels.handleInput("\u0004")).toEqual({ type: "subagentModel", edit: { action: "default", model: "example/code" } });
 		panels.handleInput("\u0010");
@@ -1172,17 +1278,78 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(panels.handleInput("\r")).toEqual({ type: "subagentModel", edit: { action: "purpose", model: "example/code", purpose: "review" } });
 	});
 
-	it("searches folded models and keeps current and starred choices visible", () => {
+	it("does not include a nonrecommended subagent candidate in the main recommended list", () => {
 		const panels = new PanelController(DEFAULT_SETTINGS);
 		const model = (id: string, curated: boolean) => ({ id, alias: `example/${id}`, provider: "example", brand: "Example", label: id, vision: false, efforts: ["off"], price: {}, curated });
 		panels.setModels([model("new", true), model("old", false), model("starred", false)], [], { provider: "example", id: "new" });
 		panels.setSubagentModelPreferences({ models: { "example/starred": "analysis" }, defaultModel: "example/starred" });
 		panels.open("models");
-		const internals = panels as unknown as { filteredModels(): Array<{ id: string }>; modelSearch: string };
-		expect(internals.filteredModels().map((m) => m.id)).not.toContain("old");
-		expect(internals.filteredModels().map((m) => m.id)).toContain("starred");
+		const output = panels.render(120, 20, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n");
+		expect(output).toContain("★ 官方推荐");
+		expect(output).not.toContain("starred");
+		expect(output).not.toContain("analysis");
+		expect(panels.renderHint(120, theme)).not.toContain("子模型");
+		expect(panels.handleInput("\u0013")).toBeUndefined();
+		expect(panels.handleInput("\u0010")).toBeUndefined();
 		panels.handleInput("old");
-		expect(internals.filteredModels().map((m) => m.id)).toEqual(["old"]);
+		expect(panels.handleInput("\r")).toBeUndefined();
+		panels.handleInput("\u000f");
+		expect(panels.handleInput("\r")).toMatchObject({ type: "model", model: { id: "old" } });
+	});
+
+	it("shows an unavailable configured subagent reference so the user can remove it", () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.setModels([]);
+		panels.setSubagentModelPreferences({ models: { "example/retired": "Review tasks" }, defaultModel: "example/retired" });
+		panels.open("subagentModels");
+		const output = panels.render(120, 16, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n");
+		expect(output).toContain("example/retired");
+		expect(output).toContain("接入暂不可用");
+		expect(output).not.toContain("★");
+		expect(panels.handleInput("\r")).toEqual({ type: "subagentModel", edit: { action: "toggle", model: "example/retired" } });
+	});
+
+	it.each([36, 80, 120])("keeps the dedicated candidate panel within %s columns", (width) => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.setSubagentModelPreferences({ models: { "example/long-model-reference-for-specialized-code-review": "检查实现边界与测试覆盖" } });
+		panels.open("subagentModels");
+		for (const line of panels.render(width, 12, theme, DEFAULT_USAGE)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		panels.handleInput("\u0010");
+		for (const line of panels.render(width, 8, theme, DEFAULT_USAGE)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+	});
+
+	it("keeps a forced core subagent configuration read-only in the candidate panel", () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.setSubagentModelPreferences({ models: { "example/code": "" }, defaultModel: "example/code", force: true });
+		panels.open("subagentModels");
+		expect(panels.handleInput("\r")).toBeUndefined();
+		expect(panels.handleInput("\u0004")).toBeUndefined();
+		expect(panels.render(120, 16, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n")).toContain("force=true");
+	});
+
+	it("returns to recommended models when the main picker is reopened", () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.setModels([{ id: "other", brand: "Example", label: "Other", vision: false, efforts: ["high"], price: {} }]);
+		panels.open("models");
+		expect(panels.handleInput("\r")).toBeUndefined();
+		panels.handleInput("\u000f");
+		expect(panels.handleInput("\r")).toMatchObject({ type: "model", model: { id: "other" } });
+		panels.close();
+		panels.open("models");
+		expect(panels.handleInput("\r")).toBeUndefined();
+	});
+
+	it.each(["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna", "claude-fable-5-1", "claude-opus-5", "kimi-k3", "glm-5.3", "glm-5.3-flash", "deepseek-v4.1-flash", "deepseek-v4-pro", "MiniMax-M3", "mimo-v2.5", "mimo-v2.5-pro", "qwen3.8-max", "google/gemini-3.8-flash", "google/gemini-3.1-pro-preview", "tencent/hy4-preview"])("recognizes the approved recommendation %s independently of subagent configuration", (id) => {
+		expect(isOfficialRecommendedModel(id)).toBe(true);
+	});
+
+	it.each(["gpt-5.6-terra", "kimi-k2.7-code", "deepseek-v4-flash-vision-exp", "gemini-3.1-flash-lite", "example-model"])("does not automatically recommend an unlisted model %s", (id) => {
+		expect(isOfficialRecommendedModel(id)).toBe(false);
+	});
+
+	it("matches a pending recommendation only when the catalog supplies its exact approved name", () => {
+		expect(isOfficialRecommendedModel("new-provider-id", "Kimi K2.8 Preview")).toBe(true);
+		expect(isOfficialRecommendedModel("new-provider-id", "Kimi K2.8 Other")).toBe(false);
 	});
 
 	it("does not reset model selection when background snapshots arrive", () => {
@@ -1231,6 +1398,45 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		panels.setCronTasks([]);
 
 		expect(panelState.state.selected).toBe(12);
+	});
+
+	it.each(["columns", "detail"])("renders the terminal agent failure in the %s view after a long conversation", (view) => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		const run = panelsFailedAgentRun();
+		panels.setAgentSnapshot({ ...panelsAgentSnapshot(run), active: [], recent: [run] });
+		panels.open("agents");
+		if (view === "detail") panels.handleInput("\r");
+		panels.setAgentConversation({
+			runId: run.id, agentId: run.agentId, tokenCount: 60, totalBlocks: 60,
+			blocks: Array.from({ length: 60 }, (_, index) => ({
+				id: `commentary-${String(index)}`, kind: "commentary", sourceRole: "assistant", text: `Process line ${String(index)}`, injected: false, presentation: "message",
+			})),
+		});
+		const output = panels.render(140, 18, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n");
+		expect(output).toContain("PROVIDER_FAILURE_DIAGNOSTIC");
+		expect(output).toContain("运行时限：2 小时");
+	});
+
+	it("shows a configured agent timeout as a resumable deadline rather than an unexplained error", () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		const base = panelsFailedAgentRun();
+		const run: AgentRunSnapshot = { ...base, error: undefined, status: "timed_out", budget: { ...base.budget, maxRunSeconds: 1_800 } };
+		panels.setAgentSnapshot({ ...panelsAgentSnapshot(run), active: [], recent: [run] });
+		panels.open("agents");
+		const output = panels.render(140, 18, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n");
+		expect(output).toContain("运行时限：30 分钟");
+		expect(output).toContain("已达到运行时限");
+		expect(output).toContain("可恢复同一 Agent 继续");
+	});
+
+	it("removes terminal escape sequences from an agent failure reason", () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		const run = { ...panelsFailedAgentRun(), error: "Failure\u001B[2Jdetail" };
+		panels.setAgentSnapshot({ ...panelsAgentSnapshot(run), active: [], recent: [run] });
+		panels.open("agents");
+		const output = panels.render(140, 18, theme, DEFAULT_USAGE).join("\n");
+		expect(output).not.toContain("\u001B[2J");
+		expect(stripTerminalSequences(output)).toContain("Failuredetail");
 	});
 
 	it("renders the agents browser and confirms stop before emitting an action", () => {

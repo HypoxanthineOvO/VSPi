@@ -204,6 +204,10 @@ export class EventHub<TPayloadMap extends object = KlientEventPayloads>
       }
       payload = parsed.data;
     }
+    if (data !== null && typeof data === 'object' && payload !== null && typeof payload === 'object') {
+      const metadata = data as { viewRevision?: unknown; viewSegment?: unknown };
+      if (Number.isSafeInteger(metadata.viewRevision)) payload = { ...payload, viewRevision: metadata.viewRevision, viewSegment: Number.isSafeInteger(metadata.viewSegment) ? metadata.viewSegment : undefined };
+    }
     const set = this.listeners.get(event);
     if (set === undefined) return;
     for (const listener of set) {

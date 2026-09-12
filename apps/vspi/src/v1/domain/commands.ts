@@ -10,6 +10,7 @@ export interface CommandDefinition {
 export type ActionHandler =
 	| "newSession"
 	| "sessions"
+	| "history"
 	| "externalImport"
 	| "skills"
 	| "compact"
@@ -18,6 +19,7 @@ export type ActionHandler =
 	| "plan"
 	| "goal"
 	| "models"
+	| "subagentModels"
 	| "providers"
 	| "login"
 	| "logout"
@@ -55,6 +57,7 @@ export interface CommandMatch {
 export const BUILTIN_COMMAND_SOURCE = "builtin";
 
 export const ACTION_REGISTRY: ActionDefinition[] = [
+	{ id: 'history', aliases: [], label: '/history', description: '分页加载更早的持久化会话记录', group: 'VSPi', availability: 'enabled', handler: 'history' },
 	{
 		id: "new",
 		aliases: ["clear"],
@@ -104,7 +107,7 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
 		id: "update",
 		aliases: [],
 		label: "/update",
-		description: "检查并安装最新版本",
+		description: "查看安全升级指引（终端执行 vspi update）",
 		group: "VSPi",
 		handler: "update",
 		availability: "enabled",
@@ -113,7 +116,7 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
 		id: "reload",
 		aliases: [],
 		label: "/reload",
-		description: "平滑重启：续接当前会话并加载最新配置",
+		description: "查看安全重启指引（退出后 vspi continue）",
 		group: "VSPi",
 		handler: "reload",
 		availability: "enabled",
@@ -125,6 +128,15 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
 		description: "选择模型或模型组",
 		group: "VSPi",
 		handler: "models",
+		availability: "enabled",
+	},
+	{
+		id: "subagent-model",
+		aliases: [],
+		label: "/subagent-model",
+		description: "配置 Subagent 候选模型与能力（core secondary_model）",
+		group: "VSPi",
+		handler: "subagentModels",
 		availability: "enabled",
 	},
 	{
@@ -455,5 +467,5 @@ export function describeCommandsForPrompt(): string {
 	return `# VSPi 命令契约
 VSPi 与上游 pi coding agent CLI 是不同产品：上游文档（包括 node_modules 内捆绑的 pi docs）描述的 CLI 参数、命令与扩展热加载行为均不适用于 VSPi，不得据此向用户推荐。VSPi 实际支持的全部 TUI 命令如下；除此之外的 / 命令一律不存在，不要建议用户输入清单外的命令，需要时让用户在命令面板（输入 / 后浏览）自行查看。
 ${lines.join("\n")}
-修改 VSPi 本体或其配置文件后，配置不会在当前进程内自动生效；此时建议用户输入 /reload 平滑重启并自动续接当前会话，而不是让用户退出重开或手动拼接启动参数。`;
+修改配置后可使用 vspi config reload；修改 VSPi 程序后，请退出当前客户端再运行 vspi continue。当前 /reload 不进行不安全的终端进程接管。/history 分页加载更早记录，/history latest 返回最近记录。`;
 }

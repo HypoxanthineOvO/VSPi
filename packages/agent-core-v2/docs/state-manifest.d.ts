@@ -27,7 +27,7 @@
 // references become '(circular)', and class instances collapse to a '(ClassName)'
 // marker — the wire shape of an entry is the JSON projection of the type here.
 //
-// Index (App: 0 keys · Workspace: 6 keys · Session: 9 keys · Agent: 79 keys)
+// Index (App: 0 keys · Workspace: 6 keys · Session: 9 keys · Agent: 80 keys)
 //   App
 //   Workspace
 //     workspaceDirs.ephemeralDirs          src/workspace/workspaceDirs/workspaceDirsService.ts
@@ -102,6 +102,7 @@
 //     staleGuard                                      src/features/staleGuard/staleGuardOps.ts
 //     stepRetry.failedAttempts                        src/agent/stepRetry/stepRetryService.ts
 //     stepRetry.lastFailedDriverId                    src/agent/stepRetry/stepRetryService.ts
+//     stepRetry.recoveryDeadline                      src/agent/stepRetry/stepRetry.ts
 //     swarm                                           src/features/swarm/swarmOps.ts
 //     task                                            src/agent/task/taskOps.ts
 //     task.activeTaskReminderPending                  src/agent/task/taskService.ts
@@ -1230,6 +1231,9 @@ export interface AgentStateSnapshot {
       readonly usedContextTokens?: number;
       readonly maxContextTokens?: number;
       readonly onTraceId?: (traceId: string | null) => void;
+      readonly onProtocolProgress?: (stage: 'start' | 'headers' | 'body') => void;
+      readonly idleTimeoutMs?: number;
+      readonly deadlineAt?: number;
     };
     readonly systemPrompt: string;
   }>;
@@ -1356,6 +1360,8 @@ export interface AgentStateSnapshot {
   };
   // src/agent/shellCommand/shellCommandService.ts
   'shellCommand.tasks': Map<string, string>;
+  // src/agent/stepRetry/stepRetry.ts
+  'stepRetry.recoveryDeadline': number | undefined;
   // src/agent/stepRetry/stepRetryService.ts
   'stepRetry.failedAttempts': number;
   'stepRetry.lastFailedDriverId': string | undefined;

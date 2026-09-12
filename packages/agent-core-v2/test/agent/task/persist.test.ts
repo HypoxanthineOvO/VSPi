@@ -2,7 +2,7 @@ import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'pathe';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SyncDescriptor } from '#/_base/di/descriptors';
 import { DisposableStore } from '#/_base/di/lifecycle';
@@ -165,6 +165,23 @@ describe('AgentTaskPersistence', () => {
   });
 
   describe('readTaskOutputBytes / taskOutputSizeBytes', () => {
+    it('reads only the bounded tail from storage for a small preview', async () => {
+      await persistence.appendTaskOutput('bash-tail0001', 'x'.repeat(2 * 1024 * 1024));
+      const read = vi.spyOn(bytes, 'read');
+      const stream = vi.spyOn(bytes, 'readStream');
+      try {
+        const snapshot = await persistence.readTaskOutputSnapshot('bash-tail0001', 200);
+        expect(snapshot?.preview).toBe('x'.repeat(200));
+        expect(read).not.toHaveBeenCalled();
+        expect(stream).toHaveBeenCalledWith(expect.any(String), 'output.log', { start: 2096952, end: 2097151 });
+      } finally { read.mockRestore(); stream.mockRestore(); }
+    });
+
+    it('drops an incomplete UTF-8 prefix from a tail without inserting replacement characters', async () => {
+      await persistence.appendTaskOutput('bash-tail0002', '中文🧪tail');
+      const snapshot = await persistence.readTaskOutputSnapshot('bash-tail0002', 5);
+      expect(snapshot?.preview).toBe('tail');
+    });
     it('taskOutputSizeBytes reports the full byte size of output.log', async () => {
       await persistence.appendTaskOutput('bash-size0000', 'abcdefghij');
       expect(await persistence.taskOutputSizeBytes('bash-size0000')).toBe(10);

@@ -149,6 +149,8 @@ const ModelBaseSchema = z.object({
   oauth: OAuthRefSchema.optional(),
 
   protocol: ProtocolSchema.optional(),
+  defaultProtocol: ProtocolSchema.optional(),
+  effortProfileRevision: z.number().int().positive().optional(),
 
   name: z.string().optional(),
   aliases: z.array(z.string()).optional(),
@@ -197,6 +199,8 @@ export const ModelOverrideSchema = ModelBaseSchema.omit({
   apiKey: true,
   oauth: true,
   protocol: true,
+  defaultProtocol: true,
+  effortProfileRevision: true,
   name: true,
   aliases: true,
   provider: true,
@@ -288,6 +292,7 @@ export const ThinkingConfigSchema = z.object({
   effort: z.string().optional(),
   forcedEffort: z.string().optional(),
   keep: z.string().optional(),
+  modelEfforts: z.record(z.string().min(1), z.string().min(1)).optional(),
 });
 
 type _AssertThinkingConfig = AssertExact<
@@ -307,6 +312,18 @@ export const stripThinkingEnv: ConfigStripEnv<ThinkingConfig> = (value) => {
 registerConfigSection(THINKING_SECTION, ThinkingConfigSchema, {
   env: thinkingEnvBindings,
   stripEnv: stripThinkingEnv,
+  fromToml: (raw) => {
+    if (!isPlainObject(raw)) return raw;
+    const value = transformPlainObject(raw);
+    if (isPlainObject(raw['model_efforts'])) value['modelEfforts'] = cloneRecord(raw['model_efforts']);
+    return value;
+  },
+  toToml: (value, raw) => {
+    if (!isPlainObject(value)) return value;
+    const result = plainObjectToToml(value, raw);
+    if (isPlainObject(value['modelEfforts'])) result['model_efforts'] = cloneRecord(value['modelEfforts']);
+    return result;
+  },
 });
 
 export const MODEL_CATALOG_SECTION = 'modelCatalog';

@@ -195,6 +195,7 @@ export interface ModelPrice {
 
 export interface ModelOption {
 	id: string;
+	protocol?: string;
 	alias?: string;
 	provider?: string;
 	brand: string;

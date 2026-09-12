@@ -1,8 +1,9 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { resolveRuntimePaths, type RuntimeConnection, type RuntimeState } from '@vsp/vsp-runtime';
+import { runtimeBuildId } from './runtime-build.js';
 
 export const MINIMUM_NODE_VERSION = '22.19.0';
 
@@ -34,12 +35,11 @@ export async function createExpectedRuntimeIdentity(options: {
   readonly platform: string;
   readonly nodeVersion?: string;
 }): Promise<ExpectedRuntimeIdentity> {
-  const bytes = await readFile(options.entryPath);
   return {
     productName: options.productName,
     version: options.version,
     platform: options.platform,
-    buildId: createHash('sha256').update(bytes).digest('hex'),
+    buildId: await runtimeBuildId(options.entryPath),
     nodeVersion: options.nodeVersion ?? process.versions.node,
     homeDir: resolveRuntimePaths(options.homeDir).homeDir,
   };

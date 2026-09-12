@@ -7,6 +7,7 @@
  */
 
 import { z } from 'zod';
+import { agentActivityStateSchema } from './activity.js';
 
 import { maybe, noResult } from '../helpers.js';
 import type { ServiceContract } from '../types.js';
@@ -77,6 +78,15 @@ export const agentContextMemoryContract = {
   get: { input: z.tuple([]), output: z.array(z.unknown()) },
 } satisfies ServiceContract;
 
+export const agentHistoryPageSchema = z.object({
+  items: z.array(z.unknown()), before: z.number().optional(), total: z.number(), revision: z.number(), truncated: z.boolean(),
+  activity: agentActivityStateSchema, model: z.string().optional(), effort: z.string(),
+  live: z.object({ turnId: z.number(), segment: z.number(), text: z.string(), thinking: z.string() }).optional(),
+});
+export const agentHistoryContract = {
+  page: { input: z.tuple([z.object({ before: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(100).optional() }).optional()]), output: agentHistoryPageSchema },
+} satisfies ServiceContract;
+
 export const agentTokenCountingContract = {
   statusSize: { input: z.tuple([]), output: z.number() },
 } satisfies ServiceContract;
@@ -99,7 +109,7 @@ export const bindAgentProfileInputSchema = z.object({
 export const agentProfileContract = {
   bind: { input: z.tuple([bindAgentProfileInputSchema]), output: noResult },
   getModel: { input: z.tuple([]), output: z.string() },
-  setModel: { input: z.tuple([z.string()]), output: setModelResultSchema },
+  setModel: { input: z.tuple([z.string(), z.string().optional()]), output: setModelResultSchema },
   setThinking: { input: z.tuple([z.string()]), output: noResult },
   getEffectiveThinkingLevel: { input: z.tuple([]), output: z.string() },
 } satisfies ServiceContract;

@@ -4,7 +4,6 @@ export type InteractionSurface = "panel" | "composer" | "inspect";
 
 export interface InteractionState {
 	modelChoiceTab?: boolean;
-	modelPurposeEditing?: boolean;
 	modelHasCollapsed?: boolean;
 	modelExpanded?: boolean;
   hasItems?: boolean;
@@ -446,7 +445,7 @@ const actions: InteractionDefinition[] = [
     handler: "closeSkillPanel",
     hint: (state) => (state.skillAdding === true || state.skillViewing === true ? "Esc 返回" : "Esc 关闭"),
   }),
-  ...(["models", "settings", "theme", "policy", "effort", "approval", "tools", "cron"] as const).map((context) =>
+  ...(["models", "subagentModels", "settings", "theme", "policy", "effort", "approval", "tools", "cron"] as const).map((context) =>
     keyAction({
       id: `panel.${context}.move`,
       surface: "panel",
@@ -506,17 +505,16 @@ const actions: InteractionDefinition[] = [
     hint: "Tab 切换视图",
   }),
   ...([
-    ["star", "s", "Ctrl+S 星标"],
+    ["toggle", "s", "Ctrl+S 加入/移除候选"],
     ["default", "d", "Ctrl+D 默认子模型"],
     ["purpose", "p", "Ctrl+P 用途"],
   ] as const).map(([action, key, hint]) => keyAction({
-    id: `panel.models.${action}`,
+    id: `panel.subagentModels.${action}`,
     surface: "panel",
-    context: "models",
+    context: "subagentModels",
     keys: [`Ctrl+${key.toUpperCase()}`],
     keyValues: [Key.ctrl(key)],
     handler: "editSubagentModels",
-    enabled: (state) => state.modelChoiceTab === true && state.modelPurposeEditing !== true,
     hint,
   })),
   keyAction({
@@ -526,8 +524,25 @@ const actions: InteractionDefinition[] = [
     keys: ["Ctrl+O"],
     keyValues: [Key.ctrl("o")],
     handler: "expandModelList",
-    enabled: (state) => state.modelChoiceTab === true && state.modelHasCollapsed === true && state.modelPurposeEditing !== true,
-    hint: (state) => state.modelExpanded ? "Ctrl+O 精选" : "Ctrl+O 全部",
+    enabled: (state) => state.modelChoiceTab === true,
+    hint: (state) => state.modelExpanded ? "Ctrl+O 星标" : "Ctrl+O 全部",
+  }),
+  keyAction({
+    id: "panel.subagentModels.select",
+    surface: "panel",
+    context: "subagentModels",
+    keys: ["Enter"],
+    keyValues: [Key.enter],
+    handler: "editSubagentModels",
+    hint: "Enter 加入/移除候选",
+  }),
+  inputAction({
+    id: "panel.subagentModels.input",
+    surface: "panel",
+    context: "subagentModels",
+    keys: ["Text", "Editing keys"],
+    handler: "editSubagentModels",
+    matcher: editingInput,
   }),
   keyAction({
     id: "panel.effort.select",
@@ -742,6 +757,7 @@ const actions: InteractionDefinition[] = [
   ...(
     [
       "models",
+      "subagentModels",
       "settings",
       "usage",
       "theme",

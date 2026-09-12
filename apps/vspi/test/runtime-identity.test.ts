@@ -1,10 +1,13 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { formatRuntimeMigrationWarning } from '../src/v1/run.js';
+import { runtimeBuildId, stageRuntimeBuild } from '../src/runtime-build.js';
 import {
   assertSupportedNodeVersion,
   createExpectedRuntimeIdentity,
@@ -31,6 +34,23 @@ describe('VSPi startup runtime warning', () => {
 });
 
 describe('VSPi runtime identity', () => {
+  it('keeps a staged daemon executable unchanged when the installation is replaced', async () => {
+    const root = await temporaryDirectory('vspi-build-snapshot-');
+    const dist = join(root, 'package', 'dist');
+    await mkdir(dist, { recursive: true });
+    await mkdir(join(root, 'package', 'skills', 'vspi-self'), { recursive: true });
+    const entry = join(dist, 'main.mjs');
+    await writeFile(entry, 'console.log("previous build")');
+    await writeFile(join(dist, 'search-worker.mjs'), 'export {};');
+    await writeFile(join(dist, 'text-build-worker.mjs'), 'export {};');
+    await writeFile(join(root, 'package', 'skills', 'vspi-self', 'SKILL.md'), 'Example skill');
+    const buildId = await runtimeBuildId(entry);
+    const snapshot = await stageRuntimeBuild(entry, join(root, 'home'), buildId);
+    await writeFile(entry, 'console.log("replacement build")');
+    expect((await promisify(execFile)(process.execPath, [snapshot])).stdout.trim()).toBe('previous build');
+    expect(await runtimeBuildId(snapshot)).toBe(buildId);
+    expect(await runtimeBuildId(entry)).not.toBe(buildId);
+  });
   it('accepts the VSPi Node.js runtime floor and newer releases', () => {
     expect(() => assertSupportedNodeVersion('22.19.0')).not.toThrow();
     expect(() => assertSupportedNodeVersion('22.22.3')).not.toThrow();

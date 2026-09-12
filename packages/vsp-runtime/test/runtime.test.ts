@@ -4,10 +4,13 @@
  * Wiring: real KAP/Core/Klient with isolated filesystem state and no model network calls.
  * Run: pnpm -C packages/vsp-runtime test
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile, utimes, readdir, link, rename } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createServer, type Socket } from "node:net";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseSkillText } from "@moonshot-ai/agent-core-v2/features/skill/catalog/parser";
@@ -21,8 +24,15 @@ import {
 	stopRuntime,
 	RuntimeAlreadyRunningError,
 	startRuntimeDaemon,
+	recoverRuntime,
+	acquireRuntimeLease,
 	type RuntimeDaemon,
 } from "../src/index.js";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+	const original = await importOriginal<typeof import("node:fs/promises")>();
+	return { ...original, link: vi.fn(original.link), rename: vi.fn(original.rename) };
+});
 
 const identity = {
 	productName: "vspi-test",
@@ -34,13 +44,291 @@ const identity = {
 describe("VSP runtime daemon (shared Core ownership)", () => {
 	let homeDir: string | undefined;
 	let daemon: RuntimeDaemon | undefined;
+	let closePeer: (() => Promise<void>) | undefined;
+
+	it("persists per-model efforts with exact alias keys while preserving other thinking settings", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-model-efforts-"));
+		daemon = await startTestDaemon(homeDir);
+		const connection = await connectRuntime(homeDir);
+		try {
+			await connection.klient.global.config.set({ domain: "thinking", patch: { effort: "low", keep: "all" } });
+			await connection.klient.global.config.set({ domain: "thinking", patch: { modelEfforts: { "Example/Code_Model": "max" } } });
+			await connection.klient.global.config.set({ domain: "thinking", patch: { modelEfforts: { "Other/Code_Model": "high" } } });
+			await connection.klient.global.config.reload();
+			expect(await connection.klient.global.config.get("thinking")).toMatchObject({ effort: "low", keep: "all", modelEfforts: { "Example/Code_Model": "max", "Other/Code_Model": "high" } });
+			const disk = await readFile(resolveRuntimePaths(homeDir).configPath, "utf8");
+			expect(disk).toContain('"Example/Code_Model"');
+		} finally { await connection.close(); }
+	});
+
+	it('uses bounded VSP retry defaults without shortening the subagent task deadline', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-retry-defaults-'));
+		daemon = await startTestDaemon(homeDir);
+		const connection = await connectRuntime(homeDir);
+		try {
+			expect(await connection.klient.global.config.get('loopControl')).toMatchObject({ maxAttemptsPerStep: 3, retryBudgetMs: 120_000, requestIdleTimeoutMs: 300_000 });
+			expect(await connection.klient.global.config.get('subagent')).toMatchObject({ timeoutMs: 7_200_000 });
+		} finally { await connection.close(); }
+	});
+
+	it('preserves explicit retry settings over the VSP defaults', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-retry-settings-'));
+		daemon = await startTestDaemon(homeDir);
+		const connection = await connectRuntime(homeDir);
+		try {
+			await connection.klient.global.config.set({ domain: 'loopControl', patch: { maxAttemptsPerStep: 2, retryBudgetMs: 1_000, requestIdleTimeoutMs: 2_000 } });
+			expect(await connection.klient.global.config.get('loopControl')).toMatchObject({ maxAttemptsPerStep: 2, retryBudgetMs: 1_000, requestIdleTimeoutMs: 2_000 });
+		} finally { await connection.close(); }
+	});
 
 	afterEach(async () => {
+		vi.mocked(link).mockRestore();
+		vi.mocked(rename).mockRestore();
+		await closePeer?.();
+		closePeer = undefined;
 		await daemon?.close();
 		daemon = undefined;
 		if (homeDir !== undefined)
 			await rm(homeDir, { recursive: true, force: true });
 		homeDir = undefined;
+	});
+
+	it('publishes one complete lease owner when two starters race', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-lease-race-'));
+		const path = resolveRuntimePaths(homeDir).leasePath;
+		const results = await Promise.allSettled([acquireRuntimeLease(path), acquireRuntimeLease(path)]);
+		try {
+			expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+			expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ pid: process.pid, ownerNonce: expect.any(String) });
+		} finally { for (const result of results) if (result.status === 'fulfilled') await result.value.release(); }
+	});
+
+	it('quarantines an old corrupt lease only through confirmed recovery', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-lease-recovery-'));
+		const paths = resolveRuntimePaths(homeDir);
+		await mkdir(paths.serverDir, { recursive: true });
+		await writeFile(paths.leasePath, '');
+		await utimes(paths.leasePath, new Date(0), new Date(0));
+		await expect(acquireRuntimeLease(paths.leasePath)).rejects.toThrow('recover --confirm-stopped');
+		await recoverRuntime(homeDir);
+		expect((await readdir(paths.serverDir)).some(name => name.startsWith('runtime.lock.recovered.'))).toBe(true);
+		const lease = await acquireRuntimeLease(paths.leasePath);
+		await lease.release();
+	});
+
+	function exitedLeaseOwner(ownerNonce: string) {
+		const child = spawnSync(process.execPath, ['-e', ''], { stdio: 'ignore' });
+		if (child.error) throw child.error;
+		if (!child.pid || child.status !== 0) throw new Error('Could not create an exited owner fixture');
+		return { pid: child.pid, ownerNonce };
+	}
+
+	function operationGate() {
+		let resolve!: () => void;
+		const promise = new Promise<void>((release) => { resolve = release; });
+		return { promise, resolve };
+	}
+
+	it('blocks a concurrent starter while confirmed recovery is moving the old primary lock', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-lease-recovery-interleave-'));
+		const paths = resolveRuntimePaths(homeDir);
+		await mkdir(paths.serverDir, { recursive: true });
+		const previous = exitedLeaseOwner('previous-owner');
+		await writeFile(paths.leasePath, JSON.stringify(previous));
+		const original = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+		const paused = operationGate();
+		const resume = operationGate();
+		vi.mocked(rename).mockImplementation(async (from, to) => {
+			if (String(from) === paths.leasePath) {
+				paused.resolve();
+				await resume.promise;
+			}
+			await original.rename(from, to);
+		});
+		const recovery = recoverRuntime(homeDir);
+		let contender: Awaited<ReturnType<typeof acquireRuntimeLease>> | undefined;
+		try {
+			await Promise.race([paused.promise, recovery.then(() => { throw new Error('Recovery did not reach the rename boundary'); })]);
+			const failure = await acquireRuntimeLease(paths.leasePath).then(value => { contender = value; return undefined; }, error => error);
+			expect(failure).toBeInstanceOf(RuntimeAlreadyRunningError);
+			expect(JSON.parse(await readFile(paths.leasePath, 'utf8'))).toEqual(previous);
+			resume.resolve();
+			await recovery;
+			const next = await acquireRuntimeLease(paths.leasePath);
+			try {
+				expect(JSON.parse(await readFile(paths.leasePath, 'utf8'))).toEqual({ pid: process.pid, ownerNonce: next.ownerNonce });
+			} finally { await next.release(); }
+		} finally {
+			resume.resolve();
+			await recovery.catch(() => {});
+			await contender?.release();
+		}
+	});
+
+	it('blocks confirmed recovery while a starter is publishing its new primary owner', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-lease-start-interleave-'));
+		const paths = resolveRuntimePaths(homeDir);
+		const original = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+		const paused = operationGate();
+		const resume = operationGate();
+		vi.mocked(link).mockImplementation(async (from, to) => {
+			if (String(to) === paths.leasePath) {
+				paused.resolve();
+				await resume.promise;
+			}
+			await original.link(from, to);
+		});
+		const started = acquireRuntimeLease(paths.leasePath);
+		try {
+			await Promise.race([paused.promise, started.then(() => { throw new Error('Starter did not reach the publication boundary'); })]);
+			await expect(recoverRuntime(homeDir)).rejects.toBeInstanceOf(RuntimeAlreadyRunningError);
+			resume.resolve();
+			const lease = await started;
+			expect(JSON.parse(await readFile(paths.leasePath, 'utf8'))).toEqual({ pid: process.pid, ownerNonce: lease.ownerNonce });
+		} finally {
+			resume.resolve();
+			await (await started).release();
+		}
+	});
+
+	it('preserves the new primary generation when ownership changes during confirmed recovery', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-lease-generation-'));
+		const paths = resolveRuntimePaths(homeDir);
+		await mkdir(paths.serverDir, { recursive: true });
+		const previous = exitedLeaseOwner('previous-owner');
+		await writeFile(paths.leasePath, JSON.stringify(previous));
+		const next = { pid: process.pid, ownerNonce: 'new-owner' };
+		const originalKill = process.kill;
+		let observed = false;
+		const kill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+			if (pid === previous.pid && signal === 0 && !observed) {
+				observed = true;
+				writeFileSync(paths.leasePath, JSON.stringify(next));
+				throw Object.assign(new Error('No such process'), { code: 'ESRCH' });
+			}
+			return originalKill(pid, signal);
+		});
+		try {
+			await expect(recoverRuntime(homeDir)).rejects.toThrow('ownership changed');
+			expect(JSON.parse(await readFile(paths.leasePath, 'utf8'))).toEqual(next);
+		} finally { kill.mockRestore(); }
+	});
+
+	it('recovers a complete dead recovery claim without dropping the winning starter owner', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-lease-stale-claim-'));
+		const paths = resolveRuntimePaths(homeDir);
+		await mkdir(paths.serverDir, { recursive: true });
+		const previous = exitedLeaseOwner('previous-recovery-owner');
+		await writeFile(`${paths.leasePath}.recovery`, JSON.stringify(previous));
+		const results = await Promise.allSettled([acquireRuntimeLease(paths.leasePath), acquireRuntimeLease(paths.leasePath)]);
+		try {
+			expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+			const active = results.find(result => result.status === 'fulfilled');
+			if (active?.status !== 'fulfilled') throw new Error('No starter acquired the lock');
+			expect(JSON.parse(await readFile(paths.leasePath, 'utf8'))).toEqual({ pid: process.pid, ownerNonce: active.value.ownerNonce });
+			const backups = (await readdir(paths.serverDir)).filter(name => name.startsWith('runtime.lock.recovery.recovered.'));
+			expect(backups).toHaveLength(1);
+			expect(JSON.parse(await readFile(join(paths.serverDir, backups[0]!), 'utf8'))).toEqual(previous);
+		} finally { for (const result of results) if (result.status === 'fulfilled') await result.value.release(); }
+	});
+
+	it('preserves an ownerless recovery claim regardless of its age', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-lease-corrupt-claim-'));
+		const paths = resolveRuntimePaths(homeDir);
+		await mkdir(paths.serverDir, { recursive: true });
+		const claim = `${paths.leasePath}.recovery`;
+		await writeFile(claim, '');
+		await utimes(claim, new Date(0), new Date(0));
+		await expect(recoverRuntime(homeDir)).rejects.toThrow('unknown recovery-claim owner requires manual inspection');
+		expect(await readFile(claim, 'utf8')).toBe('');
+		expect(await readdir(paths.serverDir)).toEqual(['runtime.lock.recovery']);
+	});
+
+	it('refuses recursive reclamation when a reclamation claim already remains', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-lease-reclaim-residue-'));
+		const paths = resolveRuntimePaths(homeDir);
+		await mkdir(paths.serverDir, { recursive: true });
+		const previous = exitedLeaseOwner('previous-recovery-owner');
+		const body = JSON.stringify(previous);
+		await writeFile(`${paths.leasePath}.recovery`, body);
+		await writeFile(`${paths.leasePath}.recovery.reclaim`, body);
+		await expect(recoverRuntime(homeDir)).rejects.toThrow('manual inspection');
+		expect(await readFile(`${paths.leasePath}.recovery`, 'utf8')).toBe(body);
+		expect(await readFile(`${paths.leasePath}.recovery.reclaim`, 'utf8')).toBe(body);
+	});
+
+	it('preserves a fresh corrupt primary lock during confirmed recovery', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-lease-fresh-corrupt-'));
+		const paths = resolveRuntimePaths(homeDir);
+		await mkdir(paths.serverDir, { recursive: true });
+		await writeFile(paths.leasePath, '');
+		await utimes(paths.leasePath, new Date(), new Date(Date.now() + 60_000));
+		await expect(recoverRuntime(homeDir)).rejects.toThrow('may still be initializing');
+		expect(await readFile(paths.leasePath, 'utf8')).toBe('');
+	});
+
+	it('refuses lock recovery while the authenticated runtime process remains alive', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-lease-live-'));
+		daemon = await startTestDaemon(homeDir);
+		await expect(recoverRuntime(homeDir)).rejects.toThrow('still alive');
+		expect(JSON.parse(await readFile(resolveRuntimePaths(homeDir).leasePath, 'utf8'))).toHaveProperty('ownerNonce', daemon.state.ownerNonce);
+	});
+
+	async function connectionPeer(replyHello = true) {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-runtime-peer-"));
+		const paths = resolveRuntimePaths(homeDir);
+		await mkdir(paths.serverDir, { recursive: true });
+		const sockets = new Set<Socket>();
+		const server = createServer((socket) => {
+			sockets.add(socket);
+			socket.on("error", () => {});
+			let pending = "";
+			socket.on("data", (chunk) => {
+				pending += chunk.toString("utf8");
+				const lines = pending.split("\n");
+				pending = lines.pop() ?? "";
+				for (const line of lines) {
+					const frame = JSON.parse(line);
+					if (frame.type === "hello" && replyHello) {
+						socket.write(`${JSON.stringify({ type: "hello_result", data: { pid: process.pid, ownerNonce: "test-owner", homeDir } })}\n`);
+					}
+					if (frame.type === "call" && frame.service === "bootstrapService") {
+						const data = frame.method === "clientIdentity" ? { productName: "test", version: "test", platform: "test" } : homeDir;
+						socket.write(`${JSON.stringify({ type: "result", id: frame.id, data })}\n`);
+					}
+				}
+			});
+		});
+		await new Promise<void>((resolve) => server.listen(paths.ipcPath, resolve));
+		closePeer = async () => {
+			for (const socket of sockets) socket.destroy();
+			await new Promise<void>((resolve) => { server.close(() => { resolve(); }); });
+		};
+		await writeFile(paths.statePath, JSON.stringify({ protocolVersion: 1, pid: process.pid, ownerNonce: "test-owner", host: "127.0.0.1", port: 1, ipcPath: paths.ipcPath, startedAt: new Date().toISOString(), version: "test" }));
+		await writeFile(paths.tokenPath, "TEST_ONLY_TOKEN");
+		return paths;
+	}
+
+	it("uses the configured RPC deadline when reusing an existing daemon", async () => {
+		await connectionPeer();
+		const connection = await ensureRuntime({ homeDir, callTimeoutMs: 25, spawn: () => { throw new Error("Must reuse the existing daemon"); } });
+		try {
+			await expect(connection.klient.global.workspaces.list()).rejects.toThrow("call timed out after 25ms");
+		} finally { await connection.close(); }
+	});
+
+	it("rejects a nonresponsive handshake within the connection deadline", async () => {
+		await connectionPeer(false);
+		await expect(connectRuntime(homeDir, { connectionTimeoutMs: 25, callTimeoutMs: 0 })).rejects.toThrow("handshake timed out");
+	});
+
+	it("does not signal a daemon when its ownership handshake times out", async () => {
+		await connectionPeer(false);
+		const kill = vi.spyOn(process, "kill");
+		try {
+			await expect(stopRuntime(homeDir, 25)).rejects.toThrow("handshake timed out");
+			expect(kill.mock.calls.every((call) => call[1] === 0)).toBe(true);
+		} finally { kill.mockRestore(); }
 	});
 
 	it("connects through IPC when the daemon is ready, exposes the daemon environment", async () => {
@@ -292,7 +580,7 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 		}
 	});
 
-	it("signals an owned daemon only after the authenticated handshake", async () => {
+	it("closes an owned daemon through IPC without sending a termination signal", async () => {
 		homeDir = await mkdtemp(join(tmpdir(), "vsp-runtime-owned-stop-"));
 		daemon = await startTestDaemon(homeDir);
 		const killedPid = daemon.state.pid;
@@ -307,8 +595,10 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 			return true;
 		});
 		try {
-			await expect(stopRuntime(homeDir, 250)).resolves.toBe(true);
-			expect(kill).toHaveBeenCalledWith(daemon.state.pid, "SIGTERM");
+			await expect(stopRuntime(homeDir, 2000)).resolves.toBe(true);
+			expect(kill).not.toHaveBeenCalledWith(daemon.state.pid, "SIGTERM");
+			await expect(daemon.closed).resolves.toBeUndefined();
+			await expect(readFile(resolveRuntimePaths(homeDir).leasePath)).rejects.toMatchObject({ code: 'ENOENT' });
 		} finally {
 			kill.mockRestore();
 		}

@@ -4,7 +4,8 @@
  * Wiring: edge translators and focused Klient-shaped backend fixtures.
  * Run: pnpm -C apps/vspi test
  */
-import type { AgentTaskInfo } from "@moonshot-ai/klient";
+import type { AgentTaskInfo, QuestionRequest } from "@moonshot-ai/klient";
+import type { ChatBackendEvents } from '../src/v1/backend/types.js';
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -83,9 +84,13 @@ function draftBackendFixture(
 	const events = { on: vi.fn((name: string, handler: (event: Record<string, unknown>) => void) => { listeners.set(name, handler); return { dispose: vi.fn() }; }), onError: vi.fn((handler: (error: Error) => void) => { connectionError = handler; return { dispose: vi.fn() }; }) };
 	const models = [model("example", "code")];
 	let thinking = "off";
+	let selectedModel = 'example/code';
 	let permission: "auto" | "yolo" | "manual" = "auto";
 	const agent = {
-		events, setModel: vi.fn(async () => undefined), getModel: vi.fn(async () => "example/code"),
+		events, setModel: vi.fn(async (alias: string) => { selectedModel = alias; }), getModel: vi.fn(async () => selectedModel),
+		getActivity: vi.fn(async () => ({ lifecycle: 'ready' as const, background: [] })),
+		getContextTokenCount: vi.fn(async () => 0),
+		getHistory: vi.fn(async () => ({ items: [], total: 0, revision: 0, truncated: false, activity: { lifecycle: 'ready' as const, background: [] }, model: await agent.getModel(), effort: await agent.getThinking() })),
 		setThinking: vi.fn(async (value: string) => { thinking = value; }), getThinking: vi.fn(async () => thinking),
 		getPermission: vi.fn(async () => permission),
 		setPermission: vi.fn(async (mode: "auto" | "yolo" | "manual") => {
@@ -101,7 +106,8 @@ function draftBackendFixture(
 	const remove = vi.fn(async () => undefined);
 	const restore = vi.fn(async () => true);
 	const getConfig = vi.fn(async (section: string): Promise<unknown> => section === "defaultModel" ? "example/code" : undefined);
-	const connection = { close: vi.fn(async () => undefined), klient: { events, session: (id: string) => ({ agent: () => agent, events, delete: remove, restore, get: async () => ({ id }) }), global: {
+	const questions = { list: vi.fn<() => Promise<readonly QuestionRequest[]>>(async () => []), answer: vi.fn(async () => {}) };
+	const connection = { close: vi.fn(async () => undefined), klient: { events, session: (id: string) => ({ agent: () => agent, events, questions, approvals: { list: async () => [] }, delete: remove, restore, get: async () => ({ id }) }), global: {
 		workspaces: { createOrTouch: vi.fn(async () => ({ id: "workspace" })) }, sessions: { create },
 		config: { get: getConfig },
 		kosong: { listModels: vi.fn(async () => models), listProviders: vi.fn(async () => [provider("example")]), getProvider: vi.fn(async () => provider("example")), queryAvailableModels: vi.fn(async () => ({ modelIds: ["example/code"] })), setDefaultModel: vi.fn(async () => ({ model: models[0] })) },
@@ -110,15 +116,155 @@ function draftBackendFixture(
 	const reset = vi.fn();
 	const connectionStates: Array<{ state: string; attempt: number }> = [];
 	const policies: string[] = [];
-	const start = () => backend.start({ onMessage: vi.fn(), onMessageUpdate: vi.fn(), onBusy: vi.fn(), onUsage: vi.fn(), onNotice: vi.fn(), onSessionReset: reset, onPolicySnapshot: (snapshot) => { policies.push(snapshot.policy); }, onRuntimeConnectionState: (state, attempt) => { connectionStates.push({ state, attempt }); } });
-	return { backend, connection, create, remove, restore, agent, reset, start, listeners, getConfig, policies, connectionStates, disconnect: () => connectionError?.(new Error("ipc closed")) };
+	const start = (overrides: Partial<ChatBackendEvents> = {}) => backend.start({ onMessage: vi.fn(), onMessageUpdate: vi.fn(), onBusy: vi.fn(), onUsage: vi.fn(), onNotice: vi.fn(), onSessionReset: reset, onPolicySnapshot: (snapshot) => { policies.push(snapshot.policy); }, onRuntimeConnectionState: (state, attempt) => { connectionStates.push({ state, attempt }); }, ...overrides });
+	return { backend, connection, create, remove, restore, agent, reset, start, listeners, getConfig, policies, connectionStates, questions, disconnect: () => connectionError?.(new Error("ipc closed")) };
 }
+
+describe('model retry projection', () => {
+  it('announces a retry only once when activity snapshots repeat', async () => {
+    const fixture = draftBackendFixture();
+    const onNotice = vi.fn();
+    const onBusy = vi.fn();
+    try {
+      await fixture.start({ onNotice, onBusy });
+      await fixture.backend.switchSession('old-session');
+      onNotice.mockClear();
+      const activity = { turn: { turnId: 7, step: 1, retry: { nextAttempt: 2, maxAttempts: 3, delayMs: 500, statusCode: 503 } } };
+      fixture.listeners.get('agent.activity.updated')?.(activity);
+      fixture.listeners.get('agent.activity.updated')?.(activity);
+      expect(onNotice).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('第 2/3 次尝试'), 'warning');
+      expect(onBusy).toHaveBeenLastCalledWith(true);
+    } finally { await fixture.backend.dispose(); }
+  });
+
+  it('discards failed partial output when the next attempt streams a replacement', async () => {
+    const fixture = draftBackendFixture();
+    const onMessage = vi.fn();
+    const onMessageUpdate = vi.fn();
+    try {
+      await fixture.start({ onMessage, onMessageUpdate });
+      await fixture.backend.switchSession('old-session');
+      fixture.listeners.get('assistant.delta')?.({ turnId: 7, delta: 'partial response', viewSegment: 0 });
+      fixture.listeners.get('agent.activity.updated')?.({ turn: { turnId: 7, step: 1, retry: { nextAttempt: 2, maxAttempts: 3, delayMs: 500 } } });
+      fixture.listeners.get('assistant.delta')?.({ turnId: 7, delta: 'replacement response', viewSegment: 1 });
+      expect(onMessageUpdate).toHaveBeenCalledWith('assistant:7', { text: '[本次响应中断，已放弃未完成内容]', streaming: false });
+      expect(onMessage).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'assistant:7:1', text: 'replacement response' }));
+    } finally { await fixture.backend.dispose(); }
+  });
+});
+
+describe('pending interaction reconciliation', () => {
+  it('opens an existing question only once across repeated notifications', async () => {
+    const fixture = draftBackendFixture();
+    fixture.questions.list.mockResolvedValue([{ id: 'question-one', questions: [{ header: 'Example', question: 'Continue?', options: [{ label: 'Yes', description: 'Continue' }] }] }]);
+    const ask = vi.fn<NonNullable<ChatBackendEvents['onQuestion']>>((_questions, signal) => new Promise((_resolve, reject) => { signal?.addEventListener('abort', () => { const error = new Error('cancelled'); error.name = 'AbortError'; reject(error); }, { once: true }); }));
+    try {
+      await fixture.start({ onQuestion: ask });
+      await fixture.backend.switchSession('old-session');
+      await vi.waitFor(() => { expect(ask).toHaveBeenCalledOnce(); });
+      fixture.listeners.get('interactions.changed')?.({});
+      fixture.listeners.get('interactions.changed')?.({});
+      await vi.waitFor(() => { expect(fixture.questions.list.mock.calls.length).toBeGreaterThan(1); });
+      expect(ask).toHaveBeenCalledOnce();
+    } finally { await fixture.backend.dispose(); }
+  });
+
+  it('cancels a local dialog after another client resolves its request', async () => {
+    const fixture = draftBackendFixture();
+    fixture.questions.list.mockResolvedValue([{ id: 'question-one', questions: [{ header: 'Example', question: 'Continue?', options: [{ label: 'Yes', description: 'Continue' }] }] }]);
+    let signal: AbortSignal | undefined;
+    const ask: NonNullable<ChatBackendEvents['onQuestion']> = (_questions, current) => new Promise((_resolve, reject) => {
+      signal = current;
+      current?.addEventListener('abort', () => { const error = new Error('cancelled'); error.name = 'AbortError'; reject(error); }, { once: true });
+    });
+    const onError = vi.fn();
+    try {
+      await fixture.start({ onQuestion: ask, onSessionError: onError });
+      await fixture.backend.switchSession('old-session');
+      await vi.waitFor(() => { expect(signal).toBeDefined(); });
+      fixture.questions.list.mockResolvedValue([]);
+      fixture.listeners.get('interactions.resolved')?.({});
+      await vi.waitFor(() => { expect(signal?.aborted).toBe(true); });
+      expect(fixture.questions.answer).not.toHaveBeenCalled();
+      expect(onError).not.toHaveBeenCalled();
+    } finally { await fixture.backend.dispose(); }
+  });
+});
 
 afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
 describe("Klient backend projection (Core wire to VSPi UI)", () => {
+	it("remembers efforts independently for the same model name on different providers", async () => {
+		const fixture = draftBackendFixture();
+		const models = ["example", "other"].map((id) => ({ ...model(id, "code"), thinking: { availability: "always" as const, can_disable: false, controls: ["effort" as const], efforts: ["high", "max"], default_effort: "high" } }));
+		vi.spyOn(fixture.connection.klient.global.kosong, "listModels").mockResolvedValue(models);
+		vi.spyOn(fixture.connection.klient.global.kosong, "listProviders").mockResolvedValue([provider("example"), provider("other")]);
+		let saved: Record<string, string> = {};
+		fixture.getConfig.mockImplementation(async (domain) => domain === "thinking" ? { modelEfforts: saved } : undefined);
+		Object.assign(fixture.connection.klient.global.config, { set: async (input: { domain: string; patch: { modelEfforts: Record<string, string> } }) => { saved = { ...saved, ...input.patch.modelEfforts }; } });
+		try {
+			await fixture.backend.rememberModelEffort("example", "code", "max");
+			await fixture.backend.rememberModelEffort("other", "code", "high");
+			expect(await fixture.backend.getPreferredModelEffort("example", "code")).toEqual({ effort: "max", warning: undefined });
+			expect(await fixture.backend.getPreferredModelEffort("other", "code")).toEqual({ effort: "high", warning: undefined });
+		} finally { await fixture.backend.dispose(); }
+	});
+
+	it("offers a declared default with a warning when the remembered effort is Off", async () => {
+		const fixture = draftBackendFixture();
+		vi.spyOn(fixture.connection.klient.global.kosong, "listModels").mockResolvedValue([{ ...model("example", "code"), thinking: { availability: "dynamic", can_disable: true, controls: ["toggle", "effort"], efforts: ["low", "high"], default_effort: "high" } }]);
+		fixture.getConfig.mockImplementation(async (domain) => domain === "thinking" ? { modelEfforts: { "example/code": "off" } } : undefined);
+		try {
+			expect(await fixture.backend.getPreferredModelEffort("example", "code")).toMatchObject({ effort: "high", warning: expect.stringContaining("off") });
+		} finally { await fixture.backend.dispose(); }
+	});
+	it("persists user subagent candidates in secondaryModel without changing the main model", async () => {
+		const fixture = draftBackendFixture();
+		let section: Record<string, unknown> = { maxContextSize: 8192 };
+		fixture.getConfig.mockImplementation(async (domain) => domain === "secondaryModel" ? section : undefined);
+		Object.assign(fixture.connection.klient.global.config, {
+			inspect: async () => ({ userValue: section }),
+			replace: async (input: { domain: string; value: Record<string, unknown> }) => {
+				expect(input.domain).toBe("secondaryModel");
+				section = structuredClone(input.value);
+			},
+		});
+		try {
+			await fixture.backend.updateSubagentModelPreferences({ action: "purpose", model: "example/code", purpose: " Code review " });
+			expect(await fixture.backend.getSubagentModelPreferences()).toMatchObject({ models: { "example/code": "Code review" }, defaultModel: "example/code" });
+			expect(section.maxContextSize).toBe(8192);
+			expect(fixture.agent.setModel).not.toHaveBeenCalled();
+			expect((await fixture.backend.getModelOptions())[0]?.curated).toBe(false);
+		} finally { await fixture.backend.dispose(); }
+	});
+
+	it("preserves an explicit forced secondary model when candidate editing is requested", async () => {
+		const fixture = draftBackendFixture();
+		const section = { force: true, defaultModel: "example/code" };
+		const replace = vi.fn();
+		Object.assign(fixture.connection.klient.global.config, { inspect: async () => ({ userValue: section }), replace });
+		try {
+			await expect(fixture.backend.updateSubagentModelPreferences({ action: "toggle", model: "example/code" })).rejects.toThrow("force=true");
+			expect(replace).not.toHaveBeenCalled();
+		} finally { await fixture.backend.dispose(); }
+	});
+
+	it("removes an unavailable user candidate without requiring it to remain in the model catalog", async () => {
+		const fixture = draftBackendFixture();
+		let section: Record<string, unknown> = { models: { "example/retired": "Review" }, defaultModel: "example/retired" };
+		fixture.getConfig.mockImplementation(async (domain) => domain === "secondaryModel" ? section : undefined);
+		Object.assign(fixture.connection.klient.global.config, {
+			inspect: async () => ({ userValue: section }),
+			replace: async (input: { value: Record<string, unknown> }) => { section = structuredClone(input.value); },
+		});
+		try {
+			await fixture.backend.updateSubagentModelPreferences({ action: "toggle", model: "example/retired" });
+			expect(await fixture.backend.getSubagentModelPreferences()).toEqual({ models: {}, defaultModel: undefined });
+		} finally { await fixture.backend.dispose(); }
+	});
+
 	it("keeps a user permission reduction made while the first session is initializing", async () => {
 		const fixture = draftBackendFixture();
 		let release: ((value: unknown) => void) | undefined;
@@ -376,7 +522,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			await fixture.start();
 			fixture.getConfig.mockImplementation(async (section: string) => section === "defaultModel" ? "example/other" : undefined);
 			await fixture.backend.switchSession("old-session");
-			expect(fixture.agent.getModel).toHaveBeenCalledOnce();
+			expect(fixture.backend.modelId).toBe('code');
 			expect(fixture.agent.setModel).not.toHaveBeenCalled();
 			expect(fixture.create).not.toHaveBeenCalled();
 		} finally { await fixture.backend.dispose(); }
@@ -678,6 +824,9 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			setModel,
 			getGoal,
 			getContext: vi.fn().mockRejectedValue(new Error("not loaded")),
+			getActivity: vi.fn().mockResolvedValue({ lifecycle: 'ready', background: [] }),
+			getModel: vi.fn().mockResolvedValue('acme/available'),
+			getHistory: vi.fn().mockResolvedValue({ items: [], total: 0, revision: 0, truncated: false, activity: { lifecycle: 'ready', background: [] }, model: 'acme/available', effort: 'off' }),
 			getTasks: vi.fn().mockResolvedValue([]),
 			getCronTasks: vi.fn().mockResolvedValue([]),
 			getUsage: vi.fn().mockRejectedValue(new Error("not loaded")),
@@ -793,6 +942,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		const connection = {
 			klient: {
 				global: {
+					config: { get: vi.fn(async () => undefined) },
 					kosong: {
 						listModels: vi.fn().mockResolvedValue(models),
 						listProviders: vi.fn().mockResolvedValue(providers),
@@ -824,7 +974,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		expect(queryAvailableModels).toHaveBeenCalledTimes(1);
 		expect(queryAvailableModels).toHaveBeenCalledWith("acme");
 		expect(setDefaultModel).toHaveBeenCalledWith("acme/omitted");
-		expect(setModel).toHaveBeenCalledWith("acme/omitted");
+		expect(setModel).toHaveBeenCalledWith("acme/omitted", "off");
 	});
 
 	it("shows managed OAuth models without probing API-key availability", async () => {
@@ -1376,7 +1526,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			status: "running",
 			content: [{ type: "text", text: "ordinary user prompt" }],
 		});
-		expect(onMessage).not.toHaveBeenCalled();
+		expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ role: 'user', text: 'ordinary user prompt' }));
 	});
 
 	it("projects steer lifecycle from Core facts without faking a reply", () => {
@@ -1678,7 +1828,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		Object.assign(backend, {
 			agent: {
 				getUsage: vi.fn().mockResolvedValue(usage),
-				getContext: vi.fn().mockResolvedValue({ history: [], tokenCount: 100 }),
+				getContextTokenCount: vi.fn().mockResolvedValue(100),
 			},
 			events: { onUsage },
 			currentProvider: "example",
@@ -1726,7 +1876,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 						inputCacheCreation: 0,
 					},
 				}),
-				getContext: vi.fn().mockResolvedValue({ history: [], tokenCount: 100 }),
+				getContextTokenCount: vi.fn().mockResolvedValue(100),
 			},
 			events: { onUsage },
 			currentProvider: "vsplab",

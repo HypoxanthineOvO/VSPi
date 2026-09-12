@@ -33,6 +33,7 @@ export interface RuntimeConnection {
 
 export interface RuntimeDaemon {
   readonly state: RuntimeState;
+  readonly closed: Promise<void>;
   close(): Promise<void>;
 }
 

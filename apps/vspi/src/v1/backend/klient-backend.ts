@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import type {
 	AgentCronTask,
 	AgentHandle,
+	AgentEventPayloads,
 	AgentTaskInfo,
 	TowerMissionProjection,
 	IDisposable,
@@ -21,6 +22,8 @@ import {
 	catalogEffortCapability,
 	normalizeEffortLevel,
 	resolveCatalogEffort,
+	preferredVisibleEffort,
+	visibleEffortLevels,
 } from "../domain/effort.js";
 import type {
 	CronSessionPresentation,
@@ -41,6 +44,7 @@ import type {
 } from "../policy/execution-policy.js";
 import { OutputSpeedTracker } from "./output-speed.js";
 import { editSubagentModels, subagentModelPreferences } from "../domain/subagent-models.js";
+import { isOfficialRecommendedModel } from "../domain/recommended-models.js";
 import type { SubagentModelEdit, SubagentModelPreferences } from "./types.js";
 import type {
 	AgentConversationActivity,
@@ -167,6 +171,7 @@ export class KlientChatBackend implements ChatBackend {
 	private globalSubscriptions: IDisposable[] = [];
 	private childConversationSubscription: BackendSubscription | undefined;
 	private turn: TurnState | undefined;
+	private lastRetryKey: string | undefined;
 	private pendingPrompts = new Map<string, PendingPrompt>();
 	private queuedPrompts = new Map<string, QueuedPrompt>();
 	private promptPhases = new Map<string, PromptLifecyclePhase>();
@@ -205,6 +210,18 @@ export class KlientChatBackend implements ChatBackend {
 	private providerAvailability = new Map<string, ProviderAvailability>();
 	private modelOptionsPromise: Promise<RuntimeModelOption[]> | undefined;
 	private subagentModelWrite: Promise<unknown> = Promise.resolve();
+	private activityRevision = 0;
+	private modelRevision = 0;
+	private readonly polls = new Map<string, { promise: Promise<void>; next?: () => Promise<void> }>();
+	private readonly pendingInteractions = new Map<string, AbortController>();
+	private interactionsDirty = false;
+	private interactionRefresh: Promise<void> | undefined;
+	private historyBefore: number | undefined;
+	private hydrating = false;
+	private historyRevision = 0;
+	private historyOverflow = false;
+	private historyEventBytes = 0;
+	private historyEvents: Array<{ revision?: number; apply: () => void }> = [];
 
 	constructor(
 		connection: RuntimeConnection,
@@ -212,6 +229,7 @@ export class KlientChatBackend implements ChatBackend {
 		private readonly startupMode: SessionStartupMode,
 		private readonly reconnectRuntime?: () => Promise<RuntimeConnection>,
 		private readonly recoveryDelays: readonly number[] = [1_000, 2_000, 4_000, 8_000, 16_000],
+		private readonly recentSessionDelays: readonly number[] = [0, 100, 400, 1000],
 	) {
 		this.connection = connection;
 	}
@@ -241,6 +259,9 @@ export class KlientChatBackend implements ChatBackend {
 		this.events = events;
 		this.subscribeGlobalCatalog();
 		void this.refreshRelayCatalogs();
+		void this.connection.klient.global.config.get<{ timeoutMs?: number } | undefined>("subagent")
+			.then((config) => { if (config?.timeoutMs !== undefined) this.subagentTimeoutSeconds = config.timeoutMs / 1000; })
+			.catch(() => {});
 		const workspace =
 			await this.connection.klient.global.workspaces.createOrTouch({
 				root: this.cwd,
@@ -248,16 +269,20 @@ export class KlientChatBackend implements ChatBackend {
 		if (this.startupMode === "resume") { await this.prepareDraft("startup"); return; }
 		let meta: SessionMeta | undefined;
 		if (this.startupMode === "continue") {
-			const page = await this.connection.klient.global.sessions.list({
-				workspaceIds: [workspace.id],
-				limit: 1,
-			});
-			const latest = page.items[0];
+			let latest: Awaited<ReturnType<RuntimeConnection['klient']['global']['sessions']['list']>>['items'][number] | undefined;
+			for (const wait of this.recentSessionDelays) {
+				if (wait > 0) await delay(wait);
+				if (this.disposed) return;
+				const page = await this.connection.klient.global.sessions.list({ workspaceIds: [workspace.id], limit: 1 });
+				latest = page.items[0];
+				if (latest) break;
+			}
 			if (latest !== undefined) {
 				const existing = this.connection.klient.session(latest.id);
 				await existing.restore();
 				meta = await existing.get();
 			}
+			else events.onNotice('尚未找到可续接记录；若会话刚创建，请稍后使用 /sessions 刷新选择。当前仅打开草稿。', 'info');
 		}
 		if (meta) await this.bindSession(meta, "resume");
 		else await this.prepareDraft("startup");
@@ -273,7 +298,7 @@ export class KlientChatBackend implements ChatBackend {
 		const policyRevision = ++this.policyRevision;
 		const [alias, thinking, models, providers, permission] = await Promise.all([
 			this.connection.klient.global.config.get<string | undefined>("defaultModel"),
-			this.connection.klient.global.config.get<{ effort?: string } | undefined>("thinking"),
+			this.connection.klient.global.config.get<{ effort?: string; modelEfforts?: Record<string, string> } | undefined>("thinking"),
 			this.connection.klient.global.kosong.listModels(),
 			this.connection.klient.global.kosong.listProviders(),
 			this.connection.klient.global.config.get<"auto" | "yolo" | "manual" | undefined>("defaultPermissionMode"),
@@ -283,7 +308,9 @@ export class KlientChatBackend implements ChatBackend {
 		this.draftModelAlias = selected?.model;
 		this.applyModel(selected?.provider ?? "", selected ? displayModelId(selected.provider, selected.model) : "", selected?.capabilities ?? [], selected?.display_name);
 		const capability = catalogEffortCapability(selected?.thinking, { identity: selected?.provider, type: providers.find((provider) => provider.id === selected?.provider)?.type });
-		this.effort = resolveCatalogEffort(thinking?.effort, capability);
+		const previousEffort = (alias ? thinking?.modelEfforts?.[alias] : undefined) ?? thinking?.effort;
+		this.effort = preferredVisibleEffort(previousEffort, capability);
+		if (previousEffort !== undefined && previousEffort !== this.effort) this.events?.onNotice(`旧默认 Effort ${previousEffort} 不受当前模型支持，已预选 ${this.effort}；可通过 /model 重新确认`, "warning");
 		this.events?.onSessionReset?.({ id: `draft-${randomUUID()}`, reason, effort: this.effort });
 		this.events?.onPlanItems?.([]);
 		this.events?.onUsage({ ...DEFAULT_USAGE, contextWindow: selected?.max_context_size ?? 0 });
@@ -498,6 +525,7 @@ export class KlientChatBackend implements ChatBackend {
 			.filter((model) => selectableProviders.has(model.provider))
 			.map((model) => ({
 				id: displayModelId(model.provider, model.model),
+				protocol: model.protocol,
 				provider: model.provider,
 				alias: model.model,
 				brand: formatProviderDisplayName(model.provider),
@@ -507,20 +535,20 @@ export class KlientChatBackend implements ChatBackend {
 					model.display_name,
 				),
 				vision: model.capabilities?.includes("image_in") ?? false,
-				curated: model.curated,
+				curated: isOfficialRecommendedModel(displayModelId(model.provider, model.model), model.display_name),
 				releasedAt: model.released_at,
-				efforts: catalogEffortCapability(model.thinking, {
+				efforts: visibleEffortLevels(catalogEffortCapability(model.thinking, {
 					identity: model.provider,
 					type: providerTypes.get(model.provider),
-				}).options,
-				effortMutable: catalogEffortCapability(model.thinking, {
+				}).options),
+				effortMutable: visibleEffortLevels(catalogEffortCapability(model.thinking, {
 					identity: model.provider,
 					type: providerTypes.get(model.provider),
-				}).mutable,
-				defaultEffort: catalogEffortCapability(model.thinking, {
+				}).options).length > 1,
+				defaultEffort: preferredVisibleEffort(undefined, catalogEffortCapability(model.thinking, {
 					identity: model.provider,
 					type: providerTypes.get(model.provider),
-				}).defaultEffort,
+				})),
 				price:
 					model.pricing === undefined
 						? {}
@@ -558,6 +586,8 @@ export class KlientChatBackend implements ChatBackend {
 			const config = this.connection.klient.global.config;
 			const inspection = await config.inspect<Record<string, unknown>>("secondaryModel");
 			const current = subagentModelPreferences(inspection.userValue);
+			if (current.force) throw new Error("secondary_model.force=true；请先在 core 配置中关闭 force，再编辑候选池");
+			if (edit.model === "primary") throw new Error("primary 是继承主模型的保留标识，不能加入候选池");
 			const removing = edit.action === "toggle" && Object.hasOwn(current.models, edit.model);
 			if (!removing) {
 				const models = await this.connection.klient.global.kosong.listModels();
@@ -613,7 +643,10 @@ export class KlientChatBackend implements ChatBackend {
 	async selectModel(
 		provider: string,
 		id: string,
+		requestedEffort?: EffortLevel,
 	): Promise<ModelSelectionResult> {
+		const epoch = this.submissionEpoch;
+		const agent = this.agent;
 		const [models, providers] = await Promise.all([
 			this.connection.klient.global.kosong.listModels(),
 			this.connection.klient.global.kosong.listProviders(),
@@ -628,31 +661,53 @@ export class KlientChatBackend implements ChatBackend {
 			throw new Error(`Provider ${provider} 当前不可用`);
 		}
 		const alias = resolveModelAlias(models, provider, id);
-		const selected =
-			await this.connection.klient.global.kosong.setDefaultModel(alias);
+		const model = models.find((item) => item.model === alias);
+		if (!model) throw new Error(`模型 ${alias} 不在当前目录中`);
+		const capability = catalogEffortCapability(model.thinking, { identity: provider, type: selectedProvider.type });
+		const effort = requestedEffort ?? (await this.getPreferredModelEffort(provider, id)).effort;
+		if (!capability.options.includes(effort)) throw new Error(`模型 ${alias} 不支持 Effort ${effort}，请重新选择`);
+		if (epoch !== this.submissionEpoch || agent !== this.agent) throw new Error("Session changed");
+		const binding = await agent?.setModel(alias, effort);
+		const applied = binding?.thinking ?? (agent ? await agent.getThinking() : effort);
+		if (epoch !== this.submissionEpoch || agent !== this.agent) throw new Error("Session changed");
+		this.effort = normalizeEffortLevel(applied, effort);
 		this.draftModelAlias = alias;
-		await this.agent?.setModel(alias);
 		this.applyModel(
-			selected.model.provider,
-			displayModelId(selected.model.provider, selected.model.model),
-			selected.model.capabilities ?? [],
-			selected.model.display_name,
+			model.provider,
+			displayModelId(model.provider, model.model),
+			model.capabilities ?? [],
+			model.display_name,
 		);
-		const effort = catalogEffortCapability(selected.model.thinking, {
-			identity: selected.model.provider,
-			type: selectedProvider.type,
-		});
-		await this.normalizeCurrentEffort({
-			efforts: effort.options,
-			defaultEffort: effort.defaultEffort,
-		});
+		let warning = this.effort === effort ? undefined : `所选 Effort ${effort} 被配置约束为 ${this.effort}`;
+		try { await this.connection.klient.global.kosong.setDefaultModel(alias); }
+		catch (error) { warning = `当前选择已生效，但默认模型未保存：${error instanceof Error ? error.message : String(error)}`; }
 		return {
 			modelId: id,
 			vision: this.supportsVision,
-			contextWindow: selected.model.max_context_size,
+			contextWindow: model.max_context_size,
 			profileModelId: id,
 			effort: this.effort,
+			warning,
 		};
+	}
+
+	async getPreferredModelEffort(provider: string, id: string): Promise<{ effort: EffortLevel; warning?: string }> {
+		const model = (await this.getModelOptions()).find((item) => item.provider === provider && item.id === id);
+		if (!model) throw new Error(`模型 ${provider}/${id} 不在当前目录中`);
+		const thinking = await this.connection.klient.global.config.get<{ modelEfforts?: Record<string, string> } | undefined>("thinking");
+		const current = provider === this.currentProvider && id === this.currentModel;
+		const saved = current && this.agent ? this.effort : thinking?.modelEfforts?.[model.alias] ?? (current ? this.effort : undefined);
+		const effort = preferredVisibleEffort(saved, { options: model.efforts, defaultEffort: model.defaultEffort ?? "off" });
+		return {
+			effort,
+			warning: saved !== undefined && saved !== effort ? `之前的 Effort ${saved} 不在当前可选档位中，请确认 ${effort === "off" ? "固定配置" : effort}` : undefined,
+		};
+	}
+
+	async rememberModelEffort(provider: string, id: string, effort: EffortLevel): Promise<void> {
+		const models = await this.connection.klient.global.kosong.listModels();
+		const alias = resolveModelAlias(models, provider, id);
+		await this.connection.klient.global.config.set({ domain: "thinking", patch: { modelEfforts: { [alias]: effort } } });
 	}
 
 	async runProviderProbe(
@@ -748,10 +803,11 @@ export class KlientChatBackend implements ChatBackend {
 		return model?.efforts ?? ["off"];
 	}
 
-	async setEffort(level: EffortLevel): Promise<void> {
-		if (!this.agent) { this.effort = level; return; }
+	async setEffort(level: EffortLevel): Promise<EffortLevel> {
+		if (!this.agent) { this.effort = level; return level; }
 		await this.agent.setThinking(level);
 		this.effort = normalizeEffortLevel(await this.agent.getThinking(), level);
+		return this.effort;
 	}
 
 	async setPolicy(policy: PolicyLevel): Promise<PolicySnapshot> {
@@ -907,14 +963,14 @@ export class KlientChatBackend implements ChatBackend {
 	): Promise<AgentConversationPage> {
 		const run = this.requireChildAgent(runId);
 		const agentId = run.agentId ?? run.taskId;
-		const context = await this.requireSession().agent(agentId).getContext();
-		return projectAgentConversation(
-			runId,
-			agentId,
-			context.history,
-			context.tokenCount,
-			options,
-		);
+		const cursor = options.cursor?.match(/^h:(\d+):(\d*)$/u);
+		if (options.cursor && !cursor) throw new Error('历史游标已失效，请重新打开 Subagent');
+		const before = cursor ? Number(cursor[1]) : undefined;
+		const child = this.requireSession().agent(agentId);
+		const [page, tokens] = await Promise.all([child.getHistory({ before, limit: 20 }), child.getContextTokenCount()]);
+		const projected = projectAgentConversation(runId, agentId, page.items, tokens, { cursor: cursor?.[2] || undefined, limit: options.limit, active: before !== undefined || page.activity.turn !== undefined });
+		const end = (page.before ?? 0) + page.items.length;
+		return { ...projected, totalBlocks: undefined, nextCursor: projected.nextCursor ? `h:${end}:${projected.nextCursor}` : page.before !== undefined ? `h:${page.before}:` : undefined };
 	}
 
 	subscribeAgentConversation(
@@ -1092,11 +1148,20 @@ export class KlientChatBackend implements ChatBackend {
 			this.currentProvider = "";
 			this.supportsVision = false;
 		}
+		this.events?.onSessionReset?.({ id: meta.id, reason, effort: this.effort });
+		this.hydrating = reason !== 'created';
 		this.subscribe();
 		await this.refreshPolicy(this.agent);
-		this.events?.onSessionReset?.({ id: meta.id, reason, effort: this.effort });
+		const agent = this.agent;
+		const revision = this.activityRevision;
+		const activity = await agent.getActivity();
+		if (this.agent === agent && this.activityRevision === revision && !this.hydrating) this.applyActivity(activity);
+		this.refreshInteractions();
 		await this.publishRuntimeGoalStatus();
-		if (reason !== "created") await this.publishHistory();
+		if (reason !== "created") {
+			try { await this.restoreHistory(); }
+			catch (error) { this.events?.onNotice(`历史尚未同步，当前连接与活动状态已保留；可使用 /history latest 重试：${error instanceof Error ? error.message : String(error)}`, 'warning'); }
+		}
 		this.taskPoll = setInterval(() => void this.refreshTasks(), 1_000);
 		this.taskPoll.unref();
 		this.towerPoll = setInterval(() => void this.refreshTowerMissions(), 1_000);
@@ -1253,14 +1318,99 @@ export class KlientChatBackend implements ChatBackend {
 		}
 	}
 
+	private poll(name: string, run: () => Promise<void>): Promise<void> {
+		if (this.disposed) return Promise.resolve();
+		const key = `${this.meta?.id ?? 'draft'}:${name}`;
+		const pending = this.polls.get(key);
+		if (pending) { pending.next = run; return pending.promise; }
+		const item: { promise: Promise<void>; next?: () => Promise<void> } = { promise: Promise.resolve() };
+		this.polls.set(key, item);
+		item.promise = (async () => {
+			let next: (() => Promise<void>) | undefined = run;
+			while (next && !this.disposed) {
+				await next();
+				next = item.next;
+				item.next = undefined;
+			}
+		})().finally(() => { if (this.polls.get(key) === item) this.polls.delete(key); });
+		return item.promise;
+	}
+
+	private ensureTurn(turnId: number, segment?: number): void {
+		this.activityRevision++;
+		if (this.turn?.id !== turnId || segment !== undefined && this.turn.segment !== segment) {
+			this.finishTurnSegment();
+			this.turn = { ...turnState(turnId, segment ?? 0), effort: this.effort };
+		}
+		this.setBusy(true);
+	}
+
+	private applyActivity(activity: { turn?: { turnId: number; step: number; retry?: { nextAttempt: number; maxAttempts: number; delayMs: number; statusCode?: number } } }): void {
+		if (activity.turn) {
+			if (this.turn?.id !== activity.turn.turnId) this.turn = { ...turnState(activity.turn.turnId, Math.max(0, activity.turn.step - 1)), effort: this.effort };
+			this.setBusy(true);
+			const retry = activity.turn.retry;
+			if (retry) {
+				const key = `${activity.turn.turnId}:${activity.turn.step}:${retry.nextAttempt}`;
+				if (this.lastRetryKey !== key) {
+					this.lastRetryKey = key;
+					for (const id of [this.turn.assistantId, this.turn.thinkingId]) {
+						if (this.streamMessages.has(id)) this.events?.onMessageUpdate(id, { text: '[本次响应中断，已放弃未完成内容]', streaming: false });
+					}
+					this.advanceTurnSegment();
+					this.events?.onNotice(`模型调用暂时失败${retry.statusCode ? `（HTTP ${retry.statusCode}）` : ''}，${Math.ceil(retry.delayMs / 1000)} 秒后进行第 ${retry.nextAttempt}/${retry.maxAttempts} 次尝试；可随时中断`, 'warning');
+				}
+			}
+		} else {
+			this.finishTurnSegment();
+			this.turn = undefined;
+			this.lastRetryKey = undefined;
+			this.setBusy(false);
+		}
+	}
+
+	private async refreshModelBinding(agent: AgentHandle): Promise<void> {
+		const revision = ++this.modelRevision;
+		try {
+			const [alias, effort, models] = await Promise.all([agent.getModel(), agent.getThinking(), this.connection.klient.global.kosong.listModels()]);
+			if (this.agent !== agent || this.modelRevision !== revision || this.disposed) return;
+			const model = models.find(item => item.model === alias);
+			const provider = model?.provider ?? alias.split('/')[0] ?? '';
+			this.applyModel(provider, displayModelId(provider, alias), model?.capabilities ?? [], model?.display_name);
+			this.effort = normalizeEffortLevel(effort);
+			this.events?.onModelChanged?.(this.effort);
+		} catch (error) {
+			if (this.agent === agent && !this.disposed) this.events?.onNotice(`模型状态同步失败：${error instanceof Error ? error.message : String(error)}`, 'warning');
+		}
+	}
+
 	private subscribe(): void {
 		const agent = this.requireAgent();
 		const session = this.requireSession();
+		const events = {
+			on: <E extends keyof AgentEventPayloads>(name: E, listener: (event: AgentEventPayloads[E]) => void) => agent.events.on(name, event => {
+				if (this.agent !== agent) return;
+				const revision = record(event)['viewRevision'];
+				if (typeof revision === 'number' && revision <= this.historyRevision && name !== 'error') return;
+				if (!this.hydrating || name === 'error') { listener(event); return; }
+				this.historyEventBytes += JSON.stringify(event).length * 2;
+				if (this.historyEvents.length >= 1024 || this.historyEventBytes > 8 * 1024 * 1024) {
+					this.historyOverflow = true; this.historyEvents = []; return;
+				}
+				this.historyEvents.push({ revision: typeof revision === 'number' ? revision : undefined, apply: () => { listener(event); } });
+			}),
+		};
 		this.subscriptions.push(
-			agent.events.on("permission.mode.changed", ({ mode }) => {
+			events.on("agent.status.updated", () => { void this.refreshModelBinding(agent); }),
+			events.on("agent.activity.updated", (activity) => {
+				if (this.agent !== agent) return;
+				this.activityRevision++;
+				this.applyActivity(activity);
+			}),
+			events.on("permission.mode.changed", ({ mode }) => {
 				if (this.agent === agent) this.publishPolicy(mode);
 			}),
-			agent.events.on("turn.started", (event) => {
+			events.on("turn.started", (event) => {
 				this.outputSpeed.reset();
 				this.turn = { ...turnState(event.turnId, 0), effort: this.effort };
 				if (event.promptId !== undefined) {
@@ -1269,22 +1419,24 @@ export class KlientChatBackend implements ChatBackend {
 				}
 				this.setBusy(true);
 			}),
-			agent.events.on("assistant.delta", (event) => {
+			events.on("assistant.delta", (event) => {
+				this.ensureTurn(event.turnId, typeof record(event)['viewSegment'] === 'number' ? record(event)['viewSegment'] as number : undefined);
 				this.setPromptPhaseForTurn(event.turnId, "responding");
 				this.publishSpeed(this.outputSpeed.recordDelta(event.delta));
 				const id = this.turn?.assistantId ?? `assistant:${event.turnId}`;
 				this.appendStream(id, event.delta, "text");
 			}),
-			agent.events.on("thinking.delta", (event) => {
+			events.on("thinking.delta", (event) => {
+				this.ensureTurn(event.turnId, typeof record(event)['viewSegment'] === 'number' ? record(event)['viewSegment'] as number : undefined);
 				this.setPromptPhaseForTurn(event.turnId, "responding");
 				const id = this.turn?.thinkingId ?? `thinking:${event.turnId}`;
 				this.appendStream(id, event.delta, "thinking");
 			}),
-			agent.events.on("turn.step.started", (event) => {
+			events.on("turn.step.started", (event) => {
 				if (this.turn) this.turn.effort = this.effort;
 				this.setPromptPhaseForTurn(event.turnId, "started");
 			}),
-			agent.events.on("tool.call.started", (event) => {
+			events.on("tool.call.started", (event) => {
 				this.advanceTurnSegment();
 				this.toolNames.set(event.toolCallId, event.name);
 				if (event.name === "TodoList") {
@@ -1302,7 +1454,7 @@ export class KlientChatBackend implements ChatBackend {
 					expanded: false,
 				});
 			}),
-			agent.events.on("tool.result", (event) => {
+			events.on("tool.result", (event) => {
 				const toolName = this.toolNames.get(event.toolCallId);
 				this.toolNames.delete(event.toolCallId);
 				const todoItems = this.pendingTodoUpdates.get(event.toolCallId);
@@ -1319,11 +1471,12 @@ export class KlientChatBackend implements ChatBackend {
 					void this.publishCronTasks();
 				void this.refreshTasks();
 			}),
-			agent.events.on("turn.ended", (event) => {
+			events.on("turn.ended", (event) => {
 				this.finishTurnSegment();
 				this.turn = undefined;
 				this.setBusy(false);
 				this.resolveTurnEnd(event.turnId);
+				this.promptTurns.delete(event.turnId);
 				if (event.reason !== "completed") {
 					this.events?.onNotice(
 						`Turn ${event.reason}`,
@@ -1332,7 +1485,7 @@ export class KlientChatBackend implements ChatBackend {
 				}
 				void this.publishUsage(true);
 			}),
-			agent.events.on("prompt.completed", (event) => {
+			events.on("prompt.completed", (event) => {
 				this.removeQueuedPrompt(event.promptId);
 				this.setPromptPhase(
 					event.promptId,
@@ -1344,14 +1497,14 @@ export class KlientChatBackend implements ChatBackend {
 				this.pendingPrompts.delete(event.promptId);
 				pending?.resolve({ status: "completed" });
 			}),
-			agent.events.on("prompt.aborted", (event) => {
+			events.on("prompt.aborted", (event) => {
 				this.removeQueuedPrompt(event.promptId);
 				this.setPromptPhase(event.promptId, "cancelled");
 				const pending = this.pendingPrompts.get(event.promptId);
 				this.pendingPrompts.delete(event.promptId);
 				pending?.resolve({ status: "cancelled" });
 			}),
-			agent.events.on("prompt.submitted", (event) => {
+			events.on("prompt.submitted", (event) => {
 				const userSubmitted =
 					this.pendingPrompts.has(event.promptId) ||
 					this.queuedPrompts.has(event.promptId);
@@ -1363,13 +1516,14 @@ export class KlientChatBackend implements ChatBackend {
 					contentText(event.content),
 				);
 				if (cron !== undefined) this.events?.onMessage(cron);
+				else this.events?.onMessage({ id: event.userMessageId, role: 'user', kind: 'text', text: contentText(event.content) });
 			}),
-			agent.events.on("prompt.queued", (event) => {
+			events.on("prompt.queued", (event) => {
 				if (this.queuedPrompts.has(event.promptId))
 					this.setPromptPhase(event.promptId, "queued");
 				this.publishQueueState();
 			}),
-			agent.events.on("prompt.steered", (event) => {
+			events.on("prompt.steered", (event) => {
 				const turnPrompts =
 					this.promptTurns.get(this.turn?.id ?? -1) ?? new Set<string>();
 					for (const promptId of event.promptIds) {
@@ -1379,33 +1533,33 @@ export class KlientChatBackend implements ChatBackend {
 					if (this.turn !== undefined)
 						this.promptTurns.set(this.turn.id, turnPrompts);
 			}),
-			agent.events.on("goal.updated", (event) => {
+			events.on("goal.updated", (event) => {
 				this.setRuntimeGoalStatus(event.snapshot?.status, true);
 			}),
-			agent.events.on("compaction.started", (event) => {
+			events.on("compaction.started", (event) => {
 				this.events?.onCompactionActivity?.({
 					type: "started",
 					trigger: event.trigger,
 					startedAt: event.time ?? Date.now(),
 				});
 			}),
-			agent.events.on("compaction.blocked", (event) => {
+			events.on("compaction.blocked", (event) => {
 				this.events?.onCompactionActivity?.({
 					type: "blocked",
 					turnId: event.turnId,
 				});
 			}),
-			agent.events.on("compaction.completed", (event) => {
+			events.on("compaction.completed", (event) => {
 				this.events?.onCompactionActivity?.({
 					type: "completed",
 					result: event.result,
 				});
 				void this.publishUsage();
 			}),
-			agent.events.on("compaction.cancelled", () => {
+			events.on("compaction.cancelled", () => {
 				this.events?.onCompactionActivity?.({ type: "cancelled" });
 			}),
-			agent.events.on("error", (event) => {
+			events.on("error", (event) => {
 				if (event["code"] === "compaction.failed")
 					this.events?.onCompactionActivity?.({ type: "failed" });
 				this.events?.onMessage({
@@ -1421,22 +1575,81 @@ export class KlientChatBackend implements ChatBackend {
 			session.events.on("interactions.changed", () =>
 				this.refreshInteractions(),
 			),
+			session.events.on("interactions.resolved", () => this.refreshInteractions()),
 			agent.events.onError((error) => this.handleConnectionError(error)),
 			session.events.onError((error) => this.handleConnectionError(error)),
 		);
 	}
 
 	private async publishHistory(): Promise<void> {
-		let context: Awaited<ReturnType<AgentHandle["getContext"]>>;
-		try {
-			context = await this.requireAgent().getContext();
-		} catch {
+		const agent = this.requireAgent();
+		for (let attempt = 0; attempt < 4; attempt++) {
+			this.historyOverflow = false;
+			const page = await agent.getHistory({ limit: 100 });
+			if (this.agent !== agent) return;
+			if (this.historyOverflow) { this.historyEventBytes = 0; continue; }
+			this.historyBefore = page.before;
+			this.historyRevision = page.revision;
+			this.projectHistory(page.items, false);
+			this.effort = normalizeEffortLevel(page.effort);
+			await this.refreshModelBinding(agent);
+			this.applyActivity(page.activity);
+			if (page.live) {
+				this.turn = { ...turnState(page.live.turnId, page.live.segment), effort: this.effort };
+				if (page.live.text) this.appendStream(this.turn.assistantId, page.live.text, 'text');
+				if (page.live.thinking) this.appendStream(this.turn.thinkingId, page.live.thinking, 'thinking');
+			}
+			for (const tool of page.activity.turn?.activeToolCalls ?? []) this.events?.onMessageUpdate(tool.toolCallId, { status: 'running' });
+			this.hydrating = false;
+			const buffered = this.historyEvents;
+			this.historyEvents = []; this.historyEventBytes = 0;
+			for (const event of buffered) if (event.revision === undefined || event.revision > page.revision) event.apply();
+			if (page.before !== undefined) this.events?.onNotice('已加载最近 100 条记录；使用 /history 分页查看更早记录', 'info');
+			if (page.truncated) this.events?.onNotice('超长记录已限制展示长度，完整内容仍保存在会话记录中', 'warning');
 			return;
 		}
+		throw new Error('历史同步期间事件过多，请等待当前步骤完成后重新接入');
+	}
+
+	private async restoreHistory(): Promise<void> {
+		const agent = this.requireAgent();
+		this.hydrating = true;
+		try { await this.publishHistory(); }
+		catch (error) {
+			if (this.agent !== agent) return;
+			this.hydrating = false;
+			const events = this.historyEvents;
+			this.historyEvents = []; this.historyEventBytes = 0; this.historyOverflow = false;
+			for (const event of events) event.apply();
+			const revision = this.activityRevision;
+			const activity = await agent.getActivity();
+			if (this.agent === agent && this.activityRevision === revision) this.applyActivity(activity);
+			throw error;
+		}
+	}
+
+	async loadOlderHistory(latest = false): Promise<void> {
+		if (latest) { await this.restoreHistory(); return; }
+		if (this.historyBefore === undefined) { this.events?.onNotice('没有更早的记录', 'info'); return; }
+		const agent = this.requireAgent();
+		const page = await agent.getHistory({ before: this.historyBefore, limit: 100 });
+		if (this.agent !== agent) return;
+		this.historyBefore = page.before;
+		this.projectHistory(page.items, true);
+	}
+
+	private projectHistory(history: readonly unknown[], prepend: boolean): void {
+		const messages: TranscriptMessage[] = [];
+		const emit = (message: TranscriptMessage) => { messages.push(message); };
+		const update = (id: string, patch: Partial<TranscriptMessage>) => {
+			const message = messages.find(item => item.id === id);
+			if (message) Object.assign(message, patch);
+			else emit({ id, role: 'assistant', kind: 'tool', name: 'Tool', summary: '', status: 'success', expanded: false, ...patch } as TranscriptMessage);
+		};
 		const toolNames = new Map<string, string>();
 		const todoUpdates = new Map<string, PlanItem[]>();
 		let latestTodoItems: PlanItem[] | undefined;
-		for (const [index, raw] of context.history.entries()) {
+		for (const [index, raw] of history.entries()) {
 			const message = record(raw);
 			const role = message["role"];
 			const messageId =
@@ -1450,7 +1663,7 @@ export class KlientChatBackend implements ChatBackend {
 				const origin = record(message["origin"]);
 				const text = contentText(content);
 				if (origin["kind"] === "user" && text.length > 0) {
-					this.events?.onMessage({
+					emit({
 						id: messageId,
 						role: "user",
 						kind: "text",
@@ -1460,7 +1673,7 @@ export class KlientChatBackend implements ChatBackend {
 					origin["kind"] === "task" &&
 					text.length > 0
 				) {
-					this.events?.onMessage({
+					emit({
 						id: messageId,
 						role: "assistant",
 						kind: "session",
@@ -1475,7 +1688,7 @@ export class KlientChatBackend implements ChatBackend {
 			if (role === "assistant") {
 				const thinking = contentThinking(content);
 				if (thinking.length > 0) {
-					this.events?.onMessage({
+					emit({
 						id: `${messageId}:thinking`,
 						role: "assistant",
 						kind: "thinking",
@@ -1487,7 +1700,7 @@ export class KlientChatBackend implements ChatBackend {
 				}
 				const text = contentText(content);
 				if (text.length > 0) {
-					this.events?.onMessage({
+					emit({
 						id: messageId,
 						role: "assistant",
 						kind: "text",
@@ -1511,7 +1724,7 @@ export class KlientChatBackend implements ChatBackend {
 						const items = projectTodoPlanItems(toolCall["arguments"]);
 						if (items !== undefined) todoUpdates.set(id, items);
 					}
-					this.events?.onMessage({
+					emit({
 						id,
 						role: "assistant",
 						kind: "tool",
@@ -1534,14 +1747,16 @@ export class KlientChatBackend implements ChatBackend {
 				const todoItems = todoUpdates.get(toolCallId);
 				if (message["isError"] !== true && todoItems !== undefined)
 					latestTodoItems = todoItems;
-				this.events?.onMessageUpdate(toolCallId, {
+				update(toolCallId, {
 					name: toolNames.get(toolCallId) ?? "Tool",
 					status: message["isError"] === true ? "error" : "success",
 					output: contentText(content),
 				});
 			}
 		}
-		if (latestTodoItems !== undefined) {
+		if (this.events?.onHistory) this.events.onHistory(messages, prepend);
+		else for (const message of messages) this.events?.onMessage(message);
+		if (!prepend && latestTodoItems !== undefined) {
 			this.lastTodoItems = structuredClone(latestTodoItems);
 			if (!this.towerPlanActive) this.events?.onPlanItems?.(latestTodoItems);
 		}
@@ -1608,32 +1823,53 @@ export class KlientChatBackend implements ChatBackend {
 
 	private async processInteractions(): Promise<void> {
 		const session = this.requireSession();
-		const questions = await session.questions.list();
-		for (const request of questions) await this.answerQuestion(request);
-		const approvals = await session.approvals.list();
-		for (const request of approvals) {
-			if (request.id === undefined) continue;
-			const response = await this.events?.onHandoffInteraction?.({
-				kind: "approval",
-				request: toApprovalRequest(request.toolName, request.action),
-			});
-			if (response?.kind !== "approval") continue;
-			await session.approvals.decide(
-				request.id,
-				fromApprovalResponse(response.response),
-			);
+		const [questions, approvals] = await Promise.all([session.questions.list(), session.approvals.list()]);
+		if (this.session !== session || this.disposed) return;
+		const ids = new Set([...questions, ...approvals].flatMap(request => request.id ? [request.id] : []));
+		for (const [id, controller] of this.pendingInteractions) {
+			if (ids.has(id)) continue;
+			this.pendingInteractions.delete(id);
+			controller.abort();
 		}
-	}
-
-	private refreshInteractions(): void {
-		void this.processInteractions().catch((error: unknown) => {
-			this.events?.onSessionError?.(
-				error instanceof Error ? error : new Error(String(error)),
-			);
+		if (this.pendingInteractions.size > 0) return;
+		const question = questions.find(request => request.id !== undefined);
+		const approval = question ? undefined : approvals.find(request => request.id !== undefined);
+		const id = question?.id ?? approval?.id;
+		if (!id) return;
+		const controller = new AbortController();
+		this.pendingInteractions.set(id, controller);
+		const respond = async () => {
+			if (question) await this.answerQuestion(question, session, controller.signal);
+			else if (approval) {
+				const response = await this.events?.onHandoffInteraction?.({ kind: 'approval', request: toApprovalRequest(approval.toolName, approval.action) }, controller.signal);
+				if (controller.signal.aborted || this.session !== session || response?.kind !== 'approval') return;
+				await session.approvals.decide(id, fromApprovalResponse(response.response));
+			}
+		};
+		void respond().then(() => {
+			if (!controller.signal.aborted && this.session === session) this.refreshInteractions();
+		}).catch((error: unknown) => {
+			if (!controller.signal.aborted && this.session === session && !(error instanceof Error && error.name === 'AbortError')) this.events?.onSessionError?.(error instanceof Error ? error : new Error(String(error)));
+		}).finally(() => {
+			if (this.pendingInteractions.get(id) === controller) this.pendingInteractions.delete(id);
 		});
 	}
 
-	private async answerQuestion(request: QuestionRequest): Promise<void> {
+	private refreshInteractions(): void {
+		this.interactionsDirty = true;
+		if (this.interactionRefresh || !this.session || this.disposed) return;
+		const refresh = async () => {
+			while (this.interactionsDirty && this.session && !this.disposed) {
+				this.interactionsDirty = false;
+				await this.processInteractions();
+			}
+		};
+		this.interactionRefresh = refresh().catch((error: unknown) => {
+			if (!this.disposed) this.events?.onSessionError?.(error instanceof Error ? error : new Error(String(error)));
+		}).finally(() => { this.interactionRefresh = undefined; if (this.interactionsDirty) this.refreshInteractions(); });
+	}
+
+	private async answerQuestion(request: QuestionRequest, session: SessionHandle, signal: AbortSignal): Promise<void> {
 		if (request.id === undefined || this.events?.onQuestion === undefined)
 			return;
 		const questions = request.questions.map(
@@ -1649,19 +1885,24 @@ export class KlientChatBackend implements ChatBackend {
 				})),
 			}),
 		);
-		const answered = await this.events.onQuestion(questions);
+		const answered = await this.events.onQuestion(questions, signal);
+		if (signal.aborted || this.session !== session) return;
 		const result: Record<string, string | true> = {};
 		for (const [index, question] of request.questions.entries()) {
 			const answer = answered[index]?.answer;
 			const serialized = serializeQuestionAnswer(question.options, answer);
 			if (serialized !== undefined) result[question.question] = serialized;
 		}
-		await this.requireSession().questions.answer(request.id, {
+		await session.questions.answer(request.id, {
 			answers: result,
 		});
 	}
 
-	private async refreshTasks(strict = false): Promise<void> {
+	private refreshTasks(strict = false): Promise<void> {
+		return this.poll('tasks', () => this.readTasks(strict));
+	}
+
+	private async readTasks(strict: boolean): Promise<void> {
 		const agent = this.agent;
 		if (agent === undefined) return;
 		let tasks: readonly AgentTaskInfo[];
@@ -1695,32 +1936,38 @@ export class KlientChatBackend implements ChatBackend {
 		];
 		if (this.agent !== agent) return;
 		this.tasks = reconcileTaskSnapshot(previous, mergedTasks, Date.now());
-		await Promise.all(
-			mergedTasks
+		for (const id of this.taskOutputs.keys()) if (!this.tasks.has(id)) this.taskOutputs.delete(id);
+		const retainedParents = new Set([...this.tasks.values()].flatMap(task => task.kind === 'agent' && task.parentToolCallId ? [task.parentToolCallId] : []));
+		for (const id of this.parentTaskSummaries.keys()) if (!retainedParents.has(id)) this.parentTaskSummaries.delete(id);
+		const outputs = mergedTasks
 				.filter(
 					(task) =>
 						task.kind === "agent" &&
 						task.status !== "running" &&
 						previous.get(task.taskId)?.status !== task.status,
-				)
-				.map(async (task) => {
+				);
+		for (let offset = 0; offset < outputs.length; offset += 4) {
+			await Promise.all(outputs.slice(offset, offset + 4).map(async (task) => {
 					try {
-						this.taskOutputs.set(
-							task.taskId,
-							await agent.getTaskOutput({ taskId: task.taskId, tail: 200 }),
-						);
+						const output = await agent.getTaskOutput({ taskId: task.taskId, tail: 200 });
+						if (this.agent === agent && this.tasks.has(task.taskId)) this.taskOutputs.set(task.taskId, output);
 					} catch {
-						this.taskOutputs.delete(task.taskId);
+						if (this.agent === agent) this.taskOutputs.delete(task.taskId);
 					}
-				}),
-		);
+			}));
+			if (this.agent !== agent) return;
+		}
 		if (this.agent !== agent) return;
 		this.publishParentTaskSummaries();
 		this.events?.onAgentSnapshot?.(this.getAgentSnapshot());
 		this.events?.onTaskSnapshot?.(this.getTaskSnapshot());
 	}
 
-	private async refreshTowerMissions(): Promise<void> {
+	private refreshTowerMissions(): Promise<void> {
+		return this.poll('tower', () => this.readTowerMissions());
+	}
+
+	private async readTowerMissions(): Promise<void> {
 		const agent = this.agent;
 		if (agent === undefined) return;
 		try {
@@ -1809,7 +2056,11 @@ export class KlientChatBackend implements ChatBackend {
 		return { goalId: snapshot.goalId, status: undefined };
 	}
 
-	private async publishUsage(finishTurn = false): Promise<void> {
+	private publishUsage(finishTurn = false): Promise<void> {
+		return this.poll('usage', () => this.readUsage(finishTurn));
+	}
+
+	private async readUsage(finishTurn: boolean): Promise<void> {
 		const agent = this.agent;
 		if (!agent) return;
 		try {
@@ -1822,13 +2073,13 @@ export class KlientChatBackend implements ChatBackend {
 				: this.outputSpeed.snapshot();
 			this.cacheTelemetryObserved ||=
 				(total?.inputCacheRead ?? 0) + (total?.inputCacheCreation ?? 0) > 0;
-			const context = await agent.getContext();
+			const contextTokens = await agent.getContextTokenCount();
 			const modelOptions = await this.getModelOptions();
 			if (this.agent !== agent) return;
 			const cost = calculateUsageCost(usage.byModel, modelOptions);
 			const snapshot: UsageSnapshot = {
 				...DEFAULT_USAGE,
-				contextTokens: context.tokenCount,
+				contextTokens,
 				inputTokens: total?.inputOther ?? 0,
 				outputTokens: total?.output ?? 0,
 				cacheReadTokens: this.cacheTelemetryObserved
@@ -1912,6 +2163,10 @@ export class KlientChatBackend implements ChatBackend {
 				return;
 		}
 		this.promptPhases.set(promptId, phase);
+		if (this.promptPhases.size > 512) for (const [id, value] of this.promptPhases) {
+			if (['completed', 'failed', 'cancelled'].includes(value)) this.promptPhases.delete(id);
+			if (this.promptPhases.size <= 512) break;
+		}
 		this.events?.onPromptLifecycle?.(promptId, phase);
 	}
 
@@ -1983,18 +2238,23 @@ export class KlientChatBackend implements ChatBackend {
 			options: model.efforts,
 			defaultEffort: model.defaultEffort ?? model.efforts[0] ?? "off",
 		});
+		if (requested !== undefined && requested !== resolved) this.events?.onNotice(`原 Effort ${requested} 不受当前模型支持，已采用 ${resolved}；可通过 /effort 重新选择`, "warning");
 		if (!this.agent) { this.effort = resolved; return; }
 		await this.requireAgent().setThinking(resolved);
-		this.effort = resolveCatalogEffort(
-			normalizeEffortLevel(await this.requireAgent().getThinking(), resolved),
-			{
-				options: model.efforts,
-				defaultEffort: resolved,
-			},
-		);
+		this.effort = normalizeEffortLevel(await this.requireAgent().getThinking(), resolved);
 	}
 
 	private clearBindings(): void {
+		this.lastRetryKey = undefined;
+		this.hydrating = false;
+		this.historyRevision = 0;
+		this.historyBefore = undefined;
+		this.historyEvents = [];
+		this.historyEventBytes = 0;
+		this.activityRevision++;
+		this.modelRevision++;
+		for (const controller of this.pendingInteractions.values()) controller.abort();
+		this.pendingInteractions.clear();
 		if (this.taskPoll !== undefined) clearInterval(this.taskPoll);
 		if (this.towerPoll !== undefined) clearInterval(this.towerPoll);
 		this.taskPoll = undefined;
@@ -2383,10 +2643,10 @@ export function projectAgentConversation(
 	agentId: string,
 	history: readonly unknown[],
 	tokenCount: number,
-	options: { cursor?: string; limit?: number } = {},
+	options: { cursor?: string; limit?: number; active?: boolean } = {},
 ): AgentConversationPage {
 	const rawBlocks = history.flatMap((message, index) =>
-		projectConversationMessage(message, index, index === history.length - 1),
+		projectConversationMessage(message, index, !options.active && index === history.length - 1),
 	);
 	const toolCalls = new Map(
 		rawBlocks.flatMap((block) =>
@@ -2743,6 +3003,9 @@ export function reconcileTaskSnapshot(
 			current.set(task.taskId, { ...task, status: "lost", endedAt: now });
 		}
 	}
+	const finished = [...current.values()].filter(task => task.status !== 'running')
+		.toSorted((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt));
+	for (const task of finished.slice(100)) current.delete(task.taskId);
 	return current;
 }
 

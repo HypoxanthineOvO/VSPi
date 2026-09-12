@@ -5,21 +5,18 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { npmCommand } from '../src/v1/update/npm-command.mjs';
 
 const exec = promisify(execFile);
 const isWindows = process.platform === 'win32';
 
-function viaCmd(command, args) {
-  return { command: process.env.ComSpec ?? process.env.COMSPEC ?? 'cmd.exe', args: ['/d', '/s', '/c', command, ...args] };
-}
-
 async function runNpm(args, options) {
-  const invocation = isWindows ? viaCmd('npm.cmd', args) : { command: 'npm', args };
+  const invocation = npmCommand(args);
   return exec(invocation.command, invocation.args, options);
 }
 
 async function runInstalled(executable, args, options) {
-  const invocation = isWindows ? viaCmd(executable, args) : { command: executable, args };
+  const invocation = isWindows ? { command: process.execPath, args: [join(dirname(executable), '..', 'vspi', 'dist', 'main.mjs'), ...args] } : { command: executable, args };
   return exec(invocation.command, invocation.args, options);
 }
 

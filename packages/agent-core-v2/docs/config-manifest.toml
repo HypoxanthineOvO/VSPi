@@ -194,6 +194,8 @@ extra_skill_dirs = []
 # max_attempts_per_step: integer
 # retry_initial_delay_ms: integer
 # retry_max_delay_ms: integer
+# retry_budget_ms: integer
+# request_idle_timeout_ms: integer
 # max_ralph_iterations: integer
 # reserved_context_size: integer
 # compaction_trigger_ratio: number
@@ -249,6 +251,8 @@ merge_all_available_skills = true
     # key: string
     # oauth_host: string
   # protocol: "anthropic" | "openai" | "openai_responses" | "google-genai"
+  # default_protocol: "anthropic" | "openai" | "openai_responses" | "google-genai"
+  # effort_profile_revision: integer
   # name: string
   # aliases: string[]
   # provider: string
@@ -448,7 +452,7 @@ timeout_ms = 7200000
 # thinking
 #   owner: src/app/kosongConfig/configSection.ts
 #   scope: core
-#   hooks: stripEnv
+#   hooks: custom fromToml · custom toToml · stripEnv
 #   env:
 #     forced_effort <- KIMI_MODEL_THINKING_EFFORT
 # ##########################################################################
@@ -458,6 +462,7 @@ timeout_ms = 7200000
 # effort: string
 # forced_effort: string
 # keep: string
+# model_efforts: record<string, string>
 
 # ##########################################################################
 # tokenCounting (config.toml: token_counting)

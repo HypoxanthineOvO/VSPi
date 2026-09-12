@@ -109,6 +109,7 @@ export const setModelPayloadSchema = z.object({
 export const setModelResultSchema = z.object({
   model: z.string(),
   providerName: z.string().optional(),
+  thinking: z.string().optional(),
 });
 
 export const runtimeBindingSchema = z.object({

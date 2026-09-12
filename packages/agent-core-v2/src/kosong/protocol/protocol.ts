@@ -17,6 +17,7 @@ export const ProtocolSchema = z.enum([
 export type Protocol = z.infer<typeof ProtocolSchema>;
 
 export interface ProtocolProviderOptions {
+  readonly relay?: boolean;
   readonly reasoningKey?: string;
   readonly defaultMaxTokens?: number;
   readonly supportEfforts?: readonly string[];

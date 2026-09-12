@@ -14,7 +14,7 @@ import {
 import { loadSettings } from "./config/settings.js";
 import {
 	catalogEffortCapability,
-	resolveCatalogEffort,
+	preferredVisibleEffort,
 } from "./domain/effort.js";
 import {
 	applySettingsToCapabilities,
@@ -78,7 +78,7 @@ export async function runVspiTui(
 						klient.global.config.get<string | undefined>(
 							"defaultModel",
 						),
-						klient.global.config.get<{ effort?: string } | undefined>(
+					klient.global.config.get<{ effort?: string; modelEfforts?: Record<string, string> } | undefined>(
 							"thinking",
 						),
 						klient.global.kosong.listModels(),
@@ -88,9 +88,7 @@ export async function runVspiTui(
 					defaultModel === undefined
 						? undefined
 						: models.find(
-								(model) =>
-									`${model.provider}/${displayModelId(model.provider, model.model)}` ===
-									defaultModel,
+								(model) => model.model === defaultModel,
 							);
 				const provider = providers.find(
 					(candidate) => candidate.id === selected?.provider,
@@ -112,7 +110,7 @@ export async function runVspiTui(
 										provider: selected.provider,
 										id: displayModelId(selected.provider, selected.model),
 									},
-						effort: resolveCatalogEffort(thinking?.effort, {
+						effort: preferredVisibleEffort((defaultModel ? thinking?.modelEfforts?.[defaultModel] : undefined) ?? thinking?.effort, {
 							options: [...efforts],
 							defaultEffort: effort.defaultEffort,
 						}),
@@ -121,10 +119,7 @@ export async function runVspiTui(
 				};
 			},
 			save: async (_scope, value) => {
-				await backend.runtimeConnection.klient.global.config.replace({
-					domain: "thinking",
-					value: { effort: value.effort },
-				});
+				if (value.model) await backend.rememberModelEffort(value.model.provider, value.model.id, value.effort);
 				return backend.runtimeConnection.env.configPath;
 			},
 		}),

@@ -100,6 +100,7 @@ export interface ProfileModelContext {
 export interface ProfileSetModelResult {
   readonly model: string;
   readonly providerName?: string | undefined;
+  readonly thinking?: string;
 }
 
 export interface BindAgentInput {
@@ -116,7 +117,7 @@ export interface IAgentProfileService {
   update(changed: ProfileUpdateData): void;
   applyBindingSnapshot(snapshot: ProfileBindingSnapshot): void;
   bind(input: BindAgentInput): Promise<void>;
-  setModel(model: string): Promise<ProfileSetModelResult>;
+  setModel(model: string, thinking?: string): Promise<ProfileSetModelResult>;
   setThinking(level: string): void;
   republishStatus(): void;
   getModel(): string;

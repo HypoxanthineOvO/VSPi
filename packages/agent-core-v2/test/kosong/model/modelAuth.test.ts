@@ -10,6 +10,7 @@ import {
   effectiveModelConfig,
   resolveModelAuthMaterial,
   resolveModelForReady,
+  resolveModelProtocol,
 } from '#/kosong/model/modelAuth';
 
 function authMaterial(args: {
@@ -23,6 +24,31 @@ function authMaterial(args: {
     providerName: 'p1',
   });
 }
+
+describe('relay protocol defaults', () => {
+  it.each([
+    ['gpt-6-astra', 'openai_responses'],
+    ['gpt-5.6-sol', 'openai_responses'],
+    ['claude-opus-5', 'anthropic'],
+    ['kimi-k3', 'openai'],
+    ['glm-5.3', 'openai'],
+    ['deepseek-v4.1-flash', 'openai'],
+  ])('uses the model family default for %s instead of the relay-wide protocol', (model, protocol) => {
+    expect(resolveModelProtocol({ provider: 'vsplab', model }, { type: 'openai_responses' })?.protocol).toBe(protocol);
+  });
+
+  it('preserves an explicit model protocol over catalog and family defaults', () => {
+    expect(resolveModelProtocol({ provider: 'vsplab', model: 'gpt-6-astra', protocol: 'openai', defaultProtocol: 'anthropic' }, { type: 'openai_responses' })?.protocol).toBe('openai');
+  });
+
+  it('does not rewrite unrelated custom provider routing', () => {
+    expect(resolveModelProtocol({ provider: 'custom', model: 'gpt-6-astra' }, { type: 'openai' })?.protocol).toBe('openai');
+  });
+
+  it('uses a catalog protocol default for a newly introduced model', () => {
+    expect(resolveModelProtocol({ provider: 'vsplab', model: 'new-model', defaultProtocol: 'anthropic' }, { type: 'openai' })?.protocol).toBe('anthropic');
+  });
+});
 
 describe('resolveModelAuthMaterial', () => {
   it('prefers the model inline credentials over everything else', () => {
@@ -95,6 +121,39 @@ describe('resolveModelAuthMaterial', () => {
 });
 
 describe('effectiveModelConfig', () => {
+  it.each([
+    ['gpt-6-astra', ['low', 'medium', 'high', 'xhigh', 'max'], 'medium'],
+    ['gpt-5.6-luna', ['low', 'medium', 'high', 'xhigh', 'max'], 'medium'],
+    ['claude-fable-5-1', ['low', 'medium', 'high', 'xhigh', 'max'], 'high'],
+    ['kimi-k3', ['low', 'high', 'max'], 'max'],
+    ['glm-5.3-flash', ['low', 'high', 'max'], 'max'],
+    ['deepseek-v4-pro', ['low', 'high', 'max'], 'high'],
+    ['qwen3.8-flash', ['low', 'medium', 'xhigh'], 'xhigh'],
+    ['gemini-3.1-pro-preview', ['low', 'medium', 'high'], 'high'],
+    ['gemini-3.8-flash', ['low', 'medium', 'high'], 'medium'],
+    ['hy4-preview', ['high'], 'high'],
+  ])('replaces old generic defaults for %s with its documented profile', (name, efforts, defaultEffort) => {
+    const result = effectiveModelConfig({ provider: 'vsplab', model: name, thinking: { availability: 'dynamic', controls: ['effort'], efforts: ['minimal', 'medium', 'high'], defaultEffort: 'medium' } });
+    expect(result.thinking).toMatchObject({ efforts, defaultEffort });
+  });
+
+  it.each(['mimo-v2.5', 'mimo-v2.5-pro', 'MiniMax-M3'])('does not invent separate effort levels for %s', (name) => {
+    const result = effectiveModelConfig({ provider: 'vsplab', model: name, supportEfforts: ['low', 'medium', 'high'] });
+    expect(result.thinking).toMatchObject({ controls: ['toggle'] });
+    expect(result.thinking?.efforts).toBeUndefined();
+    expect(result.supportEfforts).toBeUndefined();
+  });
+
+  it('retains explicit user effort overrides over a documented profile', () => {
+    const result = effectiveModelConfig({ provider: 'vsplab', model: 'kimi-k3', overrides: { thinking: { efforts: ['custom-level'], defaultEffort: 'custom-level' } } });
+    expect(result.thinking).toMatchObject({ efforts: ['custom-level'], defaultEffort: 'custom-level' });
+  });
+
+  it('does not replace a custom endpoint model profile', () => {
+    const result = effectiveModelConfig({ provider: 'vsplab', model: 'kimi-k3', baseUrl: 'https://custom.example.test/v1', thinking: { efforts: ['medium'] } }, 'openai', { baseUrl: 'https://relay.example.test/v1' });
+    expect(result.thinking?.efforts).toEqual(['medium']);
+  });
+
   it('applies overrides over the base record', () => {
     const effective = effectiveModelConfig({
       model: 'm',

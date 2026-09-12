@@ -55,6 +55,7 @@ export function convertPiError(error: unknown, response: PiResponseState = {}): 
       finishReason: 'filtered',
       rawFinishReason: 'content_filter',
     });
+  if (/^(?:OpenAI Responses |Codex |Google )?[Ss]tream ended without (?:finish_reason|a (?:stop reason|finish reason|completion event))\.?$/.test(message)) return new APIConnectionError(message);
   const record =
     typeof error === 'object' && error !== null ? (error as Record<string, unknown>) : undefined;
   const directStatus = record?.['status'] ?? record?.['statusCode'];

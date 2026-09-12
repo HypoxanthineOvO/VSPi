@@ -6,26 +6,28 @@ import { defineState } from '#/state/state';
 import {
   DEFAULT_MAX_RETRY_ATTEMPTS,
   readRetryAfterMs,
-  retryBackoffDelays,
+  retryBackoffDelay,
   retryErrorFields,
   sleepForRetry,
 } from '#/_base/utils/retry';
-import { isRetryableGenerateError } from '#/kosong/contract/errors';
+import { isRetryableGenerateError, isTransientGenerateError } from '#/kosong/contract/errors';
 import { IConfigService } from '#/app/config/config';
 import { IEventBus } from '#/app/event/eventBus';
 import { AgentEvent2 } from '#/app/event/event2';
 import { unwrapErrorCause } from '#/errors';
 import {
   IAgentLoopService,
+  LoopError,
   type LoopErrorContext,
 } from '#/agent/loop/loop';
 import { LOOP_CONTROL_SECTION, type LoopControl } from '#/agent/loop/configSection';
+import { LoopErrors } from '#/agent/loop/errors';
 import { TurnStarted } from '#/agent/loop/turnEvents';
 import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 import { IAgentStateService } from '#/agent/state/agentState';
 import { IEventDispatcher } from '#/state/eventDispatcher';
 
-import { IAgentStepRetryService } from './stepRetry';
+import { IAgentStepRetryService, stepRetryRecoveryDeadlineKey } from './stepRetry';
 
 export interface TurnStepRetryingPayload {
   readonly agentId: string;
@@ -70,10 +72,13 @@ export class AgentStepRetryService extends Disposable implements IAgentStepRetry
     super();
     this.states.contributeState(stepRetryLastFailedDriverIdKey);
     this.states.contributeState(stepRetryFailedAttemptsKey);
+    this.states.contributeState(stepRetryRecoveryDeadlineKey);
     this._register(
       this.loopService.registerLoopErrorHandler({
         id: 'step-retry',
-        match: (context) => isRetryableGenerateError(unwrapErrorCause(context.error)),
+        match: (context) => this.config.get<LoopControl>(LOOP_CONTROL_SECTION)?.retryBudgetMs === undefined
+          ? isRetryableGenerateError(unwrapErrorCause(context.error))
+          : isTransientGenerateError(unwrapErrorCause(context.error)),
         handle: (context) => this.recover(context),
       }),
     );
@@ -105,6 +110,7 @@ export class AgentStepRetryService extends Disposable implements IAgentStepRetry
   private resetAttempts(): void {
     this.lastFailedDriverId = undefined;
     this.failedAttempts = 0;
+    this.states.set(stepRetryRecoveryDeadlineKey, undefined);
   }
 
   private async recover(context: LoopErrorContext): Promise<boolean> {
@@ -112,12 +118,20 @@ export class AgentStepRetryService extends Disposable implements IAgentStepRetry
     if (driver === undefined || context.step === undefined) return false;
 
     if (this.lastFailedDriverId !== driver.id) {
+      this.resetAttempts();
       this.lastFailedDriverId = driver.id;
-      this.failedAttempts = 0;
     }
     this.failedAttempts += 1;
 
     const loopControl = this.config.get<LoopControl>(LOOP_CONTROL_SECTION);
+    if (loopControl?.retryBudgetMs !== undefined && this.states.get(stepRetryRecoveryDeadlineKey) === undefined) {
+      this.states.set(stepRetryRecoveryDeadlineKey, Date.now() + loopControl.retryBudgetMs);
+    }
+    const deadline = this.states.get(stepRetryRecoveryDeadlineKey);
+    if (deadline !== undefined && Date.now() >= deadline) {
+      this.resetAttempts();
+      throw new LoopError(LoopErrors.codes.LOOP_RETRY_BUDGET_EXCEEDED, 'Provider retry recovery budget exhausted; this turn has stopped.', { cause: context.error });
+    }
     const maxAttempts = Math.max(
       loopControl?.maxAttemptsPerStep ?? DEFAULT_MAX_RETRY_ATTEMPTS,
       1,
@@ -128,13 +142,14 @@ export class AgentStepRetryService extends Disposable implements IAgentStepRetry
     }
 
     const error = unwrapErrorCause(context.error);
-    const delayMs =
-      readRetryAfterMs(error) ??
-      retryBackoffDelays(maxAttempts, {
+    const delayMs = readRetryAfterMs(error) ?? retryBackoffDelay(this.failedAttempts - 1, {
         initialDelayMs: loopControl?.retryInitialDelayMs,
         maxDelayMs: loopControl?.retryMaxDelayMs,
-      })[this.failedAttempts - 1] ??
-      0;
+      });
+    if (deadline !== undefined && delayMs >= deadline - Date.now()) {
+      this.resetAttempts();
+      throw new LoopError(LoopErrors.codes.LOOP_RETRY_BUDGET_EXCEEDED, 'Provider retry delay exceeds the remaining recovery budget; this turn has stopped without retrying early.', { cause: error });
+    }
     void this.dispatcher.dispatch(
       new TurnStepRetrying({
         agentId: this.scopeContext.agentId,
@@ -151,6 +166,10 @@ export class AgentStepRetryService extends Disposable implements IAgentStepRetry
     await sleepForRetry(delayMs, context.signal);
 
     if (context.currentStep?.signal.aborted === true) return false;
+    if (deadline !== undefined && Date.now() >= deadline) {
+      this.resetAttempts();
+      throw new LoopError(LoopErrors.codes.LOOP_RETRY_BUDGET_EXCEEDED, 'Provider retry recovery budget exhausted; this turn has stopped.', { cause: error });
+    }
     context.retry(driver, { at: 'head' });
     return true;
   }

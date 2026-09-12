@@ -13,7 +13,6 @@ const OUTPUT_LOG_KEY = 'output.log';
 const JSON_SUFFIX = '.json';
 
 const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
 
 type PersistedTask = AgentTaskInfo;
 
@@ -39,7 +38,7 @@ interface ListedTask {
 
 interface TaskOutputData {
   readonly root: AgentTaskPersistenceRoot;
-  readonly data: Uint8Array;
+  readonly size: number;
 }
 
 function validateTaskId(taskId: string): void {
@@ -108,7 +107,7 @@ export class AgentTaskPersistence {
 
   async taskOutputSizeBytes(taskId: string): Promise<number> {
     const output = await this.readTaskOutputData(taskId);
-    return output?.data.byteLength ?? 0;
+    return output?.size ?? 0;
   }
 
   async taskOutputExists(taskId: string): Promise<boolean> {
@@ -120,9 +119,9 @@ export class AgentTaskPersistence {
     const limit = Math.max(0, Math.trunc(maxBytes));
     if (limit === 0) return '';
     const output = await this.readTaskOutputData(taskId);
-    if (output === undefined || start >= output.data.byteLength) return '';
-    const end = Math.min(output.data.byteLength, start + limit);
-    return textDecoder.decode(output.data.subarray(start, end));
+    if (output === undefined || start >= output.size) return '';
+    const end = Math.min(output.size, start + limit);
+    return this.readOutputRange(taskId, output.root, start, end);
   }
 
   async readTaskOutputSnapshot(
@@ -132,14 +131,14 @@ export class AgentTaskPersistence {
     const output = await this.readTaskOutputData(taskId);
     if (output === undefined) return undefined;
     const previewLimit = Math.max(0, Math.trunc(maxPreviewBytes));
-    const previewBytes = Math.min(previewLimit, output.data.byteLength);
-    const previewOffset = output.data.byteLength - previewBytes;
+    const previewBytes = Math.min(previewLimit, output.size);
+    const previewOffset = output.size - previewBytes;
     return {
       outputPath: this.taskOutputFileAt(taskId, output.root),
-      outputSizeBytes: output.data.byteLength,
+      outputSizeBytes: output.size,
       previewBytes,
       truncated: previewOffset > 0,
-      preview: textDecoder.decode(output.data.subarray(previewOffset)),
+      preview: await this.readOutputRange(taskId, output.root, previewOffset, output.size),
     };
   }
 
@@ -182,15 +181,31 @@ export class AgentTaskPersistence {
 
   private async readTaskOutputData(taskId: string): Promise<TaskOutputData | undefined> {
     const primaryRoot = this.primaryRoot();
-    const primary = await this.bytes.read(this.taskOutputScope(taskId, primaryRoot), OUTPUT_LOG_KEY);
-    if (primary !== undefined) return { root: primaryRoot, data: primary };
+    const primary = await this.bytes.size(this.taskOutputScope(taskId, primaryRoot), OUTPUT_LOG_KEY);
+    if (primary !== undefined) return { root: primaryRoot, size: primary };
     const fallbackRoot = this.fallbackRoot;
     if (fallbackRoot === undefined) return undefined;
-    const fallback = await this.bytes.read(
+    const fallback = await this.bytes.size(
       this.taskOutputScope(taskId, fallbackRoot),
       OUTPUT_LOG_KEY,
     );
-    return fallback === undefined ? undefined : { root: fallbackRoot, data: fallback };
+    return fallback === undefined ? undefined : { root: fallbackRoot, size: fallback };
+  }
+
+  private async readOutputRange(taskId: string, root: AgentTaskPersistenceRoot, start: number, end: number): Promise<string> {
+    if (start >= end) return '';
+    const decoder = new TextDecoder();
+    const parts: string[] = [];
+    let first = true;
+    for await (const chunk of this.bytes.readStream(this.taskOutputScope(taskId, root), OUTPUT_LOG_KEY, { start, end: end - 1 })) {
+      let offset = 0;
+      if (first && start > 0) while (offset < chunk.length && (chunk[offset]! & 0xc0) === 0x80) offset++;
+      if (offset === chunk.length) continue;
+      first = false;
+      parts.push(decoder.decode(chunk.subarray(offset), { stream: true }));
+    }
+    parts.push(decoder.decode());
+    return parts.join('');
   }
 }
 

@@ -15,6 +15,8 @@ export const LoopControlSchema = z.object({
   maxAttemptsPerStep: z.number().int().min(0).optional(),
   retryInitialDelayMs: z.number().int().min(0).optional(),
   retryMaxDelayMs: z.number().int().min(0).optional(),
+  retryBudgetMs: z.number().int().min(1).max(2 ** 31 - 1).optional(),
+  requestIdleTimeoutMs: z.number().int().min(1).max(2 ** 31 - 1).optional(),
   maxRalphIterations: z.number().int().min(-1).optional(),
   reservedContextSize: z.number().int().min(0).optional(),
   compactionTriggerRatio: z.number().min(0.5).max(0.99).optional(),

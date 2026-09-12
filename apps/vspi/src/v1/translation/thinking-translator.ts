@@ -36,6 +36,7 @@ export class HttpThinkingTranslator implements ThinkingTranslator {
   constructor(private readonly request: typeof fetch = fetch) {}
 
   async translate(text: string, endpoint: string, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
     const source = text.trim();
     if (!source) return "";
     if (source.length > MAX_SOURCE_CHARACTERS) throw new Error("待翻译 Thinking 超过 200,000 个字符");
@@ -53,8 +54,10 @@ export class HttpThinkingTranslator implements ThinkingTranslator {
           headers: { accept: "application/json, text/plain", "content-type": "application/json" },
           body: JSON.stringify(requestBody(source, format)),
           signal: controller.signal,
+          redirect: "error",
         });
         if (!response.ok) {
+          await response.body?.cancel();
           const error = new Error(`翻译服务返回 HTTP ${response.status}`);
           if ([400, 415, 422].includes(response.status)) {
             lastError = error;
@@ -86,7 +89,10 @@ function requestBody(text: string, format: TranslationRequest): TranslationReque
 
 async function readLimitedResponse(response: Response): Promise<string> {
   const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) throw new Error("翻译服务响应超过 1 MiB");
+  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
+    await response.body?.cancel();
+    throw new Error("翻译服务响应超过 1 MiB");
+  }
   if (!response.body) return "";
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];

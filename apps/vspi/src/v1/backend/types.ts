@@ -125,7 +125,7 @@ export interface AgentConversationPage {
 	blocks: AgentConversationBlock[];
 	nextCursor?: string;
 	tokenCount: number;
-	totalBlocks: number;
+	totalBlocks?: number;
 }
 
 export type AgentConversationActivity =
@@ -158,6 +158,7 @@ export interface RuntimeModelOption extends ModelOption {
 export interface SubagentModelPreferences {
 	models: Record<string, string>;
 	defaultModel?: string;
+	force?: boolean;
 }
 
 export type SubagentModelEdit =
@@ -166,6 +167,7 @@ export type SubagentModelEdit =
 	| { action: "purpose"; model: string; purpose: string };
 
 export interface ModelSelectionResult {
+	warning?: string;
 	modelId: string;
 	vision: boolean;
 	contextWindow: number;
@@ -277,6 +279,8 @@ export type CompactionActivity =
 	| { type: "cancelled" | "failed" };
 
 export interface ChatBackendEvents {
+  onHistory?: (messages: TranscriptMessage[], prepend: boolean) => void;
+  onModelChanged?: (effort: EffortLevel) => void;
 	onMessage: (message: TranscriptMessage) => void;
 	onMessageUpdate: (id: string, patch: Partial<TranscriptMessage>) => void;
 	onBusy: (busy: boolean) => void;
@@ -379,6 +383,7 @@ export interface SendOptions {
 }
 
 export interface ChatBackend {
+  loadOlderHistory?(latest?: boolean): Promise<void>;
 	getSubagentModelPreferences?(): Promise<SubagentModelPreferences>;
 	updateSubagentModelPreferences?(edit: SubagentModelEdit): Promise<SubagentModelPreferences>;
 	readonly kind: "runtime";
@@ -440,9 +445,11 @@ export interface ChatBackend {
 	getModelOptions?(): Promise<RuntimeModelOption[]>;
 	getModelGroups?(): Promise<ModelGroup[]>;
 	getProviderOptions?(): Promise<ProviderOption[]>;
-	selectModel?(provider: string, id: string): Promise<ModelSelectionResult>;
+	selectModel?(provider: string, id: string, effort?: EffortLevel): Promise<ModelSelectionResult>;
+	getPreferredModelEffort?(provider: string, id: string): Promise<{ effort: EffortLevel; warning?: string }>;
+	rememberModelEffort?(provider: string, id: string, effort: EffortLevel): Promise<void>;
 	getEffortOptions?(): Promise<EffortLevel[]>;
-	setEffort?(level: EffortLevel): Promise<void>;
+	setEffort?(level: EffortLevel): Promise<EffortLevel | void>;
 	setPolicy?(policy: PolicyLevel): Promise<PolicySnapshot>;
 	getAgentSnapshot?(): AgentSnapshot;
 	getTaskSnapshot?(): TaskDashboardSnapshot;

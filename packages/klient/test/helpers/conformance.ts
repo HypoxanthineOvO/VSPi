@@ -446,6 +446,10 @@ export function defineKlientConformance(
           });
           expect(await agent.getModel()).toBe(modelId);
           expect(await agent.getThinking()).toBe('high');
+          await expect(agent.setModel(modelId, 'off')).resolves.toMatchObject({ model: modelId, thinking: 'off' });
+          expect(await agent.getThinking()).toBe('off');
+          await expect(agent.setModel(modelId, 'high')).resolves.toMatchObject({ model: modelId, thinking: 'high' });
+          expect(await agent.getThinking()).toBe('high');
         } finally {
           await target.klient.session(created.id).close();
         }

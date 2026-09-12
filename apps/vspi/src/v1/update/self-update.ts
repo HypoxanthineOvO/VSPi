@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { parseReleaseChecksums, releaseVersionFromLatestRedirect } from "./release-contract.mjs";
+import { npmCommand } from './npm-command.mjs';
+import { acquireRuntimeLease, inspectRuntime, stopRuntime, resolveRuntimePaths } from '@vsp/vsp-runtime';
 
 const RELEASE_DOWNLOAD_ORIGIN = "https://github.com";
 const RELEASE_ASSET_ORIGINS = new Set([
@@ -20,6 +22,7 @@ export interface SelfUpdateResult {
   status: "up-to-date" | "updated";
   currentVersion: string;
   latestVersion: string;
+  runtimeRestarted?: boolean;
 }
 
 export interface SelfUpdateOptions {
@@ -152,8 +155,7 @@ export function resolvePackageInstaller(
   const npmArgs = ["install", "--global", "--no-audit", "--no-fund", resolve(tarballPath)];
   if (platform === "win32") {
     return {
-      command: environment.ComSpec ?? environment.COMSPEC ?? "cmd.exe",
-      args: ["/d", "/s", "/c", "npm.cmd", ...npmArgs],
+      ...npmCommand(npmArgs, platform),
       manager: "npm",
     };
   }
@@ -170,7 +172,7 @@ async function executeInstaller(invocation: PackageInstallerInvocation, environm
       invocation.command,
       invocation.args,
       {
-        env: { ...environment, npm_config_update_notifier: "false" },
+        env: { ...environment, npm_config_update_notifier: "false", npm_config_ignore_scripts: 'true' },
         maxBuffer: 8 * 1024 * 1024,
         timeout: 180_000,
       },
@@ -241,8 +243,7 @@ export async function updateVspi(currentVersion: string, options: SelfUpdateOpti
     fetchImpl,
     githubReleaseAssetUrl(latestVersion, "SHA256SUMS"),
   );
-  const checksumBytes = Buffer.from(await checksumsResponse.arrayBuffer());
-  if (checksumBytes.byteLength > 64 * 1024) throw new Error("VSPi SHA256SUMS 超过 64 KiB 上限");
+  const checksumBytes = await readLimitedResponse(checksumsResponse, 64 * 1024);
   const expectedChecksum = parseReleaseChecksums(checksumBytes.toString("utf8"), latestVersion);
 
   const directory = await mkdtemp(join(options.temporaryRoot ?? tmpdir(), "vspi-update-"));
@@ -255,17 +256,104 @@ export async function updateVspi(currentVersion: string, options: SelfUpdateOpti
     const declaredSize = Number(packageResponse.headers.get("content-length"));
     if (Number.isFinite(declaredSize) && declaredSize > MAX_PACKAGE_BYTES)
       throw new Error("VSPi 更新包超过 64 MiB 上限");
-    const packageBytes = Buffer.from(await packageResponse.arrayBuffer());
-    if (packageBytes.byteLength > MAX_PACKAGE_BYTES) throw new Error("VSPi 更新包超过 64 MiB 上限");
+    const packageBytes = await readLimitedResponse(packageResponse, MAX_PACKAGE_BYTES);
     await writeFile(tarballPath, packageBytes, { mode: 0o600 });
     const actualChecksum = createHash("sha256")
-      .update(await readFile(tarballPath))
+      .update(packageBytes)
       .digest("hex");
     if (actualChecksum !== expectedChecksum) throw new Error("VSPi 更新包 SHA-256 校验失败");
-    if (options.installPackage) await options.installPackage(tarballPath);
-    else await installVspiPackage(tarballPath, latestVersion);
-    return { status: "updated", currentVersion, latestVersion };
+    if (options.installPackage) {
+      await options.installPackage(tarballPath);
+      return { status: 'updated', currentVersion, latestVersion };
+    }
+    const runtimeRestarted = await installVspiUpdate(tarballPath, latestVersion);
+    return { status: "updated", currentVersion, latestVersion, runtimeRestarted };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+async function readLimitedResponse(response: Response, limit: number): Promise<Buffer> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('更新下载没有响应体');
+  let total = 0;
+  const chunks: Uint8Array[] = [];
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      total += chunk.value.byteLength;
+      if (total > limit) throw new Error(`VSPi 下载超过 ${limit >= 1024 * 1024 ? `${limit / (1024 * 1024)} MiB` : `${limit / 1024} KiB`} 上限`);
+      chunks.push(chunk.value);
+    }
+    return Buffer.concat(chunks, total);
+  } finally { await reader.cancel(); }
+}
+
+function execute(command: string, args: string[], env: NodeJS.ProcessEnv): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { env, timeout: 180_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+      if (error) reject(new Error(stderr.trim() || error.message, { cause: error }));
+      else resolve(stdout);
+    });
+  });
+}
+
+export interface InstallUpdateOptions {
+  entryPath?: string;
+  homeDir?: string;
+  install?: (path: string, version: string) => Promise<void>;
+  environment?: NodeJS.ProcessEnv;
+}
+
+export async function installVspiUpdate(tarball: string, version: string, options: InstallUpdateOptions = {}): Promise<boolean> {
+  const entry = await realpath(options.entryPath ?? process.argv[1] ?? '');
+  const packageRoot = dirname(dirname(entry));
+  const installId = createHash('sha256').update(packageRoot).digest('hex').slice(0, 16);
+  const lock = await acquireRuntimeLease(join(dirname(packageRoot), `.vspi-update-${installId}.lock`));
+  try {
+  const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8')) as { name?: string; version?: string; private?: boolean };
+  if (manifest.name !== 'vspi' || manifest.private || !manifest.version) throw new Error('自动升级仅支持已安装的 VSPi 发行包；源码工作区请使用构建流程');
+  const paths = resolveRuntimePaths(options.homeDir);
+  const env = { ...(options.environment ?? process.env), VSPI_HOME: paths.homeDir, npm_config_update_notifier: 'false', npm_config_ignore_scripts: 'true' };
+  const backupRoot = join(paths.serverDir, 'update-backups');
+  await mkdir(backupRoot, { recursive: true, mode: 0o700 });
+  const backup = await mkdtemp(join(backupRoot, 'update-'));
+  let keepBackup = false;
+  try {
+  const pack = npmCommand(['pack', packageRoot, '--pack-destination', backup, '--ignore-scripts', '--json']);
+  await execute(pack.command, pack.args, env);
+  const previousPackage = join(backup, `vspi-${manifest.version}.tgz`);
+  await readFile(previousPackage);
+  const originalConfig = await readFile(paths.configPath).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error; });
+  if (originalConfig) await writeFile(join(backup, 'config.toml'), originalConfig, { mode: 0o600 });
+  const running = await inspectRuntime(paths.homeDir);
+  if (running) {
+    try { await stopRuntime(paths.homeDir, 30_000, { requireIdle: true }); }
+    catch (error) { keepBackup = (await inspectRuntime(paths.homeDir)) === undefined; throw error; }
+  }
+  keepBackup = true;
+  const install = options.install ?? ((path: string, expected: string) => installVspiPackage(path, expected, { entryPath: entry, environment: env }));
+  try {
+    await install(tarball, version);
+    const actual = (await execute(process.execPath, [entry, '--version'], env)).trim();
+    if (actual !== version) throw new Error(`新入口版本不符：${actual}`);
+    if (running) await execute(process.execPath, [entry, 'daemon', 'start'], env);
+    await writeFile(join(backup, 'result.json'), JSON.stringify({ previous: manifest.version, installed: version, runtimeRestarted: Boolean(running) }), { mode: 0o600 });
+    return Boolean(running);
+  } catch (error) {
+    try {
+      if (await inspectRuntime(paths.homeDir)) await stopRuntime(paths.homeDir, 30_000, { requireIdle: true });
+      await install(previousPackage, manifest.version);
+      const config = await readFile(paths.configPath).catch((failure: NodeJS.ErrnoException) => { if (failure.code === 'ENOENT') return undefined; throw failure; });
+      const unchanged = originalConfig === undefined ? config === undefined : config?.equals(originalConfig) === true;
+      if (running && unchanged) await execute(process.execPath, [entry, 'daemon', 'start'], env);
+      throw new Error(`升级失败，已恢复旧安装包${running && !unchanged ? '；配置已变化，未自动覆盖或启动旧 Daemon' : ''}。备份：${backup}`, { cause: error });
+    } catch (recoveryError) {
+      if (recoveryError instanceof Error && recoveryError.cause === error) throw recoveryError;
+      throw new AggregateError([error, recoveryError], `升级及自动恢复未完成；已保留备份：${backup}`);
+    }
+  }
+  } finally { if (!keepBackup) await rm(backup, { recursive: true, force: true }); }
+  } finally { await lock.release(); }
 }

@@ -1,9 +1,32 @@
 import { randomBytes } from 'node:crypto';
-import { chmod, mkdir, open, readFile, rename, rm, type FileHandle } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { chmod, mkdir, open, readFile, rename, rm, writeFile, type FileHandle } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
 import { parseRuntimeMigrationWarning } from './config-migration.js';
 import { VSP_RUNTIME_PROTOCOL_VERSION, type RuntimeState } from './types.js';
+
+export interface RuntimeShutdownReceipt {
+  readonly ownerNonce: string;
+  readonly success: boolean;
+  readonly error?: string;
+}
+
+export async function writeRuntimeShutdown(serverDir: string, receipt: RuntimeShutdownReceipt): Promise<void> {
+  const path = join(serverDir, 'shutdown.json');
+  const temporary = `${path}.${receipt.ownerNonce}.tmp`;
+  try {
+    await writeFile(temporary, JSON.stringify(receipt), { mode: 0o600 });
+    await rename(temporary, path);
+  } finally { await rm(temporary, { force: true }); }
+}
+
+export async function readRuntimeShutdown(serverDir: string): Promise<RuntimeShutdownReceipt | undefined> {
+  try {
+    const value = JSON.parse(await readFile(join(serverDir, 'shutdown.json'), 'utf8')) as Partial<RuntimeShutdownReceipt>;
+    return typeof value.ownerNonce === 'string' && typeof value.success === 'boolean'
+      ? { ownerNonce: value.ownerNonce, success: value.success, error: typeof value.error === 'string' ? value.error : undefined } : undefined;
+  } catch { return undefined; }
+}
 
 export async function readRuntimeState(statePath: string): Promise<RuntimeState | undefined> {
   let text: string;

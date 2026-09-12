@@ -8,7 +8,7 @@ const LEGACY_EFFORTS: Record<string, EffortLevel> = {
 
 const KNOWN_LABELS: Record<string, string> = {
 	off: "Off",
-	on: "On",
+	on: "开启",
 	minimal: "Minimal",
 	low: "Low",
 	medium: "Medium",
@@ -127,4 +127,17 @@ export function resolveCatalogEffort(
 		capability.options[0] ??
 		"off"
 	);
+}
+
+export function visibleEffortLevels(levels: readonly EffortLevel[]): EffortLevel[] {
+	return [...new Set(levels.filter((level) => level !== "off"))];
+}
+
+export function preferredVisibleEffort(
+	requested: unknown,
+	capability: Pick<CatalogEffortCapability, "options" | "defaultEffort">,
+): EffortLevel {
+	const options = visibleEffortLevels(capability.options);
+	if (options.length === 0) return "off";
+	return resolveCatalogEffort(requested, { options, defaultEffort: capability.defaultEffort });
 }

@@ -24,7 +24,13 @@ const vspFeatureDefaultsOverlay: ConfigEffectiveOverlay = {
 			"defaultPermissionMode",
 			effective["defaultPermissionMode"] ?? "auto",
 		);
-		return ["experimental", "builtinProductSkills", "defaultPermissionMode"];
+		effective["loopControl"] = validate("loopControl", {
+			maxAttemptsPerStep: 3,
+			retryBudgetMs: 120_000,
+			requestIdleTimeoutMs: 300_000,
+			...record(effective["loopControl"]),
+		});
+		return ["experimental", "builtinProductSkills", "defaultPermissionMode", "loopControl"];
 	},
 };
 

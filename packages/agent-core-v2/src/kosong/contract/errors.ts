@@ -254,6 +254,12 @@ export function isRetryableGenerateError(error: unknown): boolean {
   return error instanceof ChatProviderError && !isImageFormatError(error);
 }
 
+export function isTransientGenerateError(error: unknown): boolean {
+  if (error instanceof APIConnectionError || error instanceof APITimeoutError) return true;
+  if (error instanceof APIProviderQuotaExhaustedError) return false;
+  return error instanceof APIStatusError && [408, 429, 500, 502, 503, 504, 529].includes(error.statusCode);
+}
+
 const NETWORK_RE = /network|connection|connect|disconnect|terminated/i;
 const TIMEOUT_RE = /timed?\s*out|timeout|deadline/i;
 

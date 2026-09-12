@@ -20,7 +20,7 @@ import {
 import { traitDefaultHeaders, type ProtocolTrait, type ResolvedTrait, type TraitContext } from '#/kosong/protocol/protocolTrait';
 
 import { getProviderDefinition } from './providerDefinition';
-import { findPiModel, piCapability } from './pi/catalog';
+import { findPiModel, piCapability, relayNativeProvider } from './pi/catalog';
 import { PiChatProvider } from './pi/piChatProvider';
 
 const CONFIG_DEFAULT_HEADERS_TRAIT: ProtocolTrait = {
@@ -112,7 +112,10 @@ export class ProtocolAdapterRegistry implements IProtocolAdapterRegistry {
       context: { config, providerId: config.providerType },
     }));
     const effectiveConfig = { ...config, defaultHeaders: traitDefaultHeaders(traits) };
-    return new PiChatProvider(effectiveConfig, findPiModel(config.providerType, config.modelName, config.protocol), () => {
+    const catalogProvider = config.providerOptions?.relay ? relayNativeProvider(config.modelName) ?? config.providerType : config.providerType;
+    const native = findPiModel(catalogProvider, config.modelName, config.protocol, { allowFallback: config.providerOptions?.relay !== true }) ??
+      (config.providerOptions?.relay ? findPiModel(catalogProvider, config.modelName.split('/').at(-1) ?? config.modelName, config.protocol, { allowFallback: false }) : undefined);
+    return new PiChatProvider(effectiveConfig, native, () => {
       const base = getProtocolBase(identity.baseId);
       if (base === undefined) throw new ChatProviderError(`No compatibility adapter for '${identity.baseId}'.`);
       return base.createChatProvider({ config, traits });

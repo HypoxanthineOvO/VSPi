@@ -22,7 +22,7 @@ import {
 	matchCommands,
 } from "../domain/commands.js";
 import { FX } from "../domain/defaults.js";
-import { effortLabel } from "../domain/effort.js";
+import { effortLabel, visibleEffortLevels } from "../domain/effort.js";
 import { formatLocalDate, formatLocalTimestamp } from "../domain/local-time.js";
 import type {
 	AppSettings,
@@ -86,6 +86,7 @@ import {
 } from "./interactions.js";
 import { formatContextUsage } from "./status.js";
 import type { VspiTheme } from "./theme.js";
+import { SubagentModelsPanel } from "./subagent-models-panel.js";
 
 export function sessionsSurfaceRowLimit(availableRows: number): number {
 	return Math.max(3, Math.floor(availableRows * 0.8));
@@ -97,6 +98,7 @@ export type PanelKind =
 	| "prompt"
 	| "commands"
 	| "models"
+	| "subagentModels"
 	| "providers"
 	| "sessions"
 	| "externalImport"
@@ -285,6 +287,15 @@ function agentElapsed(run: AgentRunSnapshot): string {
 
 function agentRunTerminal(status: AgentRunSnapshot["status"]): boolean {
 	return status !== "queued" && status !== "running";
+}
+
+function agentRuntimeLimit(run: AgentRunSnapshot): string {
+	const seconds = run.budget.maxRunSeconds;
+	if (!Number.isFinite(seconds) || seconds < 0) return "未记录";
+	if (seconds === 0) return "无限制或旧任务未记录";
+	if (seconds % 3_600 === 0) return `${String(seconds / 3_600)} 小时`;
+	if (seconds % 60 === 0) return `${String(seconds / 60)} 分钟`;
+	return `${String(seconds)} 秒`;
 }
 
 function agentRunSymbol(run: AgentRunSnapshot, theme: VspiTheme): string {
@@ -636,8 +647,7 @@ export class PanelController {
 	private selectedModelKey = "";
 	private selectedGroupId = "";
 	private models: ModelOption[] = [];
-	private subagentPreferences: SubagentModelPreferences = { models: {} };
-	private subagentEditing: { model: string; purpose: string } | undefined;
+	private readonly subagentModelsPanel = new SubagentModelsPanel();
 	private modelExpandCollapsed = false;
 	private filteredModelCache:
 		| { query: string; expanded: boolean; models: ModelOption[] }
@@ -702,6 +712,7 @@ export class PanelController {
 	private settingsEndpointInput = "";
 	private effort: EffortLevel = "medium";
 	private effortLevels: EffortLevel[] = ["medium"];
+	private modelReturnSelection = 0;
 	private questionIndex = 0;
 	private questionReview = false;
 	private questionDirectAnswer = false;
@@ -823,10 +834,16 @@ export class PanelController {
 	}
 
 	open(kind: PanelKind): void {
-		this.subagentEditing = undefined;
 		this.state = { kind, selected: 0, scroll: 0 };
 		if (kind === "commands") this.state.selected = 0;
-		if (kind === "models") this.modelNarrowDetail = false;
+		if (kind === "models") {
+			this.modelNarrowDetail = false;
+			this.modelSearch = "";
+			this.modelExpandCollapsed = false;
+			this.filteredModelCache = undefined;
+			this.modelTab = 0;
+		}
+		if (kind === "subagentModels") this.subagentModelsPanel.open();
 		if (kind === "agents" || kind === "tasks") {
 			const selectedIndex = this.agentSelectedRunId
 				? this.agentRuns().findIndex(
@@ -876,8 +893,13 @@ export class PanelController {
 
 	openEffort(effort: EffortLevel, levels: EffortLevel[]): void {
 		this.effort = effort;
-		this.effortLevels = levels.length > 0 ? [...levels] : ["off"];
+		if (this.kind === "models") this.modelReturnSelection = this.state.selected;
+		this.effortLevels = visibleEffortLevels(levels);
 		this.open("effort");
+	}
+
+	returnToModels(): void {
+		this.state = { kind: "models", selected: Math.max(0, Math.min(this.modelReturnSelection, this.filteredModels().length - 1)), scroll: 0 };
 	}
 
 	setSettingsLayers(layers: {
@@ -939,7 +961,9 @@ export class PanelController {
 		groups: ModelGroup[] = [],
 		selectedModel?: string | { provider: string; id: string },
 	): void {
+		const focused = this.kind === "models" ? modelKey(this.filteredModels()[this.state.selected]) : undefined;
 		this.models = structuredClone(models);
+		this.subagentModelsPanel.setModels(this.models);
 		this.filteredModelCache = undefined;
 		this.modelGroups = structuredClone(groups);
 		if (this.modelGroups.length === 0) this.modelTab = 0;
@@ -956,16 +980,11 @@ export class PanelController {
 		this.selectedGroupId =
 			this.modelGroups.find((group) => group.id === this.selectedGroupId)?.id ??
 			"";
-		this.state.selected = 0;
+		if (this.kind === "models") this.state.selected = Math.max(0, this.filteredModels().findIndex((model) => modelKey(model) === focused));
 	}
 
 	setSubagentModelPreferences(preferences: SubagentModelPreferences): void {
-		this.subagentPreferences = structuredClone(preferences);
-		this.filteredModelCache = undefined;
-	}
-
-	private subagentAlias(model: ModelOption): string {
-		return model.alias ?? `${model.provider ?? model.brand}/${model.id}`;
+		this.subagentModelsPanel.setPreferences(preferences);
 	}
 
 	confirmModelSelection(
@@ -1221,15 +1240,10 @@ export class PanelController {
 	}
 
 	handleInput(data: string): PanelEvent | undefined {
-		if (this.kind === "models" && this.subagentEditing) {
-			if (matchesKey(data, Key.escape)) { this.subagentEditing = undefined; return; }
-			if (matchesKey(data, Key.enter)) {
-				const edit = this.subagentEditing;
-				this.subagentEditing = undefined;
-				return { type: "subagentModel", edit: { action: "purpose", ...edit } };
-			}
-			this.subagentEditing.purpose = this.editSharedTextField("subagent-purpose", this.subagentEditing.purpose, data, 300);
-			return;
+		if (this.kind === "subagentModels") {
+			const result = this.subagentModelsPanel.handleInput(data);
+			if (result === "close") { this.close(); return { type: "close" }; }
+			return result ? { type: "subagentModel", edit: result } : undefined;
 		}
 		if (this.kind === "settings" && this.settingsEndpointEditing)
 			return this.handleSettings(data);
@@ -1362,6 +1376,8 @@ export class PanelController {
 			[title, body] = ["Prompt Profile", this.renderPrompt(bodyWidth, theme)];
 		else if (this.kind === "models")
 			[title, body] = ["Model", this.renderModels(bodyWidth, bodyRows, theme)];
+		else if (this.kind === "subagentModels")
+			[title, body] = ["Subagent Model", this.subagentModelsPanel.render(bodyWidth, bodyRows, theme)];
 		else if (this.kind === "providers")
 			[title, body] = [
 				"Provider",
@@ -1619,6 +1635,7 @@ export class PanelController {
 
 	renderHint(width: number, theme: VspiTheme): string {
 		this.lastBodyWidth = Math.max(1, width - 2);
+		if (this.kind === "subagentModels") return theme.muted(padLine(this.subagentModelsPanel.hint(), width));
 		const hint = renderInteractionHint(
 			"panel",
 			this.kind,
@@ -1723,8 +1740,7 @@ export class PanelController {
 		const state: InteractionState = {
 			narrowModel: !usesWideModelLayout(this.lastBodyWidth),
 			modelChoiceTab: this.modelTab === 0,
-			modelPurposeEditing: this.subagentEditing !== undefined,
-			modelHasCollapsed: this.models.some((model) => model.curated === false),
+			modelHasCollapsed: this.models.some((model) => model.curated !== true),
 			modelExpanded: this.modelExpandCollapsed,
 		};
 		if (this.kind === "plan")
@@ -1824,18 +1840,6 @@ export class PanelController {
 			this.state.selected = Math.max(0, this.filteredModels().findIndex((model) => modelKey(model) === modelKey(selected)));
 			return;
 		}
-		if (this.modelTab === 0) {
-			const model = this.filteredModels()[this.state.selected];
-			if (model) {
-				const alias = this.subagentAlias(model);
-				if (matchesKey(data, Key.ctrl("s"))) return { type: "subagentModel", edit: { action: "toggle", model: alias } };
-				if (matchesKey(data, Key.ctrl("d"))) return { type: "subagentModel", edit: { action: "default", model: alias } };
-				if (matchesKey(data, Key.ctrl("p"))) {
-					this.subagentEditing = { model: alias, purpose: this.subagentPreferences.models[alias] ?? "" };
-					return;
-				}
-			}
-		}
 		if (matchesKey(data, Key.tab) && this.modelGroups.length > 0) {
 			this.modelTab = this.modelTab === 0 ? 1 : 0;
 			this.state.selected = 0;
@@ -1858,6 +1862,7 @@ export class PanelController {
 			if (this.modelTab === 0) {
 				const model = models[this.state.selected];
 				if (model) {
+					this.modelReturnSelection = this.state.selected;
 					return { type: "model", model };
 				}
 			} else {
@@ -2259,6 +2264,7 @@ export class PanelController {
 				return;
 			}
 			if (row.key === "thinkingTranslationEndpoint") {
+				if (this.settings.scope === "project") return;
 				this.settingsEndpointEditing = true;
 				this.settingsEndpointInput = this.settings.thinkingTranslationEndpoint;
 				return;
@@ -2285,6 +2291,7 @@ export class PanelController {
 	private handleEffort(data: string): PanelEvent | undefined {
 		if (this.move(data, this.effortLevels.length)) return;
 		if (!matchesKey(data, Key.enter)) return;
+		if (this.effortLevels.length === 0) return { type: "effort", effort: "off" };
 		const effort = this.effortLevels[this.state.selected];
 		return effort ? { type: "effort", effort } : undefined;
 	}
@@ -2707,7 +2714,7 @@ export class PanelController {
 			return index === -1 ? BRAND_PRIORITY.length : index;
 		};
 		const models = this.models
-			.filter((model) => query || this.modelExpandCollapsed || model.curated !== false || modelKey(model) === this.selectedModelKey || Object.hasOwn(this.subagentPreferences.models, this.subagentAlias(model)))
+			.filter((model) => this.modelExpandCollapsed || model.curated === true)
 			.filter(
 				(model) =>
 					!query ||
@@ -2742,14 +2749,9 @@ export class PanelController {
 		bodyRows: number,
 		theme: VspiTheme,
 	): string[] {
-		if (this.subagentEditing) return [
-			theme.bold("子模型用途"),
-			...wrapTextWithAnsi(this.subagentEditing.model, width),
-			...wrapTextWithAnsi(this.subagentEditing.purpose || " ", width),
-		].slice(0, bodyRows);
-		const modelView = this.modelExpandCollapsed ? "全部模型" : "精选模型";
+		const modelView = this.modelExpandCollapsed ? "全部模型" : "★ 官方推荐";
 		const modelTab = this.modelSearch
-			? `选择模型 · ${this.modelSearch}`
+			? `${modelView} · ${this.modelSearch}`
 			: modelView;
 		const tabs = tabLine(
 			this.modelGroups.length > 0 ? [modelTab, "模型组"] : [modelTab],
@@ -2875,8 +2877,7 @@ export class PanelController {
 					? theme.success("✓ ")
 					: "  ";
 			const vision = entry.model.vision ? theme.blue(" ◉") : "";
-			const alias = this.subagentAlias(entry.model);
-			const star = Object.hasOwn(this.subagentPreferences.models, alias) ? theme.warning("★ ") : "  ";
+			const star = entry.model.curated === true ? theme.warning("★ ") : "  ";
 			const line = padLine(
 				`${marker}${check}${star}${entry.model.label}${vision}`,
 				width,
@@ -2914,7 +2915,7 @@ export class PanelController {
 		theme: VspiTheme,
 	): string[] {
 		const model = this.filteredModels()[this.state.selected];
-		if (!model) return [theme.muted("没有匹配的模型")];
+		if (!model) return wrapTextWithAnsi(theme.muted("没有匹配的模型；Ctrl+O 切换全部模型"), width).slice(0, rowCount);
 		const input =
 			model.price.inputUsdPerMillion === undefined
 				? undefined
@@ -2933,8 +2934,9 @@ export class PanelController {
 				: model.price.cacheWriteUsdPerMillion * FX.fxRate;
 		const provider = `${theme.muted("Provider  ")}${model.brand}`;
 		const modelId = `${theme.muted("Model ID  ")}${model.id}`;
+		const protocol = model.protocol ? `${theme.muted("协议  ")}${model.protocol === "openai" ? "Chat Completions" : model.protocol === "openai_responses" ? "Responses" : model.protocol}` : undefined;
 		const capability = `${theme.muted("能力      ")}${model.vision ? "文本 · 图片 · Tools" : "文本 · Tools"}`;
-		const effort = `${theme.muted("Effort  ")}${model.efforts.map(effortLabel).join(" / ")}`;
+		const effort = `${theme.muted("Effort  ")}${visibleEffortLevels(model.efforts).map(effortLabel).join(" / ") || "不可调"}`;
 		const release = model.releasedAt
 			? `${theme.muted("发布  ")}${model.releasedAt}`
 			: "";
@@ -2960,11 +2962,8 @@ export class PanelController {
 		];
 		const details = [
 			theme.bold(theme.focus(model.label)),
-			...Object.hasOwn(this.subagentPreferences.models, this.subagentAlias(model)) ? [
-				theme.warning(this.subagentPreferences.defaultModel === this.subagentAlias(model) ? "★ 默认子模型" : "★ 子模型候选"),
-				...wrapTextWithAnsi(this.subagentPreferences.models[this.subagentAlias(model)] || "用途未设置", width),
-			] : [],
 			combinedIdentity,
+			...(protocol ? [protocol] : []),
 			capabilityRelease,
 			...effortRows,
 			...prices,
@@ -3499,7 +3498,7 @@ export class PanelController {
 			},
 			{
 				group: "Transcript",
-				label: `思考翻译服务  ${this.settings.thinkingTranslationEndpoint || "关"}`,
+				label: `思考翻译服务${this.settings.scope === "project" ? "（仅全局可设置）" : "（发送 Thinking 内容）"}  ${this.settings.thinkingTranslationEndpoint || "关"}`,
 				key: "thinkingTranslationEndpoint",
 			},
 			{
@@ -4020,7 +4019,7 @@ export class PanelController {
 								: theme.focus("●");
 			const selected = index === this.state.selected;
 			const current = selected ? theme.focus("▶ ") : "  ";
-			const summary = (run.summary ?? run.outputPreview ?? run.task)
+			const summary = stripAnsi(run.error ?? run.summary ?? run.outputPreview ?? run.task)
 				.replace(/\s+/gu, " ")
 				.trim();
 			const identity = `${run.codename ?? run.agentId} · ${run.taskTitle ?? run.task}`;
@@ -4110,8 +4109,29 @@ export class PanelController {
 			),
 			"",
 			...this.renderAgentProcess(width, theme),
+			...this.renderAgentDiagnostics(run, width, theme),
 		];
 		return lines.map((line) => padLine(line, width));
+	}
+
+	private renderAgentDiagnostics(
+		run: AgentRunSnapshot,
+		width: number,
+		theme: VspiTheme,
+	): string[] {
+		const limit = `运行时限：${agentRuntimeLimit(run)}`;
+		let reason = run.error?.trim();
+		if (!reason && run.status === "timed_out") {
+			reason = "已达到运行时限，任务已停止；可恢复同一 Agent 继续。";
+		}
+		const lines = wrapTextWithAnsi(theme.muted(limit), width);
+		if (reason) {
+			lines.push(...wrapTextWithAnsi(
+				theme.error(`结束原因：${compactAgentProcessText(stripAnsi(reason), 1_024)}`),
+				width,
+			));
+		}
+		return lines;
 	}
 
 	private renderAgentProcess(width: number, theme: VspiTheme): string[] {
@@ -4194,8 +4214,15 @@ export class PanelController {
 				);
 				return selectedRow ? theme.focus(theme.bold(line)) : line;
 			});
+		const diagnostics = selected
+			? this.renderAgentDiagnostics(selected, detailWidth, theme).slice(0, visibleRows)
+			: [];
+		const processRows = Math.max(0, visibleRows - diagnostics.length);
 		const detail = selected
-			? this.renderAgentProcess(detailWidth, theme).slice(-visibleRows)
+			? [
+				...(processRows > 0 ? this.renderAgentProcess(detailWidth, theme).slice(-processRows) : []),
+				...diagnostics,
+			]
 			: [theme.muted("Select a task")];
 		const result = [
 			`${theme.bold(padLine(`Agents [${this.agentFilter}]`, listWidth))}${theme.muted("│")}${theme.focus(theme.bold(padLine(selected ? `当前选择 · ${selected.codename ?? selected.agentId} · ${selected.taskTitle ?? selected.task}` : "当前选择", detailWidth)))}`,
@@ -4245,6 +4272,7 @@ export class PanelController {
 	}
 
 	private renderEffort(width: number, theme: VspiTheme): string[] {
+		if (this.effortLevels.length === 0) return [theme.muted(padLine("当前模型没有可调 Effort；Enter 确认固定配置", width))];
 		const rows = this.effortLevels.map((level, index) =>
 			selectedLine(
 				`${level === this.effort ? theme.success("✓ ") : "  "}${effortLabel(level)}`,

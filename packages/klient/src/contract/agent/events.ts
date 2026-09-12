@@ -8,6 +8,7 @@
  */
 
 import { z } from 'zod';
+import { agentActivityStateSchema } from './activity.js';
 
 import type { EventRegistration } from '../types.js';
 import { goalChangeSchema, goalSnapshotSchema, permissionModeSchema } from './schemas.js';
@@ -264,6 +265,7 @@ export const permissionModeChangedSchema = z.object({
 });
 
 export interface AgentEventPayloads {
+  'agent.activity.updated': z.infer<typeof agentActivityStateSchema>;
   'permission.mode.changed': z.infer<typeof permissionModeChangedSchema>;
   'turn.started': z.infer<typeof turnStartedEventSchema>;
   'turn.ended': z.infer<typeof turnEndedEventSchema>;
@@ -295,6 +297,7 @@ export type AgentEventName = keyof AgentEventPayloads;
 
 /** Public event name → stream binding + payload schema. */
 export const agentEvents = {
+  'agent.activity.updated': { kind: 'stream', name: 'events', type: 'agent.activity.updated', schema: agentActivityStateSchema },
   'permission.mode.changed': {
     kind: 'emitter',
     service: 'agentPermissionModeService',
