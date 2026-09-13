@@ -226,6 +226,62 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		return { terminal, tui, app, backend, events: () => events, setPolicy };
 	}
 
+	it("removes the retry status from the rendered screen when recovery clears it", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-retry-notice-"));
+		const { app, events } = renderFixture(home);
+		try {
+			await app.start();
+			events().onRetryNotice?.("第 2/3 次尝试");
+			expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("第 2/3 次尝试");
+			events().onRetryNotice?.(undefined);
+			expect(app.render(160).map(stripTerminalSequences).join("\n")).not.toContain("第 2/3 次尝试");
+		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("opens a saved feedback preview after explicit context selection without uploading", async () => {
+		vi.stubEnv('KIMI_CODE_EXPERIMENTAL_VSPI_FEEDBACK', 'true');
+		const home = await mkdtemp(join(tmpdir(), 'vspi-feedback-ui-'));
+		const { app, backend, events } = renderFixture(home);
+		backend.feedbackContext = () => ({ home });
+		try {
+			await app.start();
+			events().onMessage({ id: 'example-error', role: 'assistant', kind: 'error', summary: 'example connection error', detail: 'example diagnostic', expanded: false });
+			app.composer.setText('/feedback example failure');
+			app.handleInput('\r');
+      await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join('\n')).toContain('最近一轮'));
+			app.handleInput('\r'); app.handleInput('\r');
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join('\n')).toContain('Feedback 预览'));
+			app.handleInput('\u001B');
+			expect(app.render(160).map(stripTerminalSequences).join('\n')).toContain('本地反馈包已保留');
+		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); vi.unstubAllEnvs(); }
+	});
+
+	it("collects a description when feedback is opened from the command menu", async () => {
+		vi.stubEnv('KIMI_CODE_EXPERIMENTAL_VSPI_FEEDBACK', 'true');
+		const home = await mkdtemp(join(tmpdir(), 'vspi-feedback-description-'));
+		const { app, backend } = renderFixture(home);
+		backend.feedbackContext = () => ({ home });
+		try {
+			await app.start(); app.composer.setText('/feedback'); app.handleInput('\r');
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join('\n')).toContain('Question'));
+			app.handleInput('example problem'); app.handleInput('\r'); app.handleInput('\r');
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join('\n')).toContain('最近一轮'));
+			app.handleInput('\u001B');
+		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); vi.unstubAllEnvs(); }
+	});
+
+	it("preserves an unrelated warning when the retry status is cleared", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-retry-warning-"));
+		const { app, events } = renderFixture(home);
+		try {
+			await app.start();
+			events().onRetryNotice?.("第 2/3 次尝试");
+			events().onNotice("独立的配置警告", "warning");
+			events().onRetryNotice?.(undefined);
+			expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("独立的配置警告");
+		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
 	it("opens the main model picker without reading secondary model configuration", async () => {
 		const home = await mkdtemp(join(tmpdir(), "vspi-main-model-isolation-"));
 		const { app, backend } = renderFixture(home);

@@ -47,6 +47,7 @@ const main = defineConfig({
 
 function worker(name: string, entry: string) {
   return defineConfig({
+    plugins: [rawTextPlugin()],
     entry: { [name]: resolve(appRoot, entry) },
     format: ['esm'],
     outDir: 'dist',
@@ -59,7 +60,8 @@ function worker(name: string, entry: string) {
     minify: false,
     silent: true,
     deps: {
-      alwaysBundle: [/^@moonshot-ai\//],
+      onlyBundle: false,
+      alwaysBundle: [/^@moonshot-ai\//, /^@vsp\//, /^@earendil-works\//],
     },
     outputOptions: {
       codeSplitting: false,
@@ -70,6 +72,10 @@ function worker(name: string, entry: string) {
 
 export default [
   main,
+  worker('feedback-server', './src/feedback-server.ts'),
+  worker('feedback-admin', './src/feedback-admin.ts'),
+  worker('distribution-admin', './src/distribution-admin.ts'),
+  worker('distribution-install', './src/distribution-install.ts'),
   worker('text-build-worker', '../../packages/minidb/src/worker/text-build-worker.ts'),
   worker('search-worker', '../../packages/kap-server/src/search/worker/entry.ts'),
 ];

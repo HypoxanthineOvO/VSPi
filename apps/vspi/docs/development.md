@@ -22,6 +22,20 @@ pnpm --filter vspi package:verify
 
 调试时使用独立 `VSPI_HOME`，不要反复重启承载日常任务的 daemon。
 
+### Feedback 与实验分发工具
+
+构建另行输出 `feedback-server.mjs`、`feedback-admin.mjs`、`distribution-admin.mjs`、`distribution-install.mjs`，不包含在普通客户端发布包中，供管理员操作包使用。2.4.0 默认提供 `/feedback`、`vspi feedback`；签名更新仍由 `KIMI_CODE_EXPERIMENTAL_VSPI_DISTRIBUTION` 显式启用，并要求镜像部署和可信公钥先就绪。普通更新仍走 GitHub；不要把本地验收等同于远端部署或自动通知就绪。
+
+用 `node apps/vspi/dist/feedback-server.mjs /absolute/path/server.json` 启动。配置文件应为私有文件，包含 `directory`、`port`（1024–65535，默认只监听 127.0.0.1）、`submitters`（每项包含 `id`、独立随机 `token`，至少 32 字符）。不要复用模型 API Key。远端配置、反向代理、DNS/TLS 和 Hermes 读取权限必须经管理员审阅后单独部署。
+
+仅支持 `POST /api/feedback`，需要独立 Bearer 凭证、`Content-Type: application/json` 和 `X-Feedback-Consent: reviewed-v1`。单包最多 1 MiB，默认最多两个活动上传、32 个连接、每凭证每分钟 10 次请求；存储默认 256 MiB 预算（含保守元数据开销），最多 1000 条反馈，达到上限拒绝新提交，不自动删除用户数据。容量管理和持久处理游标仍需纳入部署验收。
+
+先写私有 `staging/` 和 owner PID，验证和脱敏后写入 `bundle.json`、`manifest.json`、`summary.md`，同步磁盘并原子发布到 `ready/<id>/` 后才确认成功。重复提交还会核对已存包的完整性。重启仅回收可核实 owner 已死亡的未确认临时目录，不明归属保留并计入预算。正式 unit 使用 flock 保证单接收进程，配额和限流不是分布式的。
+
+Hermes 通过 list/show/ack 受限 SSH 命令读取 ready；只有独立回执目录可写，不能读取配置组的提交凭据。凭据 reload 不重启接收端。部署文件和管理员包生成器见[操作包说明](../../../ops/vspi-services/README.md)。
+
+本地验证：`pnpm -C apps/vspi exec vitest run test/feedback.test.ts test/distribution.test.ts test/tui-render.test.ts`、`VSPI_TEST_CADDY=/path/to/caddy node --test scripts/prepare-vspi-admin.test.mjs`。未提供实际 Caddy 二进制时，对应解析测试会显式跳过，不算部署配置验收通过。已覆盖的脱敏规则不代表任意未知秘密都能识别，仍须让使用者预览具体上传内容。
+
 ## 项目结构
 
 | 目录 | 职责 |

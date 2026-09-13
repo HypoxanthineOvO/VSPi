@@ -9,6 +9,8 @@ import type {
 
 import {
   APIConnectionError,
+  APIProtocolError,
+  APIIncompleteStreamError,
   APIEmptyResponseError,
   ChatProviderError,
   classifyBaseApiError,
@@ -23,10 +25,12 @@ import type { FinishReason, StreamedMessage } from '#/kosong/contract/provider';
 import type { TokenUsage } from '#/kosong/contract/usage';
 
 import { encodePiSignature } from './messages';
+import type { ResponseDiagnostics } from './responseDiagnostics';
 
 export interface PiResponseState {
   status?: number;
   headers?: Record<string, string>;
+  diagnostics?: ResponseDiagnostics;
 }
 
 function structuredErrorStatus(message: string): number | undefined {
@@ -48,6 +52,11 @@ function structuredErrorStatus(message: string): number | undefined {
 
 export function convertPiError(error: unknown, response: PiResponseState = {}): Error {
   if (isAbortError(error)) return createAbortError();
+  const diagnostics = response.diagnostics;
+  if (diagnostics?.mismatch !== undefined)
+    return new APIProtocolError(`Provider response format mismatch: expected ${diagnostics.expectedProtocol}, received ${diagnostics.mismatch}. Check the effective protocol and endpoint.`, diagnostics.snapshot());
+  if (diagnostics?.transportFailure !== undefined)
+    return new APIConnectionError(`Provider transport failed: ${diagnostics.transportFailure}.`, diagnostics.snapshot());
   if (error instanceof ChatProviderError) return error;
   const message = error instanceof Error ? error.message : String(error);
   if (/^Provider finish_reason: content_filter$/.test(message))
@@ -55,7 +64,7 @@ export function convertPiError(error: unknown, response: PiResponseState = {}): 
       finishReason: 'filtered',
       rawFinishReason: 'content_filter',
     });
-  if (/^(?:OpenAI Responses |Codex |Google )?[Ss]tream ended without (?:finish_reason|a (?:stop reason|finish reason|completion event))\.?$/.test(message)) return new APIConnectionError(message);
+  if (/^(?:OpenAI Responses |Codex |Google )?[Ss]tream ended without (?:finish_reason|a (?:stop reason|finish reason|completion event))\.?$/.test(message)) return new APIIncompleteStreamError(message, diagnostics?.snapshot());
   const record =
     typeof error === 'object' && error !== null ? (error as Record<string, unknown>) : undefined;
   const directStatus = record?.['status'] ?? record?.['statusCode'];
@@ -86,7 +95,10 @@ export function convertPiError(error: unknown, response: PiResponseState = {}): 
       if (typeof text === 'string' && isImageFormatMessage(text)) return new ImageFormatProviderError(text);
     }
   } catch {}
-  return classifyBaseApiError(message);
+  const classified = classifyBaseApiError(message);
+  return classified instanceof APIConnectionError && diagnostics !== undefined
+    ? new APIConnectionError(classified.message, diagnostics.snapshot())
+    : classified;
 }
 
 interface ToolState {
@@ -316,7 +328,7 @@ export class PiStreamedMessage implements StreamedMessage {
         }
       }
       if (this.signal.aborted) throw createAbortError();
-      throw new APIConnectionError('Provider stream ended without a completion event.');
+      throw new APIIncompleteStreamError('Provider stream ended without a completion event.', this.response.diagnostics?.snapshot());
     } catch (error) {
       if (this.signal.aborted) throw createAbortError();
       throw this.convertError(convertPiError(error, this.response));

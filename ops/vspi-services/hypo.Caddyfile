@@ -1,0 +1,39 @@
+__PUBLIC_HOST__ {
+    log {
+        output discard
+    }
+    request_body {
+        max_size 1048576
+    }
+    @download {
+        method GET HEAD
+        path /vspi/latest.json /vspi/releases/*
+    }
+    @feedback {
+        method POST
+        path /api/feedback
+    }
+    handle @download {
+        reverse_proxy https://__EDEN_ADDRESS__:443 {
+            header_up Host __INTERNAL_HOST__
+            transport http {
+                tls_server_name __INTERNAL_HOST__
+                dial_timeout 3s
+                response_header_timeout 15s
+            }
+        }
+    }
+    handle @feedback {
+        reverse_proxy https://__EDEN_ADDRESS__:443 {
+            header_up Host __INTERNAL_HOST__
+            transport http {
+                tls_server_name __INTERNAL_HOST__
+                dial_timeout 3s
+                response_header_timeout 65s
+            }
+        }
+    }
+    handle {
+        respond 404
+    }
+}

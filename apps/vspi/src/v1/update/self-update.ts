@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { parseReleaseChecksums, releaseVersionFromLatestRedirect } from "./release-contract.mjs";
+import { experimentalEnabled } from '../../experimental.js';
+import { downloadDistributionRelease, selectDistributionRelease, withDistributionTrust, type DistributionSource, type DistributionTrust } from './distribution.js';
 import { npmCommand } from './npm-command.mjs';
 import { acquireRuntimeLease, inspectRuntime, stopRuntime, resolveRuntimePaths } from '@vsp/vsp-runtime';
 
@@ -26,6 +28,7 @@ export interface SelfUpdateResult {
 }
 
 export interface SelfUpdateOptions {
+  distribution?: { trust?: DistributionTrust; source?: DistributionSource; home?: string };
   fetch?: typeof globalThis.fetch;
   installPackage?: (tarballPath: string) => Promise<void>;
   latestReleaseUrl?: string;
@@ -231,6 +234,7 @@ export async function installVspiPackage(
 
 export async function updateVspi(currentVersion: string, options: SelfUpdateOptions = {}): Promise<SelfUpdateResult> {
   parseVersion(currentVersion);
+  if (options.distribution || experimentalEnabled('distribution')) return updateFromDistribution(currentVersion, options);
   const fetchImpl = options.fetch ?? globalThis.fetch;
   if (!fetchImpl) throw new Error("当前 Node.js 不支持 fetch，无法检查更新");
 
@@ -271,6 +275,24 @@ export async function updateVspi(currentVersion: string, options: SelfUpdateOpti
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+async function updateFromDistribution(currentVersion: string, options: SelfUpdateOptions): Promise<SelfUpdateResult> {
+  const update = async (trust: DistributionTrust, minimumVersion: string, remember: (version: string) => Promise<void>): Promise<SelfUpdateResult> => {
+    const release = await selectDistributionRelease(trust, { source: options.distribution?.source, minimumVersion, fetch: options.fetch });
+    await remember(release.manifest.version);
+    if (compareVersions(release.manifest.version, currentVersion) <= 0) return { status: 'up-to-date', currentVersion, latestVersion: release.manifest.version };
+    const directory = await mkdtemp(join(options.temporaryRoot ?? tmpdir(), 'vspi-distribution-'));
+    try {
+      const path = join(directory, `vspi-${release.manifest.version}.tgz`);
+      await writeFile(path, await downloadDistributionRelease(release, { source: options.distribution?.source, fetch: options.fetch }), { mode: 0o600 });
+      if (options.installPackage) { await options.installPackage(path); return { status: 'updated', currentVersion, latestVersion: release.manifest.version }; }
+      const runtimeRestarted = await installVspiUpdate(path, release.manifest.version);
+      return { status: 'updated', currentVersion, latestVersion: release.manifest.version, runtimeRestarted };
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  };
+  if (options.distribution?.trust) return update(options.distribution.trust, currentVersion, async () => {});
+  return withDistributionTrust(currentVersion, update, options.distribution?.home);
 }
 
 async function readLimitedResponse(response: Response, limit: number): Promise<Buffer> {

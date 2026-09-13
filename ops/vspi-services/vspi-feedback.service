@@ -1,0 +1,31 @@
+[Unit]
+Description=VSPi private feedback receiver
+After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=vspi-feedback
+Group=vspi-feedback
+SupplementaryGroups=vspi-feedback-read
+UMask=0027
+ExecStart=/usr/bin/flock --nonblock --no-fork /var/lib/vsp-feedback/receiver.lock /opt/vsp-feedback/node /opt/vsp-feedback/feedback-server.mjs /etc/vsp-feedback/server.json
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=75s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vsp-feedback
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=256M
+TasksMax=64
+LimitNOFILE=256
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -45,6 +45,7 @@ import type {
 import { OutputSpeedTracker } from "./output-speed.js";
 import { editSubagentModels, subagentModelPreferences } from "../domain/subagent-models.js";
 import { isOfficialRecommendedModel } from "../domain/recommended-models.js";
+import { errorDiagnostic, FeedbackDiagnosticLog } from '../feedback/diagnostics.js';
 import type { SubagentModelEdit, SubagentModelPreferences } from "./types.js";
 import type {
 	AgentConversationActivity,
@@ -160,6 +161,9 @@ function delay(ms: number): Promise<void> {
 }
 
 export class KlientChatBackend implements ChatBackend {
+	feedbackContext(): { home: string; sessionId?: string } {
+		return { home: this.connection.env.homeDir, sessionId: this.meta?.id };
+	}
 	readonly kind = "runtime" as const;
 	supportsVision = false;
 	private events: ChatBackendEvents | undefined;
@@ -172,6 +176,8 @@ export class KlientChatBackend implements ChatBackend {
 	private childConversationSubscription: BackendSubscription | undefined;
 	private turn: TurnState | undefined;
 	private lastRetryKey: string | undefined;
+	private retryNoticeVisible = false;
+	private feedbackDiagnostics: FeedbackDiagnosticLog | undefined;
 	private pendingPrompts = new Map<string, PendingPrompt>();
 	private queuedPrompts = new Map<string, QueuedPrompt>();
 	private promptPhases = new Map<string, PromptLifecyclePhase>();
@@ -291,6 +297,7 @@ export class KlientChatBackend implements ChatBackend {
 
 	private async prepareDraft(reason: "startup" | "new"): Promise<void> {
 		this.clearBindings();
+		await this.feedbackDiagnostics?.drain();
 		this.session = undefined;
 		this.agent = undefined;
 		this.meta = undefined;
@@ -1073,6 +1080,7 @@ export class KlientChatBackend implements ChatBackend {
 		this.submissionEpoch += 1;
 		await this.sessionCreation?.catch(() => {});
 		this.clearBindings();
+		await this.feedbackDiagnostics?.drain();
 		for (const subscription of this.globalSubscriptions) subscription.dispose();
 		this.globalSubscriptions = [];
 	}
@@ -1358,8 +1366,11 @@ export class KlientChatBackend implements ChatBackend {
 						if (this.streamMessages.has(id)) this.events?.onMessageUpdate(id, { text: '[本次响应中断，已放弃未完成内容]', streaming: false });
 					}
 					this.advanceTurnSegment();
-					this.events?.onNotice(`模型调用暂时失败${retry.statusCode ? `（HTTP ${retry.statusCode}）` : ''}，${Math.ceil(retry.delayMs / 1000)} 秒后进行第 ${retry.nextAttempt}/${retry.maxAttempts} 次尝试；可随时中断`, 'warning');
+					this.retryNoticeVisible = true;
+					this.events?.onRetryNotice?.(`模型调用暂时失败${retry.statusCode ? `（HTTP ${retry.statusCode}）` : ''}，正在等待或重新连接（第 ${retry.nextAttempt}/${retry.maxAttempts} 次尝试）；可随时中断`);
 				}
+			} else {
+				this.clearRetryNotice();
 			}
 		} else {
 			this.finishTurnSegment();
@@ -1420,6 +1431,7 @@ export class KlientChatBackend implements ChatBackend {
 				this.setBusy(true);
 			}),
 			events.on("assistant.delta", (event) => {
+				this.clearRetryNotice();
 				this.ensureTurn(event.turnId, typeof record(event)['viewSegment'] === 'number' ? record(event)['viewSegment'] as number : undefined);
 				this.setPromptPhaseForTurn(event.turnId, "responding");
 				this.publishSpeed(this.outputSpeed.recordDelta(event.delta));
@@ -1427,6 +1439,7 @@ export class KlientChatBackend implements ChatBackend {
 				this.appendStream(id, event.delta, "text");
 			}),
 			events.on("thinking.delta", (event) => {
+				this.clearRetryNotice();
 				this.ensureTurn(event.turnId, typeof record(event)['viewSegment'] === 'number' ? record(event)['viewSegment'] as number : undefined);
 				this.setPromptPhaseForTurn(event.turnId, "responding");
 				const id = this.turn?.thinkingId ?? `thinking:${event.turnId}`;
@@ -1560,6 +1573,10 @@ export class KlientChatBackend implements ChatBackend {
 				this.events?.onCompactionActivity?.({ type: "cancelled" });
 			}),
 			events.on("error", (event) => {
+				if (this.connection.env?.homeDir) {
+					this.feedbackDiagnostics ??= new FeedbackDiagnosticLog(this.connection.env.homeDir);
+					this.feedbackDiagnostics.append(event, this.currentModel);
+				}
 				if (event["code"] === "compaction.failed")
 					this.events?.onCompactionActivity?.({ type: "failed" });
 				this.events?.onMessage({
@@ -1567,7 +1584,7 @@ export class KlientChatBackend implements ChatBackend {
 					role: "assistant",
 					kind: "error",
 					summary: event.message,
-					detail: event.message,
+					detail: `${event.message}\n${JSON.stringify(errorDiagnostic(event), null, 2)}`,
 					model: this.currentModel,
 					expanded: false,
 				});
@@ -2132,9 +2149,16 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	private setBusy(busy: boolean): void {
+		if (!busy) this.clearRetryNotice();
 		if (this.busy === busy) return;
 		this.busy = busy;
 		this.events?.onBusy(busy);
+	}
+
+	private clearRetryNotice(): void {
+		if (!this.retryNoticeVisible) return;
+		this.retryNoticeVisible = false;
+		this.events?.onRetryNotice?.(undefined);
 	}
 
 	private publishQueueState(): void {
@@ -2245,6 +2269,7 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	private clearBindings(): void {
+		this.clearRetryNotice();
 		this.lastRetryKey = undefined;
 		this.hydrating = false;
 		this.historyRevision = 0;

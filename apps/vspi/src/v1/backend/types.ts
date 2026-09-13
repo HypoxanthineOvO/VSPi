@@ -279,6 +279,7 @@ export type CompactionActivity =
 	| { type: "cancelled" | "failed" };
 
 export interface ChatBackendEvents {
+  onRetryNotice?: (message: string | undefined) => void;
   onHistory?: (messages: TranscriptMessage[], prepend: boolean) => void;
   onModelChanged?: (effort: EffortLevel) => void;
 	onMessage: (message: TranscriptMessage) => void;
@@ -391,6 +392,7 @@ export interface ChatBackend {
 	readonly modelId: string;
 	readonly modelProvider?: string | undefined;
 	readonly supportsVision: boolean;
+	feedbackContext?(): { home: string; sessionId?: string };
 	isSessionReady?(): boolean;
 	start(events: ChatBackendEvents): Promise<void>;
 	// Existing extension backends may not report a result; VSPi backends return SendResult.

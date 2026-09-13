@@ -8,6 +8,8 @@ export const PROVIDER_FILTERED_ERROR_CODE = 'provider.filtered';
 export const PROVIDER_RATE_LIMIT_ERROR_CODE = 'provider.rate_limit';
 export const PROVIDER_AUTH_ERROR_CODE = 'provider.auth_error';
 export const PROVIDER_CONNECTION_ERROR_CODE = 'provider.connection_error';
+export const PROVIDER_PROTOCOL_ERROR_CODE = 'provider.protocol_error';
+export const PROVIDER_INCOMPLETE_STREAM_ERROR_CODE = 'provider.incomplete_stream';
 export const PROVIDER_OVERLOADED_ERROR_CODE = 'provider.overloaded';
 export const CONTEXT_OVERFLOW_ERROR_CODE = 'context.overflow';
 
@@ -17,6 +19,8 @@ export type ProviderErrorCode =
   | typeof PROVIDER_RATE_LIMIT_ERROR_CODE
   | typeof PROVIDER_AUTH_ERROR_CODE
   | typeof PROVIDER_CONNECTION_ERROR_CODE
+  | typeof PROVIDER_PROTOCOL_ERROR_CODE
+  | typeof PROVIDER_INCOMPLETE_STREAM_ERROR_CODE
   | typeof PROVIDER_OVERLOADED_ERROR_CODE
   | typeof CONTEXT_OVERFLOW_ERROR_CODE;
 
@@ -45,9 +49,23 @@ export class ChatProviderError extends Error2 {
 }
 
 export class APIConnectionError extends ChatProviderError {
-  constructor(message: string) {
-    super(message, PROVIDER_CONNECTION_ERROR_CODE);
+  constructor(message: string, details?: Readonly<Record<string, unknown>>) {
+    super(message, PROVIDER_CONNECTION_ERROR_CODE, { details });
     this.name = 'APIConnectionError';
+  }
+}
+
+export class APIProtocolError extends ChatProviderError {
+  constructor(message: string, details?: Readonly<Record<string, unknown>>) {
+    super(message, PROVIDER_PROTOCOL_ERROR_CODE, { details });
+    this.name = 'APIProtocolError';
+  }
+}
+
+export class APIIncompleteStreamError extends ChatProviderError {
+  constructor(message: string, details?: Readonly<Record<string, unknown>>) {
+    super(message, PROVIDER_INCOMPLETE_STREAM_ERROR_CODE, { details });
+    this.name = 'APIIncompleteStreamError';
   }
 }
 
@@ -236,6 +254,8 @@ export function isImageFormatError(error: unknown): boolean {
 }
 
 export function isRetryableGenerateError(error: unknown): boolean {
+  if (error instanceof APIProtocolError) return false;
+  if (error instanceof APIIncompleteStreamError) return true;
   if (error instanceof APIConnectionError || error instanceof APITimeoutError) {
     return true;
   }
@@ -255,6 +275,7 @@ export function isRetryableGenerateError(error: unknown): boolean {
 }
 
 export function isTransientGenerateError(error: unknown): boolean {
+  if (error instanceof APIIncompleteStreamError) return true;
   if (error instanceof APIConnectionError || error instanceof APITimeoutError) return true;
   if (error instanceof APIProviderQuotaExhaustedError) return false;
   return error instanceof APIStatusError && [408, 429, 500, 502, 503, 504, 529].includes(error.statusCode);
@@ -484,6 +505,8 @@ export type ApiErrorKind =
   | '5xx_server'
   | '4xx_client'
   | 'network'
+  | 'protocol'
+  | 'incomplete_stream'
   | 'timeout'
   | 'empty_response'
   | 'other';
@@ -495,6 +518,8 @@ export interface ApiErrorClassification {
 
 export function classifyApiError(error: unknown): ApiErrorClassification {
   const statusCode = getStatusCode(error);
+  if (error instanceof APIProtocolError) return { kind: 'protocol', statusCode };
+  if (error instanceof APIIncompleteStreamError) return { kind: 'incomplete_stream', statusCode };
   if (error instanceof APIContextOverflowError) return { kind: 'context_overflow', statusCode };
   if (error instanceof APIProviderOverloadedError) return { kind: 'overloaded', statusCode };
   if (error instanceof APIProviderQuotaExhaustedError) {

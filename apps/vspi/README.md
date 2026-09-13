@@ -2,14 +2,14 @@
 
 VSPi is a daemon-backed terminal coding assistant. Sessions and background work live in the runtime; the terminal interface and non-interactive CLI connect over local IPC.
 
-Requires **Node.js >=22.19.0**. This **2.3.0 Linux-first release** is validated on Linux. Windows remains on 2.2.4 until this release completes native verification; macOS has not been verified in this round.
+Requires **Node.js >=22.19.0**. This **2.4.0 Linux-first release** is validated on Linux. Windows remains on 2.2.4 until this release completes native verification; macOS has not been verified in this round.
 
 ## Install
 
 Install the fixed Linux release:
 
 ```sh
-npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.3.0/vspi-2.3.0.tgz"
+npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.4.0/vspi-2.4.0.tgz"
 vspi --version
 vspi init
 vspi
@@ -19,7 +19,11 @@ Run `vspi init` in an interactive terminal to configure a Provider and default m
 
 ## Update
 
-2.3.0 uses the normal shared release channel, but this round is verified only on Linux. Windows users should stay on the fixed 2.2.4 release and avoid updating until native verification. To upgrade from 2.2.x, finish tasks, close clients, run `vspi daemon stop`, and install the fixed 2.3.0 URL above. Existing users must not run `init` again. For later updates:
+2.4.0 enables `/feedback <description>` and `vspi feedback --help` by default: export a bounded, redacted package, review it, and explicitly confirm before upload. Export and preview work without credentials. Online submission requires a per-user `feedback.json` supplied privately by the administrator, stored in `VSPI_HOME` (normally `~/.vspi`) with mode 0600 on POSIX. These credentials are independent of model API keys; they are not included in the package. Without credentials, keep the exported package and share it manually only after review. The receiver and administrator tools are separate build artifacts, not automatically started by the client.
+
+Signed dual-entry distribution remains experimental and is not the default release channel. Set `KIMI_CODE_EXPERIMENTAL_VSPI_DISTRIBUTION=true` only after the administrator completes mirror provisioning and supplies an independently verified `distribution.json` public-key file in `VSPI_HOME`. Updates then prefer the trusted internal entry and fall back to the public relay, verify signed manifests and package hashes, and retain the existing installation rollback. Normal installations and updates continue to use GitHub.
+
+2.4.0 uses the normal shared release channel, but this round is verified only on Linux. Windows users should stay on the fixed 2.2.4 release and avoid updating until native verification. To upgrade from 2.2.x, finish tasks, close clients, run `vspi daemon stop`, and install the fixed 2.4.0 URL above. Existing users must not run `init` again. From 2.3.0 and for later updates:
 
 ```sh
 vspi update

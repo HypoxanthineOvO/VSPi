@@ -5,6 +5,9 @@ import { loadSettings } from "./v1/config/settings.js";
 import { runAuthSetup, type AuthSetupOptions } from "./v1/app/auth-setup.js";
 import { updateVspi, type SelfUpdateResult } from "./v1/update/self-update.js";
 import { VSPI_VERSION } from "./v1/version.js";
+import { dispatchFeedback } from './v1/feedback/cli.js';
+import { requireExperimental } from './experimental.js';
+import type { DistributionSource } from './v1/update/distribution.js';
 
 export interface CliCommandDependencies {
 	readonly update?: (currentVersion: string) => Promise<SelfUpdateResult>;
@@ -27,6 +30,7 @@ Commands:
   vspi resume             恢复会话并打开会话面板
   vspi exec ...           非交互执行（vspi exec --help 查看用法）
   vspi update             更新到最新发布版本
+  vspi feedback --help    导出、预览并主动提交错误反馈
   vspi init [provider]    初始化 Provider 和默认模型
   vspi config [provider]  配置 Provider 或读写 Core 配置（--help 查看用法）
   vspi inspect [paths|models|session <id>]  只读检查运行中的 daemon
@@ -86,8 +90,13 @@ export async function dispatchCliCommand(
 		return true;
 	}
 	if (args[0] === "update") {
-		if (args.length > 1) throw new Error("Usage: vspi update");
-		const result = await (dependencies.update ?? updateVspi)(VSPI_VERSION);
+		let source: DistributionSource | undefined;
+		if (args.length > 1) {
+			if (args.length !== 3 || args[1] !== '--source' || !['auto', 'internal', 'public'].includes(args[2] ?? '')) throw new Error('Usage: vspi update [--source auto|internal|public]');
+			requireExperimental('distribution');
+			source = args[2] as DistributionSource;
+		}
+		const result = await (dependencies.update ?? (version => updateVspi(version, source ? { distribution: { source } } : {})))(VSPI_VERSION);
 		write(
 			result.status === "updated"
 				? `VSPi 已安装 ${result.latestVersion}。${result.runtimeRestarted ? 'Daemon 已完成安全切换。' : '没有启动或替换运行中的 Daemon。'}请重启客户端。\n`
@@ -96,6 +105,10 @@ export async function dispatchCliCommand(
 		return true;
 	}
 	const command = args[0];
+	if (command === 'feedback') {
+		await dispatchFeedback(args.slice(1), { write, connect: dependencies.connectReadOnly });
+		return true;
+	}
 	if (command === "inspect") {
 		await dispatchInspect(args.slice(1), dependencies, write);
 		return true;

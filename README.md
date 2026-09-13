@@ -18,10 +18,10 @@ VSPi 是基于 Kimi Code 引擎演进的终端编码助手。常驻进程（daem
 
 ### 新安装
 
-运行安装包需要 **Node.js ≥ 22.19.0**。**2.3.0 先面向 Linux 发布**；Windows 暂留 2.2.4，待本轮实机验收后再推进，macOS 本轮未做实机验证。
+运行安装包需要 **Node.js ≥ 22.19.0**。**2.4.0 先面向 Linux 发布**；Windows 暂留 2.2.4，待本轮实机验收后再推进，macOS 本轮未做实机验证。
 
 ```sh
-npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.3.0/vspi-2.3.0.tgz"
+npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.4.0/vspi-2.4.0.tgz"
 vspi --version
 ```
 
@@ -40,12 +40,12 @@ Linux 从 2.2.x 升级：先结束任务、退出所有客户端，再停旧并�
 
 ```sh
 vspi daemon stop
-npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.3.0/vspi-2.3.0.tgz"
+npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.4.0/vspi-2.4.0.tgz"
 vspi --version
 vspi continue
 ```
 
-2.3.0 按普通正式版本发布到共享更新通道；本轮实测范围为 Linux，Windows 用户建议暂留[固定 2.2.4 发行包](https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.2.4/vspi-2.2.4.tgz)，等待实机验收，不要先运行 `vspi update`。新版更新器会校验 SHA-256，保存旧包和配置备份，确认运行时空闲后安装、验证并切换 Daemon。
+2.4.0 按普通正式版本发布到共享更新通道；2.3.0 用户结束任务、关闭客户端后可运行 `vspi update`。本轮实测范围为 Linux，Windows 用户建议暂留[固定 2.2.4 发行包](https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.2.4/vspi-2.2.4.tgz)，等待实机验收，不要先运行 `vspi update`。新版更新器会校验 SHA-256，保存旧包和配置备份，确认运行时空闲后安装、验证并切换 Daemon。
 
 从 2.2.x 首次升级仍需先确认任务结束并显式运行 `vspi daemon stop`，再安装新版；不要删除配置目录。旧 Windows 实例不支持新关闭协议时，需要明确确认后使用旧实例终止流程。安全升级、回退和锁恢复的边界见[使用指南](apps/vspi/docs/usage.md#升级诊断与运行边界)。
 
@@ -64,6 +64,14 @@ vspi update                           # 更新到最新发布版
 **`/quit` 只断开前端，`/cancel-and-exit` 才取消当前运行并退出。**
 
 ## 配置与文档
+
+### 问题反馈
+
+2.4.0 默认提供 `/feedback 问题描述`：选择是否包含近期对话与中间输出，检查脱敏预览后再主动确认上传。也可以用 `vspi feedback export --description "连接失败" --turns 0` 仅导出诊断；导出和预览不需要上传凭据。
+
+在线提交前请向管理员领取个人专用 `feedback.json`，放到 `VSPI_HOME/feedback.json`（默认 `~/.vspi/feedback.json`，POSIX 权限 0600）。不要复用模型 API Key，不要共享凭据；没有凭据可手工交付已检查的导出包。未知秘密仍可能漏检，必须检查具体内容。
+
+本次安装与更新仍走 GitHub；签名镜像为默认关闭的实验能力，通知话题和自动汇总另行上线，不保证反馈提交后即时回复。
 
 配置默认位于 `~/.vspi/config.toml`，用 `vspi config path` 查询实际路径。设置 `VSPI_HOME` 可隔离配置、会话和 daemon。
 

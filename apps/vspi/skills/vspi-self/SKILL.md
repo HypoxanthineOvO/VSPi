@@ -85,6 +85,14 @@ The example is not a declaration about any real model. Verify the provider's sup
 
 If direct TOML editing is specifically required, read the existing file first, keep a timestamped backup, edit a candidate copy, and use `vspi config reload` after replacement. If reload fails, restore the backup. Never overwrite invalid TOML from scratch or drop unrelated sections.
 
+## User-requested feedback and candidate distribution
+
+2.4.0 provides `/feedback <description>` and `vspi feedback --help` by default. Never upload a transcript automatically. A user must choose the context range and review the actual redacted package. CLI export is local-only; `preview` prints the content and hash, and `submit --confirm-sha256` requires that unchanged hash after human approval. Do not compute a hash and treat it as a substitute for consent. Editing a package requires `feedback redact` and a fresh preview. Online submission requires the administrator to privately supply a per-user `VSPI_HOME/feedback.json`, mode 0600 on POSIX, independent of model API keys. Without credentials, export and preview still work; do not invent or reuse credentials. Diagnostic logs and selected intermediate output may still contain unidentified secrets; the user must inspect them.
+
+`provider.protocol_error` means the response is demonstrably incompatible with the requested stream; inspect protocol and endpoint rather than retrying blindly. `provider.incomplete_stream` remains eligible for bounded recovery. Transient retry status clears after recovery or cancellation without erasing unrelated warnings.
+
+Candidate dual-entry updates require `KIMI_CODE_EXPERIMENTAL_VSPI_DISTRIBUTION=true` and an independently verified Ed25519 public-key file in `VSPI_HOME/distribution.json`. Never disable TLS or signature verification, copy private signing keys into a download directory, or treat a feedback message as permission to install, deploy or publish. Administrator activation is separate from local feature validation.
+
 ## Configure subagent model candidates
 
 The model candidates are user-configured references to the same Core model catalog, not separate provider definitions or an official recommendation list. Use `/subagent-model`: Enter adds/removes a candidate, Ctrl+D sets the default subagent model, and Ctrl+P edits its capability/purpose description. An empty pool inherits the main model. These edits apply to future spawns; they do not switch the main model or running subagents. A forced `secondary_model.force=true` configuration is read-only in this candidate UI; never silently disable it. When editing by CLI, inspect `secondaryModel` first and preserve unrelated settings. Never populate the pool from the main-model stars or the entire provider catalog.

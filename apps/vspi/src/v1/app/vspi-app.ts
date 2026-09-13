@@ -1,4 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { join } from 'node:path';
+import { resolveRuntimePaths } from '@vsp/vsp-runtime';
+import { requireExperimental } from '../../experimental.js';
+import { collectFeedback } from '../feedback/collect.js';
+import { redactFeedbackText, saveFeedbackBundle } from '../feedback/bundle.js';
+import { feedbackDigest, readFeedbackUploadConfig, uploadFeedback } from '../feedback/client.js';
+import { FeedbackPreview } from '../feedback/preview.js';
 import {
 	type Component,
 	type Focusable,
@@ -376,10 +383,13 @@ export class VspiApp implements Component, Focusable {
 	private readonly renameField = new Input();
 	private preview: Component | undefined;
 	private previewLabel = "";
+	private feedbackPreview: FeedbackPreview | undefined;
+	private feedbackUpload: AbortController | undefined;
 	private notice:
 		| { text: string; tone: NoticeTone; progress: boolean }
 		| undefined;
 	private noticeTimer: NodeJS.Timeout | undefined;
+	private retryNotice: string | undefined;
 	private _focused = false;
 	private renderReady = false;
 	private shutdownRequested = false;
@@ -609,6 +619,10 @@ export class VspiApp implements Component, Focusable {
 					this.syncActivityPresentation();
 				},
 				onNotice: (text, tone) => this.showNotice(text, tone),
+				onRetryNotice: (message) => {
+					this.retryNotice = message;
+					this.requestRender();
+				},
 				onModelChanged: (effort) => {
 					this.effort = effort;
 					this.modelLabel = this.backend.modelLabel;
@@ -918,6 +932,10 @@ export class VspiApp implements Component, Focusable {
 	}
 
 	async dispose(mode: "detach" | "cancel" = "detach"): Promise<void> {
+		this.feedbackUpload?.abort();
+		this.feedbackUpload = undefined;
+		if (this.preview === this.feedbackPreview) this.preview = undefined;
+		this.feedbackPreview = undefined;
 		if (this.disposing) return;
 		this.disposing = true;
 		this.renderReady = false;
@@ -1069,6 +1087,11 @@ export class VspiApp implements Component, Focusable {
 			return;
 		}
 		if (this.preview) {
+			if (this.feedbackPreview && this.preview === this.feedbackPreview) {
+				this.feedbackPreview.handleInput(data);
+				this.requestRender();
+				return;
+			}
 			if (matchesInteraction("composer", "preview", "closePreview", data)) {
 				this.preview = undefined;
 				this.previewLabel = "";
@@ -2173,7 +2196,7 @@ export class VspiApp implements Component, Focusable {
 				noticeContext = `${statusModel} · Effort ${effortLabel(this.effort)} · ${this.options.cwd} · Policy ${runtime.policy}`;
 			}
 		}
-		if (this.notice && lines.length > 0) {
+		if ((this.notice || this.retryNotice) && lines.length > 0) {
 			lines[0] = this.renderNotice(width);
 			if (noticeContext && lines.length > 1)
 				lines[1] = this.theme.muted(padLine(noticeContext, width));
@@ -2182,45 +2205,46 @@ export class VspiApp implements Component, Focusable {
 	}
 
 	private renderNotice(width: number): string {
-		if (!this.notice) return "";
+		const notice = this.notice ?? (this.retryNotice ? { text: this.retryNotice, tone: 'info' as const, progress: true } : undefined);
+		if (!notice) return "";
 		const style =
-			this.notice.tone === "error"
+			notice.tone === "error"
 				? this.theme.error
-				: this.notice.tone === "warning"
+				: notice.tone === "warning"
 					? this.theme.warning
-					: this.notice.tone === "success"
+					: notice.tone === "success"
 						? this.theme.success
 						: this.theme.blue;
 		const icon = this.theme.capabilities.unicode
-			? this.notice.progress
+			? notice.progress
 				? "◌"
-				: this.notice.tone === "error"
+				: notice.tone === "error"
 					? "×"
-					: this.notice.tone === "warning"
+					: notice.tone === "warning"
 						? "!"
-						: this.notice.tone === "success"
+						: notice.tone === "success"
 							? "✓"
 							: "i"
-			: this.notice.progress
+			: notice.progress
 				? "..."
-				: this.notice.tone === "error"
+				: notice.tone === "error"
 					? "x"
-					: this.notice.tone === "warning"
+					: notice.tone === "warning"
 						? "!"
-						: this.notice.tone === "success"
+						: notice.tone === "success"
 							? "+"
 							: "i";
-		const label = this.notice.progress
+		const label = notice.progress
 			? "进行中"
-			: this.notice.tone === "error"
+			: notice.tone === "error"
 				? "错误"
-				: this.notice.tone === "warning"
+				: notice.tone === "warning"
 					? "警告"
-					: this.notice.tone === "success"
+					: notice.tone === "success"
 						? "完成"
 						: "通知";
 		// 通知栏是单行表面：夹带 \n 的文本会占据多个物理行并错位后续 diff，渲染前压平。
-		const text = this.notice.text.replace(/\s+/g, " ").trim();
+		const text = notice.text.replace(/\s+/g, " ").trim();
 		return padLine(
 			`${style(`${icon} ${label}`)} ${this.theme.muted("·")} ${text}`,
 			width,
@@ -2629,6 +2653,14 @@ export class VspiApp implements Component, Focusable {
 		raw: string,
 	): Promise<void> {
 		if (action.handler !== "plan") this.planPanelExplicit = false;
+		if (action.handler === 'feedback') {
+			try { await this.openFeedback(raw.replace(/^\/feedback\s*/u, '')); }
+			catch (error) {
+				if (error instanceof UserQuestionCancelledError) return;
+				if (!this.disposing && !(error instanceof Error && error.name === 'AbortError')) this.showNotice(error instanceof Error ? error.message : 'Feedback 未生成', 'warning');
+			}
+			return;
+		}
 		if (action.handler === "quit") {
 			this.options.onExit("detach");
 			return;
@@ -4272,6 +4304,56 @@ export class VspiApp implements Component, Focusable {
 		}
 	}
 
+	private async openFeedback(description: string): Promise<void> {
+		requireExperimental('feedback');
+		if (!description.trim()) {
+			const [answer] = await this.requestQuestions([{ id: 'feedback-description', title: 'Feedback 问题描述', prompt: '描述实际现象、预期结果和复现方式。不要填写凭据；随后选择上下文并预览。', kind: 'freeText' }]);
+			description = typeof answer?.answer === 'string' ? answer.answer.trim() : '';
+			if (!description) { this.showNotice('未填写描述，没有生成或上传反馈', 'info'); return; }
+		}
+		const [choice] = await this.requestQuestions([{ id: 'feedback-scope', title: 'Feedback 上下文范围', prompt: '只采集你选定的内容，预览后才上传；也可以仅导出本地。', kind: 'singleChoice', options: [
+			{ id: '1', label: '最近一轮', description: '包含该轮对话、中间输出和必要诊断' },
+			{ id: '3', label: '最近三轮', description: '扩大上下文；仍受条数和大小上限约束' },
+			{ id: '0', label: '仅诊断', description: '不包含对话，保留有限错误日志和版本信息' },
+			{ id: 'cancel', label: '取消', description: '不采集、不上传' },
+		] }]);
+		if (!choice || typeof choice.answer !== 'string' || !['0', '1', '3'].includes(choice.answer)) return;
+		const context = this.backend.feedbackContext?.();
+		const home = context?.home ?? resolveRuntimePaths().homeDir;
+		const bundle = await collectFeedback({ description, home, sessionId: context?.sessionId, turns: Number(choice.answer) as 0 | 1 | 3, messages: [...this.messages], terminal: { columns: this.tui.terminal.columns, rows: this.tui.terminal.rows, mode: this.options.settings.tuiMode, theme: this.options.settings.theme } });
+		if (this.disposing) return;
+		const path = await saveFeedbackBundle(join(home, 'feedback', 'outbox'), bundle);
+		if (this.disposing) return;
+		if (context?.sessionId !== this.backend.feedbackContext?.().sessionId) {
+			this.showNotice(`会话已切换，反馈包仅保存在本地：${path}`, 'info');
+			return;
+		}
+		const bytes = Buffer.from(JSON.stringify(bundle));
+		const digest = feedbackDigest(bytes);
+		const panel = new FeedbackPreview(bundle, this.theme, () => Math.max(5, Math.min(18, this.tui.terminal.rows - 10)), action => {
+			if (action === 'close') {
+				this.feedbackUpload?.abort();
+				this.feedbackUpload = undefined;
+				this.feedbackPreview = undefined; this.preview = undefined; this.previewLabel = '';
+				this.showNotice(`本地反馈包已保留：${path}`, 'info');
+				return;
+			}
+			if (this.feedbackUpload) return;
+			const controller = new AbortController(); this.feedbackUpload = controller;
+			panel.setUploading(true);
+			void (async () => {
+				try {
+					const id = await uploadFeedback(bytes, digest, await readFeedbackUploadConfig(home), { signal: controller.signal });
+					if (this.feedbackPreview === panel) { this.feedbackPreview = undefined; this.preview = undefined; this.previewLabel = ''; this.showNotice(`Feedback ${id} 已确认保存`, 'success'); }
+				} catch (error) {
+					if (this.feedbackPreview === panel) panel.setUploading(false, `上传未完成：${redactFeedbackText(error instanceof Error ? error.message : '检查凭据、网络或服务状态')}；本地包保留。`);
+				} finally { if (this.feedbackUpload === controller) this.feedbackUpload = undefined; this.requestRender(); }
+			})();
+		});
+		this.feedbackPreview = panel; this.preview = panel; this.previewLabel = `私有本地包：${path}`;
+		this.requestRender();
+	}
+
 	private async confirmSessionCollision(
 		session: SessionOption,
 	): Promise<"takeover" | "fork" | "cancel"> {
@@ -5384,6 +5466,9 @@ export class VspiApp implements Component, Focusable {
 		this.pendingRouteSubmission = undefined;
 		this.planPanelExplicit = false;
 		this.composer.restoreDraft("", []);
+		this.feedbackUpload?.abort();
+		this.feedbackUpload = undefined;
+		this.feedbackPreview = undefined;
 		this.preview = undefined;
 		this.previewLabel = "";
 		this.renameAttachmentId = undefined;

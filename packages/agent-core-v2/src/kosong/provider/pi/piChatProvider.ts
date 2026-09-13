@@ -15,6 +15,7 @@ import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import { thinkingEffortsForProvider } from '#/kosong/contract/capability';
 import {
   APIStatusError,
+  APIProtocolError,
   ChatProviderError,
   createAbortError,
   VideoUploadUnsupportedError,
@@ -35,6 +36,7 @@ import { kimiOpenAITrait, kimiAnthropicTrait } from '#/kosong/provider/providers
 
 import { toLegacyHistory, toPiContext } from './messages';
 import { convertPiError, PiStreamedMessage, type PiResponseState } from './streamedMessage';
+import { ResponseDiagnostics } from './responseDiagnostics';
 
 const API_BY_PROTOCOL: Record<ProtocolAdapterConfig['protocol'], Api> = {
   openai: 'openai-completions',
@@ -272,7 +274,8 @@ export class PiChatProvider implements ChatProvider {
       options.signal === undefined
         ? controller.signal
         : AbortSignal.any([controller.signal, options.signal]);
-    const response: PiResponseState = {};
+    const diagnostics = new ResponseDiagnostics(this.config.protocol);
+    const response: PiResponseState = { diagnostics };
     try {
       const endpoint = resolveProviderEndpoint(this.config.providerType ?? this.config.protocol);
       const model: Model<Api> = {
@@ -329,16 +332,27 @@ export class PiChatProvider implements ChatProvider {
             ? undefined
             : async (input, init) => {
                 options.onProtocolProgress?.('start');
-                const received = await fetch(input, init);
+                let received: Response;
+                try {
+                  received = await fetch(input, init);
+                } catch (error) {
+                  diagnostics.failure(error);
+                  throw error;
+                }
                 options.onProtocolProgress?.('headers');
                 response.status = received.status;
                 response.headers = Object.fromEntries(received.headers.entries());
-                if (options.onProtocolProgress !== undefined && received.body !== null) {
+                diagnostics.headers(received);
+                if (received.body !== null) {
                   const tracked = new Response(received.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
                     transform(chunk, target) {
+                      diagnostics.receive(chunk);
+                      if (diagnostics.mismatch !== undefined)
+                        throw new APIProtocolError(`Provider response format mismatch: expected ${diagnostics.expectedProtocol}, received ${diagnostics.mismatch}. Check the effective protocol and endpoint.`, diagnostics.snapshot());
                       if (received.ok && chunk.byteLength > 0) options.onProtocolProgress?.('body');
                       target.enqueue(chunk);
                     },
+                    flush() { diagnostics.end(); },
                   })), { status: received.status, statusText: received.statusText, headers: received.headers });
                   Object.defineProperty(tracked, 'url', { value: received.url });
                   return tracked;

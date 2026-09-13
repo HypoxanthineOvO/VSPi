@@ -39,6 +39,41 @@
 
 执行前应确认工作目录、权限策略与模型配置，尤其是涉及文件修改、进程和外部服务的任务。
 
+## Feedback：先预览，再提交
+
+2.4.0 默认提供 `/feedback 问题描述`，无需设置实验环境变量。选择最近一轮、最近三轮或仅诊断，先保存到 `VSPI_HOME/feedback/outbox/`，再打开可滚动的完整预览。`U` 进入确认，`Enter` 才上传；`E` 或 `Esc` 只保留本地包。切会话或退出会取消上传，失败不会删除本地包。
+
+不依赖 TUI 的入口：
+
+```sh
+vspi feedback export --description "连接失败" --turns 0
+vspi feedback export --description "工具调用之后失败" --session SESSION_ID --turns 1
+vspi feedback preview /private/path/FEEDBACK_ID.json
+vspi feedback submit /private/path/FEEDBACK_ID.json --confirm-sha256 PREVIEW_HASH
+```
+
+不指定 session 时默认仅诊断，不擅自挑选会话；只读取已运行的 daemon，离线时可导出有限的本地信息。提交必须使用预览打印的 SHA256，文件变化会被拒绝。如果需要手工删去某些内容，编辑副本后运行 `vspi feedback redact /private/edited.json`，生成新编号并重新预览。
+
+包含范围由使用者选择：有限的版本/协议/端点信息、错误元数据，以及选定的对话与中间输出。原始响应正文不会自动写入结构诊断日志。已知凭据、常见认证头、带认证的 URL、私钥块和终端控制符会被清理，但不能保证识别任意未知秘密，预览是必需步骤。
+
+每包最多 1 MiB、200 条；单条原文超过 64 KiB 会明确省略，普通条目脱敏后最多 16384 字符，截断时优先保留最新条目。需要长文本时自行摘录相关片段，不上传整个 home 或项目。本地 outbox 预检预算为 20 MiB／100 个包，达到上限要求手工归档，不自动丢弃用户反馈。POSIX 文件为 0600、目录为 0700；Windows 私有性还依赖用户目录 ACL，本轮未做 Windows 实机验收。
+
+在线上传前，向管理员领取个人专用的 `feedback.json`，通过私有渠道交付；将它放到 `VSPI_HOME/feedback.json`（默认 `~/.vspi/feedback.json`），POSIX 权限设为 0600。文件包含 `token`，可选 `endpoint`，默认 `https://dist.hypohub.cn/api/feedback`，也允许已配置可信 TLS 的内网入口。不要使用模型 API Key，不要共享凭据或把凭据粘贴到反馈中。没有凭据仍可导出、预览，再手工交付已检查的包。接收端在 Eden 持久保存后才确认编号；公网不提供反馈下载或列表。自动处理和通知的上线独立于客户端发版，不保证提交后即时回复。
+
+## 签名分发与双入口更新
+
+2.4.0 普通安装与更新仍走 GitHub；签名镜像默认关闭，等待镜像正式启用。管理员完成部署并通过可信渠道提供独立核对的 Ed25519 公钥文件 `distribution.json` 后，安装到自己的 VSPI_HOME，POSIX 权限 0600，再启用 `KIMI_CODE_EXPERIMENTAL_VSPI_DISTRIBUTION=true`：
+
+```sh
+vspi update
+vspi update --source public
+vspi update --source internal
+```
+
+自动模式短超时探测 `dist-internal.hypohub.cn`，失败转到 `dist.hypohub.cn`；两者内容源均为 Eden，不是独立冗余存储。查询版本不再依赖 GitHub，只有签名、有效期、版本防回退和包哈希全部通过才安装。源不可用或校验失败不会降级为未经验证的下载；继续沿用忙碌拒绝、安装备份与失败回滚。
+
+新安装和旧版本一次性升级可使用管理员提供的 `distribution-install.mjs`，`--trust` 指定已独立核对的公钥文件；默认仅下载，`--mode install` 明确执行安装。初始 installer 的来源同样需要核验，不能仅凭同一未知网站同时提供脚本、公钥就认为可信。管理员部署、凭据、Hermes 和证书要求见[操作包说明](../../../ops/vspi-services/README.md)。
+
 ## 非交互执行
 
 ```sh
@@ -162,7 +197,9 @@ VSPi 默认每个模型步骤最多尝试 3 次（含首次），只自动重试
 
 Pi 的 Chat Completions、Responses、Anthropic HTTP 路径在发起请求及接收协议字节时监测进展，默认连续 300 秒没有进展则取消本次请求；Thinking、工具流、SSE 控制/心跳字节也计入进展，不会只因没有可见正文就超时。Google/Vertex 原生 SDK 和 legacy compatibility 适配路径目前未接入该字节级监测，不能假定它们也受此空闲期限保护；恢复窗口仍适用于后续重试请求。
 
-对应 `[loop_control]` 的 `max_attempts_per_step`、`retry_budget_ms` 和 `request_idle_timeout_ms` 可配置。界面显示每次重试与等待时间，放弃失败的半截输出；用户可以随时中断。已经执行的工具或崩溃时的提示不会因此自动重放。
+对应 `[loop_control]` 的 `max_attempts_per_step`、`retry_budget_ms` 和 `request_idle_timeout_ms` 可配置。界面用临时状态显示重试次数，恢复输出、回合结束或切换会话后清除，不覆盖独立警告；用户可以随时中断。失败的半截输出会被放弃，已经执行的工具或崩溃时的提示不会因此自动重放。
+
+流没有提供完成标记时，错误码为 `provider.incomplete_stream`，可在上述预算内重试。明确收到其他协议事件、HTML 页面或非流式 JSON 时，错误码为 `provider.protocol_error`，应检查实际协议与端点，不会盲目换协议或重复请求。Pi HTTP 路径在异常详情中保留有界结构诊断（预期协议、采样识别的格式、状态码、收流字节数和时间），不保存原始响应正文；最多检查前 64 KiB，未识别格式不代表格式正确。Google/Vertex 原生 SDK 等未经过该 HTTP 路径的请求不具备完整的此类诊断。
 
 Subagent 自身默认任务超时仍为 2 小时，`[subagent].timeout_ms` 或 `KIMI_CODE_SUBAGENT_TIMEOUT_MS` 可调整，`0` 表示禁用这层任务时限，不是禁用模型恢复预算。`/agents` 显示实际错误和任务超时值。若任务失败，应先检查错误详情，再决定是否继续同一 Agent；没有证据时不要把“约 30 分钟失败”直接解释成固定的 30 分钟限制。
 

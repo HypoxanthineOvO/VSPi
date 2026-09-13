@@ -123,19 +123,36 @@ function draftBackendFixture(
 describe('model retry projection', () => {
   it('announces a retry only once when activity snapshots repeat', async () => {
     const fixture = draftBackendFixture();
-    const onNotice = vi.fn();
+    const onRetryNotice = vi.fn();
     const onBusy = vi.fn();
     try {
-      await fixture.start({ onNotice, onBusy });
+      await fixture.start({ onRetryNotice, onBusy });
       await fixture.backend.switchSession('old-session');
-      onNotice.mockClear();
+      onRetryNotice.mockClear();
       const activity = { turn: { turnId: 7, step: 1, retry: { nextAttempt: 2, maxAttempts: 3, delayMs: 500, statusCode: 503 } } };
       fixture.listeners.get('agent.activity.updated')?.(activity);
       fixture.listeners.get('agent.activity.updated')?.(activity);
-      expect(onNotice).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('第 2/3 次尝试'), 'warning');
+      expect(onRetryNotice).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('第 2/3 次尝试'));
       expect(onBusy).toHaveBeenLastCalledWith(true);
     } finally { await fixture.backend.dispose(); }
   });
+
+  it.each(['assistant.delta', 'thinking.delta', 'turn.ended', 'agent.activity.updated'])(
+    'clears the retry notice when %s ends the waiting state', async (event) => {
+      const fixture = draftBackendFixture();
+      const onRetryNotice = vi.fn();
+      try {
+        await fixture.start({ onRetryNotice });
+        await fixture.backend.switchSession('old-session');
+        const activity = { turn: { turnId: 7, step: 1, retry: { nextAttempt: 2, maxAttempts: 3, delayMs: 500 } } };
+        fixture.listeners.get('agent.activity.updated')?.(activity);
+        fixture.listeners.get(event)?.(event === 'agent.activity.updated' ? { turn: { turnId: 7, step: 1 } } : { turnId: 7, delta: 'recovered', reason: 'completed' });
+        expect(onRetryNotice).toHaveBeenLastCalledWith(undefined);
+        fixture.listeners.get('agent.activity.updated')?.(activity);
+        expect(onRetryNotice).toHaveBeenLastCalledWith(undefined);
+      } finally { await fixture.backend.dispose(); }
+    },
+  );
 
   it('discards failed partial output when the next attempt streams a replacement', async () => {
     const fixture = draftBackendFixture();

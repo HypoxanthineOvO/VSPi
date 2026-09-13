@@ -9,6 +9,7 @@ import { getBuiltinModel as getModel } from '@earendil-works/pi-ai/providers/all
 import { describe, expect, it, vi } from 'vitest';
 
 import { generate } from '#/kosong/contract/generate';
+import { isTransientGenerateError, isRetryableGenerateError } from '#/kosong/contract/errors';
 import type { Message } from '#/kosong/contract/message';
 import type { ProtocolAdapterConfig } from '#/kosong/protocol/protocol';
 import { toPiContext, emptyPiUsage, encodePiSignature } from '#/kosong/provider/pi/messages';
@@ -24,6 +25,58 @@ import '#/kosong/provider/bases/anthropic/index';
 import '#/kosong/provider/providers/standard.contrib';
 
 const model = getModel('openai', 'gpt-4.1');
+
+describe('provider response diagnosis', () => {
+  it.each([
+    ['responses events', 'text/event-stream', 'data: {"type":"response.output_text.delta","delta":"private-output"}\n\n', 'openai_responses'],
+    ['anthropic events', 'text/event-stream', 'data: {"type":"message_start","message":{"role":"assistant"}}\n\n', 'anthropic'],
+    ['HTML page', 'text/html', '<!doctype html><html>private-output</html>', 'html'],
+    ['non-streaming JSON', 'application/json', '{"choices":[{"message":{"content":"private-output"},"finish_reason":"stop"}]}', 'non_streaming_json'],
+  ])('rejects %s returned to a Chat request without transient retries', async (_name, contentType, body, format) => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': contentType });
+      response.end(body);
+    });
+    const baseUrl = await listen(server);
+    try {
+      const provider = new PiChatProvider({ protocol: 'openai', modelName: 'example-model', apiKey: 'YOUR_API_KEY', baseUrl });
+      const error: unknown = await generate(provider, '', [], []).then(() => { throw new Error('Expected rejection'); }, error => error);
+      expect(error).toMatchObject({ code: 'provider.protocol_error', details: { expectedProtocol: 'openai', observedFormat: format, statusCode: 200 } });
+      expect(isTransientGenerateError(error)).toBe(false);
+      expect(isRetryableGenerateError(error)).toBe(false);
+      expect(JSON.stringify(error)).not.toContain('private-output');
+      expect(JSON.stringify(error)).not.toContain('YOUR_API_KEY');
+    } finally { await close(server); }
+  });
+
+  it('bounds structural sampling when a large Chat stream ends without a finish reason', async () => {
+    const body = `data: ${JSON.stringify({ choices: [{ delta: { content: 'private-output'.repeat(100000) }, finish_reason: null }] })}\n\ndata: [DONE]\n\n`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.end(body);
+    });
+    const baseUrl = await listen(server);
+    try {
+      const provider = new PiChatProvider({ protocol: 'openai', modelName: 'example-model', apiKey: 'YOUR_API_KEY', baseUrl });
+      const error: unknown = await generate(provider, '', [], []).catch(error => error);
+      expect(error).toMatchObject({ code: 'provider.incomplete_stream', details: { expectedProtocol: 'openai', sampledBytes: 65536, bytesReceived: Buffer.byteLength(body) } });
+      expect(isTransientGenerateError(error)).toBe(true);
+      expect(JSON.stringify(error)).not.toContain('private-output');
+    } finally { await close(server); }
+  });
+
+  it('preserves HTTP authentication errors even when the body is HTML', async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(401, { 'content-type': 'text/html' });
+      response.end('<html><title>Unauthorized</title></html>');
+    });
+    const baseUrl = await listen(server);
+    try {
+      const provider = new PiChatProvider({ protocol: 'openai', modelName: 'example-model', apiKey: 'YOUR_API_KEY', baseUrl });
+      await expect(generate(provider, '', [], [])).rejects.toMatchObject({ code: 'provider.auth_error', statusCode: 401 });
+    } finally { await close(server); }
+  });
+});
 
 describe('relay model request encoding', () => {
   it.each([
@@ -307,7 +360,7 @@ describe('PiChatProvider stream conversion', () => {
   });
 
   it('rejects truncated streams and incomplete tool argument JSON', async () => {
-    await expect(collect([])).rejects.toMatchObject({ code: 'provider.connection_error' });
+    await expect(collect([])).rejects.toMatchObject({ code: 'provider.incomplete_stream' });
     const tool = { type: 'toolCall' as const, id: 'call_1', name: 'read', arguments: {} };
     const message = assistant([tool]);
     await expect(

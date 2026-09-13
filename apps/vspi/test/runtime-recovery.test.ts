@@ -66,14 +66,16 @@ async function fixture(mode: 'normal' | 'http-retry' | 'stream-retry' = 'normal'
     const messages = new Map<string, TranscriptMessage>();
     const errors: Error[] = [];
     const notices: string[] = [];
+    const retryNotices: Array<string | undefined> = [];
     let busy = false;
     await backend.start({
       onHistory(items, prepend) { if (!prepend) messages.clear(); for (const item of items) messages.set(item.id, item); },
       onMessage(message) { messages.set(message.id, message); },
       onMessageUpdate(id, patch) { const previous = messages.get(id); if (previous) messages.set(id, { ...previous, ...patch } as TranscriptMessage); },
       onBusy(value) { busy = value; }, onUsage() {}, onNotice(message) { notices.push(message); }, onSessionError(error) { errors.push(error); },
+      onRetryNotice(message) { retryNotices.push(message); },
     });
-    return { backend, messages, errors, notices, busy: () => busy };
+    return { backend, messages, errors, notices, retryNotices, busy: () => busy };
   }
   return { home, daemon, connection, front, attempts: () => attempts, release: () => { for (const reply of replies.splice(0)) reply(); } };
 }
@@ -89,7 +91,9 @@ describe('multiple clients on a real runtime', () => {
     await prompt;
     expect(rig.attempts()).toBe(2);
     expect(a.errors).toEqual([]);
-    expect(a.notices.some(message => message.includes('第 2/3 次尝试'))).toBe(true);
+    expect(a.retryNotices.some(message => message?.includes('第 2/3 次尝试'))).toBe(true);
+    expect(a.retryNotices.at(-1)).toBeUndefined();
+    expect(a.notices.some(message => message.includes('第 2/3 次尝试'))).toBe(false);
   }, 30000);
 
   it('replaces interrupted SSE content instead of concatenating it with a retried reply', async () => {

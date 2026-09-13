@@ -3,5 +3,5 @@
   "compilerOptions": {
     "noPropertyAccessFromIndexSignature": false
   },
-  "include": ["src/main.ts", "test", "../../packages/agent-core-v2/src/env.d.ts"]
+  "include": ["src/main.ts", "src/feedback-server.ts", "src/feedback-admin.ts", "src/distribution-admin.ts", "src/distribution-install.ts", "test", "../../packages/agent-core-v2/src/env.d.ts"]
 }
