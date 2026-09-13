@@ -125,6 +125,28 @@ const staticSections: Record<string, unknown> = {
 
 describe('queryAvailableModels', () => {
 
+  it('adds an unknown station model entirely from metadata and retains user overrides', () => {
+    const result = mergeRelayCatalog({}, 'relay', { type: 'openai' }, { version: 1, models: [{
+      id: 'future-example', protocol: 'anthropic', contextWindow: 200000, maxTokens: 32000,
+      input: ['text', 'image'], capabilities: ['tool_use'], effortRevision: 3,
+      effortLevels: ['low', 'high'], defaultEffort: 'high',
+    }] });
+    expect(result['relay/future-example']).toMatchObject({
+      model: 'future-example', defaultProtocol: 'anthropic', maxContextSize: 200000,
+      maxOutputSize: 32000, capabilities: ['tool_use', 'image_in'], defaultEffort: 'high',
+    });
+    const record = { ...result['relay/future-example'], overrides: { maxContextSize: 4096 } };
+    const stale = mergeRelayCatalog({ m: record }, 'relay', {}, { models: [{
+      id: 'future-example', effortRevision: 2, effortLevels: ['low'], defaultEffort: 'low',
+    }] });
+    expect(stale['m']?.defaultEffort).toBe('high');
+    expect(stale['m']?.overrides).toEqual(record.overrides);
+    const older = mergeRelayCatalog({ m: { ...record, effortProfileRevision: 1 } }, 'relay', {}, {
+      models: [{ id: 'future-example', effortLevels: ['low'] }],
+    });
+    expect(older['m']?.defaultEffort).toBe('high');
+  });
+
   it('merges station models without dropping local entries or user overrides', () => {
     const records = {
       local: { provider: 'relay', model: 'local-only', maxContextSize: 1000 },

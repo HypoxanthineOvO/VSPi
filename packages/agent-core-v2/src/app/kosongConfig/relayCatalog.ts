@@ -22,6 +22,7 @@ const entrySchema = z.object({
   contextWindow: z.number().int().positive().optional(),
   maxTokens: z.number().int().positive().optional(),
   input: z.array(z.string()).optional(),
+  capabilities: z.array(z.string().min(1)).optional(),
   reasoning: z.boolean().optional(),
   effortLevels: z.array(z.string().min(1)).min(1).optional(),
   effortRevision: z.number().int().positive().optional(),
@@ -74,17 +75,17 @@ export function mergeRelayCatalog(
         if (!Number.isFinite(Date.parse(remote.releasedAt)) || new Date(remote.releasedAt).toISOString().slice(0, 10) !== remote.releasedAt) throw new Error('Invalid model release date');
         record.releasedAt = remote.releasedAt;
       }
-      const capabilities = new Set(old?.capabilities ?? (native ? [ 'tool_use', ...native.input.includes('image') ? ['image_in'] : [] ] : []));
+      const capabilities = new Set(remote.capabilities ?? old?.capabilities ?? (native ? [ 'tool_use', ...native.input.includes('image') ? ['image_in'] : [] ] : []));
       if (remote.input !== undefined) {
         for (const [input, capability] of [['image', 'image_in'], ['video', 'video_in'], ['audio', 'audio_in']] as const) {
           if (remote.input.includes(input)) capabilities.add(capability); else capabilities.delete(capability);
         }
       }
-      if (remote.input !== undefined) record.capabilities = [...capabilities];
+      if (remote.input !== undefined || remote.capabilities !== undefined) record.capabilities = [...capabilities];
       const profile = modelEffortProfile(remote.id);
       const revision = remote.effortRevision ?? 0;
       const currentRevision = old?.effortProfileRevision ?? 0;
-      if (!profile || revision >= Math.max(EFFORT_PROFILE_REVISION, currentRevision)) {
+      if (revision >= currentRevision && (!profile || revision >= EFFORT_PROFILE_REVISION)) {
         const thinking = { ...nativeThinking, ...old?.thinking };
         if (revision > 0) {
           record.offEffort = undefined;
@@ -119,7 +120,7 @@ export function mergeRelayCatalog(
         } else if (remote.reasoning === true) record.thinking = { ...thinking, availability: thinking.availability === 'always' ? 'always' : 'dynamic' };
         if (remote.thinkingLevelMap !== undefined) record.effortMapping = { ...(revision > 0 ? {} : old?.effortMapping), ...remote.thinkingLevelMap };
         if (revision > 0) record.effortProfileRevision = revision;
-      } else if (currentRevision < EFFORT_PROFILE_REVISION) {
+      } else if (profile && currentRevision < EFFORT_PROFILE_REVISION) {
         Object.assign(record, applyModelEffortProfile(record, profile));
       }
       if (remote.cost !== undefined) {
