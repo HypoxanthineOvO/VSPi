@@ -755,10 +755,10 @@
       "contextWindow": 1048576,
       "maxTokens": 384000,
       "cost": {
-        "input": 0.14,
-        "output": 0.56,
-        "cacheRead": 0.0028,
-        "reasoning": 0.56
+        "input": 0.15,
+        "output": 0.6,
+        "cacheRead": 0.003,
+        "reasoning": 0.6
       },
       "effortLevels": [
         "off",
@@ -768,9 +768,19 @@
       ],
       "metadataSources": {
         "cost": {
-          "source": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+          "source": "https://api-docs.deepseek.com/quick_start/pricing/",
           "verification": "official-pricing-page",
-          "checkedAt": "2026-09-10T12:00:00Z"
+          "checkedAt": "2026-09-13",
+          "model": "deepseek-flash",
+          "currency": "USD",
+          "perTokens": 1000000,
+          "period": "off-peak",
+          "peakMultiplier": 2,
+          "peakHoursUTC": [
+            "01:00-04:00",
+            "06:00-10:00"
+          ],
+          "weekdaysOnly": true
         },
         "effort": {
           "source": "https://api-docs.deepseek.com/guides/thinking_mode/",
@@ -800,10 +810,10 @@
       "contextWindow": 1048576,
       "maxTokens": 384000,
       "cost": {
-        "input": 0.435,
-        "output": 0.87,
-        "cacheRead": 0.003625,
-        "reasoning": 0.87
+        "input": 0.66,
+        "output": 1.98,
+        "cacheRead": 0.022,
+        "reasoning": 1.98
       },
       "effortLevels": [
         "off",
@@ -813,11 +823,19 @@
       ],
       "metadataSources": {
         "cost": {
-          "source": "https://models.dev/api.json",
-          "provider": "deepseek",
+          "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+          "verification": "official-pricing-page",
+          "checkedAt": "2026-09-13",
           "model": "deepseek-v4-pro",
-          "verification": "catalog-first-party-entry",
-          "checkedAt": "2026-09-06T14:08:33.645Z"
+          "currency": "USD",
+          "perTokens": 1000000,
+          "period": "off-peak",
+          "peakMultiplier": 2,
+          "peakHoursUTC": [
+            "01:00-04:00",
+            "06:00-10:00"
+          ],
+          "weekdaysOnly": true
         },
         "effort": {
           "source": "https://api-docs.deepseek.com/guides/thinking_mode/",
@@ -1792,10 +1810,10 @@
       "contextWindow": 1048576,
       "maxTokens": 384000,
       "cost": {
-        "input": 0.14,
-        "output": 0.56,
-        "cacheRead": 0.0028,
-        "reasoning": 0.56
+        "input": 0.15,
+        "output": 0.6,
+        "cacheRead": 0.003,
+        "reasoning": 0.6
       },
       "effortLevels": [
         "off",
@@ -1806,9 +1824,19 @@
       "releasedAt": "2026-08-21",
       "metadataSources": {
         "cost": {
-          "source": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+          "source": "https://api-docs.deepseek.com/quick_start/pricing/",
           "verification": "official-pricing-page",
-          "checkedAt": "2026-09-10T12:00:00Z"
+          "checkedAt": "2026-09-13",
+          "model": "deepseek-flash",
+          "currency": "USD",
+          "perTokens": 1000000,
+          "period": "off-peak",
+          "peakMultiplier": 2,
+          "peakHoursUTC": [
+            "01:00-04:00",
+            "06:00-10:00"
+          ],
+          "weekdaysOnly": true
         },
         "releasedAt": {
           "source": "https://api-docs.deepseek.com/news/news260821",
@@ -1849,17 +1877,27 @@
         "max"
       ],
       "cost": {
-        "input": 0.14,
-        "output": 0.56,
-        "cacheRead": 0.0028,
-        "reasoning": 0.56
+        "input": 0.15,
+        "output": 0.6,
+        "cacheRead": 0.003,
+        "reasoning": 0.6
       },
       "releasedAt": "2026-09-10",
       "metadataSources": {
         "cost": {
-          "source": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+          "source": "https://api-docs.deepseek.com/quick_start/pricing/",
           "verification": "official-pricing-page",
-          "checkedAt": "2026-09-10T12:00:00Z"
+          "checkedAt": "2026-09-13",
+          "model": "deepseek-flash",
+          "currency": "USD",
+          "perTokens": 1000000,
+          "period": "off-peak",
+          "peakMultiplier": 2,
+          "peakHoursUTC": [
+            "01:00-04:00",
+            "06:00-10:00"
+          ],
+          "weekdaysOnly": true
         },
         "releasedAt": {
           "source": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
@@ -2863,7 +2901,7 @@
     "relayCharges": false
   },
   "releaseDateMeaning": "Model public release date (YYYY-MM-DD), not catalog registration or snapshot identifier date; see per-model provenance",
-  "updatedAt": "2026-09-10",
+  "updatedAt": "2026-09-13",
   "metadataSourceSnapshot": {
     "url": "https://models.dev/api.json",
     "sha256": "5ebd3e69924168e7b7c44495eb43d5447bf0e8b308fe4d6401ee4eb14ef34e4c",

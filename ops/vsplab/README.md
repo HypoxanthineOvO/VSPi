@@ -1,5 +1,7 @@
 # VSPLab 中转站模型目录（Golden）
 
+2026-09-13 更新：用户确认本文件为模型元数据标准。DeepSeek 四个现有可见条目的价格按当前官方 USD 价格页修正，并在 `metadataSources.cost` 标记空闲基价、峰值倍率和时段；不再使用人民币固定汇率换算 DeepSeek。官方当前价格页已撤回 9 月 14 日将 V4 Pro 改按 Flash 计费的旧安排，Pro 仍按独立费率。此次不修改模型 ID、协议或思考档位，不新增提供商接入。**本次更新尚未发布到 Babel**，实施前线上文件仍是较早快照，与本文件不一致；下文历史同步记录不代表当前线上已同步。
+
 `model-catalog.json` 是 `/vsp/models` 端点的权威内容（Golden 标准目录）。2026-09-08 由联网核实产出：逐模型对照官方文档（智谱 / Moonshot / OpenAI / Anthropic / DeepSeek / 阿里云百炼 / MiniMax 等），修正了旧快照中 37 处与官方不一致的声明（effort 档位照抄模板、上下文/输出上限抄错、定价币种与倍率错误等）。2026-09-10 与线上部署内容对齐回写，并将 DeepSeek V4.1 Flash 转正（去掉内测期的 `expires-on-0910` 后缀），价格按官方当日新定价（空闲时段、7.2 汇率）修正。逐模型来源记录在 `metadataSources`（官方 URL 与核对时间），顶层 `metadataSourceSnapshot` 记录快照级来源；这些 provenance 字段客户端解析时会忽略。
 
 本文件与线上部署内容保持逐字节一致（同一 JSON 序列化），便于用校验和检测漂移；发现线上被热改时，先回写本文件再继续修改。
@@ -11,7 +13,7 @@
 - `effortMode` 为 `effort` 或 `toggle`。MiMo V2.5 与 MiniMax M3 使用 `toggle`，列表中的 `on` 只表示开启思考，不代表一档推理强度。发布此契约时须与支持它的新版 VSPi 配套，不能假设旧版会正确解释。
 - 版本化声明应完整提供档位与默认值；同版本或更高版本可修订既有模型，较旧版本不能回退已保存的新声明。用户 `overrides` 始终保留。
 - `defaultEffort` 为默认档位（官方有明确默认值时填写）。
-- `cost` 单位为 **USD / 百万 tokens**（CNY 官方价按 7.2 汇率换算，DeepSeek 峰谷定价取空闲时段；`pricingBasis.relayCharges: false` 表示与官方等价计费）。
+- `cost` 单位为 **USD / 百万 tokens**。DeepSeek 直接使用[官方 USD 表](https://api-docs.deepseek.com/quick_start/pricing/)的空闲时段价格，高峰为两倍；其他条目保留原有来源/换算约定（CNY 官方价按 7.2 汇率换算）。客户端当前投影的是基准价，不是实时峰谷账单；实际网关计费还取决于请求时间与渠道/分组设置，`pricingBasis.relayCharges: false` 不代表已经验证线上所有扣费配置。
 - `hidden: true` 表示该 id 不应出现在模型列表（幽灵 id 清理用）；`curated: false` 表示默认折叠展示。
 
 ## 部署
