@@ -3,12 +3,13 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { createInterface } from 'node:readline/promises';
 
 import { parseReleaseChecksums, releaseVersionFromLatestRedirect } from "./release-contract.mjs";
 import { experimentalEnabled } from '../../experimental.js';
 import { downloadDistributionRelease, selectDistributionRelease, withDistributionTrust, type DistributionSource, type DistributionTrust } from './distribution.js';
 import { npmCommand } from './npm-command.mjs';
-import { acquireRuntimeLease, inspectRuntime, stopRuntime, resolveRuntimePaths } from '@vsp/vsp-runtime';
+import { acquireRuntimeLease, inspectRuntime, inspectRuntimeActivity, stopRuntime, resolveRuntimePaths, type RuntimeActivity } from '@vsp/vsp-runtime';
 
 const RELEASE_DOWNLOAD_ORIGIN = "https://github.com";
 const RELEASE_ASSET_ORIGINS = new Set([
@@ -28,11 +29,40 @@ export interface SelfUpdateResult {
 }
 
 export interface SelfUpdateOptions {
+  confirmStop?: (activity: RuntimeActivity) => Promise<boolean>;
   distribution?: { trust?: DistributionTrust; source?: DistributionSource; home?: string };
   fetch?: typeof globalThis.fetch;
   installPackage?: (tarballPath: string) => Promise<void>;
   latestReleaseUrl?: string;
   temporaryRoot?: string;
+}
+
+export async function confirmUpdateStop(activity: RuntimeActivity): Promise<boolean> {
+  if (!process.stdin.isTTY || !process.stderr.isTTY) return false;
+  const reader = createInterface({ input: process.stdin, output: process.stderr });
+  const controller = new AbortController();
+  reader.on('SIGINT', () => { controller.abort(); });
+  reader.on('close', () => { controller.abort(); });
+  try {
+    const answer = await reader.question(
+      `运行时 PID ${activity.pid}：${activity.busyAgents.length} 个活跃 Agent、${activity.scheduledAgents.length} 个含计划任务/目标的 Agent、${activity.pendingCalls + activity.pendingStreams} 个处理中请求、${activity.clients} 个客户端。\n终止这些工作并更新？未完成输出可能丢失，计划任务需重新打开会话恢复；历史和配置保留。[y/N] `,
+      { signal: controller.signal },
+    );
+    return ['y', 'yes'].includes(answer.trim().toLowerCase());
+  } catch { return false; }
+  finally { reader.close(); }
+}
+
+export async function stopRuntimeForUpdate(homeDir: string, confirmStop?: (activity: RuntimeActivity) => Promise<boolean>): Promise<void> {
+  try { await stopRuntime(homeDir, 30_000, { requireIdle: true }); return; }
+  catch (error) {
+    if (!(error instanceof Error) || !/Runtime has active work|Runtime is in use/u.test(error.message)) throw error;
+    const activity = await inspectRuntimeActivity(homeDir);
+    if (!activity) throw error;
+    if (activity.busyAgents.length === 0 && activity.scheduledAgents.length === 0 && activity.pendingCalls === 0 && activity.pendingStreams === 0) throw new Error('旧版运行时仍将空闲连接视为占用；首次升级请先退出旧界面，再运行 vspi daemon stop 和 vspi update。', { cause: error });
+    if (!confirmStop || !await confirmStop(activity)) throw new Error('更新已取消：未获准终止活跃任务，运行时和安装保持不变。', { cause: error });
+    await stopRuntime(homeDir, 30_000, { expectedOwnerNonce: activity.ownerNonce });
+  }
 }
 
 export interface PackageInstallerInvocation {
@@ -270,7 +300,7 @@ export async function updateVspi(currentVersion: string, options: SelfUpdateOpti
       await options.installPackage(tarballPath);
       return { status: 'updated', currentVersion, latestVersion };
     }
-    const runtimeRestarted = await installVspiUpdate(tarballPath, latestVersion);
+    const runtimeRestarted = await installVspiUpdate(tarballPath, latestVersion, { confirmStop: options.confirmStop });
     return { status: "updated", currentVersion, latestVersion, runtimeRestarted };
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -287,7 +317,7 @@ async function updateFromDistribution(currentVersion: string, options: SelfUpdat
       const path = join(directory, `vspi-${release.manifest.version}.tgz`);
       await writeFile(path, await downloadDistributionRelease(release, { source: options.distribution?.source, fetch: options.fetch }), { mode: 0o600 });
       if (options.installPackage) { await options.installPackage(path); return { status: 'updated', currentVersion, latestVersion: release.manifest.version }; }
-      const runtimeRestarted = await installVspiUpdate(path, release.manifest.version);
+      const runtimeRestarted = await installVspiUpdate(path, release.manifest.version, { confirmStop: options.confirmStop });
       return { status: 'updated', currentVersion, latestVersion: release.manifest.version, runtimeRestarted };
     } finally { await rm(directory, { recursive: true, force: true }); }
   };
@@ -322,6 +352,7 @@ function execute(command: string, args: string[], env: NodeJS.ProcessEnv): Promi
 }
 
 export interface InstallUpdateOptions {
+  confirmStop?: (activity: RuntimeActivity) => Promise<boolean>;
   entryPath?: string;
   homeDir?: string;
   install?: (path: string, version: string) => Promise<void>;
@@ -351,7 +382,7 @@ export async function installVspiUpdate(tarball: string, version: string, option
   if (originalConfig) await writeFile(join(backup, 'config.toml'), originalConfig, { mode: 0o600 });
   const running = await inspectRuntime(paths.homeDir);
   if (running) {
-    try { await stopRuntime(paths.homeDir, 30_000, { requireIdle: true }); }
+    try { await stopRuntimeForUpdate(paths.homeDir, options.confirmStop); }
     catch (error) { keepBackup = (await inspectRuntime(paths.homeDir)) === undefined; throw error; }
   }
   keepBackup = true;

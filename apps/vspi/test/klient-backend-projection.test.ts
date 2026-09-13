@@ -9,7 +9,7 @@ import type { ChatBackendEvents } from '../src/v1/backend/types.js';
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { RuntimeConnection } from "@vsp/vsp-runtime";
+import { RuntimeStoppedError, type RuntimeConnection } from "@vsp/vsp-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -453,6 +453,17 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			}, { timeout: 4_000 });
 			expect(attempts).toBe(5);
 			expect(fixture.connectionStates[0]).toEqual({ state: "reconnecting", attempt: 1 });
+		} finally { await fixture.backend.dispose(); }
+	});
+
+	it('stops retrying when the runtime was intentionally shut down', async () => {
+		const connect = vi.fn(async (): Promise<RuntimeConnection> => { throw new RuntimeStoppedError(); });
+		const fixture = draftBackendFixture(connect, [0, 0, 0]);
+		await fixture.start();
+		try {
+			fixture.disconnect();
+			await vi.waitFor(() => { expect(fixture.connectionStates.at(-1)?.state).toBe('stopped'); });
+			expect(connect).toHaveBeenCalledOnce();
 		} finally { await fixture.backend.dispose(); }
 	});
 

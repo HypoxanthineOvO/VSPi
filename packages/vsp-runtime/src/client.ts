@@ -9,6 +9,7 @@ import {
   readRuntimeState,
   removeRuntimeState,
   readRuntimeShutdown,
+  readRuntimeShutdownIntent,
 } from './state.js';
 import type {
   RuntimeConnection,
@@ -27,6 +28,51 @@ export interface EnsureRuntimeOptions extends RuntimeConnectionOptions {
   readonly homeDir?: string;
   readonly spawn: RuntimeSpawner;
   readonly timeoutMs?: number;
+}
+
+export class RuntimeStoppedError extends Error {
+  constructor() {
+    super('运行时已主动停止或更新；此界面不会重新启动后端。请退出后运行 vspi continue。');
+    this.name = 'RuntimeStoppedError';
+  }
+}
+
+export interface RuntimeActivity {
+  readonly ownerNonce: string;
+  readonly pid: number;
+  readonly busyAgents: readonly string[];
+  readonly scheduledAgents: readonly string[];
+  readonly clients: number;
+  readonly pendingCalls: number;
+  readonly pendingStreams: number;
+}
+
+export async function inspectRuntimeActivity(homeDir?: string): Promise<RuntimeActivity | undefined> {
+  const paths = resolveRuntimePaths(homeDir);
+  const state = await inspectRuntime(paths.homeDir);
+  if (!state) return undefined;
+  const token = (await readFile(paths.tokenPath, 'utf8')).trim();
+  if (!token) throw new Error('Runtime token is empty');
+  const transport = { socketPath: state.ipcPath, token, handshakeTimeoutMs: 5000, callTimeoutMs: 5000 };
+  assertOwnedRuntime(state, await probeKlientIpc(transport), paths.homeDir);
+  const data = await callKlientIpcControl(transport, 'inspect', [{ ownerNonce: state.ownerNonce }]) as Partial<RuntimeActivity>;
+  if (!data || !Array.isArray(data.busyAgents) || data.busyAgents.some(id => typeof id !== 'string') ||
+    !Number.isSafeInteger(data.clients) || !Number.isSafeInteger(data.pendingCalls) ||
+    (data.clients ?? -1) < 0 || (data.pendingCalls ?? -1) < 0 ||
+    (data.pendingStreams !== undefined && (!Number.isSafeInteger(data.pendingStreams) || data.pendingStreams < 0)) ||
+    (data.scheduledAgents !== undefined && (!Array.isArray(data.scheduledAgents) || data.scheduledAgents.some(id => typeof id !== 'string')))) throw new Error('Invalid runtime activity response');
+  return { ownerNonce: state.ownerNonce, pid: state.pid, busyAgents: data.busyAgents, scheduledAgents: data.scheduledAgents ?? [], clients: data.clients!, pendingCalls: data.pendingCalls!, pendingStreams: data.pendingStreams ?? 0 };
+}
+
+export async function reconnectRuntime(
+  previous: RuntimeConnection,
+  connect: () => Promise<RuntimeConnection>,
+): Promise<RuntimeConnection> {
+  const paths = resolveRuntimePaths(previous.env.homeDir);
+  const intent = await readRuntimeShutdownIntent(paths.serverDir);
+  const receipt = await readRuntimeShutdown(paths.serverDir);
+  if (intent?.ownerNonce === previous.state.ownerNonce || receipt?.ownerNonce === previous.state.ownerNonce) throw new RuntimeStoppedError();
+  return connect();
 }
 
 export async function inspectRuntime(homeDir?: string): Promise<RuntimeState | undefined> {
@@ -110,11 +156,12 @@ export async function ensureRuntime(options: EnsureRuntimeOptions): Promise<Runt
   );
 }
 
-export async function stopRuntime(homeDir?: string, timeoutMs = 10_000, options: { requireIdle?: boolean; forceLegacy?: boolean } = {}): Promise<boolean> {
+export async function stopRuntime(homeDir?: string, timeoutMs = 10_000, options: { requireIdle?: boolean; forceLegacy?: boolean; expectedOwnerNonce?: string } = {}): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   const paths = resolveRuntimePaths(homeDir);
   const state = await inspectRuntime(paths.homeDir);
   if (state === undefined) return false;
+  if (options.expectedOwnerNonce !== undefined && state.ownerNonce !== options.expectedOwnerNonce) throw new Error('Runtime changed after confirmation; retry the update');
   const token = (await readFile(paths.tokenPath, 'utf8')).trim();
   if (token.length === 0) throw new Error('VSP runtime ownership cannot be proven: token is empty');
   const handshake = await probeKlientIpc({ socketPath: state.ipcPath, token, handshakeTimeoutMs: Math.min(remainingConnectionTime(deadline), 5_000) });

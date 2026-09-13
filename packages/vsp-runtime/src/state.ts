@@ -11,6 +11,31 @@ export interface RuntimeShutdownReceipt {
   readonly error?: string;
 }
 
+export interface RuntimeShutdownIntent {
+  readonly ownerNonce: string;
+  readonly reason: 'stop' | 'update' | 'idle';
+}
+
+export async function writeRuntimeShutdownIntent(serverDir: string, intent: RuntimeShutdownIntent): Promise<void> {
+  const path = join(serverDir, 'shutdown-intent.json');
+  const temporary = `${path}.${intent.ownerNonce}.tmp`;
+  try {
+    await writeFile(temporary, JSON.stringify(intent), { mode: 0o600, flag: 'wx' });
+    await rename(temporary, path);
+  } finally { await rm(temporary, { force: true }); }
+}
+
+export async function readRuntimeShutdownIntent(serverDir: string): Promise<RuntimeShutdownIntent | undefined> {
+  try {
+    const value = JSON.parse(await readFile(join(serverDir, 'shutdown-intent.json'), 'utf8')) as Partial<RuntimeShutdownIntent>;
+    if (typeof value.ownerNonce === 'string' && ['stop', 'update', 'idle'].includes(value.reason ?? '')) return value as RuntimeShutdownIntent;
+    throw new Error('Invalid runtime shutdown intent');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
 export async function writeRuntimeShutdown(serverDir: string, receipt: RuntimeShutdownReceipt): Promise<void> {
   const path = join(serverDir, 'shutdown.json');
   const temporary = `${path}.${receipt.ownerNonce}.tmp`;

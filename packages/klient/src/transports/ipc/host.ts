@@ -30,11 +30,13 @@ export interface ServeKlientIpcOptions {
   readonly maxFrameBytes?: number;
   readonly maxConcurrentCalls?: number;
   readonly maxTotalCalls?: number;
-  readonly control?: (method: string, args: readonly unknown[], peers: number, calls: number) => { data: unknown; afterReply?: () => Promise<void> };
+  readonly control?: (method: string, args: readonly unknown[], peers: number, calls: number, streams: number) => { data: unknown; afterReply?: () => Promise<void> };
 }
 
 export interface KlientIpcHost {
   readonly socketPath: string;
+  activity(): { clients: number; pendingCalls: number; pendingStreams: number };
+  beginShutdown(): void;
   close(): Promise<void>;
 }
 
@@ -165,7 +167,7 @@ export async function serveKlientIpc(options: ServeKlientIpcOptions): Promise<Kl
           if (draining) { sendError(id, new RPCError(50301, 'Runtime is shutting down')); return; }
           if (frame.service === 'runtimeControl' && options.control) {
             try {
-              const { data, afterReply } = options.control(String(frame.method), args, connections.size, totalCalls);
+              const { data, afterReply } = options.control(String(frame.method), args, connections.size, totalCalls, totalStreams);
               if (!afterReply) { send({ type: 'result', id, data }); return; }
               draining = true;
               socket.write(encodeFrame({ type: 'result', id, data }, maxFrameBytes), () => {
@@ -329,7 +331,10 @@ export async function serveKlientIpc(options: ServeKlientIpcOptions): Promise<Kl
 
   return {
     socketPath: options.socketPath,
+    activity: () => ({ clients: connections.size, pendingCalls: totalCalls, pendingStreams: totalStreams }),
+    beginShutdown: () => { draining = true; },
     close: () => {
+      draining = true;
       for (const socket of connections) {
         socket.destroy();
       }

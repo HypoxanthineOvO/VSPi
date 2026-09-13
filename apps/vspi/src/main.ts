@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import {
 	connectRuntime,
+	reconnectRuntime,
 	ensureRuntime,
 	inspectRuntime,
 	resolveRuntimePaths,
@@ -54,6 +55,7 @@ async function main(): Promise<void> {
 		return;
 	}
 	const connection = await ensureConnection();
+	let reconnectFrom = connection;
 	try {
 		if (args[0] === "web") {
 			const workspace = await connection.klient.global.workspaces.createOrTouch(
@@ -68,7 +70,11 @@ async function main(): Promise<void> {
 		if (process.stdin.isTTY && process.stdout.isTTY) {
 			await runVspiTui(connection, {
 				startupMode: resolveSessionStartupMode(args[0]),
-				reconnect: () => ensureConnection(),
+				reconnect: async () => {
+					const next = await reconnectRuntime(reconnectFrom, () => ensureConnection());
+					reconnectFrom = next;
+					return next;
+				},
 			});
 			return;
 		}

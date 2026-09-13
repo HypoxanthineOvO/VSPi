@@ -3,7 +3,7 @@ import { connectRuntime, resolveRuntimePaths, type RuntimeConnection } from "@vs
 import type { AppSettings } from "./v1/domain/types.js";
 import { loadSettings } from "./v1/config/settings.js";
 import { runAuthSetup, type AuthSetupOptions } from "./v1/app/auth-setup.js";
-import { updateVspi, type SelfUpdateResult } from "./v1/update/self-update.js";
+import { confirmUpdateStop, updateVspi, type SelfUpdateResult } from "./v1/update/self-update.js";
 import { VSPI_VERSION } from "./v1/version.js";
 import { dispatchFeedback } from './v1/feedback/cli.js';
 import { requireExperimental } from './experimental.js';
@@ -96,7 +96,7 @@ export async function dispatchCliCommand(
 			requireExperimental('distribution');
 			source = args[2] as DistributionSource;
 		}
-		const result = await (dependencies.update ?? (version => updateVspi(version, source ? { distribution: { source } } : {})))(VSPI_VERSION);
+		const result = await (dependencies.update ?? (version => updateVspi(version, { confirmStop: confirmUpdateStop, distribution: source ? { source } : undefined })))(VSPI_VERSION);
 		write(
 			result.status === "updated"
 				? `VSPi 已安装 ${result.latestVersion}。${result.runtimeRestarted ? 'Daemon 已完成安全切换。' : '没有启动或替换运行中的 Daemon。'}请重启客户端。\n`

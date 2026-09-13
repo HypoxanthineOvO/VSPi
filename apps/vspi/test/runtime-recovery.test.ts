@@ -3,14 +3,15 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { connectRuntime, startRuntimeDaemon, stopRuntime, type RuntimeConnection } from '@vsp/vsp-runtime';
+import { connectRuntime, inspectRuntimeActivity, startRuntimeDaemon, type RuntimeConnection } from '@vsp/vsp-runtime';
+import { stopRuntimeForUpdate } from '../src/v1/update/self-update.js';
 import { KlientChatBackend } from '../src/v1/backend/klient-backend.js';
 import type { TranscriptMessage } from '../src/v1/domain/types.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).toReversed()) await cleanup(); });
 
-async function fixture(mode: 'normal' | 'http-retry' | 'stream-retry' = 'normal') {
+async function fixture(mode: 'normal' | 'http-retry' | 'stream-retry' = 'normal', idleTimeoutMs = 0) {
   const root = await mkdtemp(join(tmpdir(), 'vspi-recovery-'));
   const home = join(root, 'home');
   const workspace = join(root, 'project');
@@ -44,7 +45,7 @@ async function fixture(mode: 'normal' | 'http-retry' | 'stream-retry' = 'normal'
   await new Promise<void>(resolve => { server.listen(0, '127.0.0.1', resolve); });
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Expected TCP address');
-  const daemon = await startRuntimeDaemon({ homeDir: home, env: { HOME: root, PATH: process.env.PATH }, hostIdentity: { productName: 'vspi-test', version: '2.3.0-test', platform: 'test' } });
+  const daemon = await startRuntimeDaemon({ homeDir: home, idleTimeoutMs, env: { HOME: root, PATH: process.env.PATH }, hostIdentity: { productName: 'vspi-test', version: '2.3.0-test', platform: 'test' } });
   const connection = await connectRuntime(home);
   const connections: RuntimeConnection[] = [connection];
   const backends: KlientChatBackend[] = [];
@@ -77,10 +78,28 @@ async function fixture(mode: 'normal' | 'http-retry' | 'stream-retry' = 'normal'
     });
     return { backend, messages, errors, notices, retryNotices, busy: () => busy };
   }
-  return { home, daemon, connection, front, attempts: () => attempts, release: () => { for (const reply of replies.splice(0)) reply(); } };
+  return { home, daemon, connection, front, detach: async () => { for (const backend of backends) await backend.dispose(); for (const client of connections) await client.close(); }, attempts: () => attempts, release: () => { for (const reply of replies.splice(0)) reply(); } };
 }
 
 describe('multiple clients on a real runtime', () => {
+  it('finishes a detached turn before automatically shutting down its idle daemon', async () => {
+    const rig = await fixture('normal', 300);
+    const front = await rig.front('new');
+    const prompt = front.backend.send('finish after detach', { attachments: [], effort: 'off', behavior: 'prompt' });
+    void prompt.catch(() => {});
+    await vi.waitFor(() => { expect([...front.messages.values()].some(item => item.kind === 'text' && item.text === 'early ')).toBe(true); });
+    await rig.detach();
+    const witnessHome = await mkdtemp(join(tmpdir(), 'vspi-detach-witness-'));
+    const witness = await startRuntimeDaemon({ homeDir: witnessHome, idleTimeoutMs: 500, env: { HOME: witnessHome, PATH: process.env.PATH }, hostIdentity: { productName: 'vspi-test', version: 'test', platform: 'test' } });
+    try {
+      await witness.closed;
+      expect((await inspectRuntimeActivity(rig.home))?.busyAgents.length).toBe(1);
+      rig.release();
+      await rig.daemon.closed;
+      await expect(inspectRuntimeActivity(rig.home)).resolves.toBeUndefined();
+      await prompt.catch(() => {});
+    } finally { await witness.close(); await rm(witnessHome, { recursive: true, force: true }); }
+  }, 30000);
   it('recovers from a temporary HTTP failure without failing the prompt', async () => {
     const rig = await fixture('http-retry');
     const a = await rig.front('new');
@@ -143,9 +162,51 @@ describe('multiple clients on a real runtime', () => {
     await prompt;
   }, 30000);
 
-  it('refuses an upgrade shutdown while a client is still attached', async () => {
+  it('allows an upgrade shutdown with an idle client attached', async () => {
     const rig = await fixture();
-    await expect(stopRuntime(rig.home, 2000, { requireIdle: true })).rejects.toThrow('in use');
-    expect(await rig.connection.klient.global.env()).toHaveProperty('homeDir', rig.home);
+    const confirm = vi.fn(async () => false);
+    await expect(stopRuntimeForUpdate(rig.home, confirm)).resolves.toBeUndefined();
+    expect(confirm).not.toHaveBeenCalled();
+    await expect(rig.daemon.closed).resolves.toBeUndefined();
+  }, 30000);
+
+  it('keeps an active model turn running when update interruption is declined', async () => {
+    const rig = await fixture();
+    const front = await rig.front('new');
+    const prompt = front.backend.send('active work', { attachments: [], effort: 'off', behavior: 'prompt' });
+    void prompt.catch(() => {});
+    await vi.waitFor(() => { expect([...front.messages.values()].some(item => item.kind === 'text' && item.text === 'early ')).toBe(true); });
+    const confirm = vi.fn(async () => false);
+    await expect(stopRuntimeForUpdate(rig.home, confirm)).rejects.toThrow('更新已取消');
+    expect(confirm).toHaveBeenCalledOnce();
+    expect((await inspectRuntimeActivity(rig.home))?.busyAgents.length).toBe(1);
+    rig.release();
+    await prompt;
+  }, 30000);
+
+  it('stops an active model turn only after explicit update confirmation', async () => {
+    const rig = await fixture();
+    const front = await rig.front('new');
+    const prompt = front.backend.send('active work', { attachments: [], effort: 'off', behavior: 'prompt' });
+    void prompt.catch(() => {});
+    await vi.waitFor(() => { expect([...front.messages.values()].some(item => item.kind === 'text' && item.text === 'early ')).toBe(true); });
+    const confirm = vi.fn(async () => true);
+    await expect(stopRuntimeForUpdate(rig.home, confirm)).resolves.toBeUndefined();
+    expect(confirm).toHaveBeenCalledOnce();
+    await expect(rig.daemon.closed).resolves.toBeUndefined();
+    rig.release();
+    await prompt.catch(() => {});
+  }, 30000);
+
+  it('does not interrupt active work when no confirmation handler is available', async () => {
+    const rig = await fixture();
+    const front = await rig.front('new');
+    const prompt = front.backend.send('active work', { attachments: [], effort: 'off', behavior: 'prompt' });
+    void prompt.catch(() => {});
+    await vi.waitFor(() => { expect([...front.messages.values()].some(item => item.kind === 'text' && item.text === 'early ')).toBe(true); });
+    await expect(stopRuntimeForUpdate(rig.home)).rejects.toThrow('更新已取消');
+    expect((await inspectRuntimeActivity(rig.home))?.busyAgents.length).toBe(1);
+    rig.release();
+    await prompt;
   }, 30000);
 });

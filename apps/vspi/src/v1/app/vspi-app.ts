@@ -404,7 +404,7 @@ export class VspiApp implements Component, Focusable {
 	private startupSurface: string[] = [];
 	private backendSessionReady = false;
 	private runtimeSurfacePromise: Promise<void> | undefined;
-	private runtimeConnectionState: "reconnecting" | "reconnected" | "failed" | undefined;
+	private runtimeConnectionState: "reconnecting" | "reconnected" | "failed" | "stopped" | undefined;
 	private sessionEpoch = 0;
 	private sessionTransition = false;
 	private sessionResetObserved = false;
@@ -706,6 +706,8 @@ export class VspiApp implements Component, Focusable {
 						);
 					else if (state === "reconnected")
 						this.showNotice("运行时连接已恢复", "success");
+					else if (state === "stopped")
+						this.showNotice("运行时已主动停止或更新，此界面不再自动重连；请退出后运行 vspi continue", "warning");
 					else
 						this.showNotice(
 							`运行时连接已断开且自动恢复失败（已重试 ${String(attempt)} 次），请退出并重新启动 VSPi`,

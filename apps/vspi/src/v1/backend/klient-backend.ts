@@ -11,7 +11,7 @@ import type {
 	SessionHandle,
 	SessionMeta,
 } from "@moonshot-ai/klient";
-import type { RuntimeConnection } from "@vsp/vsp-runtime";
+import { RuntimeStoppedError, type RuntimeConnection } from "@vsp/vsp-runtime";
 import { loginWithOAuth } from "../providers/oauth-login.js";
 
 import type { AgentSnapshot } from "../agents/types.js";
@@ -1316,7 +1316,11 @@ export class KlientChatBackend implements ChatBackend {
 					this.connectionFailed = false;
 					this.events?.onRuntimeConnectionState?.("reconnected", attempt);
 					return;
-				} catch {
+				} catch (error) {
+					if (error instanceof RuntimeStoppedError) {
+						this.events?.onRuntimeConnectionState?.("stopped", attempt);
+						return;
+					}
 					continue;
 				}
 			}

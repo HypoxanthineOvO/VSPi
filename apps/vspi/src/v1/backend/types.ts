@@ -324,7 +324,7 @@ export interface ChatBackendEvents {
 	onRuntimeCatalogChanged?: () => void;
 	onPolicySnapshot?: (snapshot: PolicySnapshot) => void;
 	onRuntimeConnectionState?: (
-		state: "reconnecting" | "reconnected" | "failed",
+		state: "reconnecting" | "reconnected" | "failed" | "stopped",
 		attempt: number,
 	) => void;
 	onSessionError?: (error: Error) => void;

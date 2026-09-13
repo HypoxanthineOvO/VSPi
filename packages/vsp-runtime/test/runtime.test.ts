@@ -18,6 +18,9 @@ import { InMemorySkillCatalog } from "@moonshot-ai/agent-core-v2/features/skill/
 
 import {
 	connectRuntime,
+	reconnectRuntime,
+	RuntimeStoppedError,
+	inspectRuntimeActivity,
 	ensureRuntime,
 	inspectRuntime,
 	resolveRuntimePaths,
@@ -604,6 +607,75 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 		}
 	});
 
+	it('closes idle attached clients during a safe update shutdown', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-idle-update-'));
+		daemon = await startTestDaemon(homeDir);
+		const connection = await connectRuntime(homeDir);
+		try {
+			expect(await inspectRuntimeActivity(homeDir)).toMatchObject({ busyAgents: [], clients: 1 });
+			await expect(stopRuntime(homeDir, 2000, { requireIdle: true })).resolves.toBe(true);
+			await expect(daemon.closed).resolves.toBeUndefined();
+		} finally { await connection.close(); }
+	});
+
+	it('does not restart a runtime after its owner requested shutdown', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-intentional-stop-'));
+		daemon = await startTestDaemon(homeDir);
+		const connection = await connectRuntime(homeDir);
+		const connect = vi.fn(async () => connection);
+		try {
+			await stopRuntime(homeDir, 2000);
+			await expect(reconnectRuntime(connection, connect)).rejects.toBeInstanceOf(RuntimeStoppedError);
+			expect(connect).not.toHaveBeenCalled();
+		} finally { await connection.close(); }
+	});
+
+	it('permits recovery when no matching intentional shutdown was recorded', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-unexpected-disconnect-'));
+		daemon = await startTestDaemon(homeDir);
+		const connection = await connectRuntime(homeDir);
+		try {
+			const connect = vi.fn(async () => connection);
+			await expect(reconnectRuntime(connection, connect)).resolves.toBe(connection);
+			expect(connect).toHaveBeenCalledOnce();
+		} finally { await connection.close(); }
+	});
+
+	it('rejects a shutdown confirmation for a different runtime owner', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-stale-stop-confirmation-'));
+		daemon = await startTestDaemon(homeDir);
+		await expect(stopRuntime(homeDir, 2000, { expectedOwnerNonce: 'different-owner' })).rejects.toThrow('changed after confirmation');
+		expect(await inspectRuntime(homeDir)).toHaveProperty('pid', daemon.state.pid);
+	});
+
+	it('exits automatically after an unattached runtime remains idle', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-auto-idle-'));
+		daemon = await startTestDaemon(homeDir, 100);
+		await daemon.closed;
+		await expect(readFile(resolveRuntimePaths(homeDir).statePath)).rejects.toMatchObject({ code: 'ENOENT' });
+		expect(JSON.parse(await readFile(join(resolveRuntimePaths(homeDir).serverDir, 'shutdown-intent.json'), 'utf8'))).toMatchObject({ ownerNonce: daemon.state.ownerNonce, reason: 'idle' });
+	});
+
+	it('keeps a scheduled task alive with no attached client', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-scheduled-idle-'));
+		daemon = await startTestDaemon(homeDir, 300);
+		const connection = await connectRuntime(homeDir);
+		const session = await connection.klient.global.sessions.create({ workDir: homeDir });
+		const agent = connection.klient.session(session.id).agent('main');
+		const task = await agent.createCronTask({ cron: '0 0 1 1 *', prompt: 'future task', recurring: true });
+		await connection.close();
+		const witnessHome = await mkdtemp(join(tmpdir(), 'vsp-idle-witness-'));
+		const witness = await startTestDaemon(witnessHome, 400);
+		try {
+			await witness.closed;
+			expect(await inspectRuntimeActivity(homeDir)).toMatchObject({ scheduledAgents: [`${session.id}/main`] });
+			const next = await connectRuntime(homeDir);
+			try { await next.klient.session(session.id).agent('main').deleteCronTask(task.id); }
+			finally { await next.close(); }
+			await daemon.closed;
+		} finally { await witness.close(); await rm(witnessHome, { recursive: true, force: true }); }
+	});
+
 	it("repairs invalid TOML before Core starts and reaches a connectable state", async () => {
 		homeDir = await mkdtemp(join(tmpdir(), "vsp-runtime-invalid-config-"));
 		await writeFile(join(homeDir, "config.toml"), "[broken\napi_key = 'secret'\n");
@@ -796,10 +868,11 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 	});
 });
 
-function startTestDaemon(homeDir: string): Promise<RuntimeDaemon> {
+function startTestDaemon(homeDir: string, idleTimeoutMs = 0): Promise<RuntimeDaemon> {
 	return startRuntimeDaemon({
 		homeDir,
 		hostIdentity: identity,
 		env: { ...process.env, HOME: homeDir },
+		idleTimeoutMs,
 	});
 }
