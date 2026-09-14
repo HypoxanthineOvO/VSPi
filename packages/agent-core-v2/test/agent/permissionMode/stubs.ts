@@ -14,6 +14,7 @@ export function stubPermissionModeService(
       return mode();
     },
     getMode: mode,
+    runWithMode: (_mode, run) => run(),
     setMode: () => {},
     setModeAndBroadcast: () => {},
     onDidChangeMode: Event.None as Event<PermissionModeChangedContext>,

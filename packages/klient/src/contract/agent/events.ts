@@ -30,6 +30,7 @@ type AgentEventRegistration = EventRegistration | StreamEventRegistration;
 // ── payload schemas ─────────────────────────────────────────────────────────
 
 export const turnStartedEventSchema = z.object({
+  permissionMode: z.enum(['auto', 'manual', 'yolo']).optional(),
   type: z.literal('turn.started'),
   time: z.number().optional(),
   turnId: z.number(),

@@ -76,7 +76,7 @@ describe('SessionInitService', () => {
     const profile = {
       data: () => ({ modelAlias: 'mock-model', thinkingLevel: 'off' }),
     };
-    const permissionMode = { mode: 'auto', setMode: vi.fn() };
+    const permissionMode = { mode: 'auto', getMode: () => 'auto', setMode: vi.fn() };
 
     handles['main'] = {
       id: 'main',

@@ -1370,6 +1370,7 @@ function agentHandle(
     _serviceBrand: undefined,
     mode: 'auto',
     getMode: () => 'auto',
+    runWithMode: (_mode, run) => run(),
     setMode: () => {},
     setModeAndBroadcast: () => {},
     onDidChangeMode: Event.None,

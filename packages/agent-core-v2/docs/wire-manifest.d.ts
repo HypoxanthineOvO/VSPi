@@ -512,6 +512,7 @@ interface PromptAcceptedPayload {
   agentId: string;
   promptId: string;
   content?: any;
+  permissionMode?: 'auto' | 'manual' | 'yolo';
 }
 
 /**

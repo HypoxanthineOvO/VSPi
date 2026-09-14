@@ -35,6 +35,7 @@ Options:
   --model <provider/model|alias>
   --effort <level>
   --profile <profile>
+  --permission <auto|manual|yolo|inherit>
   --cwd <directory>
   --output <text|json|jsonl>
   --session <new|latest|session-id>
@@ -46,6 +47,7 @@ export type ExecOutput = "text" | "json" | "jsonl";
 export type ExecStatus = "success" | "failed" | "cancelled";
 
 export interface ExecOptions {
+  readonly permission?: 'auto' | 'manual' | 'yolo' | 'inherit';
 	readonly prompt: string;
 	readonly stdin: boolean;
 	readonly model?: string;
@@ -207,6 +209,7 @@ export function parseExecArgs(
 	let model: string | undefined;
 	let effort: string | undefined;
 	let profile: string | undefined;
+	let permission: ExecOptions['permission'];
 	let cwd = defaultCwd;
 	let output: ExecOutput = "text";
 	let session = "new";
@@ -251,6 +254,10 @@ export function parseExecArgs(
 				case "--profile":
 					profile = value;
 					break;
+				case "--permission":
+					if (!['auto', 'manual', 'yolo', 'inherit'].includes(value)) throw new ExecUsageError(`Invalid --permission: ${value}`);
+					permission = value as ExecOptions['permission'];
+					break;
 				case "--cwd":
 					cwd = value;
 					break;
@@ -271,7 +278,7 @@ export function parseExecArgs(
 	}
 
 	if (help) {
-		return { prompt: "", stdin: false, model, effort, profile, cwd, output, session, continueLatest, help };
+		return { prompt: "", stdin: false, model, effort, profile, permission, cwd, output, session, continueLatest, help };
 	}
 	if (continueLatest && session !== "new") {
 		throw new ExecUsageError("--continue cannot be combined with --session");
@@ -293,7 +300,7 @@ export function parseExecArgs(
 	}
 	const prompt = stdin ? "" : positional.join(" ").trim();
 	if (!stdin && prompt.length === 0) throw new ExecUsageError("Prompt is required");
-	return { prompt, stdin, model, effort, profile, cwd, output, session, continueLatest, help };
+	return { prompt, stdin, model, effort, profile, permission, cwd, output, session, continueLatest, help };
 }
 
 export async function runExec(
@@ -352,10 +359,11 @@ export async function runExec(
 				await agent.setThinking(resolveExecEffort(selectedModel, providers, options.effort));
 			}
 		}
-		await agent.setPermission("manual");
+		if (created && options.permission !== 'inherit') await agent.setPermission(options.permission ?? 'auto');
+		const permissionMode = !created && options.permission !== 'inherit' ? options.permission : undefined;
 		const outcome = await driveTurn(session, agent, options.prompt, io, emitJsonl, () => {
 			submitted = true;
-		});
+		}, permissionMode);
 		if (created && !submitted) await session.delete().catch(() => {});
 		return makeResult(outcome.status, outcome.status === "success" ? 0 : outcome.status === "cancelled" ? 130 : 1, {
 			sessionId,
@@ -504,6 +512,7 @@ async function driveTurn(
 	io: ExecIo,
 	emit: ((event: ExecJsonlEvent) => void) | undefined,
 	onSubmitted: () => void,
+	permissionMode?: 'auto' | 'manual' | 'yolo',
 ): Promise<{ status: ExecStatus; turnId: number | null; text: string; error: string | null }> {
 	const promptId = randomUUID();
 	let targetTurn: number | undefined;
@@ -569,8 +578,10 @@ async function driveTurn(
 			if (targetTurn === undefined || interaction.origin.turnId !== targetTurn) continue;
 			handledInteractions.add(interaction.id);
 			if (interaction.kind === "approval") {
+				interactionFailure = 'Tool approval is required in non-interactive exec; the requested operation was not approved. Use an interactive client or explicitly choose an authorized --permission mode.';
 				emit?.({ type: "interaction", interactionId: interaction.id, kind: interaction.kind, action: "rejected" });
 				await session.interactions.respond(interaction.id, { decision: "rejected" });
+				await agent.cancel({ turnId: targetTurn });
 			} else if (interaction.kind === "question") {
 				emit?.({ type: "interaction", interactionId: interaction.id, kind: interaction.kind, action: "dismissed" });
 				await session.interactions.respond(interaction.id, null);
@@ -710,6 +721,7 @@ async function driveTurn(
 		const launchPromise = agent.prompt({
 			input: [{ type: "text", text: prompt }],
 			promptId,
+			permissionMode,
 		}).then(
 			(launch) => ({ kind: "launch" as const, launch }),
 			(error: unknown) => ({ kind: "error" as const, error }),
@@ -785,8 +797,8 @@ function legacyResumeSelector(value: string): boolean {
 	return value === "latest" || UUID_PATTERN.test(value) || ULID_PATTERN.test(value) || (value.startsWith("session_") && UUID_PATTERN.test(value.slice(8)));
 }
 
-function optionName(arg: string): "--model" | "--effort" | "--profile" | "--cwd" | "--output" | "--session" | undefined {
-	for (const option of ["--model", "--effort", "--profile", "--cwd", "--output", "--session"] as const) {
+function optionName(arg: string): "--model" | "--effort" | "--profile" | "--permission" | "--cwd" | "--output" | "--session" | undefined {
+	for (const option of ["--model", "--effort", "--profile", "--permission", "--cwd", "--output", "--session"] as const) {
 		if (arg === option || arg.startsWith(`${option}=`)) return option;
 	}
 	return undefined;

@@ -8,6 +8,7 @@ const promptAcceptedSchema = z.object({
   agentId: z.string(),
   promptId: z.string().min(1),
   content: z.unknown().optional(),
+  permissionMode: z.enum(['auto', 'manual', 'yolo']).optional(),
 });
 
 export class PromptAccepted extends AgentEvent2<z.infer<typeof promptAcceptedSchema>> {
@@ -20,6 +21,7 @@ export interface PromptAccepted {
   readonly agentId: string;
   readonly promptId: string;
   readonly content?: unknown;
+  readonly permissionMode?: 'auto' | 'manual' | 'yolo';
 }
 
 export const promptAdmissionKey = defineState('promptAdmission', (): Map<string, true> => new Map())

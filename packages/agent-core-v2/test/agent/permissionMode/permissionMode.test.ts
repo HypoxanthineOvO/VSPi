@@ -104,7 +104,66 @@ function spliceReminderOut(): void {
   reminderLive = false;
 }
 
+function deferredSignal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
 describe('AgentPermissionModeService (wire-backed)', () => {
+  it('applies an invocation override without persisting or broadcasting it', async () => {
+    await svc.runWithMode('auto', async () => {
+      expect(svc.mode).toBe('auto');
+      expect(svc.getMode()).toBe('manual');
+      await Promise.resolve();
+      expect(svc.mode).toBe('auto');
+    });
+    expect(svc.mode).toBe('manual');
+    expect(await readRecords()).toEqual([]);
+  });
+
+  it('clears an invocation override when the turn throws', async () => {
+    await expect(svc.runWithMode('auto', async () => { throw new Error('turn failed'); })).rejects.toThrow('turn failed');
+    expect(svc.mode).toBe('manual');
+    expect(await readRecords()).toEqual([]);
+  });
+
+  it('preserves a concurrent persistent permission change instead of restoring an old value', async () => {
+    const gate = deferredSignal();
+    const running = svc.runWithMode('auto', async () => { await gate.promise; return svc.mode; });
+    expect(svc.mode).toBe('manual');
+    svc.setMode('yolo');
+    gate.resolve();
+    expect(await running).toBe('yolo');
+    expect(svc.mode).toBe('yolo');
+    expect((await readRecords()).filter(r => r.type === 'permission.set_mode')).toEqual([expect.objectContaining({ mode: 'yolo' })]);
+  });
+
+  it('revokes an override when the user explicitly reselects the same persistent mode', async () => {
+    const gate = deferredSignal();
+    const running = svc.runWithMode('auto', async () => { await gate.promise; return svc.mode; });
+    svc.setMode('manual');
+    gate.resolve();
+    expect(await running).toBe('manual');
+  });
+
+  it('does not retain invocation permissions in work that outlives the turn', async () => {
+    const gate = deferredSignal();
+    let late: Promise<PermissionMode> | undefined;
+    await svc.runWithMode('auto', async () => { late = gate.promise.then(() => svc.mode); });
+    gate.resolve();
+    expect(await late).toBe('manual');
+  });
+
+  it('isolates concurrent asynchronous permission scopes', async () => {
+    const gate = deferredSignal();
+    const auto = svc.runWithMode('auto', async () => { await gate.promise; return svc.mode; });
+    const yolo = svc.runWithMode('yolo', async () => { await gate.promise; return svc.mode; });
+    gate.resolve();
+    expect(await auto).toBe('auto');
+    expect(await yolo).toBe('yolo');
+    expect(svc.mode).toBe('manual');
+  });
   it('setMode updates mode and fires onDidChangeMode with mode/previousMode', () => {
     const changes: { mode: PermissionMode; previousMode: PermissionMode }[] = [];
     disposables.add(

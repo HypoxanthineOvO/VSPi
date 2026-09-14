@@ -18,10 +18,10 @@ VSPi 是基于 Kimi Code 引擎演进的终端编码助手。常驻进程（daem
 
 ### 新安装
 
-运行安装包需要 **Node.js ≥ 22.19.0**。**2.4.1 先面向 Linux 发布**；Windows 暂留 2.2.4，待本轮实机验收后再推进，macOS 本轮未做实机验证。
+运行安装包需要 **Node.js ≥ 22.19.0**。**2.4.2 先面向 Linux 发布**；Windows 暂留 2.2.4，待本轮实机验收后再推进，macOS 本轮未做实机验证。
 
 ```sh
-npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.4.1/vspi-2.4.1.tgz"
+npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.4.2/vspi-2.4.2.tgz"
 vspi --version
 ```
 
@@ -40,12 +40,12 @@ Linux 从 2.2.x 升级：先结束任务、退出所有客户端，再停旧并�
 
 ```sh
 vspi daemon stop
-npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.4.1/vspi-2.4.1.tgz"
+npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.4.2/vspi-2.4.2.tgz"
 vspi --version
 vspi continue
 ```
 
-2.4.1 按普通正式版本发布到共享更新通道。首次从2.3.0/2.4.0升级，请先在旧界面 `/quit`，再 `vspi daemon stop` 和 `vspi update`，避免旧界面自动拉起后端。2.4.1 起空闲连接不阻止更新，有活跃工作时先询问是否终止，默认拒绝。本轮实测范围为 Linux，Windows 用户建议暂留[固定 2.2.4 发行包](https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.2.4/vspi-2.2.4.tgz)，等待实机验收，不要先运行 `vspi update`。新版更新器会校验 SHA-256，保存旧包和配置备份，再安装、验证并切换 Daemon。
+2.4.2 按普通正式版本发布到共享更新通道。首次从2.3.0/2.4.0升级，请先在旧界面 `/quit`，再 `vspi daemon stop` 和 `vspi update`，避免旧界面自动拉起后端。2.4.1 起空闲连接不阻止更新，有活跃工作时先询问是否终止，默认拒绝。本轮实测范围为 Linux，Windows 用户建议暂留[固定 2.2.4 发行包](https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.2.4/vspi-2.2.4.tgz)，等待实机验收，不要先运行 `vspi update`。新版更新器会校验 SHA-256，保存旧包和配置备份，再安装、验证并切换 Daemon。
 
 从 2.2.x 首次升级仍需先确认任务结束并显式运行 `vspi daemon stop`，再安装新版；不要删除配置目录。旧 Windows 实例不支持新关闭协议时，需要明确确认后使用旧实例终止流程。安全升级、回退和锁恢复的边界见[使用指南](apps/vspi/docs/usage.md#升级诊断与运行边界)。
 
@@ -60,6 +60,8 @@ vspi update                           # 更新到最新发布版
 ```
 
 界面内用 `/agents` 浏览子对话，`/tasks` 查看后台任务，`/goal` 管理目标；其他操作见[使用指南](apps/vspi/docs/usage.md)和 `vspi --help`。
+
+**2.4.2 新建 `exec` 默认 Auto**：保留显式deny后自动放行，不是沙箱。支持 `--permission auto|manual|yolo|inherit`；`exec resume` 默认继承原权限，显式参数仅覆盖本轮，不再永久修改共享会话或广播到其他Agent。依赖旧版保守默认的脚本请明确选择Manual或inherit。流式响应的坏SSE JSON现在会在预算内恢复并提供结构诊断，不猜补坏JSON、不重放已执行工具。
 
 **`/quit` 只断开前端，`/cancel-and-exit` 才取消当前运行并退出。**
 

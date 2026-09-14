@@ -59,7 +59,7 @@ describe('SessionSubagentService planSpawn and spawn', () => {
   let createAgent: ReturnType<typeof vi.fn>;
   let forkAgent: ReturnType<typeof vi.fn>;
   let acquireRuntime: ReturnType<typeof vi.fn>;
-  let callerPermissionMode: { mode: string; setMode: ReturnType<typeof vi.fn> };
+  let callerPermissionMode: { mode: string; getMode: () => string; setMode: ReturnType<typeof vi.fn> };
   let createdPermissionMode: { mode: string; setMode: ReturnType<typeof vi.fn> };
   let callerUserTools: IAgentUserToolService;
   let createdUserTools: IAgentUserToolService;
@@ -126,7 +126,7 @@ describe('SessionSubagentService planSpawn and spawn', () => {
     ];
     modelIds = new Set(['main-model']);
     modelMeta = new Map();
-    callerPermissionMode = { mode: 'auto', setMode: vi.fn() };
+    callerPermissionMode = { mode: 'auto', getMode: () => callerPermissionMode.mode, setMode: vi.fn() };
     createdPermissionMode = { mode: 'manual', setMode: vi.fn() };
     callerUserTools = userToolsStub();
     createdUserTools = userToolsStub();
@@ -575,6 +575,27 @@ describe('SessionSubagentService planSpawn and spawn', () => {
 
     expect(createdPermissionMode.setMode).toHaveBeenCalledWith('auto');
     expect(createdUserTools.inheritUserTools).toHaveBeenCalledWith(callerUserTools);
+  });
+
+  it('inherits the persistent mode instead of an invocation-only elevation', async () => {
+    callerPermissionMode.mode = 'auto';
+    callerPermissionMode.getMode = () => 'manual';
+    await spawnNonForkChild(service());
+    expect(createdPermissionMode.setMode).toHaveBeenCalledWith('manual');
+  });
+
+  it('does not escape an invocation restriction through a new subagent', async () => {
+    callerPermissionMode.mode = 'manual';
+    callerPermissionMode.getMode = () => 'auto';
+    await spawnNonForkChild(service());
+    expect(createdPermissionMode.setMode).toHaveBeenCalledWith('manual');
+  });
+
+  it('does not elevate a child when a stored permission value is unrecognized', async () => {
+    callerPermissionMode.mode = 'auto';
+    callerPermissionMode.getMode = () => 'unsupported-mode';
+    await spawnNonForkChild(service());
+    expect(createdPermissionMode.setMode).toHaveBeenCalledWith('manual');
   });
 
   it('applies the profile prompt prefix to the spawned prompt', async () => {

@@ -359,6 +359,33 @@ describe("exec parser and stdin", () => {
 });
 
 describe("model, effort, profile, and cleanup", () => {
+  it('initializes a new exec session with Auto permission', async () => {
+    const fake = fixture();
+    await runExec(fake.klient, options(), io().value);
+    expect(fake.setPermission).toHaveBeenCalledExactlyOnceWith('auto');
+  });
+
+  it('inherits the stored permission when resuming without an override', async () => {
+    const fake = fixture({ summaries: [{ id: 'session-1', workspaceId: 'workspace-1' }] });
+    await runExec(fake.klient, options({ session: 'latest' }), io().value);
+    expect(fake.setPermission).not.toHaveBeenCalled();
+    expect(fake.prompt).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: undefined }));
+  });
+
+  it('passes explicit resume permission as a turn option without changing session permissions', async () => {
+    const fake = fixture({ summaries: [{ id: 'session-1', workspaceId: 'workspace-1' }] });
+    await runExec(fake.klient, options({ session: 'latest', permission: 'auto' }), io().value);
+    expect(fake.setPermission).not.toHaveBeenCalled();
+    expect(fake.prompt).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'auto' }));
+  });
+
+  it.each(['auto', 'manual', 'yolo', 'inherit'])('parses the explicit %s permission parameter', permission => {
+    expect(parseExecArgs(['--permission', permission, 'hello'], '/tmp')).toHaveProperty('permission', permission);
+  });
+
+  it('rejects unknown permission names rather than silently escalating', () => {
+    expect(() => parseExecArgs(['--permission', 'yolo+', 'hello'], '/tmp')).toThrow('Invalid --permission');
+  });
 	it("resolves display names but sends the real catalog alias", async () => {
 		const catalog = [model("provider", "wire-alias")];
 		expect(resolveExecModel("wire-alias", catalog).model).toBe("wire-alias");

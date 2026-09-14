@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { ContentPart } from '#/kosong/contract/message';
+import type { PermissionMode } from '#/agent/permissionPolicy/types';
 import { USER_PROMPT_ORIGIN, type ContextMessage, type PromptOrigin } from '#/agent/contextMemory/types';
 
 export type StepRequestState = 'pending' | 'materialized' | 'aborted';
@@ -12,6 +13,7 @@ export type StepRequestAdmission =
   | 'activeTurnOnly';
 
 export interface TurnSeed {
+  readonly permissionMode?: PermissionMode;
   readonly input: readonly ContentPart[];
   readonly origin: PromptOrigin;
   readonly promptId?: string;

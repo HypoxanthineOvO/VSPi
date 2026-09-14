@@ -28,6 +28,13 @@ export function errorDiagnostic(value: unknown): Record<string, unknown>[] {
       'sampleLimitBytes',
       'firstByteMs',
       'lastByteMs',
+      'parseStage',
+      'parseFailure',
+      'parseOffset',
+      'eventIndex',
+      'eventType',
+      'eventBytes',
+      'eventLimitBytes',
     ]) {
       const field = details[key];
       if (typeof field === 'string') item[key] = redactFeedbackText(field).slice(0, 160);

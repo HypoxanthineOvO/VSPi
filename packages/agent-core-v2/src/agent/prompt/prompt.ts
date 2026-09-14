@@ -4,6 +4,7 @@ import type { ContextMessage } from '#/agent/contextMemory/types';
 import type { Turn, TurnResult } from '#/agent/loop/loop';
 import type { ContentPart } from '#/kosong/contract/message';
 import type { Hooks } from '#/hooks';
+import type { PermissionMode } from '#/agent/permissionPolicy/types';
 
 export interface PromptSubmitContext {
   readonly promptMessage: ContextMessage;
@@ -12,6 +13,7 @@ export interface PromptSubmitContext {
 }
 
 export interface PromptInput {
+  readonly permissionMode?: PermissionMode;
   readonly id?: string;
   readonly message: ContextMessage;
 }
@@ -50,6 +52,7 @@ export interface PromptQueueSnapshot {
 }
 
 export interface PromptPayload {
+  readonly permissionMode?: PermissionMode;
   readonly input: readonly ContentPart[];
   readonly disabledTools?: readonly string[];
   readonly promptId?: string;
@@ -66,7 +69,7 @@ export interface PromptLaunchResult {
 
 export interface PromptReservation extends IDisposable {
   readonly id: string;
-  submit(message: ContextMessage): Promise<PromptHandle>;
+  submit(message: ContextMessage, permissionMode?: PermissionMode): Promise<PromptHandle>;
 }
 
 export const promptAdmission = Symbol('promptAdmission');

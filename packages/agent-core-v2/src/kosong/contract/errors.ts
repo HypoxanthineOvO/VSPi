@@ -10,6 +10,7 @@ export const PROVIDER_AUTH_ERROR_CODE = 'provider.auth_error';
 export const PROVIDER_CONNECTION_ERROR_CODE = 'provider.connection_error';
 export const PROVIDER_PROTOCOL_ERROR_CODE = 'provider.protocol_error';
 export const PROVIDER_INCOMPLETE_STREAM_ERROR_CODE = 'provider.incomplete_stream';
+export const PROVIDER_STREAM_PARSE_ERROR_CODE = 'provider.stream_parse_error';
 export const PROVIDER_OVERLOADED_ERROR_CODE = 'provider.overloaded';
 export const CONTEXT_OVERFLOW_ERROR_CODE = 'context.overflow';
 
@@ -21,6 +22,7 @@ export type ProviderErrorCode =
   | typeof PROVIDER_CONNECTION_ERROR_CODE
   | typeof PROVIDER_PROTOCOL_ERROR_CODE
   | typeof PROVIDER_INCOMPLETE_STREAM_ERROR_CODE
+  | typeof PROVIDER_STREAM_PARSE_ERROR_CODE
   | typeof PROVIDER_OVERLOADED_ERROR_CODE
   | typeof CONTEXT_OVERFLOW_ERROR_CODE;
 
@@ -69,6 +71,13 @@ export class APIIncompleteStreamError extends ChatProviderError {
   }
 }
 
+export class APIStreamParseError extends ChatProviderError {
+  constructor(details?: Readonly<Record<string, unknown>>) {
+    super('Provider returned invalid JSON in an SSE event.', PROVIDER_STREAM_PARSE_ERROR_CODE, { details });
+    this.name = 'APIStreamParseError';
+  }
+}
+
 export class VideoUploadUnsupportedError extends ChatProviderError {
   constructor(message: string) {
     super(message);
@@ -79,8 +88,8 @@ export class VideoUploadUnsupportedError extends ChatProviderError {
 export class ImageFormatProviderError extends ChatProviderError {}
 
 export class APITimeoutError extends ChatProviderError {
-  constructor(message: string) {
-    super(message, PROVIDER_CONNECTION_ERROR_CODE);
+  constructor(message: string, details?: Readonly<Record<string, unknown>>) {
+    super(message, PROVIDER_CONNECTION_ERROR_CODE, { details });
     this.name = 'APITimeoutError';
   }
 }
@@ -254,6 +263,7 @@ export function isImageFormatError(error: unknown): boolean {
 }
 
 export function isRetryableGenerateError(error: unknown): boolean {
+  if (error instanceof APIStreamParseError) return true;
   if (error instanceof APIProtocolError) return false;
   if (error instanceof APIIncompleteStreamError) return true;
   if (error instanceof APIConnectionError || error instanceof APITimeoutError) {
@@ -275,6 +285,7 @@ export function isRetryableGenerateError(error: unknown): boolean {
 }
 
 export function isTransientGenerateError(error: unknown): boolean {
+  if (error instanceof APIStreamParseError) return true;
   if (error instanceof APIIncompleteStreamError) return true;
   if (error instanceof APIConnectionError || error instanceof APITimeoutError) return true;
   if (error instanceof APIProviderQuotaExhaustedError) return false;
@@ -507,6 +518,7 @@ export type ApiErrorKind =
   | 'network'
   | 'protocol'
   | 'incomplete_stream'
+  | 'stream_parse'
   | 'timeout'
   | 'empty_response'
   | 'other';
@@ -518,6 +530,7 @@ export interface ApiErrorClassification {
 
 export function classifyApiError(error: unknown): ApiErrorClassification {
   const statusCode = getStatusCode(error);
+  if (error instanceof APIStreamParseError) return { kind: 'stream_parse', statusCode };
   if (error instanceof APIProtocolError) return { kind: 'protocol', statusCode };
   if (error instanceof APIIncompleteStreamError) return { kind: 'incomplete_stream', statusCode };
   if (error instanceof APIContextOverflowError) return { kind: 'context_overflow', statusCode };

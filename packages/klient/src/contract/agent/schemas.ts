@@ -38,6 +38,7 @@ export const promptPartSchema = z.discriminatedUnion('type', [
 export const emptyPayloadSchema = z.object({});
 
 export const promptPayloadSchema = z.object({
+  permissionMode: z.enum(['auto', 'manual', 'yolo']).optional(),
   input: z.array(promptPartSchema),
   // Mirrors `PromptPayload.disabledTools` in the engine (client-managed
   // session denylist, full-replace).

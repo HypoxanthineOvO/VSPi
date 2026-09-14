@@ -12,6 +12,7 @@ import { toErrorMessage } from '#/_base/errors/errorMessage';
 import { IAgentLLMRequesterService, type AgentLLMRequestFinish } from '#/agent/llmRequester/llmRequester';
 import type { LLMRequestTrace } from '#/kosong/contract/requestTrace';
 import { IAgentToolExecutorService } from '#/agent/toolExecutor/toolExecutor';
+import { IAgentPermissionModeService } from '#/agent/permissionMode/permissionMode';
 import { IConfigService } from '#/app/config/config';
 import { AgentErrorEvent } from '#/agent/mcp/mcpEvents';
 import { type FinishReason } from '#/kosong/contract/provider';
@@ -107,6 +108,7 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
     @IAgentContextMemoryService private readonly context: IAgentContextMemoryService,
     @IAgentLLMRequesterService private readonly llmRequester: IAgentLLMRequesterService,
     @IAgentToolExecutorService private readonly toolExecutor: IAgentToolExecutorService,
+    @IAgentPermissionModeService private readonly permissionMode: IAgentPermissionModeService,
     @IConfigService private readonly config: IConfigService,
     @IEventDispatcher private readonly dispatcher: IEventDispatcher,
     @IAgentScopeContext private readonly scopeContext: IAgentScopeContext,
@@ -463,22 +465,25 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
   }
 
   private startTurn(job: TurnJob): void {
-    const origin = job.seed.origin;
-    void this.dispatcher.dispatch(
-      new TurnPrompt({ agentId: this.scopeContext.agentId, input: job.seed.input, origin }),
-    );
-    job.turn.state = 'running';
-    this.activeTurnJob = job;
-    void this.dispatcher.dispatch(
-      new TurnStarted({
-        agentId: this.scopeContext.agentId,
-        turnId: job.turn.id,
-        origin,
-        prompt: isDisplayablePromptOrigin(origin) ? turnPromptText(job.seed.input, origin) : undefined,
-        promptAttachments: turnPromptAttachments(job.seed.input, origin),
-      }),
-    );
-    void this.runTurn(job.turn, job.ready).then(job.result.resolve, job.result.reject);
+    void this.permissionMode.runWithMode(job.seed.permissionMode, async () => {
+      const origin = job.seed.origin;
+      void this.dispatcher.dispatch(
+        new TurnPrompt({ agentId: this.scopeContext.agentId, input: job.seed.input, origin }),
+      );
+      job.turn.state = 'running';
+      this.activeTurnJob = job;
+      void this.dispatcher.dispatch(
+        new TurnStarted({
+          agentId: this.scopeContext.agentId,
+          turnId: job.turn.id,
+          origin,
+          prompt: isDisplayablePromptOrigin(origin) ? turnPromptText(job.seed.input, origin) : undefined,
+          promptAttachments: turnPromptAttachments(job.seed.input, origin),
+          permissionMode: job.seed.permissionMode,
+        }),
+      );
+      return this.runTurn(job.turn, job.ready);
+    }).then(job.result.resolve, job.result.reject);
   }
 
   private async runTurn(

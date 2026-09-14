@@ -62,6 +62,7 @@ export interface AgentFacade {
     input: readonly ContentPart[];
     disabledTools?: readonly string[];
     promptId?: string;
+    permissionMode?: PermissionMode;
   }): Promise<PromptLaunchResult>;
   /**
    * Submit one prompt with one or more skill activations bundled into the

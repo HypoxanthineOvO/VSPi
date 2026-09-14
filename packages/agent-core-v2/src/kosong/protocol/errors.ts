@@ -7,6 +7,7 @@ import {
   PROVIDER_CONNECTION_ERROR_CODE,
   PROVIDER_PROTOCOL_ERROR_CODE,
   PROVIDER_INCOMPLETE_STREAM_ERROR_CODE,
+  PROVIDER_STREAM_PARSE_ERROR_CODE,
   PROVIDER_FILTERED_ERROR_CODE,
   PROVIDER_OVERLOADED_ERROR_CODE,
   PROVIDER_RATE_LIMIT_ERROR_CODE,
@@ -24,6 +25,7 @@ export const ProtocolErrors = {
     PROVIDER_CONNECTION_ERROR: PROVIDER_CONNECTION_ERROR_CODE,
     PROVIDER_PROTOCOL_ERROR: PROVIDER_PROTOCOL_ERROR_CODE,
     PROVIDER_INCOMPLETE_STREAM: PROVIDER_INCOMPLETE_STREAM_ERROR_CODE,
+    PROVIDER_STREAM_PARSE: PROVIDER_STREAM_PARSE_ERROR_CODE,
     PROVIDER_OVERLOADED: PROVIDER_OVERLOADED_ERROR_CODE,
     CONTEXT_OVERFLOW: CONTEXT_OVERFLOW_ERROR_CODE,
   },
@@ -31,10 +33,17 @@ export const ProtocolErrors = {
     'provider.rate_limit',
     'provider.connection_error',
     'provider.incomplete_stream',
+    'provider.stream_parse_error',
     'provider.overloaded',
     'context.overflow',
   ],
   info: {
+    'provider.stream_parse_error': {
+      title: 'Provider SSE event contains invalid JSON',
+      retryable: true,
+      public: true,
+      action: 'Retry within the recovery budget; correlate request IDs with gateway and upstream logs.',
+    },
     'provider.protocol_error': {
       title: 'Provider response protocol mismatch',
       retryable: false,

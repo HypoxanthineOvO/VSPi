@@ -307,6 +307,7 @@ function createAgentLifecycleStub(options: AgentLifecycleStubOptions = {}): Agen
           return {
             _serviceBrand: undefined,
             mode: 'manual',
+            getMode: () => 'manual',
             setMode: () => {},
             onDidChangeMode: Event.None,
           } as never;

@@ -152,6 +152,14 @@ describe('AgentPromptService', () => {
     expect(prompt.list().pending.map((item) => item.id)).toEqual([first.id, second.id]);
   });
 
+  it('refuses to steer a permission-scoped prompt into another turn', async () => {
+    const { prompt } = harness();
+    await prompt.enqueue({ message: message('active') });
+    const queued = await prompt.enqueue({ message: message('scoped'), permissionMode: 'manual' });
+    await expect(prompt.steer([queued.id])).rejects.toThrow('own turn');
+    expect(prompt.list().pending.map(item => item.id)).toEqual([queued.id]);
+  });
+
   it('publishes prompt.queued only for prompts that cannot launch immediately', async () => {
     const { prompt, eventBus } = harness();
     const queued: Array<{ promptId: string; queueLength: number }> = [];

@@ -1,6 +1,7 @@
 import { USER_PROMPT_ORIGIN, type ContextMessage } from '#/agent/contextMemory/types';
 import { newMessageId } from '#/agent/contextMemory/messageId';
 import { StepRequest, type StepRequestOptions, type TurnSeed } from '#/agent/loop/stepRequest';
+import type { PermissionMode } from '#/agent/permissionPolicy/types';
 import { gateImageFormatParts } from '#/agent/media/image-compress';
 import type { ReminderRuntime } from '#/features/reminder/reminderAgentRuntime';
 
@@ -48,6 +49,7 @@ export class PromptStepRequest extends UserMessageStepRequest {
     message: ContextMessage,
     captions: readonly string[],
     reminders: ReminderRuntime,
+    private readonly permissionMode?: PermissionMode,
   ) {
     super(message, captions, reminders, { admission: 'newTurn' });
   }
@@ -57,6 +59,7 @@ export class PromptStepRequest extends UserMessageStepRequest {
       input: this.message.content,
       origin: this.message.origin ?? USER_PROMPT_ORIGIN,
       promptId: this.message.id,
+      permissionMode: this.permissionMode,
     };
   }
 }

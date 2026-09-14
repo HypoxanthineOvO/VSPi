@@ -1,5 +1,6 @@
 /* oxlint-disable typescript-eslint/no-unsafe-declaration-merging, eslint-plugin-import/namespace -- Event2 class+payload-interface declaration merging is the sanctioned event-declaration idiom. */
 import type { PromptOrigin } from '#/agent/contextMemory/types';
+import type { PermissionMode } from '#/agent/permissionPolicy/types';
 import { parseDaemonFileUrl } from '#/agent/media/mediaRef';
 import { AgentEvent2 } from '#/app/event/event2';
 import type { FinishReason } from '#/kosong/contract/provider';
@@ -29,6 +30,7 @@ export type TurnPromptAttachment =
   | TurnPromptAttachmentFile;
 
 export interface TurnStartedPayload {
+  readonly permissionMode?: PermissionMode;
   readonly agentId: string;
   readonly turnId: number;
   readonly origin: PromptOrigin;

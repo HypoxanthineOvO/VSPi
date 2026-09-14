@@ -5,7 +5,7 @@ import { IHostFileSystem } from '#/os/interface/hostFileSystem';
 import { IAgentProfileService } from '#/agent/profile/profile';
 import { loadAgentsMdDetailed } from '#/agent/profile/context';
 import { IAgentAgentsMdReminderService } from '#/agent/agentsMdReminder/agentsMdReminder';
-import { IAgentPermissionModeService } from '#/agent/permissionMode/permissionMode';
+import { IAgentPermissionModeService, permissionModeForChild } from '#/agent/permissionMode/permissionMode';
 import { agentContextOf } from '#/agent/scopeContext/scopeContext';
 import { AgentReminder } from '#/features/reminder/reminderAgentRuntime';
 import { IEventDispatcher } from '#/state/eventDispatcher';
@@ -53,7 +53,7 @@ export class SessionInitService implements ISessionInitService {
       if (own.modelAlias === undefined) {
         throw new Error2(ErrorCodes.SESSION_INIT_FAILED, 'Main agent has no model bound');
       }
-      const permissionMode = main.accessor.get(IAgentPermissionModeService).mode;
+      const permissionMode = permissionModeForChild(main.accessor.get(IAgentPermissionModeService));
 
       const childContext = await this.agentLifecycle.create({
         binding: {

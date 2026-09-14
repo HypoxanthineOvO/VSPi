@@ -1,7 +1,9 @@
 import type { Protocol } from '#/kosong/protocol/protocol';
+import { APIProtocolError, APIStreamParseError } from '#/kosong/contract/errors';
 
 type ResponseFormat = 'openai' | 'openai_responses' | 'anthropic' | 'html' | 'non_streaming_json';
 const SAMPLE_BYTES = 64 * 1024;
+const EVENT_BYTES = 4 * 1024 * 1024;
 const TRANSPORT_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'ERR_TLS_CERT_ALTNAME_INVALID']);
 
 function object(value: unknown): Record<string, unknown> | undefined {
@@ -12,6 +14,17 @@ export class ResponseDiagnostics {
   private readonly started = Date.now();
   private readonly decoder = new TextDecoder();
   private buffer = '';
+  private line = '';
+  private lineBytes = 0;
+  private eventData: string[] = [];
+  private eventBytes = 0;
+  private eventType = 'message';
+  private eventIndex = 0;
+  private skipLf = false;
+  private failureType: 'invalid_json' | 'event_too_large' | undefined;
+  private parseOffset: number | undefined;
+  private prefix = '';
+  private done = false;
   private sampledBytes = 0;
   private bytesReceived = 0;
   private firstByteMs: number | undefined;
@@ -40,25 +53,92 @@ export class ResponseDiagnostics {
     const elapsed = Math.max(0, Date.now() - this.started);
     this.firstByteMs ??= elapsed;
     this.lastByteMs = elapsed;
-    const size = Math.min(chunk.byteLength, SAMPLE_BYTES - this.sampledBytes);
-    if (size <= 0) return;
-    this.sampledBytes += size;
-    this.buffer += this.decoder.decode(chunk.subarray(0, size), { stream: true });
-    if (/^\s*(?:<!doctype\s+html|<html\b)/i.test(this.buffer)) this.format = 'html';
-    if (this.mediaType === 'application/json') return;
-    let end: number;
-    while ((end = this.buffer.indexOf('\n')) >= 0) {
-      const line = this.buffer.slice(0, end).replace(/\r$/, '');
-      this.buffer = this.buffer.slice(end + 1);
-      if (line.startsWith('data:')) this.inspect(line.slice(5).trim(), true);
+    const sampleSize = Math.min(chunk.byteLength, SAMPLE_BYTES - this.sampledBytes);
+    this.sampledBytes += sampleSize;
+    if (this.mediaType === 'application/json') {
+      if (sampleSize > 0) this.buffer += this.decoder.decode(chunk.subarray(0, sampleSize), { stream: true });
+      return;
+    }
+    for (let offset = 0; offset < chunk.length; offset += SAMPLE_BYTES) {
+      const text = this.decoder.decode(chunk.subarray(offset, offset + SAMPLE_BYTES), { stream: true });
+      if (this.prefix.length < 128) this.prefix += text.slice(0, 128 - this.prefix.length);
+      if (/^\s*(?:<!doctype\s+html|<html\b)/i.test(this.prefix)) { this.format = 'html'; return; }
+      if (this.status === undefined || this.status < 200 || this.status >= 300 || !['openai', 'openai_responses', 'anthropic'].includes(this.expectedProtocol)) continue;
+      let start = 0;
+      for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        if (this.skipLf) {
+          this.skipLf = false;
+          if (char === '\n') { start = i + 1; continue; }
+        }
+        if (char !== '\r' && char !== '\n') continue;
+        this.appendLine(text.slice(start, i));
+        this.processLine();
+        this.skipLf = char === '\r';
+        start = i + 1;
+      }
+      this.appendLine(text.slice(start));
     }
   }
 
   end(): void {
     if (this.mediaType === 'application/json') this.inspect(this.buffer, false);
-    else if (this.buffer.startsWith('data:')) this.inspect(this.buffer.slice(5).trim(), true);
     this.buffer = '';
+    this.line = '';
+    this.lineBytes = 0;
+    this.eventData = [];
   }
+
+  private appendLine(text: string): void {
+    if (this.done) return;
+    this.lineBytes += Buffer.byteLength(text);
+    if (this.lineBytes + this.eventBytes > EVENT_BYTES) {
+      this.failureType = 'event_too_large';
+      this.line = '';
+      this.eventData = [];
+      throw new APIProtocolError('Provider SSE event exceeds the supported byte limit.', this.snapshot());
+    }
+    this.line += text;
+  }
+
+  private processLine(): void {
+    if (this.done) return;
+    const line = this.line;
+    this.eventBytes += this.lineBytes + 1;
+    this.line = '';
+    this.lineBytes = 0;
+    if (line.length === 0) {
+      if (this.eventData.length > 0) {
+        this.eventIndex = Math.min(Number.MAX_SAFE_INTEGER, this.eventIndex + 1);
+        const data = this.eventData.join('\n');
+        this.eventData = [];
+        if (data.trim() === '[DONE]') this.done = true;
+        else {
+          let parsed: unknown;
+          try { parsed = JSON.parse(data); }
+          catch (error) {
+            this.failureType = 'invalid_json';
+            const offset = /position (\d+)/u.exec(error instanceof Error ? error.message : '')?.[1];
+            this.parseOffset = offset === undefined ? undefined : Number(offset);
+            throw new APIStreamParseError(this.snapshot());
+          }
+          this.classify(parsed, true);
+        }
+      }
+      this.eventBytes = 0;
+      this.eventType = 'message';
+      return;
+    }
+    if (line.startsWith(':')) return;
+    const colon = line.indexOf(':');
+    const field = colon < 0 ? line : line.slice(0, colon);
+    let value = colon < 0 ? '' : line.slice(colon + 1);
+    if (value.startsWith(' ')) value = value.slice(1);
+    if (field === 'data') this.eventData.push(value);
+    else if (field === 'event') this.eventType = /^(?:message(?:_start|_delta|_stop)?|content_block_(?:start|delta|stop)|response\.(?:created|in_progress|output_text\.delta|output_item\.added|completed|failed|incomplete)|ping|error)$/u.test(value) ? value : 'other';
+  }
+
+  get parseFailure(): 'invalid_json' | 'event_too_large' | undefined { return this.failureType; }
 
   failure(error: unknown): void {
     let value = error;
@@ -95,6 +175,13 @@ export class ResponseDiagnostics {
       firstByteMs: this.firstByteMs,
       lastByteMs: this.lastByteMs,
       transportCode: this.transportCode,
+      parseStage: this.failureType === undefined ? undefined : 'sse_event',
+      parseFailure: this.failureType,
+      parseOffset: this.parseOffset,
+      eventIndex: this.eventIndex,
+      eventType: this.eventType,
+      eventBytes: this.eventBytes + this.lineBytes,
+      eventLimitBytes: EVENT_BYTES,
     };
   }
 
@@ -102,6 +189,10 @@ export class ResponseDiagnostics {
     if (text.length === 0 || text === '[DONE]') return;
     let value: unknown;
     try { value = JSON.parse(text); } catch { return; }
+    this.classify(value, streaming);
+  }
+
+  private classify(value: unknown, streaming: boolean): void {
     const record = object(value);
     if (!record) return;
     if (!streaming) {

@@ -15,6 +15,7 @@ import type { ProtocolAdapterConfig } from '#/kosong/protocol/protocol';
 import { toPiContext, emptyPiUsage, encodePiSignature } from '#/kosong/provider/pi/messages';
 import { PiChatProvider } from '#/kosong/provider/pi/piChatProvider';
 import { PiStreamedMessage, convertPiError } from '#/kosong/provider/pi/streamedMessage';
+import { ResponseDiagnostics } from '#/kosong/provider/pi/responseDiagnostics';
 import { ProtocolAdapterRegistry } from '#/kosong/provider/protocolAdapterRegistry';
 import { normalizeThinkingCapability } from '#/kosong/contract/capability';
 import { applyModelEffortProfile } from '#/kosong/model/effortProfiles';
@@ -22,6 +23,68 @@ import { modelEffortProfile } from '#/kosong/provider/effortProfiles';
 import { registerProviderDefinition } from '#/kosong/provider/providerDefinition';
 import '#/kosong/provider/bases/openai/index';
 import '#/kosong/provider/bases/anthropic/index';
+
+describe('bounded SSE event validation', () => {
+  it.each(['openai', 'openai_responses', 'anthropic'] as const)('classifies malformed %s SSE before the SDK can log raw data', async protocol => {
+    const rawError = vi.spyOn(console, 'error');
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/event-stream', 'x-request-id': 'example-request' });
+      response.end('data: {"private-output"\ndata: }\n\n');
+    });
+    const baseUrl = await listen(server);
+    try {
+      const provider = new PiChatProvider({ protocol, modelName: 'example-model', apiKey: 'YOUR_API_KEY', baseUrl });
+      const error = await generate(provider, '', [], []).catch(error => error);
+      expect(error).toMatchObject({ code: 'provider.stream_parse_error', details: { requestId: 'example-request', parseStage: 'sse_event', parseFailure: 'invalid_json', eventIndex: 1 } });
+      expect(isTransientGenerateError(error)).toBe(true);
+      expect(JSON.stringify(error)).not.toContain('private-output');
+      expect(rawError).not.toHaveBeenCalled();
+    } finally { rawError.mockRestore(); await close(server); }
+  });
+
+  it.each(['\n', '\r\n', '\r'])('accepts multi-line event JSON across byte boundaries with %j line endings', newline => {
+    const diagnostics = new ResponseDiagnostics('openai');
+    diagnostics.headers(new Response(null, { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+    const body = [': keepalive', 'event: message', 'data: {', 'data: "choices":[{"delta":{"content":"中文"},"finish_reason":null}]}', '', 'data: [DONE]', '', ''].join(newline);
+    for (const byte of Buffer.from(body)) diagnostics.receive(Buffer.from([byte]));
+    diagnostics.end();
+    expect(diagnostics.parseFailure).toBeUndefined();
+    expect(diagnostics.snapshot()).toMatchObject({ observedFormat: 'openai', eventIndex: 2 });
+  });
+
+  it('does not parse an unfinished event at EOF as a complete JSON event', () => {
+    const diagnostics = new ResponseDiagnostics('openai');
+    diagnostics.headers(new Response(null, { headers: { 'content-type': 'text/event-stream' } }));
+    diagnostics.receive(Buffer.from('data: {"incomplete"'));
+    diagnostics.end();
+    expect(diagnostics.parseFailure).toBeUndefined();
+    expect(diagnostics.snapshot()).toHaveProperty('eventIndex', 0);
+  });
+
+  it('honors the terminal DONE marker without parsing trailing data as another event', () => {
+    const diagnostics = new ResponseDiagnostics('openai');
+    diagnostics.headers(new Response(null, { headers: { 'content-type': 'text/event-stream' } }));
+    diagnostics.receive(Buffer.from('data: [DONE]\n\ndata: {"trailing"}\n\n'));
+    expect(diagnostics.parseFailure).toBeUndefined();
+    expect(diagnostics.snapshot()).toHaveProperty('eventIndex', 1);
+  });
+
+  it('detects malformed events after the diagnostic sample budget is exhausted', () => {
+    const diagnostics = new ResponseDiagnostics('openai');
+    diagnostics.headers(new Response(null, { headers: { 'content-type': 'text/event-stream' } }));
+    diagnostics.receive(Buffer.from(`data: ${JSON.stringify({ choices: [{ delta: { content: 'x'.repeat(100000) } }] })}\n\n`));
+    expect(() => diagnostics.receive(Buffer.from('data: {"broken"}\n\n'))).toThrow('invalid JSON');
+    expect(diagnostics.snapshot()).toMatchObject({ eventIndex: 2, sampledBytes: 65536, parseFailure: 'invalid_json' });
+  });
+
+  it('rejects an oversized event without retaining its raw contents', () => {
+    const diagnostics = new ResponseDiagnostics('openai');
+    diagnostics.headers(new Response(null, { headers: { 'content-type': 'text/event-stream' } }));
+    expect(() => diagnostics.receive(Buffer.from(`data: "${'x'.repeat(4 * 1024 * 1024)}`))).toThrow('byte limit');
+    expect(diagnostics.snapshot()).toMatchObject({ parseFailure: 'event_too_large', eventLimitBytes: 4 * 1024 * 1024 });
+    expect(JSON.stringify(diagnostics.snapshot())).not.toContain('xxx');
+  });
+});
 import '#/kosong/provider/providers/standard.contrib';
 
 const model = getModel('openai', 'gpt-4.1');

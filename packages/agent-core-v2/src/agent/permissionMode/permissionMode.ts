@@ -14,9 +14,18 @@ export interface IAgentPermissionModeService {
   getMode(): PermissionMode;
   setMode(mode: PermissionMode): void;
   setModeAndBroadcast(mode: PermissionMode): void;
+  runWithMode<T>(mode: PermissionMode | undefined, run: () => Promise<T>): Promise<T>;
 
   readonly onDidChangeMode: Event<PermissionModeChangedContext>;
 }
 
 export const IAgentPermissionModeService =
   createDecorator<IAgentPermissionModeService>('agentPermissionModeService');
+
+export function permissionModeForChild(parent: Pick<IAgentPermissionModeService, 'mode' | 'getMode'>): PermissionMode {
+  const stored = parent.getMode();
+  const effective = parent.mode;
+  if (stored === 'auto' && effective === 'auto') return 'auto';
+  if (['auto', 'yolo'].includes(stored) && ['auto', 'yolo'].includes(effective)) return 'yolo';
+  return 'manual';
+}

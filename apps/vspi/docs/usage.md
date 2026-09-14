@@ -87,6 +87,18 @@ vspi exec --help
 
 `exec` 支持选择模型、思考档位、工作目录和会话，以及 `text`、`json`、`jsonl` 输出。它不提供交互式审批界面：需要人工批准、回答问题或调用交互式用户工具时，不应期待它像 TUI 一样等待输入。
 
+2.4.2 起，新建 `exec` 会话默认 **Auto**；这是保留显式 deny 规则后的自动放行，不是沙箱或自动风险评估。如果不希望默认自动执行工具，请明确使用 `--permission manual` 或 `--permission inherit`。
+
+`--permission auto|manual|yolo|inherit` 支持独立参数和 `--permission=auto` 写法。新建会话按指定模式初始化，`inherit` 沿用配置/Agent 的初始模式。恢复会话默认 `inherit`，不改持久权限；恢复时显式给出的 Auto/Manual/YOLO 仅作用于该 prompt 的 turn，不写长期权限、不广播到已有子 Agent，也不把临时提权继承为新子 Agent 的长期权限。其他终端显式调整权限会撤销正在生效的临时覆盖。带临时权限的排队 prompt 必须独立成轮，不能 steer 合并到另一轮。
+
+```sh
+vspi exec --permission auto "运行测试"
+vspi exec resume SESSION_ID "继续检查"
+vspi exec resume SESSION_ID --permission manual "只做无需审批的检查"
+```
+
+需要审批的操作仍不会在 headless 下自动获批：`exec` 拒绝其拥有轮次的请求、停止该轮并返回失败，不再用成功结果掩盖审批拒绝。若需要人工审批流程，请使用交互客户端。已有会话若已被旧版错误改成 Manual，升级不会猜测并自动升权；由用户在原会话显式恢复期望权限。HTTP 桥接若只投递内容，应省略 `permission_mode`，该 REST 参数仍是持久修改，不是此处的临时覆盖。
+
 ## 模型与凭据
 
 VSPi 支持内置 Provider 和自定义兼容端点。首次使用运行 `vspi init`；之后用 `vspi config` 调整 Provider，用 `vspi login <provider>` 登录账号或配置 API Key。界面内也提供 `/providers`、`/login` 和 `/logout`。
@@ -205,7 +217,9 @@ Pi 的 Chat Completions、Responses、Anthropic HTTP 路径在发起请求及接
 
 对应 `[loop_control]` 的 `max_attempts_per_step`、`retry_budget_ms` 和 `request_idle_timeout_ms` 可配置。界面用临时状态显示重试次数，恢复输出、回合结束或切换会话后清除，不覆盖独立警告；用户可以随时中断。失败的半截输出会被放弃，已经执行的工具或崩溃时的提示不会因此自动重放。
 
-流没有提供完成标记时，错误码为 `provider.incomplete_stream`，可在上述预算内重试。明确收到其他协议事件、HTML 页面或非流式 JSON 时，错误码为 `provider.protocol_error`，应检查实际协议与端点，不会盲目换协议或重复请求。Pi HTTP 路径在异常详情中保留有界结构诊断（预期协议、采样识别的格式、状态码、收流字节数和时间），不保存原始响应正文；最多检查前 64 KiB，未识别格式不代表格式正确。Google/Vertex 原生 SDK 等未经过该 HTTP 路径的请求不具备完整的此类诊断。
+流没有提供完成标记时，错误码为 `provider.incomplete_stream`，可在上述预算内重试。2.4.2 起，Chat/Responses/Anthropic 的 SSE 外层事件 JSON 损坏会归为 `provider.stream_parse_error` 并在同一预算内有限恢复；正常分包、多行 `data:` 和 CR/LF/CRLF 都按完整事件处理，不猜补 JSON、不丢弃坏帧后继续执行。单个事件解析预算为4 MiB，超限明确报错且不重试；HTTP/格式初步采样保持64 KiB。解析异常记录请求ID、协议、事件类型/序号、大小、位置与阶段，不把坏帧原文放入SDK错误日志。事件守卫覆盖首个采样窗口之后的流。
+
+明确收到其他协议事件、HTML 页面或非流式 JSON 时，仍为 `provider.protocol_error`，不盲目换协议或重试。工具参数JSON错误、本地配置错误不因这项修复一律重试。重试成功会清除临时提示，耗尽预算才留下最终错误；已经结束的历史失败不会被后续任意输出删除。Google/Vertex 原生 SDK 等未经过该 HTTP 路径的请求不具备完整的此类诊断。新增容错不代表已经证明具体上游或网关的故障根因。
 
 Subagent 自身默认任务超时仍为 2 小时，`[subagent].timeout_ms` 或 `KIMI_CODE_SUBAGENT_TIMEOUT_MS` 可调整，`0` 表示禁用这层任务时限，不是禁用模型恢复预算。`/agents` 显示实际错误和任务超时值。若任务失败，应先检查错误详情，再决定是否继续同一 Agent；没有证据时不要把“约 30 分钟失败”直接解释成固定的 30 分钟限制。
 

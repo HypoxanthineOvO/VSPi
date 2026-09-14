@@ -2,14 +2,14 @@
 
 VSPi is a daemon-backed terminal coding assistant. Sessions and background work live in the runtime; the terminal interface and non-interactive CLI connect over local IPC.
 
-Requires **Node.js >=22.19.0**. This **2.4.1 Linux-first release** targets Linux. Windows remains on 2.2.4 until this release completes native verification; macOS has not been verified in this round.
+Requires **Node.js >=22.19.0**. This **2.4.2 Linux-first release** targets Linux. Windows remains on 2.2.4 until this release completes native verification; macOS has not been verified in this round.
 
 ## Install
 
 Install the fixed Linux release:
 
 ```sh
-npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.4.1/vspi-2.4.1.tgz"
+npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.4.2/vspi-2.4.2.tgz"
 vspi --version
 vspi init
 vspi
@@ -17,13 +17,17 @@ vspi
 
 Run `vspi init` in an interactive terminal to configure a Provider and default model — VSPLab is built in and points at `api.vsplab.tech` by default. Use `vspi continue` to resume the latest workspace session, `vspi resume` to choose one, and `vspi exec --help` for scripting.
 
+**2.4.2 changes new `exec` sessions to Auto by default.** Auto automatically approves operations after explicit deny rules and is not a sandbox. Use `--permission manual` or `inherit` when you need conservative behavior. `exec resume` inherits the stored mode by default; explicit `--permission auto|manual|yolo` on resume applies only to that turn, not the persistent session or other agents. Headless approval failures stop the turn and return failure. Previously affected sessions are not silently elevated back to Auto; correct their stored mode only with user approval.
+
+Malformed Chat/Responses/Anthropic SSE event JSON now receives bounded recovery with structural request diagnostics. Valid fragmented and multiline events remain supported; invalid JSON is neither guessed nor skipped. Per-event parsing is limited to 4 MiB, with oversized events rejected without retries.
+
 ## Update
 
 2.4.0 enables `/feedback <description>` and `vspi feedback --help` by default: export a bounded, redacted package, review it, and explicitly confirm before upload. Export and preview work without credentials. Online submission requires a per-user `feedback.json` supplied privately by the administrator, stored in `VSPI_HOME` (normally `~/.vspi`) with mode 0600 on POSIX. These credentials are independent of model API keys; they are not included in the package. Without credentials, keep the exported package and share it manually only after review. The receiver and administrator tools are separate build artifacts, not automatically started by the client.
 
 Signed dual-entry distribution remains experimental and is not the default release channel. Set `KIMI_CODE_EXPERIMENTAL_VSPI_DISTRIBUTION=true` only after the administrator completes mirror provisioning and supplies an independently verified `distribution.json` public-key file in `VSPI_HOME`. Updates then prefer the trusted internal entry and fall back to the public relay, verify signed manifests and package hashes, and retain the existing installation rollback. Normal installations and updates continue to use GitHub.
 
-2.4.1 uses the normal shared release channel. Windows users should stay on the fixed 2.2.4 release and avoid updating until native verification. For the first upgrade from 2.3.0/2.4.0, exit old interfaces with `/quit` before `vspi daemon stop` and the update command below: those old interfaces may otherwise restart the stopped daemon. From 2.2.x, finish tasks, close clients, stop the old daemon and install the fixed URL above. Existing users must not run `init` again.
+2.4.2 uses the normal shared release channel. Windows users should stay on the fixed 2.2.4 release and avoid updating until native verification. For the first upgrade from 2.3.0/2.4.0, exit old interfaces with `/quit` before `vspi daemon stop` and the update command below: those old interfaces may otherwise restart the stopped daemon. From 2.2.x, finish tasks, close clients, stop the old daemon and install the fixed URL above. Existing users must not run `init` again.
 
 ```sh
 vspi update

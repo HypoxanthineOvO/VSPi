@@ -11,6 +11,8 @@ import {
   APIConnectionError,
   APIProtocolError,
   APIIncompleteStreamError,
+  APIStreamParseError,
+  APITimeoutError,
   APIEmptyResponseError,
   ChatProviderError,
   classifyBaseApiError,
@@ -55,6 +57,8 @@ export function convertPiError(error: unknown, response: PiResponseState = {}): 
   const diagnostics = response.diagnostics;
   if (diagnostics?.mismatch !== undefined)
     return new APIProtocolError(`Provider response format mismatch: expected ${diagnostics.expectedProtocol}, received ${diagnostics.mismatch}. Check the effective protocol and endpoint.`, diagnostics.snapshot());
+  if (diagnostics?.parseFailure === 'invalid_json') return new APIStreamParseError(diagnostics.snapshot());
+  if (diagnostics?.parseFailure === 'event_too_large') return new APIProtocolError('Provider SSE event exceeds the supported byte limit.', diagnostics.snapshot());
   if (diagnostics?.transportFailure !== undefined)
     return new APIConnectionError(`Provider transport failed: ${diagnostics.transportFailure}.`, diagnostics.snapshot());
   if (error instanceof ChatProviderError) return error;
@@ -96,9 +100,10 @@ export function convertPiError(error: unknown, response: PiResponseState = {}): 
     }
   } catch {}
   const classified = classifyBaseApiError(message);
+  if (classified instanceof APITimeoutError) return new APITimeoutError(classified.message, diagnostics?.snapshot());
   return classified instanceof APIConnectionError && diagnostics !== undefined
     ? new APIConnectionError(classified.message, diagnostics.snapshot())
-    : classified;
+    : diagnostics === undefined ? classified : new ChatProviderError(classified.message, undefined, { details: diagnostics.snapshot() });
 }
 
 interface ToolState {

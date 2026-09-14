@@ -5,13 +5,14 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connectRuntime, inspectRuntimeActivity, startRuntimeDaemon, type RuntimeConnection } from '@vsp/vsp-runtime';
 import { stopRuntimeForUpdate } from '../src/v1/update/self-update.js';
+import { runExec } from '../src/exec.js';
 import { KlientChatBackend } from '../src/v1/backend/klient-backend.js';
 import type { TranscriptMessage } from '../src/v1/domain/types.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).toReversed()) await cleanup(); });
 
-async function fixture(mode: 'normal' | 'http-retry' | 'stream-retry' = 'normal', idleTimeoutMs = 0) {
+async function fixture(mode: 'normal' | 'http-retry' | 'stream-retry' | 'json-retry' | 'json-always-fails' | 'tool-echo' = 'normal', idleTimeoutMs = 0) {
   const root = await mkdtemp(join(tmpdir(), 'vspi-recovery-'));
   const home = join(root, 'home');
   const workspace = join(root, 'project');
@@ -32,8 +33,16 @@ async function fixture(mode: 'normal' | 'http-retry' | 'stream-retry' = 'normal'
       response.end(JSON.stringify({ error: { message: 'Temporary overload' } }));
       return;
     }
-    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.writeHead(200, { 'content-type': 'text/event-stream', 'x-request-id': 'example-json-request' });
     const chunk = (delta: object, finish_reason: string | null = null) => `data: ${JSON.stringify({ id: 'test-completion', object: 'chat.completion.chunk', created: 1, model: 'one', choices: [{ index: 0, delta, finish_reason }] })}\n\n`;
+    if (mode === 'tool-echo' && attempts === 1) {
+      response.end(chunk({ tool_calls: [{ index: 0, id: 'call_example', type: 'function', function: { name: 'Bash', arguments: JSON.stringify({ command: 'echo hello' }) } }] }) + chunk({}, 'tool_calls') + 'data: [DONE]\n\n');
+      return;
+    }
+    if (mode === 'json-always-fails' || mode === 'json-retry' && attempts === 1) {
+      response.end(chunk({ role: 'assistant', content: 'discard this failed attempt' }) + 'data: {"private-broken-event"}\n\n');
+      return;
+    }
     response.write(chunk({ role: 'assistant', content: mode === 'stream-retry' && attempts > 1 ? 'replacement ' : 'early ' }));
     if (mode === 'stream-retry' && attempts === 1) {
       replies.push(() => { response.destroy(); });
@@ -78,10 +87,52 @@ async function fixture(mode: 'normal' | 'http-retry' | 'stream-retry' = 'normal'
     });
     return { backend, messages, errors, notices, retryNotices, busy: () => busy };
   }
-  return { home, daemon, connection, front, detach: async () => { for (const backend of backends) await backend.dispose(); for (const client of connections) await client.close(); }, attempts: () => attempts, release: () => { for (const reply of replies.splice(0)) reply(); } };
+  return { home, workspace, daemon, connection, front, detach: async () => { for (const backend of backends) await backend.dispose(); for (const client of connections) await client.close(); }, attempts: () => attempts, release: () => { for (const reply of replies.splice(0)) reply(); } };
 }
 
 describe('multiple clients on a real runtime', () => {
+  it.each([
+    { name: 'inherited Auto', stored: 'auto' as const, permission: undefined, status: 'success' },
+    { name: 'temporary Auto on Manual', stored: 'manual' as const, permission: 'auto' as const, status: 'success' },
+    { name: 'temporary Manual on Auto', stored: 'auto' as const, permission: 'manual' as const, status: 'failed' },
+  ])('exec resume uses $name without altering persistent session permissions', async ({ stored, permission, status }) => {
+    const rig = await fixture('tool-echo');
+    const session = await rig.connection.klient.global.sessions.create({ workDir: rig.workspace, title: 'Permission regression' });
+    const agent = rig.connection.klient.session(session.id).agent('main');
+    await agent.bindProfile({ profile: 'agent', model: 'example/one' });
+    await agent.setPermission(stored);
+    const result = runExec(rig.connection.klient, { prompt: 'echo test', stdin: false, cwd: rig.workspace, output: 'json', session: session.id, continueLatest: false, help: false, permission });
+    if (status === 'success') {
+      await vi.waitFor(() => { expect(rig.attempts()).toBe(2); }, { timeout: 5000 });
+      expect(await agent.getPermission()).toBe(stored);
+      rig.release();
+    }
+    expect(await result).toMatchObject({ status });
+    expect(await agent.getPermission()).toBe(stored);
+  }, 30000);
+  it('recovers a malformed SSE event without keeping a permanent error or stale retry notice', async () => {
+    const rig = await fixture('json-retry');
+    const front = await rig.front('new');
+    const prompt = front.backend.send('recover invalid SSE', { attachments: [], effort: 'off', behavior: 'prompt' });
+    void prompt.catch(() => {});
+    await vi.waitFor(() => { expect(rig.attempts()).toBe(2); }, { timeout: 5000 });
+    rig.release();
+    await prompt;
+    expect(front.errors).toEqual([]);
+    expect([...front.messages.values()].some(item => item.kind === 'error')).toBe(false);
+    expect(front.retryNotices.some(item => item?.includes('第 2/3'))).toBe(true);
+    expect(front.retryNotices.at(-1)).toBeUndefined();
+    expect([...front.messages.values()].some(item => item.kind === 'text' && item.text.includes('discard this'))).toBe(false);
+  }, 30000);
+
+  it('stops malformed SSE recovery after three attempts and retains a diagnostic failure', async () => {
+    const rig = await fixture('json-always-fails');
+    const front = await rig.front('new');
+    await front.backend.send('invalid SSE persists', { attachments: [], effort: 'off', behavior: 'prompt' });
+    expect(rig.attempts()).toBe(3);
+    expect([...front.messages.values()].some(item => item.kind === 'error')).toBe(true);
+    expect(front.retryNotices.at(-1)).toBeUndefined();
+  }, 30000);
   it('finishes a detached turn before automatically shutting down its idle daemon', async () => {
     const rig = await fixture('normal', 300);
     const front = await rig.front('new');

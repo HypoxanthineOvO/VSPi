@@ -5,6 +5,7 @@ import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
 import { Emitter, type Event } from '#/_base/event';
 import { PermissionModeInjection } from '#/agent/permissionMode/injection/permissionModeInjection';
 import { activateReminderWhenReady } from '#/features/reminder/internal/reminderActivation';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 import { ITelemetryService } from '#/app/telemetry/telemetry';
 import {
@@ -22,6 +23,8 @@ import {
 
 export class AgentPermissionModeService extends Service implements IAgentPermissionModeService {
   declare readonly _serviceBrand: undefined;
+  private readonly invocation = new AsyncLocalStorage<{ mode: PermissionMode | undefined; active: boolean }>();
+  private readonly activeInvocations = new Set<{ mode: PermissionMode | undefined; active: boolean }>();
 
   private readonly _onDidChangeMode = this._register(new Emitter<PermissionModeChangedContext>());
   readonly onDidChangeMode: Event<PermissionModeChangedContext> = this._onDidChangeMode.event;
@@ -44,15 +47,35 @@ export class AgentPermissionModeService extends Service implements IAgentPermiss
   }
 
   get mode(): PermissionMode {
+    const invocation = this.invocation.getStore();
+    if (invocation?.active && invocation.mode !== undefined) return invocation.mode;
     return this.agentState.get(permissionModeKey);
   }
 
+  async runWithMode<T>(mode: PermissionMode | undefined, run: () => Promise<T>): Promise<T> {
+    const invocation = { mode, active: true };
+    this.activeInvocations.add(invocation);
+    try { return await this.invocation.run(invocation, run); }
+    finally {
+      invocation.active = false;
+      this.activeInvocations.delete(invocation);
+    }
+  }
+
+  override dispose(): void {
+    for (const invocation of this.activeInvocations) invocation.active = false;
+    this.activeInvocations.clear();
+    this.invocation.disable();
+    super.dispose();
+  }
+
   getMode(): PermissionMode {
-    return this.mode;
+    return this.agentState.get(permissionModeKey);
   }
 
   setMode(mode: PermissionMode): void {
-    const previousMode = this.mode;
+    for (const invocation of this.activeInvocations) invocation.active = false;
+    const previousMode = this.agentState.get(permissionModeKey);
     const changed = mode !== previousMode;
     if (!changed && this.agentState.get(permissionModeConfiguredKey)) return;
     void this.dispatcher.dispatch(
@@ -62,8 +85,8 @@ export class AgentPermissionModeService extends Service implements IAgentPermiss
   }
 
   setModeAndBroadcast(mode: PermissionMode): void {
-    const wasYolo = this.mode === 'yolo';
-    const wasAuto = this.mode === 'auto';
+    const wasYolo = this.getMode() === 'yolo';
+    const wasAuto = this.getMode() === 'auto';
     this.setMode(mode);
     if (this.scopeContext.agentId === MAIN_AGENT_ID) {
       this.agentLifecycle.broadcastPermissionMode(mode);

@@ -134,6 +134,7 @@ export interface PromptStarted extends PromptStartedPayload {}
 
 interface Deferred<T> { readonly promise: Promise<T>; resolve(value: T): void; reject(reason: unknown): void }
 interface Record extends PromptSnapshot {
+  readonly permissionMode?: PromptPayload['permissionMode'];
   state: PromptState;
   readonly launchedDeferred: Deferred<Turn | undefined>;
   readonly completionDeferred: Deferred<PromptCompletion>;
@@ -236,7 +237,7 @@ export class AgentPromptService implements IAgentPromptService {
     let submitted = false;
     return {
       id,
-      submit: async (message) => {
+      submit: async (message, permissionMode) => {
         if (submitted) throw new Error2(ErrorCodes.REQUEST_INVALID, 'prompt reservation already submitted');
         submitted = true;
         this.reservedPromptIds.delete(id);
@@ -245,9 +246,10 @@ export class AgentPromptService implements IAgentPromptService {
             agentId: this.scopeContext.agentId,
             promptId: id,
             content: stripBundledSkillBlocks(message),
+            permissionMode,
           }),
         );
-        return this.enqueue({ id, message });
+        return this.enqueue({ id, message, permissionMode });
       },
       dispose: () => {
         this.reservedPromptIds.delete(id);
@@ -262,7 +264,7 @@ export class AgentPromptService implements IAgentPromptService {
     const completionDeferred = deferred<PromptCompletion>();
     const record = {} as Record;
     Object.assign(record, {
-      id, userMessageId: id, createdAt: new Date().toISOString(), state: 'pending', message,
+      id, userMessageId: id, createdAt: new Date().toISOString(), state: 'pending', message, permissionMode: input.permissionMode,
       launchedDeferred, completionDeferred,
     });
     record.handle = {
@@ -303,7 +305,7 @@ export class AgentPromptService implements IAgentPromptService {
         content: [...payload.input],
         toolCalls: [],
         origin: { kind: 'user' },
-      });
+      }, payload.permissionMode);
       if (handle.state === 'pending') return undefined;
       const turn = await handle.launched;
       return turn === undefined ? undefined : { turn_id: turn.id };
@@ -358,6 +360,7 @@ export class AgentPromptService implements IAgentPromptService {
       throw new Error2(ErrorCodes.PROMPT_NOT_FOUND, 'one or more prompts are not pending');
     }
     const selected = this.pending.filter((item) => ids.has(item.id));
+    if (selected.some(item => item.permissionMode !== undefined)) throw new Error2(ErrorCodes.REQUEST_INVALID, 'A prompt with a permission override must run in its own turn');
     const activeAtEntry = this.active;
     const { message: rerouted, captions } = this.extractCompressionCaptions(mergeSteerMessages(selected));
     await this.materializeDaemonRefs(rerouted);
@@ -453,7 +456,7 @@ export class AgentPromptService implements IAgentPromptService {
         item.completionDeferred.resolve({ promptId: item.id, result: undefined, state: 'blocked' });
         this.publishCompleted(item.id, 'blocked'); return;
       }
-      const turn = (await this.loop.enqueue(new PromptStepRequest(message, captions, this.reminder())).assigned).turn;
+      const turn = (await this.loop.enqueue(new PromptStepRequest(message, captions, this.reminder(), item.permissionMode)).assigned).turn;
       if (turn === undefined) { this.pending.unshift(item); return; }
       item.state = 'running'; item.launchedDeferred.resolve(turn); this.active = Object.assign(item, { turn });
       this.publishStarted(item);

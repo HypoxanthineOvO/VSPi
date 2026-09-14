@@ -18,7 +18,7 @@ import {
 } from '#/app/agentProfileCatalog/profile-shared';
 import { ISessionAgentProfileCatalog } from '#/session/sessionAgentProfileCatalog/sessionAgentProfileCatalog';
 import { IAgentProfileService } from '#/agent/profile/profile';
-import { IAgentPermissionModeService } from '#/agent/permissionMode/permissionMode';
+import { IAgentPermissionModeService, permissionModeForChild } from '#/agent/permissionMode/permissionMode';
 import { IAgentUserToolService } from '#/agent/userTool/userTool';
 import { IAgentRuntimeService } from '#/agent/runtimeBinding/agentRuntime';
 import type { Runtime } from '#/runtime/runtime';
@@ -190,7 +190,7 @@ export class SessionSubagentService extends Service implements ISessionSubagentS
       }
       created.accessor
         .get(IAgentPermissionModeService)
-        .setMode(caller.accessor.get(IAgentPermissionModeService).mode);
+        .setMode(permissionModeForChild(caller.accessor.get(IAgentPermissionModeService)));
       const createdUserTools = created.accessor.get(IAgentUserToolService);
       const callerUserTools = caller.accessor.get(IAgentUserToolService);
       if (plan.fork) {

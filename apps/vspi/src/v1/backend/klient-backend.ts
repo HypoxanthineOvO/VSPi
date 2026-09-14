@@ -1426,6 +1426,7 @@ export class KlientChatBackend implements ChatBackend {
 				if (this.agent === agent) this.publishPolicy(mode);
 			}),
 			events.on("turn.started", (event) => {
+				if (event.permissionMode !== undefined) this.events?.onNotice(`本轮使用临时权限 ${event.permissionMode}；会话长期权限未修改`, 'info');
 				this.outputSpeed.reset();
 				this.turn = { ...turnState(event.turnId, 0), effort: this.effort };
 				if (event.promptId !== undefined) {
