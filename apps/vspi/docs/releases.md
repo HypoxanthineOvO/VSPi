@@ -4,6 +4,12 @@
 
 发行包本地构建并直接发布，发版流程见[开发指南](development.md#发布)。各版本的平台验收范围分别记录；2.4.0 按 Linux 先行发布，Windows 验收后置，不沿用旧版本的结论。
 
+## 2.4.3 — 第三方 Chat 角色兼容性（Linux 先行）
+
+- 修复自定义中转 Provider 下，部分 DeepSeek/Kimi 推理模型把系统提示编码为 `developer`、被严格 Chat 上游拒绝的问题。未明确支持该角色的模型使用 `system`；保留已识别 GPT 模型及内置模型元数据明确声明的兼容能力。
+- 不改用户所选协议、Effort 或会话权限；GPT 的 Responses 和 Claude 的 Anthropic 路径不变。本次修复请求角色，不把角色校验 400 当作网络抖动重试。
+- 保留 2.4.2 的 exec 权限隔离和有界 SSE 恢复。Linux 先行，Windows/macOS 未做本轮实机验收。
+
 ## 2.4.2 — exec 权限隔离与 SSE 恢复（Linux 先行）
 
 - **行为调整：新建 exec 默认 Auto**，保留显式deny规则但不提供沙箱；新增 `--permission auto|manual|yolo|inherit`。依赖旧版保守默认的脚本应明确选 Manual 或 inherit。

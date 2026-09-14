@@ -89,6 +89,59 @@ import '#/kosong/provider/providers/standard.contrib';
 
 const model = getModel('openai', 'gpt-4.1');
 
+describe('Chat system role compatibility behind a custom relay', () => {
+  it.each(['deepseek-flash', 'deepseek-v4.1-flash', 'kimi-k3', 'k3-256k', 'kimi-for-coding', 'glm-5.3', 'example-reasoner'])(
+    'completes %s against a strict Chat upstream using system instead of developer', async modelName => {
+      let received: Record<string, unknown> = {};
+      const server = createTestHttpServer(async (request, response) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        received = JSON.parse(Buffer.concat(chunks).toString());
+        const messages = received['messages'] as Array<{ role: string }>;
+        if (messages.some(message => message.role === 'developer')) {
+          response.writeHead(400, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ error: { message: "role 'developer' is not allowed", type: 'invalid_request_error' } }));
+          return;
+        }
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: 'assistant', content: 'pong' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+      });
+      const baseUrl = await listen(server);
+      try {
+        const provider = new ProtocolAdapterRegistry().createChatProvider({
+          protocol: 'openai', providerType: 'example-relay', modelName, baseUrl,
+          apiKey: 'YOUR_API_KEY', providerOptions: { relay: true },
+          thinking: { availability: 'always', canDisable: false, controls: ['effort'], efforts: ['high'] },
+        });
+        const result = await generate(provider, 'Keep these instructions.', [], [{ role: 'user', content: [{ type: 'text', text: 'ping' }], toolCalls: [] }]);
+        expect(result.message.content).toContainEqual({ type: 'text', text: 'pong' });
+        expect(received['messages']).toEqual([
+          { role: 'system', content: 'Keep these instructions.' },
+          { role: 'user', content: [{ type: 'text', text: 'ping' }] },
+        ]);
+      } finally { await close(server); }
+    },
+  );
+
+  it('preserves developer for an identified GPT reasoning model on Chat', async () => {
+    let body: Record<string, unknown> = {};
+    const request = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      if (typeof init?.body !== 'string') throw new Error('Expected JSON body');
+      body = JSON.parse(init.body);
+      throw new Error('offline capture');
+    });
+    try {
+      const provider = new ProtocolAdapterRegistry().createChatProvider({
+        protocol: 'openai', providerType: 'example-relay', modelName: 'gpt-5.6',
+        baseUrl: 'https://relay.example.test/v1', apiKey: 'YOUR_API_KEY', providerOptions: { relay: true },
+        thinking: { availability: 'always', canDisable: false, controls: ['effort'], efforts: ['high'] },
+      });
+      await expect(generate(provider, 'Keep these instructions.', [], [])).rejects.toThrow('Connection error');
+      expect(body['messages']).toContainEqual({ role: 'developer', content: 'Keep these instructions.' });
+    } finally { request.mockRestore(); }
+  });
+});
+
 describe('provider response diagnosis', () => {
   it.each([
     ['responses events', 'text/event-stream', 'data: {"type":"response.output_text.delta","delta":"private-output"}\n\n', 'openai_responses'],

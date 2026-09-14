@@ -37,6 +37,7 @@ import { kimiOpenAITrait, kimiAnthropicTrait } from '#/kosong/provider/providers
 import { toLegacyHistory, toPiContext } from './messages';
 import { convertPiError, PiStreamedMessage, type PiResponseState } from './streamedMessage';
 import { ResponseDiagnostics } from './responseDiagnostics';
+import { relayNativeProvider } from './catalog';
 
 const API_BY_PROTOCOL: Record<ProtocolAdapterConfig['protocol'], Api> = {
   openai: 'openai-completions',
@@ -203,6 +204,9 @@ export class PiChatProvider implements ChatProvider {
     } else if (config.providerOptions?.offEffort !== undefined) {
       thinkingLevelMap.off = config.providerOptions.offEffort;
     }
+    const declaredDeveloperRole = model?.compat !== undefined && 'supportsDeveloperRole' in model.compat
+      ? model.compat.supportsDeveloperRole
+      : undefined;
     this.model = {
       id: config.modelName,
       name: model?.name ?? config.modelName,
@@ -228,7 +232,13 @@ export class PiChatProvider implements ChatProvider {
       maxTokens: this.maxCompletionTokens,
       headers: { ...model?.headers, ...config.defaultHeaders },
       samplingParams: model?.samplingParams,
-      compat: model?.compat,
+      compat: config.protocol === 'openai'
+        ? {
+            ...model?.compat,
+            supportsDeveloperRole: declaredDeveloperRole ??
+              relayNativeProvider(config.modelName) === 'openai',
+          }
+        : model?.compat,
     };
     this.provider = providerForModel(this.model);
   }
