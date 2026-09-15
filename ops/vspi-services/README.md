@@ -33,14 +33,18 @@ sudo bash eden-admin.sh install
 
 `install` 打印私有备份目录，保留现有 Nginx 站点，不自动激活。专用服务用户 `vspi-feedback` 与私有配置组同名；`vspi-feedback-read` 仅用于读取 ready 数据，不应授予读取 `/etc/vsp-feedback/server.json` 的权限。
 
-首次为使用者发放独立凭据：
+默认无需逐人发放凭据。新客户端首次确认上传时，在同一个 `POST /api/feedback` 入口发送自动登记请求；使用设备名-用户名作为自报归属标签，接收端签发独立凭据。空 `submitters` 列表可以启动。私有签名密钥自动保存在接收目录的 `registration.key`（0600），应随私有数据备份，不能交给 reader 或删除；重启继续复用。
+
+自动登记最多全局20次/分钟、120次/小时、并发2个，正文4KiB；自动身份上传最多全局30次/分钟，仍受每凭据10次/分钟、并发和磁盘总预算约束。限流表有界，不持久保存无限注册条目。身份名不代表已验证账号，manifest 会标记 `self-reported-device-user`；不同安装即使同名也不能冒认另一凭据已有的反馈。配置 `automaticRegistration: false` 并重启接收服务可暂停自动登记及自动身份提交，已有手工凭据仍可用。此配置不是 SIGHUP 热更新字段。
+
+仅兼容旧客户端或明确需要独立管理的提交者，才使用可选的手工签发入口（不是普通用户的前置条件）：
 
 ```sh
 sudo /opt/vsp-feedback/node /opt/vsp-feedback/feedback-admin.mjs issue \
   /etc/vsp-feedback/server.json example-user /root/private-client-delivery/example-user
 ```
 
-通过私有渠道将生成的 `feedback.json` 交给该使用者，放到其 `VSPI_HOME/feedback.json`，文件为使用者所有且权限 0600。不要在聊天或日志中粘贴 token，不复用模型 API Key，不用一个公共 token 给所有人。
+旧客户端可通过私有渠道取得上述 `feedback.json`，放到其 `VSPI_HOME/feedback.json`，文件为使用者所有且权限0600。新客户端自动处理，不要求该文件。不要在聊天或日志中粘贴token，不复用模型API Key。
 
 ```sh
 sudo bash eden-admin.sh activate

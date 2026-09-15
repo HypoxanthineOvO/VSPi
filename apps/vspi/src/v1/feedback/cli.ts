@@ -5,9 +5,8 @@ import { collectFeedback } from './collect.js';
 import { createFeedbackBundle, parseFeedbackBundle, saveFeedbackBundle } from './bundle.js';
 import {
   feedbackDigest,
-  readFeedbackUploadConfig,
   readPrivateFeedbackFile,
-  uploadFeedback,
+  submitFeedback,
 } from './client.js';
 
 export const FEEDBACK_USAGE = `vspi feedback export --description <text> [--session <id>] [--turns 0|1|3]
@@ -15,7 +14,7 @@ vspi feedback preview <private-file>
 vspi feedback redact <edited-private-file>
 vspi feedback submit <private-file> --confirm-sha256 <preview-hash>
 export 不上传；preview 显示完整脱敏包及 SHA256；submit 只发送明确确认且未改变的包。
-上传凭据：VSPI_HOME/feedback.json，私有文件，独立 token，不要复用模型 API Key。
+首次确认上传时按设备名-用户名自动登记，身份缓存自动保存；无需管理员发文件，不使用模型 API Key。
 `;
 
 export async function dispatchFeedback(
@@ -91,7 +90,7 @@ export async function dispatchFeedback(
       );
       return;
     }
-    const id = await uploadFeedback(bytes, args[3]!, await readFeedbackUploadConfig(home), {
+    const id = await submitFeedback(bytes, args[3]!, home, {
       fetch: options.fetch,
     });
     options.write(`Feedback ${id} 已由接收端确认保存；本地包保留在 ${path}\n`);

@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { experimentalEnabled } from '../src/experimental.js';
@@ -26,7 +26,10 @@ import {
   feedbackDigest,
   readPrivateFeedbackFile,
   uploadFeedback,
+  readFeedbackUploadConfig,
+  submitFeedback,
 } from '../src/v1/feedback/client.js';
+import { feedbackIdentity, feedbackIdentityPath } from '../src/v1/feedback/identity.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -67,6 +70,124 @@ function bundle() {
     conversation: [{ role: 'assistant', kind: 'tool', text: 'intermediate output' }],
   });
 }
+
+describe('automatic device-user feedback registration', () => {
+  it('forms a readable device-user label without an administrator configuration', () => {
+    expect(feedbackIdentity('example-device', 'alice')).toEqual({ device: 'example-device', username: 'alice', id: 'example-device-alice' });
+  });
+
+  it('submits from an unconfigured home and reuses its private identity on subsequent uploads', async () => {
+    const r = await rig();
+    const home = join(r.root, 'new-user');
+    const bytes = Buffer.from(JSON.stringify(bundle()));
+    const output: string[] = [];
+    const transport = vi.fn(r.transport);
+    const path = await saveFeedbackBundle(join(home, 'feedback/outbox'), parseFeedbackBundle(bytes));
+    await dispatchFeedback(['preview', path], { home, fetch: transport, write: text => output.push(text) });
+    expect(transport).not.toHaveBeenCalled();
+    for (let i = 0; i < 2; i++) {
+      await dispatchFeedback(['submit', path, '--confirm-sha256', feedbackDigest(bytes)], { home, fetch: transport, write: text => output.push(text) });
+    }
+    expect(transport).toHaveBeenCalledTimes(3);
+    const config = await readFeedbackUploadConfig(home, { fetch: transport });
+    expect(config.id).toBe(`${hostname()}-${userInfo().username}`);
+    expect((await stat(feedbackIdentityPath(home))).mode & 0o777).toBe(0o600);
+    expect(await readFile(path)).toEqual(bytes);
+    expect(output.join('\n')).not.toContain(config.token);
+    const manifest = JSON.parse(await readFile(join(r.directory, 'ready', parseFeedbackBundle(bytes).id, 'manifest.json'), 'utf8'));
+    expect(manifest).toMatchObject({ submitter: `${hostname()}-${userInfo().username}`, identitySource: 'self-reported-device-user' });
+  });
+
+  it('does not register or upload when the confirmation digest is wrong', async () => {
+    const r = await rig(); const transport = vi.fn(r.transport);
+    await expect(submitFeedback(Buffer.from(JSON.stringify(bundle())), '0'.repeat(64), r.root, { fetch: transport })).rejects.toThrow('changed after preview');
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it('preserves an existing managed credential without automatic registration', async () => {
+    const r = await rig(); const transport = vi.fn(r.transport);
+    await writeFile(join(r.root, 'feedback.json'), JSON.stringify({ token }), { mode: 0o600 });
+    await expect(readFeedbackUploadConfig(r.root, { fetch: transport })).resolves.toMatchObject({ endpoint: FEEDBACK_ENDPOINT, token });
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it('keeps one complete private credential when two terminals register concurrently', async () => {
+    const r = await rig(); const home = join(r.root, 'new-user');
+    const configs = await Promise.all([readFeedbackUploadConfig(home, { fetch: r.transport }), readFeedbackUploadConfig(home, { fetch: r.transport })]);
+    expect(configs[0]).toEqual(configs[1]);
+    const bytes = Buffer.from(JSON.stringify(bundle()));
+    await expect(uploadFeedback(bytes, feedbackDigest(bytes), configs[0], { fetch: r.transport })).resolves.toBeTruthy();
+  });
+
+  it('retains automatically issued credentials across a receiver restart', async () => {
+    const r = await rig();
+    const config = await readFeedbackUploadConfig(join(r.root, 'new-user'), { fetch: r.transport });
+    await new Promise<void>(resolve => r.server.close(() => { resolve(); }));
+    const restarted = await createFeedbackServer({ directory: r.directory, submitters: [] });
+    await new Promise<void>(resolve => restarted.listen(0, '127.0.0.1', resolve));
+    cleanups.push(async () => { restarted.closeAllConnections(); await new Promise<void>(resolve => restarted.close(() => { resolve(); })); });
+    const address = restarted.address(); if (!address || typeof address === 'string') throw new Error('Expected listener');
+    const transport: typeof fetch = (_url, init) => fetch(`http://127.0.0.1:${address.port}/api/feedback`, init);
+    const bytes = Buffer.from(JSON.stringify(bundle()));
+    await expect(uploadFeedback(bytes, feedbackDigest(bytes), config, { fetch: transport })).resolves.toBeTruthy();
+  });
+
+  it('does not let another installation claiming the same name acknowledge an existing report', async () => {
+    const r = await rig();
+    const first = await readFeedbackUploadConfig(join(r.root, 'first-installation'), { fetch: r.transport });
+    const second = await readFeedbackUploadConfig(join(r.root, 'second-installation'), { fetch: r.transport });
+    expect(first.id).toBe(second.id);
+    expect(first.token).not.toBe(second.token);
+    const bytes = Buffer.from(JSON.stringify(bundle()));
+    await uploadFeedback(bytes, feedbackDigest(bytes), first, { fetch: r.transport });
+    await expect(uploadFeedback(bytes, feedbackDigest(bytes), second, { fetch: r.transport })).rejects.toThrow('409');
+  });
+
+  it('rejects tampered automatic credentials without storing data', async () => {
+    const r = await rig();
+    const config = await readFeedbackUploadConfig(join(r.root, 'new-user'), { fetch: r.transport });
+    const [prefix, encoded, signature] = config.token.split('.');
+    const claims = JSON.parse(Buffer.from(encoded!, 'base64url').toString());
+    claims.username = 'different-user';
+    const tampered = `${prefix}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.${signature}`;
+    const bytes = Buffer.from(JSON.stringify(bundle()));
+    await expect(uploadFeedback(bytes, feedbackDigest(bytes), { ...config, token: tampered }, { fetch: r.transport })).rejects.toThrow('401');
+    expect(await readdir(join(r.directory, 'ready'))).toEqual([]);
+  });
+
+  it('bounds public registration even when every request uses a different identity', async () => {
+    const r = await rig();
+    const register = (i: number) => r.transport(FEEDBACK_ENDPOINT, { method: 'POST', headers: { 'content-type': 'application/json', 'x-feedback-action': 'register', 'x-feedback-consent': 'reviewed-v1' }, body: JSON.stringify({ device: `device-${i}`, username: 'alice' }) });
+    for (let i = 0; i < 20; i++) { const response = await register(i); expect(response.status).toBe(201); await response.body?.cancel(); }
+    const response = await register(21); expect(response.status).toBe(429); await response.body?.cancel();
+    expect(await readdir(join(r.directory, 'ready'))).toEqual([]);
+  });
+
+  it('explains an older receiver without suggesting administrator-issued files', async () => {
+    const r = await rig();
+    const transport: typeof fetch = async () => new Response('{}', { status: 401 });
+    await expect(readFeedbackUploadConfig(join(r.root, 'new-user'), { fetch: transport })).rejects.toThrow('接收服务尚未开放自动登记');
+  });
+
+  it('caps public uploads across separately registered identities', async () => {
+    const r = await rig();
+    for (let i = 0; i < 10; i++) {
+      const config = await readFeedbackUploadConfig(join(r.root, `installation-${i}`), { fetch: r.transport });
+      for (let n = 0; n < 3; n++) {
+        const bytes = Buffer.from(JSON.stringify(bundle()));
+        await uploadFeedback(bytes, feedbackDigest(bytes), config, { fetch: r.transport });
+      }
+    }
+    const config = await readFeedbackUploadConfig(join(r.root, 'another-installation'), { fetch: r.transport });
+    const bytes = Buffer.from(JSON.stringify(bundle()));
+    await expect(uploadFeedback(bytes, feedbackDigest(bytes), config, { fetch: r.transport })).rejects.toThrow('429');
+    expect(await readdir(join(r.directory, 'ready'))).toHaveLength(30);
+  });
+
+  it('redacts automatic submission tokens even if no identity cache is available', () => {
+    expect(redactFeedbackText('copied vspi1.ZXhhbXBsZQ.c2lnbmF0dXJl')).toBe('copied [REDACTED FEEDBACK AUTH]');
+  });
+});
 
 describe('private feedback delivery', () => {
   it('enables feedback without an experimental environment override', () => {

@@ -60,7 +60,9 @@ vspi feedback submit /private/path/FEEDBACK_ID.json --confirm-sha256 PREVIEW_HAS
 
 每包最多 1 MiB、200 条；单条原文超过 64 KiB 会明确省略，普通条目脱敏后最多 16384 字符，截断时优先保留最新条目。需要长文本时自行摘录相关片段，不上传整个 home 或项目。本地 outbox 预检预算为 20 MiB／100 个包，达到上限要求手工归档，不自动丢弃用户反馈。POSIX 文件为 0600、目录为 0700；Windows 私有性还依赖用户目录 ACL，本轮未做 Windows 实机验收。
 
-在线上传前，向管理员领取个人专用的 `feedback.json`，通过私有渠道交付；将它放到 `VSPI_HOME/feedback.json`（默认 `~/.vspi/feedback.json`），POSIX 权限设为 0600。文件包含 `token`，可选 `endpoint`，默认 `https://dist.hypohub.cn/api/feedback`，也允许已配置可信 TLS 的内网入口。不要使用模型 API Key，不要共享凭据或把凭据粘贴到反馈中。没有凭据仍可导出、预览，再手工交付已检查的包。接收端在 Eden 持久保存后才确认编号；公网不提供反馈下载或列表。自动处理和通知的上线独立于客户端发版，不保证提交后即时回复。
+首次确认上传时，客户端自动用**设备名-用户名**登记，例如 `example-device-alice`；服务端自动签发独立提交凭据，客户端保存到 `VSPI_HOME/feedback/identities/` 的私有缓存，之后复用。无需管理员发文件、无需手填 JSON，也不使用模型 API Key。身份在预览的 `feedbackSubmitter` 中可见；它是设备自报的归属标签，不是经过账号登录验证的身份。登记只在明确确认提交后进行，导出和预览不访问接收服务。
+
+默认上传到 `https://dist.hypohub.cn/api/feedback`。旧版手工配置的 `VSPI_HOME/feedback.json` 仍可兼容使用，但不再是使用条件。自动登记受服务端限流保护，失败时保留本地包，稍后重试即可；旧接收端必须先更新才能支持自动登记。不要分享身份缓存或把凭据粘贴到反馈中。接收端在 Eden 持久保存后才确认编号；公网不提供反馈下载或列表。自动处理和通知的上线独立于客户端发版，不保证提交后即时回复。
 
 ## 签名分发与双入口更新
 

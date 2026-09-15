@@ -1,6 +1,7 @@
 import { constants } from 'node:fs';
 import { open, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { feedbackIdentity, feedbackIdentityPath } from './identity.js';
 import { parse } from 'smol-toml';
 import { connectRuntime, resolveRuntimePaths, type RuntimeConnection } from '@vsp/vsp-runtime';
 import type { TranscriptMessage } from '../domain/types.js';
@@ -127,6 +128,7 @@ export async function collectFeedback(input: {
     platform: process.platform,
     arch: process.arch,
     selectedTurns: input.turns,
+    feedbackSubmitter: feedbackIdentity().id,
     runtime: 'unavailable',
     terminal: process.env.TERM ?? 'unknown',
     colorTerminal: process.env.COLORTERM ?? 'unknown',
@@ -146,6 +148,8 @@ export async function collectFeedback(input: {
     }
     const feedbackConfig = await limitedFile(join(paths.homeDir, 'feedback.json'), 16384);
     if (feedbackConfig) secrets.push(...feedbackSecrets(JSON.parse(feedbackConfig)));
+    const identityConfig = await limitedFile(feedbackIdentityPath(paths.homeDir), 16384);
+    if (identityConfig) secrets.push(...feedbackSecrets(JSON.parse(identityConfig)));
     const runtimeToken = await limitedFile(paths.tokenPath, 65536);
     if (runtimeToken?.trim()) secrets.push(runtimeToken.trim());
   } catch {

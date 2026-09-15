@@ -4,7 +4,7 @@ import { resolveRuntimePaths } from '@vsp/vsp-runtime';
 import { requireExperimental } from '../../experimental.js';
 import { collectFeedback } from '../feedback/collect.js';
 import { redactFeedbackText, saveFeedbackBundle } from '../feedback/bundle.js';
-import { feedbackDigest, readFeedbackUploadConfig, uploadFeedback } from '../feedback/client.js';
+import { feedbackDigest, submitFeedback } from '../feedback/client.js';
 import { FeedbackPreview } from '../feedback/preview.js';
 import {
 	type Component,
@@ -4342,10 +4342,10 @@ export class VspiApp implements Component, Focusable {
 			}
 			if (this.feedbackUpload) return;
 			const controller = new AbortController(); this.feedbackUpload = controller;
-			panel.setUploading(true);
+			panel.setUploading(true, '正在自动登记设备身份并提交反馈…');
 			void (async () => {
 				try {
-					const id = await uploadFeedback(bytes, digest, await readFeedbackUploadConfig(home), { signal: controller.signal });
+					const id = await submitFeedback(bytes, digest, home, { signal: controller.signal });
 					if (this.feedbackPreview === panel) { this.feedbackPreview = undefined; this.preview = undefined; this.previewLabel = ''; this.showNotice(`Feedback ${id} 已确认保存`, 'success'); }
 				} catch (error) {
 					if (this.feedbackPreview === panel) panel.setUploading(false, `上传未完成：${redactFeedbackText(error instanceof Error ? error.message : '检查凭据、网络或服务状态')}；本地包保留。`);

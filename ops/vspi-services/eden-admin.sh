@@ -53,7 +53,7 @@ case "$action" in
     chmod 640 /etc/vsp-feedback/server.json
     nginx -t
     echo "Installed but not activated. Backup: $backup"
-    echo 'Provision a submission credential, then run this script with activate.'
+    echo 'Run this script with activate. Device-user submission credentials are issued automatically.'
     ;;
   activate)
     preflight

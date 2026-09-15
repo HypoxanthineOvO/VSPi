@@ -37,6 +37,7 @@ export function redactFeedbackText(text: string, secrets: readonly string[] = []
     )
     .replaceAll(/\b(?:Bearer|Basic)\s+[^\s"']+/gi, '[REDACTED AUTH]')
     .replaceAll(/\b(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]+/g, '[REDACTED]')
+    .replaceAll(/\bvspi1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[REDACTED FEEDBACK AUTH]')
     .replaceAll(/(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[REDACTED JWT]')
     .replaceAll(
       /((?:api[-_]?key|access[-_]?token|refresh[-_]?token|secret(?:[-_]?access)?[-_]?key|token|password|secret|authorization|cookie)\s*["']?\s*[:=]\s*)(?:"[^"\r\n]*(?:"|(?=\r?\n|$))|'[^'\r\n]*(?:'|(?=\r?\n|$))|[^\s,;]+)/gi,

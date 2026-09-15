@@ -1,5 +1,24 @@
 import { constants } from 'node:fs';
-import { open } from 'node:fs/promises';
+import { link, open, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
+
+export async function createPrivateFile(path: string, bytes: Uint8Array): Promise<void> {
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  const file = await open(temporary, 'wx', 0o600);
+  try {
+    try {
+      await file.writeFile(bytes);
+      await file.sync();
+    } finally { await file.close(); }
+    try { await link(temporary, path); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    if (process.platform !== 'win32') {
+      const directory = await open(dirname(path), 'r');
+      try { await directory.sync(); } finally { await directory.close(); }
+    }
+  } finally { await rm(temporary, { force: true }); }
+}
 
 export async function readPrivateFile(path: string, limit: number): Promise<Buffer> {
   return readFileUnderLimit(path, limit, true);

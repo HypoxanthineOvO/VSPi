@@ -8,6 +8,7 @@ type Config = {
   host?: string;
   port: number;
   submitters: Array<{ id: string; token: string }>;
+  automaticRegistration?: boolean;
 };
 async function readConfig(): Promise<Config> {
   const file = await open(configPath!, 'r');
