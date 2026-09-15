@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { startServer } from '@moonshot-ai/kap-server';
 import { serveKlientIpc } from '@moonshot-ai/klient/ipc';
-import { ISessionManager, IAgentLifecycleService, IAgentActivityView, IAgentTaskService, AgentCron, AgentGoal } from '@moonshot-ai/agent-core-v2';
+import { ISessionManager, IAgentLifecycleService, IAgentActivityView, IAgentTaskService, AgentCron, AgentGoal, MAIN_AGENT_ID } from '@moonshot-ai/agent-core-v2';
 
 import './feature-defaults.js';
 
@@ -81,7 +81,7 @@ export async function startRuntimeDaemon(options: StartRuntimeDaemonOptions): Pr
         const id = `${session.id}/${agent.agentId}`;
         const activity = handle.accessor.get(IAgentActivityView).state();
         if (activity.turn || activity.background.length > 0 || handle.accessor.get(IAgentTaskService).list(true).length > 0) busyAgents.push(id);
-        if (agents.resolve(agent, AgentCron).list().length > 0 || agents.resolve(agent, AgentGoal).getGoal().goal?.status === 'active') scheduledAgents.push(id);
+        if (agent.agentId === MAIN_AGENT_ID && (agents.resolve(agent, AgentCron).list().length > 0 || agents.resolve(agent, AgentGoal).getGoal().goal?.status === 'active')) scheduledAgents.push(id);
       }
     }
     return { busyAgents, scheduledAgents };
@@ -118,6 +118,9 @@ export async function startRuntimeDaemon(options: StartRuntimeDaemonOptions): Pr
       control: (method, args, peers, calls, streams) => {
         const request = args[0] as { ownerNonce?: unknown; requireIdle?: unknown } | undefined;
         if (!request || request.ownerNonce !== ownerNonce) throw new Error('Runtime control ownership mismatch');
+        if (method === 'shutdown' && request.requireIdle !== true) {
+          return { data: { accepted: true }, afterReply: () => close('stop') };
+        }
         const { busyAgents, scheduledAgents } = inspectWork();
         const data = { busyAgents, scheduledAgents, clients: Math.max(0, peers - 1), pendingCalls: calls, pendingStreams: streams };
         if (method === 'inspect') return { data };

@@ -10,6 +10,7 @@ import {
   removeRuntimeState,
   readRuntimeShutdown,
   readRuntimeShutdownIntent,
+  writeRuntimeShutdownIntent,
 } from './state.js';
 import type {
   RuntimeConnection,
@@ -28,6 +29,7 @@ export interface EnsureRuntimeOptions extends RuntimeConnectionOptions {
   readonly homeDir?: string;
   readonly spawn: RuntimeSpawner;
   readonly timeoutMs?: number;
+  readonly allowStart?: boolean;
 }
 
 export class RuntimeStoppedError extends Error {
@@ -45,6 +47,7 @@ export interface RuntimeActivity {
   readonly clients: number;
   readonly pendingCalls: number;
   readonly pendingStreams: number;
+  readonly inspectionError?: string;
 }
 
 export async function inspectRuntimeActivity(homeDir?: string): Promise<RuntimeActivity | undefined> {
@@ -55,24 +58,28 @@ export async function inspectRuntimeActivity(homeDir?: string): Promise<RuntimeA
   if (!token) throw new Error('Runtime token is empty');
   const transport = { socketPath: state.ipcPath, token, handshakeTimeoutMs: 5000, callTimeoutMs: 5000 };
   assertOwnedRuntime(state, await probeKlientIpc(transport), paths.homeDir);
-  const data = await callKlientIpcControl(transport, 'inspect', [{ ownerNonce: state.ownerNonce }]) as Partial<RuntimeActivity>;
-  if (!data || !Array.isArray(data.busyAgents) || data.busyAgents.some(id => typeof id !== 'string') ||
-    !Number.isSafeInteger(data.clients) || !Number.isSafeInteger(data.pendingCalls) ||
-    (data.clients ?? -1) < 0 || (data.pendingCalls ?? -1) < 0 ||
-    (data.pendingStreams !== undefined && (!Number.isSafeInteger(data.pendingStreams) || data.pendingStreams < 0)) ||
-    (data.scheduledAgents !== undefined && (!Array.isArray(data.scheduledAgents) || data.scheduledAgents.some(id => typeof id !== 'string')))) throw new Error('Invalid runtime activity response');
-  return { ownerNonce: state.ownerNonce, pid: state.pid, busyAgents: data.busyAgents, scheduledAgents: data.scheduledAgents ?? [], clients: data.clients!, pendingCalls: data.pendingCalls!, pendingStreams: data.pendingStreams ?? 0 };
+  try {
+    const data = await callKlientIpcControl(transport, 'inspect', [{ ownerNonce: state.ownerNonce }]) as Partial<RuntimeActivity>;
+    if (!data || !Array.isArray(data.busyAgents) || data.busyAgents.some(id => typeof id !== 'string') ||
+      !Number.isSafeInteger(data.clients) || !Number.isSafeInteger(data.pendingCalls) ||
+      (data.clients ?? -1) < 0 || (data.pendingCalls ?? -1) < 0 ||
+      (data.pendingStreams !== undefined && (!Number.isSafeInteger(data.pendingStreams) || data.pendingStreams < 0)) ||
+      (data.scheduledAgents !== undefined && (!Array.isArray(data.scheduledAgents) || data.scheduledAgents.some(id => typeof id !== 'string')))) throw new Error('Invalid runtime activity response');
+    return { ownerNonce: state.ownerNonce, pid: state.pid, busyAgents: data.busyAgents, scheduledAgents: data.scheduledAgents ?? [], clients: data.clients!, pendingCalls: data.pendingCalls!, pendingStreams: data.pendingStreams ?? 0 };
+  } catch (error) {
+    return { ownerNonce: state.ownerNonce, pid: state.pid, busyAgents: [], scheduledAgents: [], clients: 0, pendingCalls: 0, pendingStreams: 0, inspectionError: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export async function reconnectRuntime(
   previous: RuntimeConnection,
-  connect: () => Promise<RuntimeConnection>,
+  options?: RuntimeConnectionOptions,
 ): Promise<RuntimeConnection> {
   const paths = resolveRuntimePaths(previous.env.homeDir);
   const intent = await readRuntimeShutdownIntent(paths.serverDir);
   const receipt = await readRuntimeShutdown(paths.serverDir);
   if (intent?.ownerNonce === previous.state.ownerNonce || receipt?.ownerNonce === previous.state.ownerNonce) throw new RuntimeStoppedError();
-  return connect();
+  return connectRuntime(paths.homeDir, options);
 }
 
 export async function inspectRuntime(homeDir?: string): Promise<RuntimeState | undefined> {
@@ -141,6 +148,7 @@ export async function ensureRuntime(options: EnsureRuntimeOptions): Promise<Runt
       }
     }
   }
+  if (options.allowStart !== true) throw new RuntimeStoppedError();
   await options.spawn({ homeDir: paths.homeDir, logPath: paths.logPath });
   let lastError: unknown;
   while (Date.now() < deadline) {
@@ -168,34 +176,64 @@ export async function stopRuntime(homeDir?: string, timeoutMs = 10_000, options:
   assertOwnedRuntime(state, handshake, paths.homeDir);
   await appendFile(paths.logPath, `${JSON.stringify({ event: 'runtime.stop-requested', time: new Date().toISOString(), callerPid: process.pid, targetPid: state.pid })}\n`, { mode: 0o600 }).catch(() => {});
   const graceful = (handshake as { controlProtocol?: number }).controlProtocol === 1;
-  if (graceful) {
-    await callKlientIpcControl({ socketPath: state.ipcPath, token, handshakeTimeoutMs: remainingConnectionTime(deadline), callTimeoutMs: remainingConnectionTime(deadline) }, 'shutdown', [{ ownerNonce: state.ownerNonce, requireIdle: options.requireIdle }]);
-  } else {
-    if (options.requireIdle || process.platform === 'win32' && !options.forceLegacy) throw new Error('Legacy runtime has no safe shutdown protocol; finish all its tasks before using vspi daemon stop --force-legacy. This explicitly permits termination of the authenticated old instance.');
-    try {
-      process.kill(state.pid, 'SIGTERM');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true;
-      throw error;
-    }
+  if (!options.requireIdle) {
+    await writeRuntimeShutdownIntent(paths.serverDir, { ownerNonce: state.ownerNonce, reason: 'stop' });
+    return stopConfirmedRuntime(paths, state, token, graceful, deadline);
   }
+  if (!graceful) throw new Error('Legacy runtime has no safe shutdown protocol; confirm interruption before updating');
+  await callKlientIpcControl({ socketPath: state.ipcPath, token, handshakeTimeoutMs: remainingConnectionTime(deadline), callTimeoutMs: remainingConnectionTime(deadline) }, 'shutdown', [{ ownerNonce: state.ownerNonce, requireIdle: true }]);
   while (Date.now() < deadline) {
-    if (graceful) {
-      const receipt = await readRuntimeShutdown(paths.serverDir);
-      if (receipt?.ownerNonce === state.ownerNonce) {
-        if (!receipt.success) throw new Error(`Runtime cleanup failed: ${receipt.error ?? 'unknown failure'}`);
-        return true;
-      }
-      if (!isProcessAlive(state.pid)) throw new Error('Runtime exited without a successful cleanup confirmation');
-      await delay(50);
-      continue;
+    const receipt = await readRuntimeShutdown(paths.serverDir);
+    if (receipt?.ownerNonce === state.ownerNonce) {
+      if (!receipt.success) throw new Error(`Runtime cleanup failed: ${receipt.error ?? 'unknown failure'}`);
+      return true;
     }
-    if (!isProcessAlive(state.pid)) return true;
-    const current = await readRuntimeState(paths.statePath);
-    if (current?.ownerNonce !== state.ownerNonce) return true;
+    if (!isProcessAlive(state.pid)) throw new Error('Runtime exited without a successful cleanup confirmation');
     await delay(50);
   }
   throw new Error(`VSP runtime pid ${String(state.pid)} did not stop within ${String(timeoutMs)}ms`);
+}
+
+async function stopConfirmedRuntime(
+  paths: ReturnType<typeof resolveRuntimePaths>,
+  state: RuntimeState,
+  token: string,
+  graceful: boolean,
+  deadline: number,
+): Promise<boolean> {
+  const forceAt = deadline - Math.min(1000, remainingConnectionTime(deadline) / 4);
+  const signal = async (name: 'SIGTERM' | 'SIGKILL') => {
+    const current = await readRuntimeState(paths.statePath);
+    if (current?.ownerNonce !== state.ownerNonce || current.pid !== state.pid) return;
+    if (state.pid === process.pid) throw new Error('Cannot force terminate a runtime embedded in the calling process');
+    try { process.kill(state.pid, name); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+  };
+  let terminated = !graceful;
+  if (graceful) {
+    try {
+      const timeout = Math.max(1, Math.min(1000, forceAt - Date.now()));
+      await callKlientIpcControl({ socketPath: state.ipcPath, token, handshakeTimeoutMs: timeout, callTimeoutMs: timeout }, 'shutdown', [{ ownerNonce: state.ownerNonce }]);
+    } catch { terminated = true; }
+  }
+  if (terminated) await signal('SIGTERM');
+  let killed = false;
+  while (Date.now() < deadline) {
+    const receipt = await readRuntimeShutdown(paths.serverDir);
+    if (receipt?.ownerNonce === state.ownerNonce) {
+      if (receipt.success) return true;
+      if (!terminated) { await signal('SIGTERM'); terminated = true; }
+    }
+    if (!isProcessAlive(state.pid)) {
+      const current = await readRuntimeState(paths.statePath);
+      if (current?.ownerNonce === state.ownerNonce) await removeRuntimeState(paths.statePath, state.pid);
+      return true;
+    }
+    if (terminated && (await readRuntimeState(paths.statePath))?.ownerNonce !== state.ownerNonce) return true;
+    if (!killed && Date.now() >= forceAt) { await signal('SIGKILL'); killed = true; }
+    await delay(25);
+  }
+  throw new Error(`VSP runtime pid ${String(state.pid)} did not stop after confirmed termination`);
 }
 
 function assertOwnedRuntime(state: RuntimeState, handshake: unknown, homeDir: string): void {

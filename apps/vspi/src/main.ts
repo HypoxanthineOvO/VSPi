@@ -71,7 +71,11 @@ async function main(): Promise<void> {
 			await runVspiTui(connection, {
 				startupMode: resolveSessionStartupMode(args[0]),
 				reconnect: async () => {
-					const next = await reconnectRuntime(reconnectFrom, () => ensureConnection());
+					const next = await reconnectRuntime(reconnectFrom);
+					try {
+						const expected = await expectedRuntimeIdentity();
+						assertCompatibleConnection(expected, await readRuntimeIdentity(expected.homeDir), next);
+					} catch (error) { await next.close(); throw error; }
 					reconnectFrom = next;
 					return next;
 				},
@@ -101,6 +105,7 @@ async function daemonCommand(args: readonly string[]): Promise<void> {
 			return;
 		}
 		case "serve":
+			if (process.env.VSPI_RUNTIME_CHILD === '1') throw new Error('Daemon 内派生的 CLI 不能启动运行时；请在用户终端主动运行 vspi daemon start。');
 			await serveDaemon(homeDir);
 			return;
 		case "start": {
@@ -141,7 +146,7 @@ async function daemonCommand(args: readonly string[]): Promise<void> {
 		}
 		case "stop": {
 			const forceLegacy = args.includes('--force-legacy');
-			if (forceLegacy) process.stderr.write('Warning: permitting forced termination of an authenticated legacy daemon; all of its tasks must already be finished.\n');
+			if (forceLegacy) process.stderr.write('Warning: explicit stop terminates all work in the authenticated daemon.\n');
 			const stopped = await stopRuntime(homeDir, 30_000, { forceLegacy });
 			process.stdout.write(
 				stopped ? "VSP runtime stopped\n" : "VSP runtime is already stopped\n",
@@ -165,6 +170,7 @@ async function serveDaemon(homeDir?: string): Promise<void> {
 		nodePath: process.execPath,
 	});
 	process.env.PATH = environment.PATH;
+	process.env.VSPI_RUNTIME_CHILD = environment.VSPI_RUNTIME_CHILD;
 	const daemon = await startRuntimeDaemon({
 		homeDir: expected.homeDir,
 		hostIdentity: identity,
@@ -227,6 +233,7 @@ async function ensureConnection(homeDir?: string): Promise<RuntimeConnection> {
 	}
 	const connection = await ensureRuntime({
 		homeDir: expected.homeDir,
+		allowStart: process.env.VSPI_RUNTIME_CHILD !== '1',
 		spawn: async ({ homeDir: runtimeHomeDir, logPath }) => {
 			const runtimePaths = resolveRuntimePaths(runtimeHomeDir);
 			const diagnosticDir = join(runtimePaths.serverDir, "diagnostics");

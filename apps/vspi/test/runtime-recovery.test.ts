@@ -1,16 +1,22 @@
+/**
+ * Scenario: real runtime clients recover streams and confirm interruption before updating.
+ * Wiring: real Core/Klient with a local model server; old control failures are injected at IPC.
+ * Run: pnpm -C apps/vspi test -- test/runtime-recovery.test.ts
+ */
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connectRuntime, inspectRuntimeActivity, startRuntimeDaemon, type RuntimeConnection } from '@vsp/vsp-runtime';
+import * as ipc from '@moonshot-ai/klient/ipc';
 import { stopRuntimeForUpdate } from '../src/v1/update/self-update.js';
 import { runExec } from '../src/exec.js';
 import { KlientChatBackend } from '../src/v1/backend/klient-backend.js';
 import type { TranscriptMessage } from '../src/v1/domain/types.js';
 
 const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0).toReversed()) await cleanup(); });
+afterEach(async () => { vi.restoreAllMocks(); for (const cleanup of cleanups.splice(0).toReversed()) await cleanup(); });
 
 async function fixture(mode: 'normal' | 'http-retry' | 'stream-retry' | 'json-retry' | 'json-always-fails' | 'tool-echo' = 'normal', idleTimeoutMs = 0) {
   const root = await mkdtemp(join(tmpdir(), 'vspi-recovery-'));
@@ -247,6 +253,24 @@ describe('multiple clients on a real runtime', () => {
     await expect(rig.daemon.closed).resolves.toBeUndefined();
     rig.release();
     await prompt.catch(() => {});
+  }, 30000);
+
+  it.each([false, true])('honors confirmation %s when the old runtime cannot inspect goals', async (confirmed) => {
+    const rig = await fixture();
+    const call = ipc.callKlientIpcControl;
+    vi.spyOn(ipc, 'callKlientIpcControl').mockImplementation(async (options, method, args) => {
+      if (method === 'inspect' || (args[0] as { requireIdle?: boolean }).requireIdle) throw new Error('Goals are only supported by the main agent');
+      return call(options, method, args);
+    });
+    const confirm = vi.fn(async () => confirmed);
+    if (confirmed) {
+      await expect(stopRuntimeForUpdate(rig.home, confirm)).resolves.toBeUndefined();
+      await expect(rig.daemon.closed).resolves.toBeUndefined();
+    } else {
+      await expect(stopRuntimeForUpdate(rig.home, confirm)).rejects.toThrow('更新已取消');
+      expect((await rig.connection.klient.global.env()).homeDir).toBe(rig.home);
+    }
+    expect(confirm).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ inspectionError: 'Goals are only supported by the main agent' }));
   }, 30000);
 
   it('does not interrupt active work when no confirmation handler is available', async () => {

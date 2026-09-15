@@ -13,8 +13,8 @@ export async function prepareDaemonEnvironment(
 	const shellPath = (value: string) => process.platform === "win32" ? value.replaceAll("\\", "/") : value;
 	const batchPath = (value: string) => value.replaceAll("%", "%%");
 	const launchers = {
-		vspi: `#!/bin/sh\nif [ -z "$VSPI_HOME" ]; then export VSPI_HOME=${quote(options.homeDir)}; fi\nexec ${quote(shellPath(options.nodePath))} ${quote(shellPath(options.entryPath))} "$@"\n`,
-		"vspi.cmd": `@echo off\r\nsetlocal DisableDelayedExpansion\r\nif not defined VSPI_HOME set "VSPI_HOME=${batchPath(options.homeDir)}"\r\n"${batchPath(options.nodePath)}" "${batchPath(options.entryPath)}" %*\r\n`,
+		vspi: `#!/bin/sh\nif [ -z "$VSPI_HOME" ]; then export VSPI_HOME=${quote(options.homeDir)}; fi\nexport VSPI_RUNTIME_CHILD=1\nexec ${quote(shellPath(options.nodePath))} ${quote(shellPath(options.entryPath))} "$@"\n`,
+		"vspi.cmd": `@echo off\r\nsetlocal DisableDelayedExpansion\r\nif not defined VSPI_HOME set "VSPI_HOME=${batchPath(options.homeDir)}"\r\nset "VSPI_RUNTIME_CHILD=1"\r\n"${batchPath(options.nodePath)}" "${batchPath(options.entryPath)}" %*\r\n`,
 	};
 	for (const [name, content] of Object.entries(launchers)) {
 		const temporary = join(directory, `.${name}.${randomUUID()}.tmp`);
@@ -35,7 +35,7 @@ export async function prepareDaemonEnvironment(
 			if (key.toLowerCase() === "path") delete clean[key];
 		}
 	}
-	return { ...clean, PATH: [directory, existingPath].filter(Boolean).join(delimiter) };
+	return { ...clean, PATH: [directory, existingPath].filter(Boolean).join(delimiter), VSPI_RUNTIME_CHILD: '1' };
 }
 
 export function daemonEnvironment(

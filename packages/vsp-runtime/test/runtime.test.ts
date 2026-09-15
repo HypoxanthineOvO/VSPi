@@ -5,7 +5,8 @@
  * Run: pnpm -C packages/vsp-runtime test
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile, utimes, readdir, link, rename } from "node:fs/promises";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,8 @@ import { createServer, type Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseSkillText } from "@moonshot-ai/agent-core-v2/features/skill/catalog/parser";
 import { InMemorySkillCatalog } from "@moonshot-ai/agent-core-v2/features/skill/catalog/registry";
+import { IAgentLifecycleService, ISessionManager, AgentGoal } from '@moonshot-ai/agent-core-v2';
+import { startServer } from '@moonshot-ai/kap-server';
 
 import {
 	connectRuntime,
@@ -622,11 +625,10 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 		homeDir = await mkdtemp(join(tmpdir(), 'vsp-intentional-stop-'));
 		daemon = await startTestDaemon(homeDir);
 		const connection = await connectRuntime(homeDir);
-		const connect = vi.fn(async () => connection);
 		try {
 			await stopRuntime(homeDir, 2000);
-			await expect(reconnectRuntime(connection, connect)).rejects.toBeInstanceOf(RuntimeStoppedError);
-			expect(connect).not.toHaveBeenCalled();
+			await expect(reconnectRuntime(connection)).rejects.toBeInstanceOf(RuntimeStoppedError);
+			await expect(inspectRuntime(homeDir)).resolves.toBeUndefined();
 		} finally { await connection.close(); }
 	});
 
@@ -635,10 +637,140 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 		daemon = await startTestDaemon(homeDir);
 		const connection = await connectRuntime(homeDir);
 		try {
-			const connect = vi.fn(async () => connection);
-			await expect(reconnectRuntime(connection, connect)).resolves.toBe(connection);
-			expect(connect).toHaveBeenCalledOnce();
+			const next = await reconnectRuntime(connection);
+			try { expect(next.state.ownerNonce).toBe(connection.state.ownerNonce); }
+			finally { await next.close(); }
 		} finally { await connection.close(); }
+	});
+
+	it.each([false, undefined])('refuses passive startup with allowStart %s after an explicit stop', async (allowStart) => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-passive-start-'));
+		daemon = await startTestDaemon(homeDir);
+		await stopRuntime(homeDir, 2000);
+		const spawn = vi.fn();
+		await expect(ensureRuntime({ homeDir, spawn, allowStart })).rejects.toBeInstanceOf(RuntimeStoppedError);
+		expect(spawn).not.toHaveBeenCalled();
+	});
+
+	it('starts a new runtime after an explicit user wakeup', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-user-start-'));
+		daemon = await startTestDaemon(homeDir);
+		const previousOwner = daemon.state.ownerNonce;
+		await stopRuntime(homeDir, 2000);
+		const connection = await ensureRuntime({ homeDir, allowStart: true, spawn: async () => { daemon = await startTestDaemon(homeDir!); } });
+		try { expect(connection.state.ownerNonce).not.toBe(previousOwner); }
+		finally { await connection.close(); }
+	});
+
+	it('does not resurrect a stopped runtime when its shutdown markers are missing', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-missing-stop-marker-'));
+		daemon = await startTestDaemon(homeDir);
+		const connection = await connectRuntime(homeDir);
+		try {
+			await stopRuntime(homeDir, 2000);
+			const paths = resolveRuntimePaths(homeDir);
+			await rm(join(paths.serverDir, 'shutdown-intent.json'));
+			await rm(join(paths.serverDir, 'shutdown.json'));
+			await expect(reconnectRuntime(connection)).rejects.toThrow('not running');
+			await expect(inspectRuntime(homeDir)).resolves.toBeUndefined();
+		} finally { await connection.close(); }
+	});
+
+	async function daemonWithChild() {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-child-control-'));
+		let sessionId = '';
+		daemon = await startRuntimeDaemon({
+			homeDir, hostIdentity: identity, env: { ...process.env, HOME: homeDir }, idleTimeoutMs: 0,
+			startServer: async (options) => {
+				const server = await startServer(options);
+				const session = await server.core.accessor.get(ISessionManager).create({ workDir: homeDir! });
+				sessionId = session.id;
+				await session.accessor.get(IAgentLifecycleService).create({ agentId: 'child' });
+				return server;
+			},
+		});
+		return sessionId;
+	}
+
+	it('inspects idle child agents without invoking main-only goals', async () => {
+		await daemonWithChild();
+		const activity = await inspectRuntimeActivity(homeDir);
+		expect(activity).toMatchObject({ busyAgents: [], scheduledAgents: [] });
+		expect(activity?.inspectionError).toBeUndefined();
+	});
+
+	it('allows safe update shutdown when a live child agent is idle', async () => {
+		await daemonWithChild();
+		await expect(stopRuntime(homeDir, 2000, { requireIdle: true })).resolves.toBe(true);
+		await expect(daemon!.closed).resolves.toBeUndefined();
+	});
+
+	it('stops explicitly when a main agent has an active goal', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-broken-goal-stop-'));
+		daemon = await startRuntimeDaemon({
+			homeDir, hostIdentity: identity, env: { ...process.env, HOME: homeDir }, idleTimeoutMs: 0,
+			startServer: async (options) => {
+				const server = await startServer(options);
+				const session = await server.core.accessor.get(ISessionManager).create({ workDir: homeDir! });
+				const agents = session.accessor.get(IAgentLifecycleService);
+				await agents.resolve(await agents.create({ agentId: 'main' }), AgentGoal).createGoal({ objective: 'Finish pending work' });
+				return server;
+			},
+		});
+		await expect(stopRuntime(homeDir, 2000, { requireIdle: true })).rejects.toThrow('active work');
+		await expect(stopRuntime(homeDir, 2000)).resolves.toBe(true);
+		await expect(daemon.closed).resolves.toBeUndefined();
+	});
+
+	async function legacyControlPeer(ignoreTermination = false) {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-legacy-control-'));
+		const paths = resolveRuntimePaths(homeDir);
+		await mkdir(paths.serverDir, { recursive: true });
+		const child = spawn(process.execPath, ['--input-type=module', '-e', `
+			import { createServer } from 'node:net';
+			const [home, socketPath, ignoreTermination] = process.argv.slice(1);
+			if (ignoreTermination === 'true') process.on('SIGTERM', () => {});
+			const server = createServer(socket => {
+				let pending = '';
+				socket.on('error', () => {});
+				socket.on('data', chunk => {
+					pending += chunk.toString();
+					const lines = pending.split('\\n'); pending = lines.pop();
+					for (const line of lines) {
+						const frame = JSON.parse(line);
+						const reply = frame.type === 'hello'
+							? { type: 'hello_result', id: 'hello', data: { pid: process.pid, ownerNonce: 'legacy-owner', homeDir: home, controlProtocol: 1 } }
+							: { type: 'error', id: frame.id, code: 50001, msg: 'Goals are only supported by the main agent' };
+						socket.write(JSON.stringify(reply) + '\\n');
+					}
+				});
+			});
+			server.listen(socketPath, () => process.stdout.write('ready\\n'));
+		`, homeDir, paths.ipcPath, String(ignoreTermination)], { stdio: ['ignore', 'pipe', 'pipe'] });
+		const exited = once(child, 'exit');
+		closePeer = async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); await exited; };
+		await once(child.stdout, 'data');
+		await writeFile(paths.tokenPath, 'TEST_ONLY_TOKEN');
+		await writeFile(paths.statePath, JSON.stringify({ protocolVersion: 1, pid: child.pid, ownerNonce: 'legacy-owner', host: '127.0.0.1', port: 1, ipcPath: paths.ipcPath, startedAt: new Date().toISOString(), version: 'legacy' }));
+		return { child, exited, paths };
+	}
+
+	it('reports unknown activity when the authenticated old daemon rejects inspection', async () => {
+		await legacyControlPeer();
+		expect(await inspectRuntimeActivity(homeDir)).toMatchObject({ inspectionError: 'Goals are only supported by the main agent' });
+	});
+
+	it('terminates an authenticated old daemon when its shutdown control throws', async () => {
+		const peer = await legacyControlPeer();
+		await expect(stopRuntime(homeDir, 2000)).resolves.toBe(true);
+		expect(await peer.exited).toEqual([null, 'SIGTERM']);
+		expect(JSON.parse(await readFile(join(peer.paths.serverDir, 'shutdown-intent.json'), 'utf8'))).toMatchObject({ ownerNonce: 'legacy-owner', reason: 'stop' });
+	});
+
+	it.skipIf(process.platform === 'win32')('force kills the authenticated daemon when it ignores termination', async () => {
+		const peer = await legacyControlPeer(true);
+		await expect(stopRuntime(homeDir, 1000)).resolves.toBe(true);
+		expect(await peer.exited).toEqual([null, 'SIGKILL']);
 	});
 
 	it('rejects a shutdown confirmation for a different runtime owner', async () => {

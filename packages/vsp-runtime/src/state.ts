@@ -18,7 +18,7 @@ export interface RuntimeShutdownIntent {
 
 export async function writeRuntimeShutdownIntent(serverDir: string, intent: RuntimeShutdownIntent): Promise<void> {
   const path = join(serverDir, 'shutdown-intent.json');
-  const temporary = `${path}.${intent.ownerNonce}.tmp`;
+  const temporary = `${path}.${randomBytes(8).toString('hex')}.tmp`;
   try {
     await writeFile(temporary, JSON.stringify(intent), { mode: 0o600, flag: 'wx' });
     await rename(temporary, path);

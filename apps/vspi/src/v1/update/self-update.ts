@@ -44,8 +44,11 @@ export async function confirmUpdateStop(activity: RuntimeActivity): Promise<bool
   reader.on('SIGINT', () => { controller.abort(); });
   reader.on('close', () => { controller.abort(); });
   try {
+    const summary = activity.inspectionError !== undefined
+      ? `无法检查活跃工作（${activity.inspectionError}），可能仍有任务运行。`
+      : `${activity.busyAgents.length} 个活跃 Agent、${activity.scheduledAgents.length} 个含计划任务/目标的 Agent、${activity.pendingCalls + activity.pendingStreams} 个处理中请求、${activity.clients} 个客户端。`;
     const answer = await reader.question(
-      `运行时 PID ${activity.pid}：${activity.busyAgents.length} 个活跃 Agent、${activity.scheduledAgents.length} 个含计划任务/目标的 Agent、${activity.pendingCalls + activity.pendingStreams} 个处理中请求、${activity.clients} 个客户端。\n终止这些工作并更新？未完成输出可能丢失，计划任务需重新打开会话恢复；历史和配置保留。[y/N] `,
+      `运行时 PID ${activity.pid}：${summary}\n终止这些工作并更新？未完成输出可能丢失，计划任务需重新打开会话恢复；历史和配置保留。[y/N] `,
       { signal: controller.signal },
     );
     return ['y', 'yes'].includes(answer.trim().toLowerCase());
@@ -56,10 +59,8 @@ export async function confirmUpdateStop(activity: RuntimeActivity): Promise<bool
 export async function stopRuntimeForUpdate(homeDir: string, confirmStop?: (activity: RuntimeActivity) => Promise<boolean>): Promise<void> {
   try { await stopRuntime(homeDir, 30_000, { requireIdle: true }); return; }
   catch (error) {
-    if (!(error instanceof Error) || !/Runtime has active work|Runtime is in use/u.test(error.message)) throw error;
     const activity = await inspectRuntimeActivity(homeDir);
-    if (!activity) throw error;
-    if (activity.busyAgents.length === 0 && activity.scheduledAgents.length === 0 && activity.pendingCalls === 0 && activity.pendingStreams === 0) throw new Error('旧版运行时仍将空闲连接视为占用；首次升级请先退出旧界面，再运行 vspi daemon stop 和 vspi update。', { cause: error });
+    if (!activity) return;
     if (!confirmStop || !await confirmStop(activity)) throw new Error('更新已取消：未获准终止活跃任务，运行时和安装保持不变。', { cause: error });
     await stopRuntime(homeDir, 30_000, { expectedOwnerNonce: activity.ownerNonce });
   }

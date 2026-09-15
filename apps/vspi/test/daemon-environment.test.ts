@@ -1,3 +1,8 @@
+/**
+ * Scenario: packaged and generated daemon CLIs preserve identity without implicit startup.
+ * Wiring: real child processes and temporary homes; packaged checks use VSPI_PACKAGE_SMOKE_ENTRY.
+ * Run: pnpm exec vitest run --project vspi apps/vspi/test/daemon-environment.test.ts
+ */
 import { describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
 import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
@@ -34,9 +39,28 @@ describe("VSPi daemon environment", () => {
 			const result = await connection.klient.session(session.id).agent("main").runShellCommand({ command: "vspi inspect paths" });
 			expect(result.isError).toBe(false);
 			expect(JSON.parse(result.stdout)).toMatchObject({ homeDir: home, pid: connection.state.pid });
+			const nested = await connection.klient.session(session.id).agent("main").runShellCommand({ command: 'printf "%s" "$VSPI_RUNTIME_CHILD"' });
+			expect(nested.stdout).toBe('1');
 			expect(await access(marker).then(() => true, () => false)).toBe(false);
 		} finally {
 			await connection?.close();
+			await stopRuntime(home).catch(() => {});
+			await rm(root, { recursive: true, force: true });
+		}
+	}, 45_000);
+
+	it.skipIf(!process.env.VSPI_PACKAGE_SMOKE_ENTRY)('blocks startup by a daemon-derived CLI after explicit stop', async () => {
+		const entry = process.env.VSPI_PACKAGE_SMOKE_ENTRY!;
+		const root = await mkdtemp(join(tmpdir(), 'vspi-packaged-no-wakeup-'));
+		const home = join(root, 'home');
+		const env = { ...process.env, HOME: root, VSPI_HOME: home, VSPI_RUNTIME_CHILD: '' };
+		const execute = promisify(execFile);
+		try {
+			await execute(process.execPath, [entry, 'daemon', 'start'], { env, timeout: 30_000 });
+			await execute(process.execPath, [entry, 'daemon', 'stop'], { env, timeout: 30_000 });
+			await expect(execute(process.execPath, [entry, 'daemon', 'start'], { env: { ...env, VSPI_RUNTIME_CHILD: '1' }, timeout: 10_000 })).rejects.toThrow('运行时已主动停止');
+			await expect(access(join(home, 'server', 'runtime.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+		} finally {
 			await stopRuntime(home).catch(() => {});
 			await rm(root, { recursive: true, force: true });
 		}
@@ -59,6 +83,7 @@ describe("VSPi daemon environment", () => {
 			expect(JSON.parse(explicit.stdout).home).toBe(explicitHome);
 			expect(source.PATH.startsWith(oldBin)).toBe(true);
 			expect(environment.VSPI_HOME).toBeUndefined();
+			expect(environment.VSPI_RUNTIME_CHILD).toBe('1');
 		} finally { await rm(home, { recursive: true, force: true }); }
 	});
 	it("removes VSPI_HOME without mutating the source environment", () => {
