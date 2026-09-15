@@ -25,6 +25,49 @@ afterEach(async () => {
 });
 
 describe('pre-bootstrap config migration', () => {
+  it('retires expired DeepSeek entries and rewrites dependent preferences without deleting history', async () => {
+    const { root, homeDir, agentDir } = await fixture();
+    const paths = resolveRuntimePaths(homeDir);
+    const old = 'vsplab/deepseek-v4.1-flash-expires-on-0910';
+    const current = 'vsplab/deepseek-flash';
+    const original = stringify({
+      providers: { vsplab: { type: 'openai', base_url: 'https://relay.example.test/v1', api_key: 'YOUR_API_KEY' } },
+      models: { [old]: { provider: 'vsplab', model: 'deepseek-v4.1-flash-expires-on-0910', support_efforts: ['medium'], max_context_size: 1048576 } },
+      default_model: old, thinking: { model_efforts: { [old]: 'medium' } },
+      secondary_model: { default_model: old, models: { [old]: 'Review code' }, force: false },
+    });
+    await writeFile(paths.configPath, original);
+    await writeLegacy(agentDir, { providers: { vsplab: { api: 'openai-completions', baseUrl: 'https://relay.example.test/v1', models: [{ id: 'deepseek-v4.1-flash-expires-on-0910' }] } } });
+    const history = join(homeDir, 'example-wire.jsonl'); await writeFile(history, `original binding ${old}`);
+    const result = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
+    const output = await readFile(paths.configPath, 'utf8');
+    expect(output).not.toContain('expires-on');
+    expect(parse(output)).toMatchObject({
+      default_model: current,
+      models: { [current]: { model: 'deepseek-flash', display_name: 'DeepSeek V4.1 Flash', thinking: { efforts: ['low', 'high', 'max'] } } },
+      thinking: { model_efforts: { [current]: 'high' } },
+      secondary_model: { default_model: current, models: { [current]: 'Review code' }, force: false },
+    });
+    expect(await readFile(result.report!.backupPath, 'utf8')).toBe(original);
+    expect(await readFile(history, 'utf8')).toBe(`original binding ${old}`);
+    await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
+    expect(await readFile(paths.configPath, 'utf8')).toBe(output);
+  });
+
+  it('preserves an already configured canonical model when retiring an older duplicate', async () => {
+    const { root, homeDir, agentDir } = await fixture(); const paths = resolveRuntimePaths(homeDir);
+    const target = 'vsplab/deepseek-flash'; const old = 'vsplab/deepseek-v4.1-flash';
+    await writeFile(paths.configPath, stringify({
+      providers: { vsplab: { type: 'openai' } },
+      models: { [old]: { provider: 'vsplab', model: 'deepseek-v4.1-flash', max_context_size: 4096 }, [target]: { provider: 'vsplab', model: 'deepseek-flash', max_context_size: 100000, overrides: { default_effort: 'low' } } },
+      default_model: old, thinking: { model_efforts: { [old]: 'high', [target]: 'low' } },
+    }));
+    await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
+    const value = parse(await readFile(paths.configPath, 'utf8'));
+    expect(value).toMatchObject({ default_model: target, models: { [target]: { max_context_size: 100000, overrides: { default_effort: 'low' } } }, thinking: { model_efforts: { [target]: 'low' } } });
+    expect(value['models']).not.toHaveProperty(old);
+  });
+
   it('backs up generated relay protocols and stale effort defaults while preserving user preferences', async () => {
     const { root, homeDir, agentDir } = await fixture();
     const paths = resolveRuntimePaths(homeDir);

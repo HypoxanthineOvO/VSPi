@@ -5,6 +5,7 @@ import type { ProviderConfig } from '#/kosong/provider/provider';
 import { ProtocolSchema } from '#/kosong/protocol/protocol';
 import { applyModelEffortProfile } from '#/kosong/model/effortProfiles';
 import { EFFORT_PROFILE_REVISION, modelEffortProfile } from '#/kosong/provider/effortProfiles';
+import { currentModelId } from '#/kosong/model/retiredModelIds';
 
 const costRate = z.number().finite().nonnegative();
 const costSchema = z.object({
@@ -17,6 +18,7 @@ const costSchema = z.object({
 }).passthrough();
 const entrySchema = z.object({
   id: z.string().trim().min(1).max(200),
+  aliases: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
   name: z.string().trim().min(1).max(300).optional(),
   protocol: ProtocolSchema.optional(),
   contextWindow: z.number().int().positive().optional(),
@@ -43,6 +45,7 @@ export function isRelayCatalogProvider(id: string, provider: ProviderConfig): bo
 export function relayCatalogUrl(provider: ProviderConfig): string {
   const explicit = provider.source?.['url'];
   const url = new URL(typeof explicit === 'string' ? explicit : '/vsp/models', provider.baseUrl);
+  if (url.pathname === '/vsp/models/') url.pathname = '/vsp/models';
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid relay catalog URL');
   return url.toString();
 }
@@ -55,16 +58,26 @@ export function mergeRelayCatalog(
 ): Record<string, ModelRecord> {
   const { models, pricingBasis } = relayCatalogSchema.parse(payload);
   if (new Set(models.map((model) => model.id)).size !== models.length) throw new Error('Duplicate relay model id');
+  const identities = new Set<string>();
+  for (const model of models) {
+    for (const id of [model.id, ...model.aliases ?? []]) {
+      if (identities.has(id)) throw new Error('Ambiguous relay model alias');
+      if (currentModelId(id) !== id && /expire/i.test(id)) throw new Error('Retired model identifiers must not be published');
+      identities.add(id);
+    }
+  }
   const result = { ...records };
   for (const remote of models) {
-    const aliases = Object.entries(records).filter(([, record]) => (record.providerId ?? record.provider) === providerId && (record.name ?? record.model) === remote.id).map(([alias]) => alias);
+    const names = new Set([remote.id, ...remote.aliases ?? []]);
+    const aliases = Object.entries(records).filter(([, record]) => (record.providerId ?? record.provider) === providerId && names.has(record.name ?? record.model ?? '')).map(([alias]) => alias);
     if (aliases.length === 0 && remote.hidden) continue;
     if (aliases.length === 0) aliases.push(`${providerId}/${remote.id}`);
     const native = findPiModel(provider.type, remote.id);
     const nativeThinking = native ? piThinking(native) : undefined;
     for (const alias of aliases) {
       const old = records[alias];
-      const record: ModelRecord = { ...old, provider: providerId, model: remote.id };
+      const record: ModelRecord = { ...old, provider: providerId, model: old?.model ?? remote.id };
+      if (remote.aliases !== undefined) record.aliases = [...remote.aliases];
       if (remote.protocol !== undefined) record.defaultProtocol = remote.protocol;
       if (remote.name !== undefined) record.displayName = remote.name;
       if (remote.contextWindow !== undefined) record.maxContextSize = remote.contextWindow;

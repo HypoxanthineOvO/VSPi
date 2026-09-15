@@ -4,6 +4,7 @@ import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
 import { AsyncEmitter, type Event, type IWaitUntil } from '#/_base/event';
 
 import { deepEqual, diffRecords, isEmptyDiff } from '../recordDiff';
+import { currentModelId } from './retiredModelIds';
 
 import {
   type DefaultModelChangedEvent,
@@ -38,7 +39,7 @@ export class ModelService extends Disposable implements IModelService {
     this._onDidChangeDefaultModel.event;
 
   get(id: string): ModelRecord | undefined {
-    return this.models[id];
+    return this.models[id] ?? this.models[currentModelId(id)];
   }
 
   list(): Readonly<Record<string, ModelRecord>> {

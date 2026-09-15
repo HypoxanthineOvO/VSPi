@@ -616,15 +616,11 @@
         "cacheRead": 0.3,
         "cacheWrite": 0
       },
-      "effortLevels": [
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
+      "effortLevels": ["low", "high", "max"],
+      "defaultEffort": "max",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {"low": "low", "high": "high", "max": "max"},
       "releasedAt": "2026-07-16",
       "metadataSources": {
         "releasedAt": {
@@ -639,7 +635,7 @@
           "reason": "Existing estimate retained; no verified paid first-party equivalent"
         }
       },
-      "curated": false,
+      "curated": true,
       "protocol": "openai"
     },
     {
@@ -1801,6 +1797,7 @@
     },
     {
       "id": "deepseek-v4-flash-vision-exp",
+      "hidden": true,
       "name": "DeepSeek V4 Flash Vision Exp",
       "reasoning": true,
       "input": [
@@ -1862,7 +1859,8 @@
       }
     },
     {
-      "id": "deepseek-v4.1-flash",
+      "id": "deepseek-flash",
+      "aliases": ["deepseek-v4.1-flash"],
       "name": "DeepSeek V4.1 Flash",
       "reasoning": true,
       "input": [
@@ -2901,7 +2899,7 @@
     "relayCharges": false
   },
   "releaseDateMeaning": "Model public release date (YYYY-MM-DD), not catalog registration or snapshot identifier date; see per-model provenance",
-  "updatedAt": "2026-09-13",
+  "updatedAt": "2026-09-15",
   "metadataSourceSnapshot": {
     "url": "https://models.dev/api.json",
     "sha256": "5ebd3e69924168e7b7c44495eb43d5447bf0e8b308fe4d6401ee4eb14ef34e4c",

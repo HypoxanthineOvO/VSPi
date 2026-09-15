@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { applyModelEffortProfile } from '@moonshot-ai/agent-core-v2/kosong/model/effortProfiles';
 import { EFFORT_PROFILE_REVISION, modelEffortProfile } from '@moonshot-ai/agent-core-v2/kosong/provider/effortProfiles';
 import { defaultRelayProtocol } from '@moonshot-ai/agent-core-v2/kosong/model/relayDefaults';
+import { retireModelReferences } from './retired-models.js';
 
 import {
   preserveThinkingEffort,
@@ -117,6 +118,10 @@ export async function migrateLegacyVspiProviders(
     }
   }
 
+  const previousDefault = config['default_model'];
+  const retiredModels = retireModelReferences(config, models, providers, diagnostics);
+  const retiredAliases = new Set(retiredModels.values());
+  modelCount += retiredModels.size;
   const vspLabGptModels = new Set([
     'vsplab/gpt-5.2',
     'vsplab/gpt-5.2-pro',
@@ -172,7 +177,7 @@ export async function migrateLegacyVspiProviders(
     const profile = name === undefined ? undefined : modelEffortProfile(name);
     if (!model || !provider || !providerId || !name || !profile) continue;
     if (providerId !== 'vsplab' && provider['type'] !== 'vsplab' && record(provider['source'])?.['kind'] !== 'vsp-models') continue;
-    if (alias !== `${providerId}/${name}`) continue;
+    if (alias !== `${providerId}/${name}` && !retiredAliases.has(alias)) continue;
     const refreshEffort = (positiveInteger(model['effort_profile_revision']) ?? 0) < EFFORT_PROFILE_REVISION;
     if (!refreshEffort && options.cleanProtocolDefaults === false) continue;
     if (model['api_key'] !== undefined || model['oauth'] !== undefined || model['name'] !== undefined ||
@@ -215,6 +220,12 @@ export async function migrateLegacyVspiProviders(
     if (refreshEffort) diagnostics.push(`model ${alias}: refreshed documented effort profile`);
   }
 
+  const remembered = record(record(config['thinking'])?.['model_efforts']);
+  for (const alias of retiredModels.values()) {
+    if (remembered && typeof remembered[alias] === 'string') {
+      remembered[alias] = repairThinkingEffort(remembered[alias], alias, models, providers).effort;
+    }
+  }
   if (Object.keys(providers).length > 0) config['providers'] = providers;
   else delete config['providers'];
   if (Object.keys(models).length > 0) config['models'] = models;
@@ -225,7 +236,7 @@ export async function migrateLegacyVspiProviders(
   const legacyDefaults = record(defaults) as LegacyRuntimeDefaults | undefined;
   const legacyDefault = legacyDefaultAlias(legacyDefaults, models);
   let repairedDefaultModel = false;
-  let defaultModel = false;
+  let defaultModel = previousDefault !== config['default_model'];
   if (!existingDefaultValid) {
     if (existingDefault !== undefined) repairedDefaultModel = true;
     if (legacyDefault !== undefined) {

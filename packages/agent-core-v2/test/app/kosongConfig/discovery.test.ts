@@ -11,7 +11,7 @@ import { IConfigService } from '#/app/config/config';
 import { ConfigRegistry } from '#/app/config/configService';
 import { IEventService } from '#/app/event/event';
 import { IProviderDiscoveryService } from '#/app/kosongConfig/discovery';
-import { mergeRelayCatalog } from '#/app/kosongConfig/relayCatalog';
+import { mergeRelayCatalog, relayCatalogUrl } from '#/app/kosongConfig/relayCatalog';
 import '#/app/kosongConfig/discoveryService';
 import { MODEL_CATALOG_SECTION } from '#/app/kosongConfig/configSection';
 import { IKosongConfigService } from '#/app/kosongConfig/kosongConfig';
@@ -124,6 +124,23 @@ const staticSections: Record<string, unknown> = {
 };
 
 describe('queryAvailableModels', () => {
+  it('normalizes the station metadata trailing slash without changing custom catalog paths', () => {
+    expect(relayCatalogUrl({ baseUrl: 'https://relay.example.test/v1', source: { url: '/vsp/models/' } })).toBe('https://relay.example.test/vsp/models');
+    expect(relayCatalogUrl({ baseUrl: 'https://relay.example.test/v1', source: { url: '/custom/' } })).toBe('https://relay.example.test/custom/');
+  });
+
+  it('applies explicitly declared alias metadata without rewriting the request model or user overrides', () => {
+    const result = mergeRelayCatalog({ custom: { provider: 'relay', model: 'example-current', overrides: { maxContextSize: 4096 } } }, 'relay', {}, {
+      models: [{ id: 'example-v2', aliases: ['example-current'], contextWindow: 100000, effortRevision: 2, effortLevels: ['low', 'high'], defaultEffort: 'high' }],
+    });
+    expect(result['custom']).toMatchObject({ model: 'example-current', maxContextSize: 100000, overrides: { maxContextSize: 4096 }, thinking: { efforts: ['low', 'high'] } });
+    expect(result['relay/example-v2']).toBeUndefined();
+  });
+
+  it('rejects ambiguous aliases or expired station entries instead of silently merging them', () => {
+    expect(() => mergeRelayCatalog({}, 'relay', {}, { models: [{ id: 'a', aliases: ['shared'] }, { id: 'b', aliases: ['shared'] }] })).toThrow('Ambiguous');
+    expect(() => mergeRelayCatalog({}, 'relay', {}, { models: [{ id: 'deepseek-v4.1-flash-expires-on-0910' }] })).toThrow('Retired');
+  });
 
   it('adds an unknown station model entirely from metadata and retains user overrides', () => {
     const result = mergeRelayCatalog({}, 'relay', { type: 'openai' }, { version: 1, models: [{

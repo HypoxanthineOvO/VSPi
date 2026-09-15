@@ -121,6 +121,16 @@ afterEach(() => {
 });
 
 describe('Model assembly (pure data)', () => {
+  it('resolves a historical expired DeepSeek binding through its current model without listing the retired ID', async () => {
+    const r = createHost({
+      providers: { vsplab: { type: 'openai', apiKey: 'YOUR_API_KEY', baseUrl: 'https://relay.example.test/v1' } },
+      models: { 'vsplab/deepseek-flash': { provider: 'vsplab', model: 'deepseek-flash', maxContextSize: 1048576 } },
+    });
+    try {
+      expect(r.catalog.get('vsplab/deepseek-v4.1-flash-expires-on-0910')).toMatchObject({ id: 'vsplab/deepseek-flash', name: 'deepseek-flash' });
+      expect(Object.keys(r.models.list())).toEqual(['vsplab/deepseek-flash']);
+    } finally { r.host.dispose(); }
+  });
   it.each([
     ['gpt-6-astra', 'openai_responses', 'https://relay.example.test/v1'],
     ['claude-opus-5', 'anthropic', 'https://relay.example.test'],

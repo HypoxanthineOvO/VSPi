@@ -1,6 +1,7 @@
 import { parseKimiCodeCustomHeaders } from '@moonshot-ai/kimi-code-oauth';
 
 import { Disposable } from '#/_base/di/lifecycle';
+import { currentModelId } from './retiredModelIds';
 import { LifecycleScope } from '#/app/scopes';
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
 import { Error2 } from '#/_base/errors/errors';
@@ -117,6 +118,8 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
   }
 
   private entry(id: string): CatalogEntry {
+    const current = currentModelId(id);
+    if (current !== id && !Object.hasOwn(this.models.list(), id) && this.models.get(current)) id = current;
     const cached = this.cache.get(id);
     if (cached !== undefined) return cached;
     const trace = new ResolutionTraceCollector();

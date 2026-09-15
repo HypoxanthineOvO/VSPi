@@ -1395,11 +1395,11 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(panels.handleInput("\r")).toBeUndefined();
 	});
 
-	it.each(["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna", "claude-fable-5-1", "claude-opus-5", "kimi-k3", "glm-5.3", "glm-5.3-flash", "deepseek-v4.1-flash", "deepseek-v4-pro", "MiniMax-M3", "mimo-v2.5", "mimo-v2.5-pro", "qwen3.8-max", "google/gemini-3.8-flash", "google/gemini-3.1-pro-preview", "tencent/hy4-preview"])("recognizes the approved recommendation %s independently of subagent configuration", (id) => {
+	it.each(["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna", "claude-fable-5-1", "claude-opus-5", "kimi-k3", "k3", "glm-5.3", "glm-5.3-flash", "deepseek-flash", "deepseek-v4-pro", "MiniMax-M3", "mimo-v2.5", "mimo-v2.5-pro", "qwen3.8-max", "google/gemini-3.8-flash", "google/gemini-3.1-pro-preview", "tencent/hy4-preview"])("recognizes the approved recommendation %s independently of subagent configuration", (id) => {
 		expect(isOfficialRecommendedModel(id)).toBe(true);
 	});
 
-	it.each(["gpt-5.6-terra", "kimi-k2.7-code", "deepseek-v4-flash-vision-exp", "gemini-3.1-flash-lite", "example-model"])("does not automatically recommend an unlisted model %s", (id) => {
+	it.each(["gpt-5.6-terra", "kimi-k2.7-code", "deepseek-v4-flash", "deepseek-v4.1-flash", "deepseek-v4.1-flash-expires-on-0910", "deepseek-v4-flash-vision-exp", "gemini-3.1-flash-lite", "example-model"])("does not automatically recommend an unlisted model %s", (id) => {
 		expect(isOfficialRecommendedModel(id)).toBe(false);
 	});
 
