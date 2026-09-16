@@ -72,6 +72,23 @@ describe('AppendLogStore', () => {
     expect(await collect<Rec>(SCOPE, KEY)).toEqual([{ n: 1 }, { n: 2 }, { n: 3 }]);
   });
 
+  it('resumes reading at a UTF-8 byte cursor without repeating earlier records', async () => {
+    record.append(SCOPE, KEY, { text: '中文🙂' });
+    let cursor = 0;
+    for await (const _entry of record.read(SCOPE, KEY, { onCursor: value => { cursor = value; } })) {}
+    record.append(SCOPE, KEY, { text: 'next' });
+    const entries: unknown[] = [];
+    for await (const entry of record.read(SCOPE, KEY, { fromByte: cursor })) entries.push(entry);
+    expect(entries).toEqual([{ text: 'next' }]);
+  });
+
+  it('notifies readers when rewriting invalidates their cursors', async () => {
+    const events: unknown[] = [];
+    disposables.add(record.onDidWrite(event => events.push(event)));
+    await record.rewrite(SCOPE, KEY, [{ n: 1 }]);
+    expect(events).toContainEqual({ scope: SCOPE, key: KEY, rewritten: true });
+  });
+
   it('batches many appends into a single durable append', async () => {
     const spy = { count: 0 };
     const original = storage.append.bind(storage);

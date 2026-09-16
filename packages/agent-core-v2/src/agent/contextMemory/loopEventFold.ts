@@ -69,6 +69,7 @@ export interface LoopEventFoldSink {
   appendOpenContent(part: ContentPart): void;
   appendOpenToolCall(call: ToolCall): void;
   dropOpenAssistant(): void;
+  abandonOpenAssistant(): void;
   sealOpenAssistant(): void;
   pushToolMessage(message: ContextMessage, time: number | undefined): void;
   pushMessage(message: ContextMessage, time: number | undefined): void;
@@ -152,7 +153,13 @@ function createLoopEventFoldWithState(
           return;
         }
         case 'step.end': {
-          if (event.finishReason === 'interrupted' || event.finishReason === 'error') return;
+          if (event.finishReason === 'interrupted') return;
+          if (event.finishReason === 'error' && !openHasToolCalls) {
+            if (openStepUuid !== undefined) sink.abandonOpenAssistant();
+            openStepUuid = undefined;
+            flushDeferred();
+            return;
+          }
           settleOpen(time);
           flushDeferred();
           return;
@@ -295,6 +302,11 @@ function createImmutableFoldSink(initial: readonly ContextMessage[]): ImmutableF
     },
     sealOpenAssistant: () => {
       updateOpen((message) => ({ ...message, partial: undefined }));
+      openIndex = -1;
+    },
+    abandonOpenAssistant: () => {
+      if (openIndex === -1) return;
+      current = [...current.slice(0, openIndex), ...current.slice(openIndex + 1)];
       openIndex = -1;
     },
     pushToolMessage: (message) => {

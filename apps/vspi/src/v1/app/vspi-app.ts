@@ -138,6 +138,7 @@ import {
 	buildTranscriptNodes,
 	isQueuedTranscriptMessage,
 	renderTranscript,
+	retainTranscript,
 	selectTranscriptWindow,
 	type TranscriptNode,
 	TranscriptRenderCache,
@@ -560,6 +561,7 @@ export class VspiApp implements Component, Focusable {
 					const index = this.messages.findIndex(item => item.id === message.id);
 					if (index >= 0) this.messages[index] = this.withThinkingDisplayDefault(message);
 					else this.messages.push(this.withThinkingDisplayDefault(message));
+					this.pruneTranscript();
 					this.requestRender();
 				},
 				onMessageUpdate: (id, patch) => {
@@ -585,6 +587,7 @@ export class VspiApp implements Component, Focusable {
 							this.queueThinkingTranslation(id);
 						}
 					}
+					this.pruneTranscript();
 					this.requestRender();
 				},
 				onBusy: (busy) => {
@@ -986,6 +989,15 @@ export class VspiApp implements Component, Focusable {
 
 	private createRenderSurface(render: (width: number) => string[]): Component {
 		return { render, invalidate() {} };
+	}
+
+	private pruneTranscript(): void {
+		const retained = retainTranscript(this.messages, this.committedMessageCount);
+		if (retained.messages === this.messages) return;
+		this.messages = retained.messages;
+		this.committedMessageCount = retained.committedCount;
+		this.inspectIndex = undefined;
+		this.transcriptRenderCache.clear();
 	}
 
 	private bindTui(tui: TUI): void {
@@ -3000,6 +3012,7 @@ export class VspiApp implements Component, Focusable {
 					trustedProject: this.backend.isProjectTrusted?.() ?? false,
 				});
 				this.panels.setSettingsLayers(layers);
+				this.panels.setVsplabEndpoint(await this.backend.getVsplabEndpoint?.() ?? 'cn');
 				this.panels.open("settings");
 			} catch (error) {
 				this.showNotice(
@@ -3402,6 +3415,10 @@ export class VspiApp implements Component, Focusable {
 			await this.applySkillMutation("remove", event.skill);
 		} else if (event.type === "settings") {
 			try {
+				if (event.vsplabEndpoint !== undefined) {
+					if (event.settings.scope !== 'global' || !this.backend.setVsplabEndpoint) throw new Error('当前后端不支持修改全局 VSPLab 线路');
+					await this.backend.setVsplabEndpoint(event.vsplabEndpoint);
+				}
 				const settings = {
 					...event.settings,
 					thinkingTranslationEndpoint: normalizeTranslationEndpoint(

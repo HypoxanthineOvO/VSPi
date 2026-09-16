@@ -2,6 +2,8 @@ import { AsyncEventQueue } from '#/_base/asyncEventQueue';
 import type { VideoURLPart } from '#/kosong/contract/message';
 import { APIStatusError, APITimeoutError, isAbortError, VideoUploadUnsupportedError } from '#/kosong/contract/errors';
 import { abortable, linkAbortSignal } from '#/_base/utils/abort';
+import { withScopedProxy } from '#/_base/utils/scopedProxy';
+import { withProviderTransport } from '#/kosong/provider/transport';
 import { generate, type GenerateResult } from '#/kosong/contract/generate';
 import type {
   ChatProvider,
@@ -170,6 +172,7 @@ export class ModelRequesterImpl implements ModelRequester {
 
     let result: GenerateResult;
     try {
+      progress('start');
       result = await abortable(this.runWithAuthRefresh((auth) => {
         requestStartedAt = Date.now();
         return generate(
@@ -179,7 +182,7 @@ export class ModelRequesterImpl implements ModelRequester {
           [...input.messages],
           {
             onMessagePart: (part) => {
-              bodyReceived();
+              progress('body');
               firstChunkAt ??= Date.now();
               queue.push({ type: 'part', part });
             },
@@ -225,14 +228,14 @@ export class ModelRequesterImpl implements ModelRequester {
   ): Promise<T> {
     const auth = await this.authProvider.getAuth();
     try {
-      return await run(auth);
+      return await withScopedProxy(auth?.proxyUrl, () => withProviderTransport(() => run(auth)));
     } catch (error) {
       if (!this.shouldForceRefresh(error)) throw error;
     }
 
     const refreshedAuth = await this.authProvider.getAuth({ force: true });
     try {
-      return await run(refreshedAuth);
+      return await withScopedProxy(refreshedAuth?.proxyUrl, () => withProviderTransport(() => run(refreshedAuth)));
     } catch (error) {
       if (isUnauthorizedStatusError(error)) throw translateProviderError(error);
       throw error;

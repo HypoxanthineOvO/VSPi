@@ -37,6 +37,7 @@ export interface AgentLLMRequestFinish {
 export type AgentLLMRequestPartHandler = (part: StreamedMessagePart) => void | Promise<void>;
 
 export interface AgentLLMRequestOverrides {
+  recoveryDeadlineAt?: number;
   messages?: readonly Message[];
   tools?: readonly Tool[];
   systemPrompt?: string;

@@ -9,7 +9,7 @@ import { AGENT_WIRE_RECORD_KEY, type WireRecord } from '#/wire/record';
 import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 import { IAgentActivityView } from '#/agent/activityView/activityView';
 import { IAgentProfileService } from '#/agent/profile/profile';
-import { createContextTranscriptReducer } from '#/agent/contextMemory/contextTranscript';
+import { createContextTranscriptReducer, type ContextTranscriptReducer } from '#/agent/contextMemory/contextTranscript';
 import { StorageError, StorageErrors } from '#/persistence/interface/storage';
 import { IAgentHistoryService, type AgentHistoryPage, type HistoryQuery, type LiveHistorySegment } from './history';
 
@@ -24,7 +24,10 @@ export class AgentHistoryService extends Disposable implements IAgentHistoryServ
   private liveStep: number | undefined;
   private readonly sequences = new WeakMap<object, number>();
   private pending: Promise<AgentHistoryPage> | undefined;
-  private pendingLimit: number | undefined;
+  private index: ContextTranscriptReducer | undefined;
+  private cursor = 0;
+  private indexGeneration = 0;
+  private committed: { turnId?: string; step?: number; text: boolean; thinking: boolean } | undefined;
 
   constructor(
     @IEventBus bus: IEventBus,
@@ -36,17 +39,22 @@ export class AgentHistoryService extends Disposable implements IAgentHistoryServ
   ) {
     super();
     this._register(bus.subscribe(event => this.observe(event)));
+    this._register(journal.onDidWrite(event => {
+      if (event.scope !== scope.scope() || event.key !== AGENT_WIRE_RECORD_KEY || !event.rewritten) return;
+      this.index = undefined;
+      this.cursor = 0;
+      this.committed = undefined;
+      this.indexGeneration++;
+    }));
   }
 
   sequenceFor(event: Event2<any>): number | undefined { return this.sequences.get(event); }
   liveSegment(): LiveHistorySegment | undefined { return this.live; }
 
   page(query: HistoryQuery = {}): Promise<AgentHistoryPage> {
-    if (query.before !== undefined) return this.readPage(query);
-    if (this.pending) return this.pendingLimit === query.limit ? this.pending : this.readPage(query);
+    if (this.pending) return this.pending.then(() => this.page(query));
     const pending = this.readPage(query).finally(() => { if (this.pending === pending) this.pending = undefined; });
     this.pending = pending;
-    this.pendingLimit = query.limit;
     return pending;
   }
 
@@ -75,25 +83,43 @@ export class AgentHistoryService extends Disposable implements IAgentHistoryServ
     for (let attempt = 0; attempt < 4; attempt++) {
       const structure = this.structure;
       await this.wire.flush();
-      const metadata = createContextTranscriptReducer({ contentOrdinals: new Set() });
-      for await (const record of this.journal.read<WireRecord>(this.scope.scope(), AGENT_WIRE_RECORD_KEY)) metadata.add(record);
-      if (structure !== this.structure) continue;
-      const positions = metadata.positions();
-      const end = Math.max(0, Math.min(positions.length, query.before ?? positions.length));
-      const start = Math.max(0, end - limit);
-      const reducer = createContextTranscriptReducer({ maxContentChars: MESSAGE_LIMIT, contentOrdinals: new Set(positions.slice(start, end)) });
-      let textCommitted = false;
-      let thinkingCommitted = false;
-      await this.wire.flush();
-      for await (const record of this.journal.read<WireRecord>(this.scope.scope(), AGENT_WIRE_RECORD_KEY)) {
-        reducer.add(record);
-        const event = record['event'] as { type?: string; turnId?: string; step?: number; part?: { type?: string } } | undefined;
-        if (record.type === 'context.append_loop_event' && event?.type === 'content.part' && this.live && Number(event.turnId) === this.live.turnId && event.step === this.liveStep) {
-          textCommitted ||= event.part?.type === 'text';
-          thinkingCommitted ||= event.part?.type === 'think';
+      const generation = this.indexGeneration;
+      {
+        if (this.cursor === 0) { this.index = undefined; this.committed = undefined; }
+        const index = this.index ??= createContextTranscriptReducer({ maxContentChars: MESSAGE_LIMIT, tailContentLimit: 100 });
+        try {
+          for await (const record of this.journal.read<WireRecord>(this.scope.scope(), AGENT_WIRE_RECORD_KEY, {
+            fromByte: this.cursor,
+            onCursor: cursor => { if (generation === this.indexGeneration) this.cursor = cursor; },
+          })) {
+            index.add(record);
+            const event = record['event'] as { type?: string; turnId?: string; step?: number; part?: { type?: string } } | undefined;
+            if (record.type === 'context.append_loop_event' && event?.type === 'content.part') {
+              if (this.committed?.turnId !== event.turnId || this.committed?.step !== event.step)
+                this.committed = { turnId: event.turnId, step: event.step, text: false, thinking: false };
+              this.committed!.text ||= event.part?.type === 'text';
+              this.committed!.thinking ||= event.part?.type === 'think';
+            }
+          }
+        } catch (error) {
+          this.index = undefined;
+          this.cursor = 0;
+          this.committed = undefined;
+          throw error;
         }
+        if (generation !== this.indexGeneration) continue;
       }
       if (structure !== this.structure) continue;
+      const positions = this.index.positions();
+      const end = Math.max(0, Math.min(positions.length, query.before ?? positions.length));
+      const start = Math.max(0, end - limit);
+      let reducer = this.index;
+      if (positions.slice(start, end).some(ordinal => !reducer.hasContent(ordinal))) {
+        reducer = createContextTranscriptReducer({ maxContentChars: MESSAGE_LIMIT, contentOrdinals: new Set(positions.slice(start, end)) });
+        for await (const record of this.journal.read<WireRecord>(this.scope.scope(), AGENT_WIRE_RECORD_KEY)) reducer.add(record);
+      }
+      if (structure !== this.structure || generation !== this.indexGeneration) continue;
+      const currentCommitted = this.committed !== undefined && Number(this.committed.turnId) === this.live?.turnId && this.committed.step === this.liveStep;
       const transcript = reducer.result();
       const items = transcript.entries.slice(start, end).map((message, index) => ({ ...message, id: message.id ?? `history:${positions[start + index]}` }));
       return {
@@ -105,7 +131,7 @@ export class AgentHistoryService extends Disposable implements IAgentHistoryServ
         activity: this.activity.state(),
         model: this.profile.hasModel() ? this.profile.getModel() : undefined,
         effort: this.profile.getEffectiveThinkingLevel(),
-        live: this.live ? { ...this.live, text: textCommitted ? '' : this.live.text, thinking: thinkingCommitted ? '' : this.live.thinking } : undefined,
+        live: this.live ? { ...this.live, text: currentCommitted && this.committed?.text ? '' : this.live.text, thinking: currentCommitted && this.committed?.thinking ? '' : this.live.thinking } : undefined,
       };
     }
     throw new StorageError(StorageErrors.codes.STORAGE_LOCKED, 'Conversation changed while reading history; retry after the current step');

@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer, type Socket } from "node:net";
+import { createServer as createHttpServer } from 'node:http';
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseSkillText } from "@moonshot-ai/agent-core-v2/features/skill/catalog/parser";
@@ -75,6 +76,34 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 			expect(await connection.klient.global.config.get('loopControl')).toMatchObject({ maxAttemptsPerStep: 3, retryBudgetMs: 120_000, requestIdleTimeoutMs: 300_000 });
 			expect(await connection.klient.global.config.get('subagent')).toMatchObject({ timeoutMs: 7_200_000 });
 		} finally { await connection.close(); }
+	});
+
+	it('defaults the VSPLab route to cn and preserves an explicit tech selection across restart', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-endpoint-choice-'));
+		daemon = await startTestDaemon(homeDir);
+		const connection = await connectRuntime(homeDir);
+		try {
+			expect(await connection.klient.global.config.get('vsplab')).toEqual({ endpoint: 'cn' });
+			await connection.klient.global.config.replaceSections({ sections: {
+				providers: { vsplab: { type: 'openai', apiKey: 'YOUR_API_KEY', baseUrl: 'https://api.vsplab.tech/v1', source: { enabled: false } }, custom: { type: 'openai', baseUrl: 'https://relay.example.test/v1' } },
+				models: { 'vsplab/code': { provider: 'vsplab', model: 'code', baseUrl: 'https://api.vsplab.tech/v1' }, 'vsplab/custom': { provider: 'vsplab', model: 'custom', baseUrl: 'https://relay.example.test/v1' } },
+			} });
+			expect(await connection.klient.global.config.get('providers')).toMatchObject({ vsplab: { baseUrl: 'https://api.vsplab.cn/v1' }, custom: { baseUrl: 'https://relay.example.test/v1' } });
+			expect(await connection.klient.global.config.get('models')).toMatchObject({ 'vsplab/code': { baseUrl: 'https://api.vsplab.cn/v1' }, 'vsplab/custom': { baseUrl: 'https://relay.example.test/v1' } });
+			await connection.klient.global.config.set({ domain: 'vsplab', patch: { endpoint: 'tech' } });
+			await connection.klient.global.config.reload();
+			expect(await connection.klient.global.config.get('providers')).toMatchObject({ vsplab: { baseUrl: 'https://api.vsplab.tech/v1' } });
+		} finally { await connection.close(); }
+		await daemon.close();
+		daemon = await startTestDaemon(homeDir);
+		const restarted = await connectRuntime(homeDir);
+		try {
+			expect(await restarted.klient.global.config.get('vsplab')).toEqual({ endpoint: 'tech' });
+			expect(await restarted.klient.global.config.get('providers')).toMatchObject({ vsplab: { baseUrl: 'https://api.vsplab.tech/v1' }, custom: { baseUrl: 'https://relay.example.test/v1' } });
+			expect(await restarted.klient.global.config.get('models')).toMatchObject({ 'vsplab/code': { baseUrl: 'https://api.vsplab.tech/v1' }, 'vsplab/custom': { baseUrl: 'https://relay.example.test/v1' } });
+			await restarted.klient.global.config.set({ domain: 'vsplab', patch: { endpoint: 'cn' } });
+			expect(await restarted.klient.global.config.get('providers')).toMatchObject({ vsplab: { baseUrl: 'https://api.vsplab.cn/v1' } });
+		} finally { await restarted.close(); }
 	});
 
 	it('preserves explicit retry settings over the VSP defaults', async () => {
@@ -720,6 +749,82 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 		await expect(stopRuntime(homeDir, 2000, { requireIdle: true })).rejects.toThrow('active work');
 		await expect(stopRuntime(homeDir, 2000)).resolves.toBe(true);
 		await expect(daemon.closed).resolves.toBeUndefined();
+	});
+
+	it('resumes a persisted active goal after stop then start without another user prompt', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-goal-restart-'));
+		const recoveryPath = join(resolveRuntimePaths(homeDir).serverDir, 'goal-recovery.json');
+		let core: Awaited<ReturnType<typeof startServer>>['core'];
+		let requests = 0;
+		const upstream = createHttpServer((request, response) => {
+			request.resume(); requests++;
+			response.writeHead(200, { 'content-type': 'text/event-stream' });
+			response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'complete-goal', type: 'function', function: { name: 'UpdateGoal', arguments: '{"status":"complete"}' } }] }, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 10, completion_tokens: 5 } })}\n\ndata: [DONE]\n\n`);
+		});
+		await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+		const address = upstream.address();
+		if (!address || typeof address === 'string') throw new Error('Missing listener');
+		try {
+			daemon = await startRuntimeDaemon({ homeDir, hostIdentity: identity, env: { ...process.env, HOME: homeDir }, idleTimeoutMs: 0,
+				startServer: async options => { const server = await startServer(options); core = server.core; return server; } });
+			const connection = await connectRuntime(homeDir);
+			let sessionId: string;
+			try {
+				await connection.klient.global.config.replaceSections({ sections: {
+					providers: { example: { type: 'openai', apiKey: 'YOUR_API_KEY', baseUrl: `http://127.0.0.1:${address.port}/v1` } },
+					models: { 'example/code': { provider: 'example', model: 'code', maxContextSize: 128000, capabilities: ['tool_use'] } },
+					defaultModel: 'example/code', loopControl: { maxStepsPerTurn: 1 },
+				} });
+				const created = await connection.klient.global.sessions.create({ workDir: homeDir });
+				sessionId = created.id;
+				await connection.klient.session(sessionId).agent('main').getGoal();
+				await connection.klient.session(sessionId).agent('main').setModel('example/code');
+				const agents = core!.accessor.get(ISessionManager).get(sessionId)!.accessor.get(IAgentLifecycleService);
+				await agents.resolve(agents.get('main')!, AgentGoal).createGoal({ objective: 'Complete after runtime restart' });
+				await vi.waitFor(async () => { expect(JSON.parse(await readFile(recoveryPath, 'utf8'))).toContainEqual({ sessionId, goalId: expect.any(String) }); });
+			} finally { await connection.close(); }
+			await stopRuntime(homeDir);
+			await daemon.closed;
+			daemon = await startTestDaemon(homeDir);
+			const recovered = await connectRuntime(homeDir);
+			try {
+				await vi.waitFor(async () => {
+					const goal = (await recovered.klient.session(sessionId!).agent('main').getGoal()).goal;
+					expect(goal, JSON.stringify({ goal, requests })).toBeNull();
+					expect(JSON.stringify(await recovered.klient.session(sessionId!).agent('main').getHistory())).toContain('Goal completed successfully');
+				});
+				expect(requests).toBe(1);
+			} finally { await recovered.close(); }
+		} finally { upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => { resolve(); })); }
+	});
+
+	it.each(['pause', 'cancel'] as const)('does not reactivate a goal after explicit %s then server stop/start', async action => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-goal-explicit-stop-'));
+		let core: Awaited<ReturnType<typeof startServer>>['core'];
+		daemon = await startRuntimeDaemon({ homeDir, hostIdentity: identity, env: { ...process.env, HOME: homeDir }, idleTimeoutMs: 0,
+			startServer: async options => { const server = await startServer(options); core = server.core; return server; } });
+		const connection = await connectRuntime(homeDir);
+		let sessionId: string;
+		try {
+			sessionId = (await connection.klient.global.sessions.create({ workDir: homeDir })).id;
+			const agent = connection.klient.session(sessionId).agent('main');
+			await agent.getGoal();
+			const agents = core!.accessor.get(ISessionManager).get(sessionId)!.accessor.get(IAgentLifecycleService);
+			await agents.resolve(agents.get('main')!, AgentGoal).createGoal({ objective: 'Do not resume this goal' });
+			if (action === 'pause') await agent.pauseGoal({ reason: 'Explicit user pause' });
+			else await agent.cancelGoal();
+		} finally { await connection.close(); }
+		await stopRuntime(homeDir);
+		await daemon.closed;
+		expect(JSON.parse(await readFile(join(resolveRuntimePaths(homeDir).serverDir, 'goal-recovery.json'), 'utf8'))).toEqual([]);
+		daemon = await startTestDaemon(homeDir);
+		const restarted = await connectRuntime(homeDir);
+		try {
+			await restarted.klient.session(sessionId!).restore();
+			const goal = (await restarted.klient.session(sessionId!).agent('main').getGoal()).goal;
+			if (action === 'pause') expect(goal).toMatchObject({ status: 'paused', terminalReason: 'Explicit user pause' });
+			else expect(goal).toBeNull();
+		} finally { await restarted.close(); }
 	});
 
 	async function legacyControlPeer(ignoreTermination = false) {

@@ -8,7 +8,7 @@
 # commented "# field: type" lines describe the remaining schema fields.
 # Values resolve as: default -> config.toml -> env overlay -> memory.
 
-# Index (26 sections · 2 overlay(s))
+# Index (28 sections · 3 overlay(s))
 #   background               src/agent/task/configSection.ts
 #   builtinProductSkills     src/features/skill/catalog/configSection.ts
 #   cron                     src/features/cron/configSection.ts
@@ -25,6 +25,7 @@
 #   mergeAllAvailableSkills  src/features/skill/catalog/configSection.ts
 #   modelCatalog             src/app/kosongConfig/configSection.ts
 #   models                   src/app/kosongConfig/configSection.ts
+#   oauthNetwork             src/app/auth/configSection.ts
 #   permission               src/agent/permissionRules/configSection.ts
 #   providers                src/app/kosongConfig/configSection.ts
 #   secondaryModel           src/session/subagent/configSection.ts
@@ -35,6 +36,7 @@
 #   thinking                 src/app/kosongConfig/configSection.ts
 #   tokenCounting            src/agent/tokenCounting/configSection.ts
 #   tools                    src/agent/toolPolicy/configSection.ts
+#   vsplab                   src/app/kosongConfig/vsplab.ts
 #   (overlay) servicesCredentialEnvOverlay  src/app/auth/configSection.ts
 #   (overlay) kimiModelEnvOverlay  src/app/kosongConfig/envOverlay.ts
 
@@ -309,6 +311,16 @@ merge_all_available_skills = true
     # released_at: string
 
 # ##########################################################################
+# oauthNetwork (config.toml: oauth_network)
+#   owner: src/app/auth/configSection.ts
+#   scope: core
+#   hooks: custom toToml
+# ##########################################################################
+
+[oauth_network]
+# openai_proxy_port: integer
+
+# ##########################################################################
 # permission
 #   owner: src/agent/permissionRules/configSection.ts
 #   scope: core
@@ -485,3 +497,12 @@ strategy = "measured+estimated"
 [tools]
 # enabled: string[]
 # disabled: string[]
+
+# ##########################################################################
+# vsplab
+#   owner: src/app/kosongConfig/vsplab.ts
+#   scope: core
+# ##########################################################################
+
+[vsplab]
+endpoint = "cn"

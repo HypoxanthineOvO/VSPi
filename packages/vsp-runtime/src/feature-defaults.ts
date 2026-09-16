@@ -10,6 +10,7 @@ export const VSP_EXPERIMENTAL_DEFAULTS = {
 	tower: true,
 	"remote-control": true,
 	auto_session_title: true,
+	goal_restart_recovery: true,
 } as const;
 
 const vspFeatureDefaultsOverlay: ConfigEffectiveOverlay = {

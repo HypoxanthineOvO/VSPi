@@ -40,6 +40,7 @@ export interface StreamedMessage {
 }
 
 export interface ProviderRequestAuth {
+  proxyUrl?: string;
   apiKey?: string;
   headers?: Record<string, string>;
   baseUrl?: string;

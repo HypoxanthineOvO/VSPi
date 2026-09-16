@@ -1216,20 +1216,20 @@ describe('ModelCatalog enumeration', () => {
       expect(builtin[0]).toMatchObject({
         id: 'vsplab',
         type: 'openai',
-        base_url: 'https://api.vsplab.tech/v1',
+        base_url: 'https://api.vsplab.cn/v1',
         has_api_key: false,
         models: [],
       });
       await catalog.configureBuiltinProvider('vsplab', 'relay-key');
       expect(providers.get('vsplab')).toMatchObject({
         type: 'openai',
-        baseUrl: 'https://api.vsplab.tech/v1',
+        baseUrl: 'https://api.vsplab.cn/v1',
         apiKey: 'relay-key',
       });
       expect(models.list()).toEqual({});
       expect(models.getDefaultModel()).toBeUndefined();
       await catalog.configureBuiltinProvider('vsplab', 'replacement-key');
-      expect(providers.get('vsplab')).toMatchObject({ apiKey: 'replacement-key', baseUrl: 'https://api.vsplab.tech/v1' });
+      expect(providers.get('vsplab')).toMatchObject({ apiKey: 'replacement-key', baseUrl: 'https://api.vsplab.cn/v1' });
     } finally {
       host.dispose();
     }

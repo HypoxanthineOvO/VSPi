@@ -4,7 +4,7 @@
  * Wiring: edge translators and focused Klient-shaped backend fixtures.
  * Run: pnpm -C apps/vspi test
  */
-import type { AgentTaskInfo, QuestionRequest } from "@moonshot-ai/klient";
+import type { AgentHandle, AgentTaskInfo, QuestionRequest } from "@moonshot-ai/klient";
 import type { ChatBackendEvents } from '../src/v1/backend/types.js';
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -99,7 +99,7 @@ function draftBackendFixture(
 			listeners.get("permission.mode.changed")?.({ mode, previousMode });
 		}),
 		getGoal: vi.fn(async () => ({})), getTasks: vi.fn(async () => []), getCronTasks: vi.fn(async () => []),
-		getUsage: vi.fn(async () => { throw new Error("no usage"); }), getContext: vi.fn(async () => ({ history: [], tokenCount: 0 })),
+		getUsage: vi.fn<AgentHandle['getUsage']>(async () => { throw new Error("no usage"); }), getContext: vi.fn(async () => ({ history: [], tokenCount: 0 })),
 		prompt: vi.fn(async ({ promptId }: { promptId: string }) => { listeners.get("prompt.completed")?.({ promptId, reason: "completed" }); }),
 	};
 	const create = vi.fn(async () => ({ id: "new-session" }));
@@ -121,6 +121,31 @@ function draftBackendFixture(
 }
 
 describe('model retry projection', () => {
+  it('refreshes usage when the runtime publishes new usage instead of only refreshing model metadata', async () => {
+    const fixture = draftBackendFixture();
+    const onUsage = vi.fn();
+    const usage = { total: { inputOther: 100, output: 10, inputCacheRead: 0, inputCacheCreation: 0 } };
+    fixture.agent.getUsage.mockImplementation(async () => usage);
+    try {
+      await fixture.start({ onUsage });
+      await fixture.backend.switchSession('old-session');
+      onUsage.mockClear();
+      fixture.listeners.get('agent.status.updated')?.({ usage });
+      await vi.waitFor(() => { expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 100, outputTokens: 10 })); });
+    } finally { await fixture.backend.dispose(); }
+  });
+
+  it('warns when a completed step was truncated by the provider output limit', async () => {
+    const fixture = draftBackendFixture();
+    const onNotice = vi.fn();
+    try {
+      await fixture.start({ onNotice });
+      await fixture.backend.switchSession('old-session');
+      onNotice.mockClear();
+      fixture.listeners.get('turn.step.completed')?.({ turnId: 7, step: 1, providerFinishReason: 'truncated' });
+      expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('回答尚未完成'), 'warning');
+    } finally { await fixture.backend.dispose(); }
+  });
   it('announces a retry only once when activity snapshots repeat', async () => {
     const fixture = draftBackendFixture();
     const onRetryNotice = vi.fn();

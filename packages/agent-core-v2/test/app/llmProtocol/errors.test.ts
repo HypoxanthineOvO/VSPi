@@ -453,10 +453,10 @@ describe('parseRetryAfterMs', () => {
     expect(parseRetryAfterMs(new Headers({ 'retry-after': '12' }))).toBe(12_000);
   });
 
-  it('ignores an HTTP-date retry-after value', () => {
+  it('honors an HTTP-date retry-after value relative to the supplied clock', () => {
     expect(
-      parseRetryAfterMs(new Headers({ 'retry-after': 'Wed, 21 Oct 2026 07:28:00 GMT' })),
-    ).toBeNull();
+      parseRetryAfterMs(new Headers({ 'retry-after': 'Wed, 21 Oct 2026 07:28:00 GMT' }), Date.parse('2026-10-21T07:27:00Z')),
+    ).toBe(60000);
   });
 
   it('ignores missing or malformed header containers', () => {

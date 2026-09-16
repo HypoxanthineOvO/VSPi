@@ -8,6 +8,8 @@ import { Event } from '#/_base/event';
 import { IEventBus, ISessionEventBus } from '#/app/event/eventBus';
 import { EventBusService } from '#/app/event/eventBusService';
 import { IConfigService } from '#/app/config/config';
+import { IFlagService } from '#/app/flag/flag';
+import { stubFlag } from '../../app/flag/stubs';
 import type { AgentRuntimeSet } from '#/agent/runtime/agentRuntimeSet';
 import { IAgentContextMemoryService } from '#/agent/contextMemory/contextMemory';
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
@@ -134,6 +136,7 @@ function buildHost(key: string): GoalHost {
   ix.stub(ITelemetryService, createTelemetryStub());
   ix.stub(IAgentToolExecutorService, createToolExecutorStub());
   ix.stub(IConfigService, createConfigStub());
+  ix.stub(IFlagService, stubFlag(false));
   ix.set(IGoalDeadlineScheduler, new SyncDescriptor(GoalDeadlineSchedulerService));
   registerTestAgentWire(ix, testWireScope(SCOPE, key), {
     log: ix.get(IAppendLogStore),

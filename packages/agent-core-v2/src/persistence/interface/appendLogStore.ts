@@ -29,10 +29,13 @@ export interface AppendLogTruncation {
 }
 
 export interface AppendLogReadOptions {
+  readonly fromByte?: number;
+  readonly onCursor?: (nextByte: number) => void;
   readonly onTruncate?: (truncation: AppendLogTruncation) => void;
 }
 
 export interface AppendLogWrite {
+  readonly rewritten?: boolean;
   readonly scope: string;
   readonly key: string;
 }

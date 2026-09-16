@@ -147,7 +147,7 @@ export type PanelEvent =
 	| { type: "agentOpen"; runId: string }
 	| { type: "agentLoadOlder"; runId: string; cursor: string }
 	| { type: "agentConversationClose" }
-	| { type: "settings"; settings: AppSettings }
+	| { type: "settings"; settings: AppSettings; vsplabEndpoint?: 'cn' | 'tech' }
 	| { type: "effort"; effort: EffortLevel }
 	| { type: "approval"; response: ApprovalResponse }
 	| {
@@ -707,6 +707,8 @@ export class PanelController {
 		projectInherited: boolean;
 	};
 	private settingsDirty = false;
+	private vsplabEndpoint: 'cn' | 'tech' = 'cn';
+	private savedVsplabEndpoint: 'cn' | 'tech' = 'cn';
 	private settingsTab = 1;
 	private settingsEndpointEditing = false;
 	private settingsEndpointInput = "";
@@ -917,6 +919,7 @@ export class PanelController {
 	}
 
 	confirmSettings(settings: AppSettings): void {
+		this.savedVsplabEndpoint = this.vsplabEndpoint;
 		if (settings.scope === "global")
 			this.settingsLayers.global = { ...settings };
 		else this.settingsLayers.project = { ...settings };
@@ -925,6 +928,11 @@ export class PanelController {
 		this.settingsDirty = false;
 		this.settingsEndpointEditing = false;
 		this.settingsEndpointInput = "";
+	}
+
+	setVsplabEndpoint(endpoint: 'cn' | 'tech'): void {
+		this.vsplabEndpoint = endpoint;
+		this.savedVsplabEndpoint = endpoint;
 	}
 
 	close(): void {
@@ -2182,6 +2190,7 @@ export class PanelController {
 				};
 			this.settingsTab = nextTab;
 			this.settings = { ...next };
+			this.vsplabEndpoint = this.savedVsplabEndpoint;
 			this.settingsDirty = false;
 			this.state.selected = 0;
 			return;
@@ -2191,7 +2200,8 @@ export class PanelController {
 		if (matchesKey(data, Key.ctrl("s"))) {
 			if (!this.settingsDirty)
 				return { type: "notice", text: "设置没有变化", tone: "info" };
-			return { type: "settings", settings: { ...this.settings } };
+			return { type: "settings", settings: { ...this.settings },
+				vsplabEndpoint: this.settings.scope === 'global' && this.vsplabEndpoint !== this.savedVsplabEndpoint ? this.vsplabEndpoint : undefined };
 		}
 		if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
 			const row = rows[this.state.selected];
@@ -2269,6 +2279,12 @@ export class PanelController {
 				this.settingsEndpointInput = this.settings.thinkingTranslationEndpoint;
 				return;
 			}
+			if (row.key === 'vsplabEndpoint') {
+				if (this.settings.scope !== 'global') return { type: 'notice', text: 'VSPLab 线路请在全局设置中修改', tone: 'info' };
+				this.vsplabEndpoint = this.vsplabEndpoint === 'cn' ? 'tech' : 'cn';
+				this.settingsDirty = true;
+				return;
+			}
 			const key = row.key;
 			this.settings[key] = !this.settings[key];
 			this.settingsDirty = true;
@@ -2278,6 +2294,7 @@ export class PanelController {
 	}
 
 	private restoreSettingsDraft(): void {
+		this.vsplabEndpoint = this.savedVsplabEndpoint;
 		const source =
 			this.settingsTab === 0
 				? this.settingsLayers.global
@@ -3474,6 +3491,7 @@ export class PanelController {
 			| "workingStyle"
 			| "thinkingDisplay"
 			| "thinkingTranslationEndpoint"
+			| "vsplabEndpoint"
 			| "wrapCode"
 			| "collapseTools"
 			| "summarizeSessionTitleOnExit";
@@ -3530,6 +3548,11 @@ export class PanelController {
 				group: "Markdown",
 				label: `Mermaid 图表  ${mermaidRenderingLabel(this.settings.mermaidRendering)}`,
 				key: "mermaidRendering",
+			},
+			{
+				group: '网络',
+				label: `VSPLab 线路${this.settings.scope === 'project' ? '（仅全局）' : ''}  ${this.vsplabEndpoint === 'cn' ? 'cn · 无 SNI 直连' : 'tech · 常规连接'}`,
+				key: 'vsplabEndpoint',
 			},
 		];
 	}
@@ -3597,7 +3620,7 @@ export class PanelController {
 				percent(usage.sessionCacheHitPercent),
 				width,
 			),
-			alignRight("生成速度", speed, width),
+			alignRight("请求吞吐（含等待/思考）", speed, width),
 			alignRight("预估成本", cost, width),
 			alignRight(
 				"汇率",

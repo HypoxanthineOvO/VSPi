@@ -1,4 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createServer } from 'node:http';
+import tls from 'node:tls';
+import { Socket } from 'node:net';
+import { getGlobalDispatcher, setGlobalDispatcher, MockAgent } from 'undici';
+import { withScopedProxy, withOriginDispatcher } from '#/_base/utils/scopedProxy';
+import { createNoSniConnector } from '#/_base/utils/tls';
 
 import {
   createProxyDispatcher,
@@ -12,6 +18,65 @@ import {
 } from '#/_base/utils/proxy';
 
 describe('proxy utilities', () => {
+  it('omits SNI without disabling certificate or URL-hostname verification', async () => {
+    const socket = new tls.TLSSocket(new Socket());
+    let options: tls.ConnectionOptions | undefined;
+    const connect = vi.spyOn(tls, 'connect').mockImplementation(((input: tls.ConnectionOptions) => { options = input; return socket; }) as typeof tls.connect);
+    try {
+      const done = new Promise<void>((resolve, reject) => {
+        createNoSniConnector()({ hostname: 'example.test', host: 'example.test', servername: 'example.test', protocol: 'https:', port: '443' }, (error, _socket) => {
+          if (error) reject(error); else resolve();
+        });
+      });
+      socket.emit('secureConnect');
+      await done;
+      expect(options).toMatchObject({ servername: null, host: 'example.test', rejectUnauthorized: true });
+      expect(options?.checkServerIdentity).toBe(tls.checkServerIdentity);
+      expect(options?.checkServerIdentity?.('example.test', { subjectaltname: 'DNS:wrong.example.test' } as tls.PeerCertificate)).toMatchObject({ code: 'ERR_TLS_CERT_ALTNAME_INVALID' });
+    } finally { connect.mockRestore(); socket.destroy(); }
+  });
+
+  it('limits a transport override to its selected origin and keeps the fallback for other hosts', async () => {
+    const original = getGlobalDispatcher();
+    const fallback = new MockAgent();
+    const selected = new MockAgent();
+    fallback.disableNetConnect(); selected.disableNetConnect();
+    fallback.get('https://other.example.test').intercept({ path: '/' }).reply(200, 'fallback');
+    selected.get('https://selected.example.test').intercept({ path: '/' }).reply(200, 'selected');
+    setGlobalDispatcher(fallback);
+    try {
+      const values = await withOriginDispatcher('https://selected.example.test', selected, async () => Promise.all([
+        fetch('https://selected.example.test/').then(response => response.text()),
+        fetch('https://other.example.test/').then(response => response.text()),
+      ]));
+      expect(values).toEqual(['selected', 'fallback']);
+    } finally { setGlobalDispatcher(original); await selected.close(); await fallback.close(); }
+  });
+  it('routes only the selected async scope through a proxy while concurrent requests keep their own route', async () => {
+    const original = getGlobalDispatcher();
+    const direct = createServer((_request, response) => response.end('direct'));
+    const proxy = createServer();
+    proxy.on('connect', (_request, socket) => {
+      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      socket.once('data', () => socket.end('HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nproxied'));
+    });
+    await Promise.all([new Promise<void>(resolve => direct.listen(0, '127.0.0.1', resolve)), new Promise<void>(resolve => proxy.listen(0, '127.0.0.1', resolve))]);
+    const target = direct.address();
+    const gateway = proxy.address();
+    if (target === null || gateway === null || typeof target === 'string' || typeof gateway === 'string') throw new Error('Missing listener');
+    try {
+      const url = `http://127.0.0.1:${target.port}/`;
+      const results = await Promise.all([
+        withScopedProxy(`http://127.0.0.1:${gateway.port}`, async () => (await fetch(url)).text()),
+        withScopedProxy(undefined, async () => (await fetch(url)).text()),
+      ]);
+      expect(results).toEqual(['proxied', 'direct']);
+    } finally {
+      setGlobalDispatcher(original);
+      direct.closeAllConnections(); proxy.closeAllConnections();
+      await Promise.all([new Promise<void>(resolve => direct.close(() => { resolve(); })), new Promise<void>(resolve => proxy.close(() => { resolve(); }))]);
+    }
+  });
   it('detects HTTP, HTTPS, ALL_PROXY, and SOCKS proxy configuration', () => {
     expect(isProxyConfigured({})).toBe(false);
     expect(isProxyConfigured({ HTTP_PROXY: 'http://p:3128' })).toBe(true);

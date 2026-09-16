@@ -130,15 +130,16 @@ async function collect(stream: AsyncIterable<ModelRequestEvent>): Promise<ModelR
 
 const INPUT = { systemPrompt: 'sys', tools: [], messages: [] };
 
-async function httpRequester(listener: RequestListener) {
+async function httpRequester(listener: RequestListener, protocol: Model['protocol'] = 'openai') {
   const server = createServer((request, response) => { request.resume(); listener(request, response); });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('Missing test listener');
   const model: Model = {
     ...modelWith(staticAuth('YOUR_API_KEY')),
-    name: 'gpt-4.1',
-    providerType: 'openai',
+    name: protocol === 'google-genai' ? 'gemini-2.5-flash' : 'gpt-4.1',
+    protocol,
+    providerType: protocol,
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
   };
   return {
@@ -154,6 +155,13 @@ async function httpRequester(listener: RequestListener) {
 }
 
 describe('ModelRequesterImpl request execution', () => {
+  it('enforces the idle timeout for Google without fetch progress callbacks', async () => {
+    const rig = await httpRequester(() => {}, 'google-genai');
+    try {
+      const input = { ...INPUT, messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'hello' }], toolCalls: [] }] };
+      await expect(collect(rig.requester.request(input, undefined, { idleTimeoutMs: 100 }))).rejects.toMatchObject({ name: 'APITimeoutError' });
+    } finally { await rig.close(); }
+  });
   it('aborts a real HTTP request when headers never arrive before the configured idle timeout', async () => {
     let closed!: () => void;
     const socketClosed = new Promise<void>(resolve => { closed = resolve; });

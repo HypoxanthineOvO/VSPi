@@ -296,7 +296,8 @@ function speedField(
 	const speed = formatSpeed(
 		input.usage.throughputNow ?? input.usage.throughputAverage,
 	);
-	const formatted = compact ? speed : `${speed} tok/s`;
+	const estimate = input.usage.throughputNow === null ? '' : '~';
+	const formatted = compact ? `${estimate}${speed}` : `${estimate}${speed} tok/s`;
 	return `${label("Speed", "blue", theme)}${value(formatted, theme)}`;
 }
 

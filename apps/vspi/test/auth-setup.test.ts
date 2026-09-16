@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Klient, OAuthFlowSnapshot } from "@moonshot-ai/klient";
 
-import { configureDefaultModel, runAuthSetup } from "../src/v1/app/auth-setup.js";
+import { configureDefaultModel, loginProvider, runAuthSetup } from "../src/v1/app/auth-setup.js";
 import { loginWithOAuth } from "../src/v1/providers/oauth-login.js";
 import { AuthDialog } from "../src/v1/ui/auth-dialog.js";
 import { createTheme } from "../src/v1/ui/theme.js";
@@ -23,6 +23,29 @@ function fakeConnection() {
 }
 
 describe("VSPi auth setup", () => {
+	it.each([['port', '7890', 7890], ['skip', undefined, 0]] as const)('saves OpenAI proxy choice %s before starting official OAuth', async (choice, input, port) => {
+		let saved: unknown;
+		const set = vi.fn(async (value: unknown) => { saved = value; });
+		const startLogin = vi.fn(async () => {
+			expect(saved).toEqual({ domain: 'oauthNetwork', patch: { openaiProxyPort: port } });
+			return { status: 'authenticated' };
+		});
+		const klient = { global: { config: { set }, auth: { startLogin } } } as unknown as Klient;
+		const prompt = vi.fn().mockResolvedValueOnce(choice).mockResolvedValueOnce(input);
+		await loginProvider(klient, 'openai-codex', 'oauth', { prompt, notify: vi.fn() });
+		expect(startLogin).toHaveBeenCalledWith('openai-codex');
+	});
+
+	it.each(['0', '65536', '7890; command', 'http://example.test', '1.2'])('rejects invalid OAuth proxy port %s before any login or config write', async port => {
+		const set = vi.fn();
+		const startLogin = vi.fn();
+		const klient = { global: { config: { set }, auth: { startLogin } } } as unknown as Klient;
+		await expect(loginProvider(klient, 'openai-codex', 'oauth', {
+			prompt: vi.fn().mockResolvedValueOnce('port').mockResolvedValueOnce(port), notify: vi.fn(),
+		})).rejects.toThrow('代理端口');
+		expect(set).not.toHaveBeenCalled();
+		expect(startLogin).not.toHaveBeenCalled();
+	});
 	afterEach(() => vi.useRealTimers());
 	it("rejects non-interactive execution before touching the runtime", async () => {
 		await expect(

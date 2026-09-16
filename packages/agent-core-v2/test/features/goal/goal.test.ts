@@ -15,6 +15,7 @@ import type { IDisposable } from '#/_base/di/lifecycle';
 import { IAgentContextMemoryService } from '#/agent/contextMemory/contextMemory';
 import { USER_PROMPT_ORIGIN } from '#/agent/contextMemory/types';
 import { AgentGoal, GoalRuntime } from '#/features/goal/goalAgentRuntime';
+import { GOAL_RESTART_RECOVERY_FLAG } from '#/features/goal/flag';
 import { IGoalDeadlineScheduler } from '#/features/goal/goalDeadlineScheduler';
 
 import { GoalUpdated } from '#/features/goal/goalOps';
@@ -202,6 +203,84 @@ const zeroUsage: TokenUsage = {
   inputOther: 0,
   output: 0,
 };
+
+describe('goal runtime restart intent', () => {
+  const flags = () => appService(IFlagService, stubFlag(id => id === GOAL_RESTART_RECOVERY_FLAG));
+
+  it('preserves active intent when runtime shutdown interrupts a running model request', async () => {
+    const llm = blockingGenerate();
+    const ctx = createTestAgent(flags(), { generate: llm.generate });
+    try {
+      ctx.configure();
+      const goals = ctx.resolve(AgentGoal);
+      await goals.createGoal({ objective: 'finish work' });
+      await ctx.rpc.prompt({ input: [{ type: 'text', text: 'work' }] });
+      await llm.started;
+      await goals.prepareForRuntimeShutdown();
+      await ctx.untilTurnEnd();
+      expect(goals.getGoal().goal?.status).toBe('active');
+    } finally { await ctx.dispose(); }
+  });
+
+  it('keeps a user interruption paused even when server shutdown follows it', async () => {
+    const llm = blockingGenerate();
+    const ctx = createTestAgent(flags(), { generate: llm.generate });
+    try {
+      ctx.configure();
+      const goals = ctx.resolve(AgentGoal);
+      await goals.createGoal({ objective: 'finish work' });
+      await ctx.rpc.prompt({ input: [{ type: 'text', text: 'work' }] });
+      await llm.started;
+      ctx.get(IAgentLoopService).cancel();
+      await goals.prepareForRuntimeShutdown();
+      await ctx.untilTurnEnd();
+      expect(goals.getGoal().goal?.status).toBe('paused');
+    } finally { await ctx.dispose(); }
+  });
+
+  it('launches one recovery turn for a persisted active goal after the host restores bindings', async () => {
+    const ctx = createUnrestoredTestAgent(flags());
+    try {
+      ctx.configure();
+      const goals = ctx.resolve(AgentGoal);
+      await restoreGoalRecords(ctx, goals, [
+        { type: 'goal.create', goalId: 'recoverable', objective: 'finish work' },
+        { type: 'goal.update', budgetLimits: { turnBudget: 1 } },
+      ]);
+      ctx.mockNextResponse({ type: 'text', text: 'Recovered progress.' });
+      expect(goals.getGoal().goal?.status).toBe('active');
+      expect(goals.resumeAfterRuntimeRestart()).toBe(true);
+      expect(goals.resumeAfterRuntimeRestart()).toBe(false);
+      await ctx.untilTurnEnd();
+      expect(ctx.llmCalls).toHaveLength(1);
+    } finally { await ctx.dispose(); }
+  });
+
+  it.each(['paused', 'blocked', 'complete'] as const)('does not wake a persisted %s goal on host restart', async status => {
+    const ctx = createUnrestoredTestAgent(flags());
+    try {
+      const goals = ctx.resolve(AgentGoal);
+      await restoreGoalRecords(ctx, goals, [
+        { type: 'goal.create', goalId: 'not-active', objective: 'work' },
+        { type: 'goal.update', status },
+      ]);
+      expect(goals.resumeAfterRuntimeRestart()).toBe(false);
+      expect(ctx.llmCalls).toHaveLength(0);
+    } finally { await ctx.dispose(); }
+  });
+
+  it('does not charge server downtime to the restored wall-clock budget', async () => {
+    const ctx = createUnrestoredTestAgent(flags(), appService(IGoalDeadlineScheduler, new ManualGoalDeadlineScheduler()));
+    try {
+      const goals = ctx.resolve(AgentGoal);
+      await restoreGoalRecords(ctx, goals, [
+        { type: 'goal.create', goalId: 'clock', objective: 'work', wallClockResumedAt: 1 },
+        { type: 'goal.update', wallClockMs: 100, budgetLimits: { wallClockBudgetMs: 1000 } },
+      ]);
+      expect(goals.getGoal().goal).toMatchObject({ status: 'active', wallClockMs: 100, budget: { remainingWallClockMs: 900 } });
+    } finally { await ctx.dispose(); }
+  });
+});
 
 function goalRecords(records: readonly WireRecord[]): readonly GoalRecord[] {
   return records.filter((record): record is GoalRecord => record.type.startsWith('goal.'));
@@ -1735,7 +1814,9 @@ describe('GoalRuntime API boundary', () => {
       'markComplete',
       'pauseGoal',
       'pauseOnInterrupt',
+      'prepareForRuntimeShutdown',
       'recordTokenUsage',
+      'resumeAfterRuntimeRestart',
       'resumeGoal',
       'setBudgetLimits',
     ]);

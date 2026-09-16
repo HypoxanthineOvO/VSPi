@@ -15,6 +15,7 @@ import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import { thinkingEffortsForProvider } from '#/kosong/contract/capability';
 import {
   APIStatusError,
+  APIProviderBusinessError,
   APIProtocolError,
   ChatProviderError,
   createAbortError,
@@ -33,11 +34,14 @@ import { modelEffortProfile } from '#/kosong/provider/effortProfiles';
 import { resolveProviderEndpoint } from '#/kosong/provider/providerDefinition';
 import { classifyKimiQuotaError } from '#/kosong/provider/providers/kimi/kimi-errors';
 import { kimiOpenAITrait, kimiAnthropicTrait } from '#/kosong/provider/providers/kimi/kimi.contrib';
+import { normalizeKimiToolSchema } from '#/kosong/provider/providers/kimi/kimi-schema';
 
 import { toLegacyHistory, toPiContext } from './messages';
 import { convertPiError, PiStreamedMessage, type PiResponseState } from './streamedMessage';
 import { ResponseDiagnostics } from './responseDiagnostics';
 import { relayNativeProvider } from './catalog';
+import { errorProvider } from './providerErrors';
+import { withProviderTransport } from '../transport';
 
 const API_BY_PROTOCOL: Record<ProtocolAdapterConfig['protocol'], Api> = {
   openai: 'openai-completions',
@@ -243,13 +247,22 @@ export class PiChatProvider implements ChatProvider {
     this.provider = providerForModel(this.model);
   }
 
-  async generate(
+  generate(systemPrompt: string, tools: Tool[], history: Message[], options: GenerateOptions = {}): Promise<StreamedMessage> {
+    return withProviderTransport(() => this.generateRequest(systemPrompt, tools, history, options));
+  }
+
+  private async generateRequest(
     systemPrompt: string,
     tools: Tool[],
     history: Message[],
     options: GenerateOptions = {},
   ): Promise<StreamedMessage> {
     if (options.signal?.aborted) throw createAbortError();
+    if (this.config.protocol === 'openai' && this.config.providerType !== 'kimi' && relayNativeProvider(this.config.modelName) === 'moonshotai') {
+      const normalizeTool = (tool: Tool): Tool => ({ ...tool, parameters: normalizeKimiToolSchema(tool.parameters) });
+      tools = tools.map(normalizeTool);
+      history = history.map(message => message.tools === undefined ? message : { ...message, tools: message.tools.map(normalizeTool) });
+    }
     if (
       this.legacyCompat !== undefined &&
       (this.config.providerOptions?.reasoningKey !== undefined ||
@@ -273,7 +286,7 @@ export class PiChatProvider implements ChatProvider {
             ),
         ))
     )
-      return this.resolveCompatibilityProvider()!.generate(
+      return this.generateCompatibility(
         systemPrompt,
         tools,
         toLegacyHistory(history, this.model),
@@ -285,7 +298,7 @@ export class PiChatProvider implements ChatProvider {
         ? controller.signal
         : AbortSignal.any([controller.signal, options.signal]);
     const diagnostics = new ResponseDiagnostics(this.config.protocol);
-    const response: PiResponseState = { diagnostics };
+    const response: PiResponseState = { diagnostics, provider: errorProvider(this.config.providerType, this.config.modelName) };
     try {
       const endpoint = resolveProviderEndpoint(this.config.providerType ?? this.config.protocol);
       const model: Model<Api> = {
@@ -329,6 +342,7 @@ export class PiChatProvider implements ChatProvider {
         temperature: options.sampling?.temperature,
         sessionId: options.cacheKey,
         maxRetries: 0,
+        transport: model.api === 'openai-codex-responses' ? 'sse' : undefined,
         metadata: this.config.providerOptions?.metadata,
         env:
           this.config.providerOptions?.vertexai === true
@@ -454,7 +468,7 @@ export class PiChatProvider implements ChatProvider {
               ...rawThinkingOptions(this.model.api, selectedEffort),
             });
       return new PiStreamedMessage(source, controller, signal, response, (error) =>
-        this.config.providerType === 'kimi' && error instanceof APIStatusError
+        this.config.providerType === 'kimi' && error instanceof APIStatusError && !(error instanceof APIProviderBusinessError)
           ? (classifyKimiQuotaError({
               status: error.statusCode,
               message: error.message,
@@ -481,5 +495,23 @@ export class PiChatProvider implements ChatProvider {
   private resolveCompatibilityProvider(): ChatProvider | undefined {
     this.compatibilityProvider ??= typeof this.legacyCompat === 'function' ? this.legacyCompat() : this.legacyCompat;
     return this.compatibilityProvider;
+  }
+
+  private async generateCompatibility(system: string, tools: Tool[], history: Message[], options: GenerateOptions): Promise<StreamedMessage> {
+    const response: PiResponseState = { provider: errorProvider(this.config.providerType, this.config.modelName) };
+    try {
+      const stream = await this.resolveCompatibilityProvider()!.generate(system, tools, history, options);
+      return {
+        get id() { return stream.id; },
+        get usage() { return stream.usage; },
+        get finishReason() { return stream.finishReason; },
+        get rawFinishReason() { return stream.rawFinishReason; },
+        get traceId() { return stream.traceId; },
+        async *[Symbol.asyncIterator]() {
+          try { yield* stream; }
+          catch (error) { throw convertPiError(error, response); }
+        },
+      };
+    } catch (error) { throw convertPiError(error, response); }
   }
 }

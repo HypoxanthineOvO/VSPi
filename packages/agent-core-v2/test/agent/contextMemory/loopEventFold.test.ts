@@ -216,7 +216,7 @@ describe('loop-event fold parity', () => {
     expect(folded).toEqual([]);
   });
 
-  it('keeps the open assistant untouched when step.end reports an interruption', () => {
+  it('excludes incomplete assistant content when step.end reports a failed response', () => {
     const folded = foldAll([], [
       { type: 'step.begin', uuid: 's1' },
       {
@@ -224,19 +224,10 @@ describe('loop-event fold parity', () => {
         stepUuid: 's1',
         part: { type: 'text', text: 'partial' },
       },
-      { type: 'step.end', uuid: 's1', finishReason: 'interrupted' },
+      { type: 'step.end', uuid: 's1', finishReason: 'error' },
     ]);
 
-    expect(shapes(folded)).toEqual([
-      {
-        role: 'assistant',
-        content: [{ type: 'text', text: 'partial' }],
-        toolCalls: [],
-        toolCallId: undefined,
-        isError: undefined,
-        partial: true,
-      },
-    ]);
+    expect(shapes(folded)).toEqual([]);
   });
 
   it('settles a failed step at the next step.begin as before', () => {

@@ -13,14 +13,14 @@ describe('output speed telemetry (stream and turn contract)', () => {
     let now = 1_000;
     const tracker = new OutputSpeedTracker(() => now);
 
-    expect(tracker.recordDelta('1234').now).toBeNull();
+    expect(tracker.recordDelta('1234').now).toBe(4);
     now = 1_500;
     expect(tracker.recordDelta('5678').now).toBe(4);
     now = 3_501;
     expect(tracker.snapshot().now).toBeNull();
   });
 
-  it('uses authoritative output tokens and includes turn-end tail time', () => {
+  it('uses request duration rather than tool or turn-end tail time', () => {
     let now = 1_000;
     const tracker = new OutputSpeedTracker(() => now);
     tracker.recordDelta('first');
@@ -28,7 +28,7 @@ describe('output speed telemetry (stream and turn contract)', () => {
     tracker.recordDelta('last');
     now = 2_000;
 
-    expect(tracker.finish(20)).toEqual({ now: null, average: 20 });
+    expect(tracker.finish(20, 1000)).toEqual({ now: null, average: 20 });
   });
 
   it('ignores thinking-like input when only assistant deltas are recorded', () => {
@@ -46,7 +46,7 @@ describe('output speed telemetry (stream and turn contract)', () => {
 
     expect(tracker.recordDelta('').now).toBeNull();
     now = 2_000;
-    expect(tracker.finish(20)).toEqual({ now: null, average: null });
+    expect(tracker.finish(20, 0)).toEqual({ now: null, average: null });
   });
 
   it('does not produce a rate for a single delta in the same millisecond', () => {
@@ -54,7 +54,7 @@ describe('output speed telemetry (stream and turn contract)', () => {
     const tracker = new OutputSpeedTracker(() => now);
     tracker.recordDelta('1234');
 
-    expect(tracker.finish(4)).toEqual({ now: null, average: null });
+    expect(tracker.finish(4, 0)).toEqual({ now: null, average: null });
   });
 
   it('ignores invalid authoritative token counts', () => {
@@ -63,6 +63,12 @@ describe('output speed telemetry (stream and turn contract)', () => {
     tracker.recordDelta('1234');
     now = 2_000;
 
-    expect(tracker.finish(Number.NaN)).toEqual({ now: null, average: null });
+    expect(tracker.finish(Number.NaN, 1000)).toEqual({ now: null, average: null });
+  });
+
+  it('includes hidden reasoning time when the provider reports reasoning output tokens', () => {
+    const tracker = new OutputSpeedTracker(() => 61000);
+    tracker.recordDelta('answer');
+    expect(tracker.finish(6010, 61000).average).toBeCloseTo(98.52459);
   });
 });

@@ -238,6 +238,25 @@ describe('private feedback delivery', () => {
     expect(data).not.toContain('PRIVATE_RAW_BODY');
   });
 
+  it('retains retry timing and upstream status without recording private request content', async () => {
+    const r = await rig();
+    const log = new FeedbackDiagnosticLog(r.root);
+    log.append({
+      code: 'loop.retry_budget_exceeded', name: 'LoopError',
+      details: { retryBudgetMs: 120_000, retryDelayMs: 300_000, remainingBudgetMs: 119_000, failedAttempt: 1, rawBody: 'PRIVATE_REQUEST' },
+      cause: { code: 'provider.api_error', name: 'APIStatusError', details: { statusCode: 502, requestId: 'example-request', retryAfterMs: 300_000 } },
+    }, 'example-model');
+    await log.drain();
+    const directory = join(r.root, 'feedback/diagnostics');
+    const files = await readdir(directory);
+    const data = await readFile(join(directory, files[0]!), 'utf8');
+    expect(JSON.parse(data)).toMatchObject([{ model: 'example-model', chain: [
+      { code: 'loop.retry_budget_exceeded', retryBudgetMs: 120_000, retryDelayMs: 300_000, remainingBudgetMs: 119_000, failedAttempt: 1 },
+      { statusCode: 502, requestId: 'example-request', retryAfterMs: 300_000 },
+    ] }]);
+    expect(data).not.toContain('PRIVATE_REQUEST');
+  });
+
   it('recovers incomplete staging owned by a definitely exited process', async () => {
     const r = await rig();
     await new Promise<void>((resolve) => r.server.close(() => resolve()));

@@ -23,6 +23,13 @@ import type { OAuthRef } from '#/kosong/provider/provider';
 
 export const SERVICES_SECTION = 'services';
 
+export const OAUTH_NETWORK_SECTION = 'oauthNetwork';
+export const OAuthNetworkSchema = z.object({ openaiProxyPort: z.number().int().min(0).max(65535).optional() });
+export type OAuthNetworkConfig = z.infer<typeof OAuthNetworkSchema>;
+registerConfigSection(OAUTH_NETWORK_SECTION, OAuthNetworkSchema, {
+  toToml: (value, raw) => plainObjectToToml(value as Record<string, unknown>, raw),
+});
+
 const StringRecordSchema = z.record(z.string(), z.string());
 
 const OAuthRefSchema = z.object({

@@ -405,6 +405,37 @@ describe('Ledger', () => {
   });
 
   describe('clear', () => {
+    it('joins an in-flight clear before disposing newly registered entries', async () => {
+      const gate = deferred();
+      const events: string[] = [];
+      const ledger = new Ledger('concurrent-clear');
+      ledger.register(() => { events.push('old'); });
+      ledger.register(async () => { await gate.promise; events.push('slow'); });
+      const clearing = ledger.clear();
+      ledger.register(() => { events.push('new'); });
+      const teardown = ledger.teardown();
+      expect(ledger.state).toBe('disposing');
+      expect(events).toEqual([]);
+      gate.resolve();
+      await Promise.all([clearing, teardown]);
+      expect(events).toEqual(['slow', 'old', 'new']);
+      expect(ledger.state).toBe('disposed');
+    });
+
+    it('does not invalidate the teardown traversal when another entry is released while awaiting cleanup', async () => {
+      const gate = deferred();
+      const events: string[] = [];
+      const ledger = new Ledger('release-during-drain');
+      ledger.register(() => { events.push('old'); });
+      const detached = ledger.register(() => { events.push('detached'); });
+      ledger.register(async () => { await gate.promise; events.push('slow'); });
+      const teardown = ledger.teardown();
+      detached.release();
+      gate.resolve();
+      await teardown;
+      expect(events).toEqual(['slow', 'old']);
+    });
+
     it('tears down current entries but keeps the ledger active', () => {
       const events: string[] = [];
       const ledger = new Ledger('test');

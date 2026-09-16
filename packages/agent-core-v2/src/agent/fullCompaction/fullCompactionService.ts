@@ -11,7 +11,7 @@ import type { ContextMessage } from '#/agent/contextMemory/types';
 import { ISessionTokenCountingService } from '#/session/tokenCounting/sessionTokenCounting';
 import { IAgentLLMRequesterService, type AgentLLMRequestFinish } from '#/agent/llmRequester/llmRequester';
 import type { LLMRequestTrace } from '#/kosong/contract/requestTrace';
-import { retryBackoffDelays, sleepForRetry } from '#/_base/utils/retry';
+import { readRetryAfterMs, retryBackoffDelays, sleepForRetry } from '#/_base/utils/retry';
 import { IAgentLoopService, type LoopErrorContext } from '#/agent/loop/loop';
 import { TurnStarted } from '#/agent/loop/turnEvents';
 import { TurnEnded } from '#/agent/loop/turnOps';
@@ -38,6 +38,9 @@ import { createUserMessage, type Message } from '#/kosong/contract/message';
 import type { Tool } from '#/kosong/contract/tool';
 import { inputTotal, type TokenUsage } from '#/kosong/contract/usage';
 import { IEventBus } from '#/app/event/eventBus';
+import { IConfigService } from '#/app/config/config';
+import { LOOP_CONTROL_SECTION, type LoopControl } from '#/agent/loop/configSection';
+import { LoopErrors } from '#/agent/loop/errors';
 import type { CompactionFailedEvent, CompactionFinishedEvent } from '#/app/telemetry/events';
 import { ITelemetryService } from '#/app/telemetry/telemetry';
 import { ErrorCodes, Error2, isCodedError, isError2, toKimiErrorPayload, unwrapErrorCause } from "#/errors";
@@ -152,6 +155,7 @@ export class AgentFullCompactionService extends Service implements IAgentFullCom
     @IEventBus private readonly eventBus: IEventBus,
     @IAgentLoopService private readonly loopService: IAgentLoopService,
     @IAgentStateService private readonly states: IAgentStateService,
+    @IConfigService private readonly configService: IConfigService,
   ) {
     super();
     this.todo = manager.resolve(agent.agentContext, AgentTodo);
@@ -630,6 +634,7 @@ export class AgentFullCompactionService extends Service implements IAgentFullCom
       let droppedCount = 0;
       let overflowShrinkCount = 0;
       let emptyOrTruncatedShrinkCount = 0;
+      let recoveryDeadlineAt: number | undefined;
       while (true) {
         const messagesToCompact = historyForModel;
         const messages: Message[] = [...messagesToCompact, createUserMessage(instruction)];
@@ -640,6 +645,7 @@ export class AgentFullCompactionService extends Service implements IAgentFullCom
             {
               messages,
               maxOutputSize: compactionMaxOutputSize,
+              recoveryDeadlineAt,
               source: {
                 type: 'operation',
                 turnId: active.originTurnId,
@@ -700,7 +706,12 @@ export class AgentFullCompactionService extends Service implements IAgentFullCom
           if (retryCount + 1 >= MAX_COMPACTION_RETRY_ATTEMPTS) {
             throw error;
           }
-          await sleepForRetry(delays[retryCount]!, signal);
+          const budgetMs = this.configService.get<LoopControl>(LOOP_CONTROL_SECTION)?.retryBudgetMs;
+          if (budgetMs !== undefined) recoveryDeadlineAt ??= Date.now() + budgetMs;
+          const delayMs = readRetryAfterMs(unwrappedError) ?? delays[retryCount]!;
+          if (recoveryDeadlineAt !== undefined && Date.now() + delayMs >= recoveryDeadlineAt)
+            throw new Error2(LoopErrors.codes.LOOP_RETRY_BUDGET_EXCEEDED, 'Compaction retry delay exceeds the remaining recovery budget.', { cause: error });
+          await sleepForRetry(delayMs, signal);
           retryCount += 1;
         }
       }

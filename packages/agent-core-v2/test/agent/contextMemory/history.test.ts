@@ -66,6 +66,15 @@ describe('agent history view', () => {
     expect(page.items.map(item => item.content)).toEqual([[{ type: 'text', text: 'message-3' }], [{ type: 'text', text: 'message-4' }]]);
   });
 
+  it('loads older contents after they leave the retained tail', async () => {
+    const { context, history } = setup();
+    for (let index = 0; index < 250; index++) context.appendUserMessage([{ type: 'text', text: `message-${index}` }]);
+    expect((await history.page({ limit: 1 })).items[0]?.content).toEqual([{ type: 'text', text: 'message-249' }]);
+    expect((await history.page({ before: 50, limit: 1 })).items[0]?.content).toEqual([{ type: 'text', text: 'message-49' }]);
+    context.appendUserMessage([{ type: 'text', text: 'new' }]);
+    expect((await history.page({ limit: 1 })).items[0]?.content).toEqual([{ type: 'text', text: 'new' }]);
+  });
+
   it('does not repeat a live reply after its content has reached the journal', async () => {
     const { context, history } = setup();
     const dispatcher = context.get(IEventDispatcher);

@@ -8,6 +8,7 @@ import type { IAtomicDocumentStore } from '#/persistence/interface/atomicDocumen
 import type { IProviderService, OAuthRef, ProvidersChangedEvent } from '#/kosong/provider/provider';
 import type { ProviderRequestAuth } from '#/kosong/contract/provider';
 import { AuthErrors } from './errors';
+import { withScopedProxy } from '#/_base/utils/scopedProxy';
 import type {
   OAuthFlowSnapshot,
   OAuthFlowStart,
@@ -52,6 +53,7 @@ export class PiOAuthAdapter {
     private readonly providers: IProviderService,
     private readonly scope: string,
     private readonly provisionModels: (provider: string, type: string) => Promise<void>,
+    private readonly proxyForProvider: (provider: string) => string | undefined = () => undefined,
   ) {}
 
   list(): readonly { id: string; name: string }[] {
@@ -195,7 +197,7 @@ export class PiOAuthAdapter {
 
   private async login(provider: string, definition: PiOAuthProvider, flow: PiFlow): Promise<void> {
     try {
-      const credentials = await definition.oauth.login({
+      const credentials = await withScopedProxy(this.proxyForProvider(definition.id), () => definition.oauth.login({
         signal: flow.controller.signal,
         notify: (event) => {
           if (flow.snapshot.status !== 'pending') return;
@@ -218,7 +220,7 @@ export class PiOAuthAdapter {
           this.publishReady(flow);
         },
         prompt: (prompt) => this.prompt(flow, prompt),
-      });
+      }));
       if (flow.snapshot.status !== 'pending') return;
       const key = this.credentialKey(provider);
       await this.transaction(key, async () => {
@@ -314,7 +316,8 @@ export class PiOAuthAdapter {
       }
       if (force || credentials.expires <= Date.now() + 60_000) {
         try {
-          credentials = await definition.oauth.refresh(credentials, this.refreshController.signal);
+          const previous = credentials;
+          credentials = await withScopedProxy(this.proxyForProvider(definition.id), () => definition.oauth.refresh(previous, this.refreshController.signal));
         } catch {
           throw authError('OAuth token refresh failed; please log in again.');
         }
@@ -337,6 +340,7 @@ export class PiOAuthAdapter {
         headers: Object.fromEntries(headers.filter((entry): entry is [string, string] => entry[1] !== null)),
         removeHeaders: headers.filter(([, value]) => value === null).map(([name]) => name),
         baseUrl: auth.baseUrl,
+        proxyUrl: this.proxyForProvider(definition.id),
       };
     });
   }

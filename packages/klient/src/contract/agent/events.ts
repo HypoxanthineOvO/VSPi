@@ -90,6 +90,24 @@ export const toolCallStartedEventSchema = z.object({
   display: z.unknown().optional(),
 });
 
+export const turnStepCompletedEventSchema = z.object({
+  type: z.literal('turn.step.completed'),
+  time: z.number().optional(),
+  turnId: z.number(),
+  step: z.number(),
+  stepId: z.string().optional(),
+  usage: z.object({ inputOther: z.number(), output: z.number(), inputCacheRead: z.number(), inputCacheCreation: z.number() }).optional(),
+  finishReason: z.string().optional(),
+  providerFinishReason: z.enum(['completed', 'tool_calls', 'truncated', 'filtered', 'paused', 'other']).optional(),
+  rawFinishReason: z.string().optional(),
+  llmFirstTokenLatencyMs: z.number().optional(),
+  llmStreamDurationMs: z.number().optional(),
+  llmRequestBuildMs: z.number().optional(),
+  llmServerFirstTokenMs: z.number().optional(),
+  llmServerDecodeMs: z.number().optional(),
+  llmClientConsumeMs: z.number().optional(),
+});
+
 export const toolCallDeltaEventSchema = z.object({
   type: z.literal('tool.call.delta'),
   time: z.number().optional(),
@@ -273,6 +291,7 @@ export interface AgentEventPayloads {
   'assistant.delta': z.infer<typeof assistantDeltaEventSchema>;
   'thinking.delta': z.infer<typeof thinkingDeltaEventSchema>;
   'turn.step.started': z.infer<typeof turnStepStartedEventSchema>;
+  'turn.step.completed': z.infer<typeof turnStepCompletedEventSchema>;
   'tool.call.started': z.infer<typeof toolCallStartedEventSchema>;
   'tool.call.delta': z.infer<typeof toolCallDeltaEventSchema>;
   'tool.progress': z.infer<typeof toolProgressEventSchema>;
@@ -310,6 +329,7 @@ export const agentEvents = {
   'assistant.delta': { kind: 'stream', name: 'events', type: 'assistant.delta', schema: assistantDeltaEventSchema },
   'thinking.delta': { kind: 'stream', name: 'events', type: 'thinking.delta', schema: thinkingDeltaEventSchema },
   'turn.step.started': { kind: 'stream', name: 'events', type: 'turn.step.started', schema: turnStepStartedEventSchema },
+  'turn.step.completed': { kind: 'stream', name: 'events', type: 'turn.step.completed', schema: turnStepCompletedEventSchema },
   'tool.call.started': { kind: 'stream', name: 'events', type: 'tool.call.started', schema: toolCallStartedEventSchema },
   'tool.call.delta': { kind: 'stream', name: 'events', type: 'tool.call.delta', schema: toolCallDeltaEventSchema },
   'tool.progress': { kind: 'stream', name: 'events', type: 'tool.progress', schema: toolProgressEventSchema },

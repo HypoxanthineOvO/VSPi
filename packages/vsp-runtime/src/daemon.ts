@@ -12,6 +12,7 @@ import {
 } from './config-migration.js';
 import { acquireRuntimeLease } from './lease.js';
 import { resolveRuntimePaths } from './paths.js';
+import { RuntimeGoalRecovery } from './goal-recovery.js';
 import { removeRuntimeState, writeRuntimeState, writeRuntimeShutdown, writeRuntimeShutdownIntent, type RuntimeShutdownIntent } from './state.js';
 import {
   VSP_RUNTIME_PROTOCOL_VERSION,
@@ -39,6 +40,7 @@ export async function startRuntimeDaemon(options: StartRuntimeDaemonOptions): Pr
   const lease = await acquireRuntimeLease(paths.leasePath, ownerNonce);
   let server: Awaited<ReturnType<typeof startServer>> | undefined;
   let ipc: Awaited<ReturnType<typeof serveKlientIpc>> | undefined;
+  let goals: RuntimeGoalRecovery | undefined;
   let resolveClosed!: () => void;
   let rejectClosed!: (error: unknown) => void;
   const closed = new Promise<void>((resolve, reject) => { resolveClosed = resolve; rejectClosed = reject; });
@@ -51,12 +53,18 @@ export async function startRuntimeDaemon(options: StartRuntimeDaemonOptions): Pr
     closePromise ??= (async () => {
       try { await writeRuntimeShutdownIntent(paths.serverDir, { ownerNonce, reason }); }
       finally {
-        try { await ipc?.close(); }
+        try { await goals?.prepareShutdown(); }
         finally {
-          try { await server?.close(); }
+          try { await ipc?.close(); }
           finally {
-            try { await removeRuntimeState(paths.statePath, process.pid); }
-            finally { await lease.release(); }
+            try { await goals?.close(); }
+            finally {
+              try { await server?.close(); }
+              finally {
+                try { await removeRuntimeState(paths.statePath, process.pid); }
+                finally { await lease.release(); }
+              }
+            }
           }
         }
       }
@@ -104,6 +112,8 @@ export async function startRuntimeDaemon(options: StartRuntimeDaemonOptions): Pr
       serverVersion: options.hostIdentity.version,
       telemetry: false,
     });
+    goals = new RuntimeGoalRecovery(server.core, paths.serverDir);
+    await goals.start();
     ipc = await serveKlientIpc({
       scope: server.core,
       socketPath: paths.ipcPath,
@@ -161,6 +171,7 @@ export async function startRuntimeDaemon(options: StartRuntimeDaemonOptions): Pr
       close,
     };
   } catch (error) {
+    await goals?.close().catch(() => {});
     await ipc?.close().catch(() => {});
     await server?.close().catch(() => {});
     await removeRuntimeState(paths.statePath, process.pid).catch(() => {});

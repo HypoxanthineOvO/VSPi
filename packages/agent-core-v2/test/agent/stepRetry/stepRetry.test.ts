@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   APIConnectionError,
+  APIIncompleteStreamError,
   APIProviderRateLimitError,
   APIProviderQuotaExhaustedError,
   APIStatusError,
@@ -88,6 +89,61 @@ describe('stepRetry plugin', () => {
     expect((await runBoundedTurn()).type).toBe('failed');
     expect(calls).toBe(3);
     expect(rpcEvents('turn.step.retrying')).toHaveLength(2);
+  });
+
+  it('recovers an interrupted upstream stream within the configured attempt budget', async () => {
+    let calls = 0;
+    ctx = createTestAgent(
+      { initialConfig: { loopControl: { maxAttemptsPerStep: 3, retryBudgetMs: 120_000, retryInitialDelayMs: 0 } } },
+      llmGenerateServices(async () => {
+        if (++calls === 1) throw new APIIncompleteStreamError('Upstream response stream was interrupted');
+        return { id: 'recovered', message: { role: 'assistant', content: [{ type: 'text', text: 'recovered' }], toolCalls: [] }, usage: emptyUsage(), finishReason: 'completed', rawFinishReason: 'stop' };
+      }),
+    );
+    expect((await runBoundedTurn()).type).toBe('completed');
+    expect(calls).toBe(2);
+  });
+
+  it('retries a partial response without including the failed text in the next model request', async () => {
+    const histories: unknown[] = [];
+    ctx = createTestAgent(
+      { initialConfig: { loopControl: { maxAttemptsPerStep: 3, retryBudgetMs: 120_000, retryInitialDelayMs: 0 } } },
+      llmGenerateServices(async (_provider, _system, _tools, history, callbacks) => {
+        histories.push(structuredClone(history));
+        if (histories.length === 1) {
+          await callbacks?.onMessagePart?.({ type: 'text', text: 'discarded attempt' });
+          throw new APIIncompleteStreamError('Upstream response stream was interrupted');
+        }
+        return { id: 'recovered', message: { role: 'assistant', content: [{ type: 'text', text: 'recovered' }], toolCalls: [] }, usage: emptyUsage(), finishReason: 'completed', rawFinishReason: 'stop' };
+      }),
+    );
+    ctx.appendUserMessage([{ type: 'text', text: 'Run a task' }]);
+    expect((await runBoundedTurn()).type).toBe('completed');
+    expect(histories).toHaveLength(2);
+    expect(JSON.stringify(histories[1])).not.toContain('discarded attempt');
+  });
+
+  it('stops persistent stream interruptions at the configured attempt limit', async () => {
+    let calls = 0;
+    ctx = createTestAgent(
+      { initialConfig: { loopControl: { maxAttemptsPerStep: 3, retryBudgetMs: 120_000, retryInitialDelayMs: 0 } } },
+      llmGenerateServices(async () => { calls++; throw new APIIncompleteStreamError('Upstream response stream was interrupted'); }),
+    );
+    expect((await runBoundedTurn()).type).toBe('failed');
+    expect(calls).toBe(3);
+  });
+
+  it('reports upstream delay and remaining recovery budget when a 502 retry cannot fit', async () => {
+    ctx = createTestAgent(
+      { initialConfig: { loopControl: { maxAttemptsPerStep: 3, retryBudgetMs: 120_000 } } },
+      llmGenerateServices(async () => { throw new APIStatusError(502, 'Bad gateway', 'example-request', 300_000); }),
+    );
+    const result = await runBoundedTurn();
+    expect(result).toMatchObject({ type: 'failed', error: {
+      code: 'loop.retry_budget_exceeded',
+      details: { retryBudgetMs: 120_000, retryDelayMs: 300_000, failedAttempt: 1, remainingBudgetMs: expect.any(Number) },
+      cause: { details: { statusCode: 502, requestId: 'example-request', retryAfterMs: 300_000 } },
+    } });
   });
 
   it.each([400, 401, 403, 404, 422])('does not retry HTTP %s when finite transient-only recovery is configured', async (status) => {

@@ -9,6 +9,8 @@ import type {
 
 import {
   APIConnectionError,
+  APIStatusError,
+  APIProviderBusinessError,
   APIProtocolError,
   APIIncompleteStreamError,
   APIStreamParseError,
@@ -19,6 +21,7 @@ import {
   createAbortError,
   isAbortError,
   normalizeAPIStatusError,
+  parseRetryAfterMs,
   ImageFormatProviderError,
   isImageFormatMessage,
 } from '#/kosong/contract/errors';
@@ -28,8 +31,10 @@ import type { TokenUsage } from '#/kosong/contract/usage';
 
 import { encodePiSignature } from './messages';
 import type { ResponseDiagnostics } from './responseDiagnostics';
+import { classifyProviderBusinessError, providerErrorDetail } from './providerErrors';
 
 export interface PiResponseState {
+  provider?: string;
   status?: number;
   headers?: Record<string, string>;
   diagnostics?: ResponseDiagnostics;
@@ -61,14 +66,28 @@ export function convertPiError(error: unknown, response: PiResponseState = {}): 
   if (diagnostics?.parseFailure === 'event_too_large') return new APIProtocolError('Provider SSE event exceeds the supported byte limit.', diagnostics.snapshot());
   if (diagnostics?.transportFailure !== undefined)
     return new APIConnectionError(`Provider transport failed: ${diagnostics.transportFailure}.`, diagnostics.snapshot());
-  if (error instanceof ChatProviderError) return error;
+  if (diagnostics?.incomplete === true)
+    return new APIIncompleteStreamError('Provider stream ended before its terminal event.', diagnostics.snapshot());
+  if (error instanceof ChatProviderError && !(error instanceof APIStatusError)) return error;
+  if (error instanceof APIProviderBusinessError) return error;
   const message = error instanceof Error ? error.message : String(error);
+  const headers = new Headers(response.headers);
+  let detail = diagnostics?.error;
+  if (detail === undefined) {
+    try { detail = providerErrorDetail(JSON.parse(message.replace(/^(?:Error:\s*)?\d{3}(?:\s*:\s*|\s+)/, ''))); } catch {}
+  }
+  if (detail !== undefined) {
+    const business = classifyProviderBusinessError(response.provider ?? 'unknown', detail, response.status ?? (error instanceof APIStatusError ? error.statusCode : structuredErrorStatus(message)),
+      { ...diagnostics?.snapshot(), requestId: headers.get('x-request-id') ?? headers.get('request-id'), traceId: headers.get('x-trace-id') }, parseRetryAfterMs(headers));
+    if (business !== undefined) return business;
+  }
+  if (error instanceof ChatProviderError) return error;
   if (/^Provider finish_reason: content_filter$/.test(message))
     return new APIEmptyResponseError(message, {
       finishReason: 'filtered',
       rawFinishReason: 'content_filter',
     });
-  if (/^(?:OpenAI Responses |Codex |Google )?[Ss]tream ended without (?:finish_reason|a (?:stop reason|finish reason|completion event))\.?$/.test(message)) return new APIIncompleteStreamError(message, diagnostics?.snapshot());
+  if (/^(?:(?:OpenAI Responses|Codex|Google|Anthropic) )?[Ss]tream ended (?:without (?:finish_reason|a (?:stop reason|finish reason|completion event))|before (?:message_stop|a terminal response event))\.?$/.test(message) || message === 'Provider finish_reason: network_error') return new APIIncompleteStreamError(message, diagnostics?.snapshot());
   const record =
     typeof error === 'object' && error !== null ? (error as Record<string, unknown>) : undefined;
   const directStatus = record?.['status'] ?? record?.['statusCode'];
@@ -80,16 +99,16 @@ export function convertPiError(error: unknown, response: PiResponseState = {}): 
         : (structuredErrorStatus(message) ??
           (Number(/^(?:Error:\s*)?(\d{3})(?:\s|:|$)/.exec(message)?.[1]) || undefined));
   if (status !== undefined) {
-    const headers = new Headers(response.headers);
-    const retryAfter = headers.get('retry-after');
-    const retrySeconds = retryAfter === null ? NaN : Number(retryAfter);
     return normalizeAPIStatusError(
       status,
       message,
       headers.get('x-request-id') ?? headers.get('request-id'),
-      Number.isFinite(retrySeconds) ? Math.max(0, retrySeconds * 1000) : undefined,
+      parseRetryAfterMs(headers),
       headers.get('x-trace-id'),
     );
+  }
+  if (/^(?:Error:\s*)?Upstream response stream was interrupted\.?$/i.test(message.trim())) {
+    return new APIIncompleteStreamError(message, diagnostics?.snapshot());
   }
   try {
     const payload: unknown = JSON.parse(message);
@@ -275,6 +294,10 @@ export class PiStreamedMessage implements StreamedMessage {
         yield* this.endTool(event.contentIndex, event.toolCall, event.partial);
         break;
       case 'done':
+        if (this.response.diagnostics?.incomplete === true)
+          throw new APIIncompleteStreamError('Provider stream ended before its terminal event.', this.response.diagnostics.snapshot());
+        if (this.response.diagnostics?.error !== undefined && this.response.diagnostics.error.code !== '0')
+          throw convertPiError(this.response.diagnostics.error.message ?? 'Provider reported a stream error.', this.response);
         this.update(event.message);
         if (event.reason === 'deferred')
           throw new ChatProviderError(
@@ -302,6 +325,7 @@ export class PiStreamedMessage implements StreamedMessage {
             'BLOCKLIST',
             'PROHIBITED_CONTENT',
             'SPII',
+            'sensitive',
           ].includes(this.rawFinishReason)
         )
           throw new APIEmptyResponseError(

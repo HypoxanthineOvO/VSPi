@@ -88,6 +88,7 @@ const turnEndedSchema = z.object({
 });
 
 export interface TurnEndedPayload {
+  readonly runtimeShutdown?: boolean;
   readonly agentId: string;
   readonly turnId: number;
   readonly reason: 'completed' | 'cancelled' | 'failed' | 'blocked';

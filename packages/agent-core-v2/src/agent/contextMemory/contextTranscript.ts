@@ -20,6 +20,7 @@ export interface ContextTranscriptReducer {
   add(record: WireRecord): void;
   result(): ContextTranscript;
   positions(): readonly number[];
+  hasContent(ordinal: number): boolean;
 }
 
 interface MutableMessage {
@@ -46,12 +47,14 @@ export function reduceContextTranscript(records: Iterable<WireRecord>): ContextT
   return reducer.result();
 }
 
-export function createContextTranscriptReducer(options: { maxContentChars?: number; contentOrdinals?: ReadonlySet<number> } = {}): ContextTranscriptReducer {
+export function createContextTranscriptReducer(options: { maxContentChars?: number; contentOrdinals?: ReadonlySet<number>; tailContentLimit?: number } = {}): ContextTranscriptReducer {
   const transcript: MutableEntry[] = [];
   let foldedLength = 0;
   let clearFloor = 0;
   let openEntry: MutableEntry | undefined;
   let nextOrdinal = 0;
+  const contentTail: MutableEntry[] = [];
+  const availableContent = new Set<number>();
 
   const project = (part: ContentPart, limit = options.maxContentChars): ContentPart => {
     if (options.maxContentChars === undefined) return part;
@@ -59,10 +62,11 @@ export function createContextTranscriptReducer(options: { maxContentChars?: numb
     if (part.type === 'think') return { type: 'think', think: part.think.slice(0, limit) };
     return { type: 'text', text: `[${part.type}]` };
   };
-  const omit = (entry: MutableEntry) => { entry.omitContent = true; entry.message.content = []; entry.message.toolCalls = []; };
+  const omit = (entry: MutableEntry) => { if (entry.ordinal !== undefined) availableContent.delete(entry.ordinal); entry.omitContent = true; entry.message.content = []; entry.message.toolCalls = []; };
   const push = (...entries: MutableEntry[]): void => {
     for (const entry of entries) {
       entry.ordinal = nextOrdinal++;
+      availableContent.add(entry.ordinal);
       if (options.contentOrdinals !== undefined && !options.contentOrdinals.has(entry.ordinal)) { omit(entry); continue; }
       if (options.maxContentChars === undefined) continue;
       let remaining = options.maxContentChars;
@@ -75,6 +79,10 @@ export function createContextTranscriptReducer(options: { maxContentChars?: numb
     }
     transcript.push(...entries);
     foldedLength += entries.length;
+    if (options.tailContentLimit !== undefined) {
+      contentTail.push(...entries);
+      while (contentTail.length > options.tailContentLimit) omit(contentTail.shift()!);
+    }
   };
 
   const fold = createLoopEventFold({
@@ -101,6 +109,10 @@ export function createContextTranscriptReducer(options: { maxContentChars?: numb
       foldedLength = Math.max(0, foldedLength - 1);
     },
     sealOpenAssistant: () => {
+      openEntry = undefined;
+    },
+    abandonOpenAssistant: () => {
+      if (openEntry !== undefined) openEntry.message.note = 'Response interrupted; excluded from model context.';
       openEntry = undefined;
     },
     pushToolMessage: (message, time) => {
@@ -185,6 +197,7 @@ export function createContextTranscriptReducer(options: { maxContentChars?: numb
 
   return {
     add,
+    hasContent: ordinal => availableContent.has(ordinal),
     positions: () => transcript.map(entry => entry.ordinal!),
     result: () => ({
       entries: transcript.map((e) => e.message),

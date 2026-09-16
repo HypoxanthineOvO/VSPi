@@ -66,6 +66,7 @@ import { isOAuthCatalogVendor } from '#/kosong/provider/providerDefinition';
 import { ITelemetryService } from '#/app/telemetry/telemetry';
 import { IAtomicDocumentStore } from '#/persistence/interface/atomicDocumentStore';
 import { PiOAuthAdapter } from './piOAuthAdapter';
+import { OAUTH_NETWORK_SECTION, type OAuthNetworkConfig } from './configSection';
 import { listPiModelRecords } from '#/kosong/provider/pi/catalog';
 import type { ProviderRequestAuth } from '#/kosong/contract/provider';
 
@@ -122,6 +123,10 @@ export class OAuthService extends Disposable implements IOAuthService {
       providerService,
       bootstrap.scope('credentials'),
       (provider, type) => this.provisionPiModels(provider, type),
+      (provider) => {
+        const port = this.config.get<OAuthNetworkConfig>(OAUTH_NETWORK_SECTION)?.openaiProxyPort;
+        return provider === 'openai-codex' && port !== undefined && port > 0 ? `http://127.0.0.1:${port}` : undefined;
+      },
     ));
     this._register(providerService.onDidChangeProviders((event) => {
       this.pi.invalidateProviders(event);

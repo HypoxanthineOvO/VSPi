@@ -413,7 +413,7 @@ describe('pre-bootstrap config migration', () => {
     });
   });
 
-  it('rewrites VSPLab base URLs from the retired .cn domain to .tech', async () => {
+  it('preserves VSPLab cn URLs instead of forcing the tech route during legacy migration', async () => {
     const { root, homeDir, agentDir } = await fixture();
     await writeFile(join(homeDir, 'config.toml'), [
       '[providers.vsplab]',
@@ -449,12 +449,11 @@ describe('pre-bootstrap config migration', () => {
     const models = config['models'] as Record<string, Record<string, unknown>>;
 
     expect(result.status).toBe('migrated');
-    expect(providers['vsplab']?.['base_url']).toBe('https://api.vsplab.tech/v1');
+    expect(providers['vsplab']?.['base_url']).toBe('https://api.vsplab.cn/v1');
     expect(providers['moonshot']?.['base_url']).toBe('https://api.moonshot.cn/v1');
-    expect(models['vsplab/gpt-5.6']?.['base_url']).toBe('https://api.vsplab.tech/v1');
-    expect(models['vsplab/glm-5.3']?.['base_url']).toBe('https://api.vsplab.tech/v1');
-    expect(result.report?.diagnostics).toContain('provider vsplab: base_url migrated from api.vsplab.cn to api.vsplab.tech');
-    expect(result.report?.diagnostics).toContain('model vsplab/gpt-5.6: base_url migrated from api.vsplab.cn to api.vsplab.tech');
+    expect(models['vsplab/gpt-5.6']?.['base_url']).toBe('https://api.vsplab.cn/v1');
+    expect(models['vsplab/glm-5.3']?.['base_url']).toBe('https://api.vsplab.cn/v1');
+    expect(result.report?.diagnostics.some(message => message.includes('migrated from api.vsplab.cn'))).toBe(false);
 
     const again = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
     expect(again.status).toBe('unchanged');

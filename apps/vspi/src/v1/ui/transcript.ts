@@ -27,6 +27,27 @@ import type { VspiTheme } from "./theme.js";
  *  streaming block cannot wedge the TUI renderer or grow the write without bound. */
 const MAX_THINKING_RENDER_CHARS = 200_000;
 const AGENT_TIMEZONE = "Asia/Shanghai";
+const TRANSCRIPT_RETENTION_LIMITS = { messages: 1000, characters: 4 * 1024 * 1024 };
+
+export function retainTranscript(
+	messages: TranscriptMessage[], committedCount: number,
+	limits = TRANSCRIPT_RETENTION_LIMITS,
+): { messages: TranscriptMessage[]; committedCount: number } {
+	const size = (message: TranscriptMessage) => Object.values(message).reduce((sum, value) => sum + (typeof value === 'string' ? value.length : 0), 0);
+	let characters = messages.reduce((sum, message) => sum + size(message), 0);
+	let count = messages.length;
+	let committed = committedCount;
+	const removed = new Set<number>();
+	for (const [index, message] of messages.entries()) {
+		if (count <= limits.messages && characters <= limits.characters) break;
+		if (('streaming' in message && message.streaming) || isQueuedTranscriptMessage(message) || ('status' in message && ['running', 'queued'].includes(message.status))) continue;
+		removed.add(index);
+		characters -= size(message);
+		count--;
+		if (index < committedCount) committed--;
+	}
+	return { messages: removed.size === 0 ? messages : messages.filter((_message, index) => !removed.has(index)), committedCount: committed };
+}
 
 export interface TranscriptRenderOptions {
 	inspectedId?: string;

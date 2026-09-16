@@ -7,7 +7,7 @@ import { Disposable, toDisposable, type IDisposable } from '#/_base/di/lifecycle
 import { LifecycleScope } from '#/app/scopes';
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
 import { defineState } from '#/state/state';
-import { abortError, isAbortError, isUserCancellation, userCancellationReason } from '#/_base/utils/abort';
+import { abortError, isAbortError, isUserCancellation, RuntimeShutdownCancellation, userCancellationReason } from '#/_base/utils/abort';
 import { toErrorMessage } from '#/_base/errors/errorMessage';
 import { IAgentLLMRequesterService, type AgentLLMRequestFinish } from '#/agent/llmRequester/llmRequester';
 import type { LLMRequestTrace } from '#/kosong/contract/requestTrace';
@@ -536,6 +536,7 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
             error,
             durationMs,
             interruptReason,
+            runtimeShutdown: result.type === 'cancelled' && result.reason instanceof RuntimeShutdownCancellation ? true : undefined,
           }),
         );
         if (error !== undefined) {

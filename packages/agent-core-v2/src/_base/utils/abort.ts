@@ -17,6 +17,13 @@ export class UserCancellationError extends Error {
   }
 }
 
+export class RuntimeShutdownCancellation extends Error {
+  constructor() {
+    super('Runtime is shutting down');
+    this.name = 'AbortError';
+  }
+}
+
 export function userCancellationReason(): UserCancellationError {
   return new UserCancellationError();
 }

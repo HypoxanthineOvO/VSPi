@@ -647,6 +647,18 @@ export class KlientChatBackend implements ChatBackend {
 			}));
 	}
 
+	async getVsplabEndpoint(): Promise<'cn' | 'tech'> {
+		const config = await this.connection.klient.global.config.get<{ endpoint?: string }>('vsplab');
+		return config?.endpoint === 'tech' ? 'tech' : 'cn';
+	}
+
+	async setVsplabEndpoint(endpoint: 'cn' | 'tech'): Promise<void> {
+		await this.connection.klient.global.config.set({ domain: 'vsplab', patch: { endpoint } });
+		this.providerAvailability.clear();
+		this.modelOptionsPromise = undefined;
+		this.events?.onRuntimeCatalogChanged?.();
+	}
+
 	async selectModel(
 		provider: string,
 		id: string,
@@ -1170,7 +1182,10 @@ export class KlientChatBackend implements ChatBackend {
 			try { await this.restoreHistory(); }
 			catch (error) { this.events?.onNotice(`历史尚未同步，当前连接与活动状态已保留；可使用 /history latest 重试：${error instanceof Error ? error.message : String(error)}`, 'warning'); }
 		}
-		this.taskPoll = setInterval(() => void this.refreshTasks(), 1_000);
+		this.taskPoll = setInterval(() => {
+			void this.refreshTasks();
+			if (this.busy) this.publishSpeed(this.outputSpeed.snapshot());
+		}, 1_000);
 		this.taskPoll.unref();
 		this.towerPoll = setInterval(() => void this.refreshTowerMissions(), 1_000);
 		this.towerPoll.unref();
@@ -1371,7 +1386,7 @@ export class KlientChatBackend implements ChatBackend {
 					}
 					this.advanceTurnSegment();
 					this.retryNoticeVisible = true;
-					this.events?.onRetryNotice?.(`模型调用暂时失败${retry.statusCode ? `（HTTP ${retry.statusCode}）` : ''}，正在等待或重新连接（第 ${retry.nextAttempt}/${retry.maxAttempts} 次尝试）；可随时中断`);
+					this.events?.onRetryNotice?.(`模型调用暂时失败${retry.statusCode !== undefined && retry.statusCode >= 400 ? `（HTTP ${retry.statusCode}）` : ''}，正在等待或重新连接（第 ${retry.nextAttempt}/${retry.maxAttempts} 次尝试）；可随时中断`);
 				}
 			} else {
 				this.clearRetryNotice();
@@ -1416,7 +1431,10 @@ export class KlientChatBackend implements ChatBackend {
 			}),
 		};
 		this.subscriptions.push(
-			events.on("agent.status.updated", () => { void this.refreshModelBinding(agent); }),
+			events.on("agent.status.updated", (event) => {
+				if (event['usage'] !== undefined || event['contextTokens'] !== undefined) void this.publishUsage();
+				if (event['model'] !== undefined || event['thinkingEffort'] !== undefined) void this.refreshModelBinding(agent);
+			}),
 			events.on("agent.activity.updated", (activity) => {
 				if (this.agent !== agent) return;
 				this.activityRevision++;
@@ -1453,6 +1471,14 @@ export class KlientChatBackend implements ChatBackend {
 			events.on("turn.step.started", (event) => {
 				if (this.turn) this.turn.effort = this.effort;
 				this.setPromptPhaseForTurn(event.turnId, "started");
+			}),
+			events.on("turn.step.completed", (event) => {
+				const duration = event.llmFirstTokenLatencyMs !== undefined && event.llmStreamDurationMs !== undefined
+					? event.llmFirstTokenLatencyMs + event.llmStreamDurationMs : 0;
+				this.publishSpeed(this.outputSpeed.finish(event.usage?.output ?? 0, duration));
+				if (event.providerFinishReason === 'truncated' || event.finishReason === 'max_tokens')
+					this.events?.onNotice('已达到模型输出上限，回答尚未完成；可要求继续。', 'warning');
+				void this.publishUsage();
 			}),
 			events.on("tool.call.started", (event) => {
 				this.advanceTurnSegment();
@@ -1789,6 +1815,8 @@ export class KlientChatBackend implements ChatBackend {
 		delta: string,
 		kind: "text" | "thinking",
 	): void {
+		const bounded = (text: string) => text.length > 262144 ? `[显示已截取末尾；完整内容保存在会话记录中]\n${text.slice(-262144)}` : text;
+		delta = bounded(delta);
 		const existing = this.streamMessages.get(id);
 		if (existing === undefined) {
 			const message: TranscriptMessage =
@@ -1814,11 +1842,11 @@ export class KlientChatBackend implements ChatBackend {
 			return;
 		}
 		if (existing.kind === "text") {
-			const next = `${existing.text}${delta}`;
+			const next = bounded(`${existing.text}${delta}`);
 			existing.text = next;
 			this.events?.onMessageUpdate(id, { text: next });
 		} else if (existing.kind === "thinking") {
-			const next = `${existing.text}${delta}`;
+			const next = bounded(`${existing.text}${delta}`);
 			existing.text = next;
 			this.events?.onMessageUpdate(id, { text: next });
 		}
@@ -2091,7 +2119,7 @@ export class KlientChatBackend implements ChatBackend {
 			const total = usage.total;
 			const currentTurn = usage.currentTurn;
 			const speed = finishTurn
-				? this.outputSpeed.finish(currentTurn?.output ?? 0)
+				? this.outputSpeed.finish(0, 0)
 				: this.outputSpeed.snapshot();
 			this.cacheTelemetryObserved ||=
 				(total?.inputCacheRead ?? 0) + (total?.inputCacheCreation ?? 0) > 0;

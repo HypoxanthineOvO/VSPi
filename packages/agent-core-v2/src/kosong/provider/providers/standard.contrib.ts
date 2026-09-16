@@ -38,7 +38,7 @@ registerProviderDefinition({
   endpoint: {
     apiKeyEnv: 'VSPLAB_API_KEY',
     baseUrlEnv: 'VSPLAB_BASE_URL',
-    defaultBaseUrl: 'https://api.vsplab.tech/v1',
+    defaultBaseUrl: 'https://api.vsplab.cn/v1',
   },
 });
 

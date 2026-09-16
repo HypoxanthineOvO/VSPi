@@ -51,6 +51,24 @@ describe('kimiOpenAITrait.convertTool', () => {
       },
     });
   });
+
+  it('preserves recursive tool references and their null termination branch', () => {
+    const node = {
+      type: 'object',
+      properties: { next: { anyOf: [{ $ref: '#/$defs/node' }, { type: 'null' }] } },
+      required: ['next'],
+    };
+    const tool: Tool = {
+      name: 'example_recursive_tool', description: 'Recursive structure',
+      parameters: { type: 'object', properties: { parent: { $ref: '#/$defs/node' } }, $defs: { node } },
+    };
+    const original = structuredClone(tool);
+    expect(convertKimiTool(tool)).toMatchObject({ function: { parameters: {
+      $defs: { node: { type: 'object' } },
+      properties: { parent: { properties: { next: { anyOf: [{ $ref: '#/$defs/node' }, { type: 'null' }] } } } },
+    } } });
+    expect(tool).toEqual(original);
+  });
 });
 
 describe('kimiOpenAITrait.convertMessage', () => {

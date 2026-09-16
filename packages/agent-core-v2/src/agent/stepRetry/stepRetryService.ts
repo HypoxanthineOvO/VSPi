@@ -146,9 +146,11 @@ export class AgentStepRetryService extends Disposable implements IAgentStepRetry
         initialDelayMs: loopControl?.retryInitialDelayMs,
         maxDelayMs: loopControl?.retryMaxDelayMs,
       });
-    if (deadline !== undefined && delayMs >= deadline - Date.now()) {
+    const remainingBudgetMs = deadline === undefined ? undefined : Math.max(0, deadline - Date.now());
+    if (remainingBudgetMs !== undefined && delayMs >= remainingBudgetMs) {
+      const details = { retryBudgetMs: loopControl?.retryBudgetMs, retryDelayMs: delayMs, remainingBudgetMs, failedAttempt: this.failedAttempts };
       this.resetAttempts();
-      throw new LoopError(LoopErrors.codes.LOOP_RETRY_BUDGET_EXCEEDED, 'Provider retry delay exceeds the remaining recovery budget; this turn has stopped without retrying early.', { cause: error });
+      throw new LoopError(LoopErrors.codes.LOOP_RETRY_BUDGET_EXCEEDED, 'Provider retry delay exceeds the remaining recovery budget; this turn has stopped without retrying early.', { cause: error, details });
     }
     void this.dispatcher.dispatch(
       new TurnStepRetrying({

@@ -18,6 +18,20 @@
 
 2.4.1 起，没有前台 IPC 连接、正在执行的 turn/工具/Subagent、活动目标或定时任务时，daemon 在约 5 秒宽限后自动退出，历史和配置保留。可以通过 `VSPI_DAEMON_IDLE_TIMEOUT_MS` 调整宽限，`0` 表示显式保持驻留。后台工作尚未完成时不会因为关闭前端而被自动终止。
 
+Goal 的用户意图与 server 的退出方式分开记录：
+
+| 操作 | Goal 后续行为 |
+| --- | --- |
+| `/quit` | 只断开界面，后台 Goal 继续运行 |
+| 停止 server、更新后重新启动、SIGTERM | 保留 active Goal 的继续意图；server 再次启动后自动续跑一次 |
+| SIGKILL、进程崩溃 | 下次启动按最后持久化的 active Goal 恢复，不能仅凭进程信号判断为用户取消 |
+| 用户暂停、取消或打断 Agent | 保持暂停/取消，不因 server 重启强行恢复 |
+| Goal 已 blocked、完成或因失败暂停 | 不自动复活，需要处理阻塞或显式恢复 |
+
+`daemon stop` 不会因为 Goal 尚未完成而自动拉起 server。正常停止在超时时也可能使用 SIGKILL，所以 **kill 信号不等于取消 Goal**。恢复不是重放旧工具调用，而是让模型基于持久化进展继续，并先检查中断前工具是否已经产生外部效果。停止期间不计入 Goal 的运行时长预算；异常强杀时尚未持久化的进度不能保证恢复。
+
+恢复索引保存在 `$VSPI_HOME/server/goal-recovery.json`，只记录会话和 Goal 标识。旧版尚未建立索引的会话需要先主动恢复一次。VSPi 默认启用该能力；可设置 `[experimental] goal_restart_recovery = false` 并重启 daemon，恢复原来的保守暂停行为。归档会话不会被启动恢复扫描自动打开。
+
 ## 交互命令
 
 | 命令 | 用途 |
@@ -105,7 +119,28 @@ vspi exec resume SESSION_ID --permission manual "只做无需审批的检查"
 
 VSPi 支持内置 Provider 和自定义兼容端点。首次使用运行 `vspi init`；之后用 `vspi config` 调整 Provider，用 `vspi login <provider>` 登录账号或配置 API Key。界面内也提供 `/providers`、`/login` 和 `/logout`。
 
-VSPLab 中转站是内置 Provider：`vspi init` 时选择 VSPLab 并配置 API Key 即可，默认接入 `https://api.vsplab.tech/v1`（可用 `VSPLAB_BASE_URL` 环境变量或 `base_url` 覆盖；旧配置里的 `api.vsplab.cn` 地址会在 daemon 启动时自动迁移）。中转站目录可补充模型能力、上下文大小、价格和思考档位；已核对模型的档位更新需要带有效的能力版本，未知新模型则可直接使用远程声明快速接入。可用模型仍取决于端点和账号权限，不能仅凭目录条目保证调用成功。
+在 `vspi config` 选择 **OpenAI OAuth (ChatGPT / Codex)**，或运行 `vspi login openai-codex`，会先选择代理，再进入官方账号授权。可以输入 daemon 所在机器的本机 HTTP/mixed 代理端口（例如 `7890`）并保存；选择 **Skip** 则不使用 VSPi 专用代理，沿用 daemon 已有的环境代理配置。此设置只作用于 OpenAI OAuth 登录、令牌刷新和该账号的模型调用，不修改系统代理，也不改变其他 Provider 的路由。浏览器仍需使用自身可用的网络配置；远程 daemon 的 `127.0.0.1` 指远程机器，不是浏览器所在机器。
+
+代理端口保存在 `config.toml` 的 `[oauth_network] openai_proxy_port`；`0` 或未配置表示沿用环境。令牌仍保存在私有凭据存储中，不写进这项网络配置。登录取消或端口无效时不会继续发起授权。
+
+模型故障恢复会区分 HTTP 状态和厂商业务码。例如 GLM `1302` 限流会进行有限重试，`1113` 欠费及 `1309`/`1310` 套餐或周期额度问题会停止并显示原因；Kimi 额度耗尽、DeepSeek 余额不足也不会作为普通限流反复请求。未知错误不会被默认为可无限重试。
+
+状态栏带 `~` 的速度是可见正文的估计速率；`/usage` 中的请求吞吐使用模型请求的输出 token 与完整请求耗时，包含等待和思考，不包含工具执行时间。达到输出 token 上限会显示“回答尚未完成”。实时对话窗口会移出较早的内容以控制内存，完整记录仍保存在会话历史中，可通过 `/history` 查看。
+
+VSPLab 中转站是内置 Provider：`vspi init` 时选择 VSPLab 并配置 API Key 即可。默认线路为 `cn`，接入 `https://api.vsplab.cn/v1`；在 `/settings` 的**全局 → 网络 → VSPLab 线路**中用 Enter/Space 切换 `cn` / `tech`，按 Ctrl+S 保存，Escape 放弃未保存的切换。项目设置不能改共享线路。
+
+`cn` 使用 HTTPS 无 SNI **直连**，仍校验证书链和 URL 主机名，不降级 HTTP、不关闭证书验证；该处理同时覆盖模型调用、可用模型列表和模型目录。`tech` 使用 `https://api.vsplab.tech/v1`，保留常规 TLS 与当前网络连接行为。需要代理或 cn 不可达时可选 tech；OpenAI OAuth 的专用代理设置不用于 cn 直连。
+
+线路偏好统一保存在 Core `config.toml`，例如：
+
+```toml
+[vsplab]
+endpoint = "tech"
+```
+
+此偏好同步调整 VSPLab 官方 Provider 地址、模型级官方地址与官方目录地址；其他自定义域名、非标准端口和模型的显式 `overrides` 保留。没有配置 Provider `base_url` 时仍可使用显式的环境地址覆盖。旧迁移不再强制把 cn 改回 tech，选择会在重启后保留。
+
+中转站目录可补充模型能力、上下文大小、价格和思考档位；已核对模型的档位更新需要带有效的能力版本，未知新模型则可直接使用远程声明快速接入。可用模型仍取决于端点和账号权限，不能仅凭目录条目保证调用成功。
 
 [模型目录快照](../../../ops/vsplab/model-catalog.json)是可审阅的数据，而不是永不变化的能力保证。使用与模型匹配的协议和目录参数，不要随意填写上下文容量或价格。
 
@@ -203,7 +238,7 @@ vspi daemon logs
 
 `inspect` 不会启动、重启 daemon 或恢复会话。`daemon logs` 输出日志文件路径；诊断文件位于对应 `VSPI_HOME` 的 `server/diagnostics/`。日志、堆快照和诊断报告可能包含敏感信息，分享前需要检查与脱敏。
 
-`vspi daemon stop` 会影响运行时承载的工作，不是无副作用的排查命令。断线恢复也不会自动重放崩溃时中断的提示或工具调用，需要判断任务停在哪里再继续。
+`vspi daemon stop` 会影响运行时承载的工作，不是无副作用的排查命令。普通提示和中断的工具调用不会自动重放；仍处于 active 的持久 Goal 按上面的恢复规则在下次启动后续跑。
 
 旧的空/损坏锁不会被自动猜测为可删除。确认对应 home 没有存活 Daemon 后，可使用 `vspi daemon recover --confirm-stopped`；新近写入的锁仍会被保护，恢复操作会保留原锁文件。新版锁要求 home 所在文件系统支持同目录硬链接，普通本地 NTFS、APFS、ext4 安装应纳入平台验收；不要把 home 放到未经验证的网络/同步文件系统后假定锁语义相同。
 

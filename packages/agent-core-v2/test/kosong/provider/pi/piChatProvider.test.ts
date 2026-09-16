@@ -9,7 +9,7 @@ import { getBuiltinModel as getModel } from '@earendil-works/pi-ai/providers/all
 import { describe, expect, it, vi } from 'vitest';
 
 import { generate } from '#/kosong/contract/generate';
-import { isTransientGenerateError, isRetryableGenerateError } from '#/kosong/contract/errors';
+import { classifyApiError, isTransientGenerateError, isRetryableGenerateError } from '#/kosong/contract/errors';
 import type { Message } from '#/kosong/contract/message';
 import type { ProtocolAdapterConfig } from '#/kosong/protocol/protocol';
 import { toPiContext, emptyPiUsage, encodePiSignature } from '#/kosong/provider/pi/messages';
@@ -25,6 +25,13 @@ import '#/kosong/provider/bases/openai/index';
 import '#/kosong/provider/bases/anthropic/index';
 
 describe('bounded SSE event validation', () => {
+  it('classifies EOF from protocol state even when the SDK changes its error wording', () => {
+    const diagnostics = new ResponseDiagnostics('anthropic');
+    diagnostics.headers(new Response(null, { headers: { 'content-type': 'text/event-stream' } }));
+    diagnostics.receive(Buffer.from('event: ping\ndata: {"type":"ping"}\n\n'));
+    diagnostics.end();
+    expect(convertPiError(new Error('SDK-specific new failure wording'), { diagnostics })).toMatchObject({ code: 'provider.incomplete_stream' });
+  });
   it.each(['openai', 'openai_responses', 'anthropic'] as const)('classifies malformed %s SSE before the SDK can log raw data', async protocol => {
     const rawError = vi.spyOn(console, 'error');
     const server = createServer((_request, response) => {
@@ -144,6 +151,90 @@ describe('Chat system role compatibility behind a custom relay', () => {
 
 describe('provider response diagnosis', () => {
   it.each([
+    ['glm-5.3', 429, '1113', 'quota_exhausted', false],
+    ['glm-5.3', 429, '1309', 'quota_exhausted', false],
+    ['glm-5.3', 429, '1310', 'quota_exhausted', false],
+    ['glm-5.3', 429, '1311', 'auth', false],
+    ['glm-5.3', 429, '1302', 'rate_limit', true],
+    ['glm-5.3', 429, '1305', 'overloaded', true],
+    ['glm-5.3', 400, '1261', 'context_overflow', false],
+    ['glm-5.3', 400, '1301', 'filtered', false],
+    ['kimi-k3', 429, 'exceeded_current_quota_error', 'quota_exhausted', false],
+    ['kimi-k3', 429, 'rate_limit_reached_error', 'rate_limit', true],
+    ['deepseek-flash', 402, 'insufficient_balance', 'quota_exhausted', false],
+    ['deepseek-flash', 503, 'server_error', '5xx_server', true],
+    ['gpt-4.1', 429, 'insufficient_quota', 'quota_exhausted', false],
+    ['qwen3.8-max', 429, 'insufficient_quota', 'rate_limit', true],
+    ['minimax-m3', 429, '1008', 'quota_exhausted', false],
+    ['minimax-m3', 429, '1002', 'rate_limit', true],
+  ] as const)('classifies %s business code %s/%s through a relay', async (modelName, status, code, kind, transient) => {
+    const server = createServer((_request, response) => {
+      response.writeHead(status, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: { code, type: code, message: 'Provider business failure' } }));
+    });
+    const baseUrl = await listen(server);
+    try {
+      const provider = new PiChatProvider({ protocol: 'openai', providerType: 'example-relay', modelName, apiKey: 'YOUR_API_KEY', baseUrl });
+      const error = await generate(provider, '', [], []).catch(error => error);
+      expect(classifyApiError(error).kind).toBe(kind);
+      expect(isTransientGenerateError(error)).toBe(transient);
+    } finally { await close(server); }
+  });
+
+  it.each([
+    ['anthropic', 'event: message_start\ndata: {"type":"message_start","message":{"id":"msg-example","role":"assistant","content":[],"model":"example","usage":{"input_tokens":1,"output_tokens":0}}}\n\n'],
+    ['openai_responses', 'data: {"type":"response.created","response":{"id":"resp-example","status":"in_progress","output":[]}}\n\n'],
+  ] as const)('retries %s streams missing the terminal event', async (protocol, body) => {
+    const server = createServer((_request, response) => { response.writeHead(200, { 'content-type': 'text/event-stream' }); response.end(body); });
+    const baseUrl = await listen(server);
+    try {
+      const error = await generate(new PiChatProvider({ protocol, modelName: 'example', apiKey: 'YOUR_API_KEY', baseUrl }), '', [], []).catch(error => error);
+      expect(error).toMatchObject({ code: 'provider.incomplete_stream' });
+      expect(isTransientGenerateError(error)).toBe(true);
+    } finally { await close(server); }
+  });
+
+  it.each([
+    ['anthropic', 'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n'],
+    ['openai_responses', 'data: {"type":"response.failed","response":{"id":"resp-example","status":"failed","error":{"code":"server_error","message":"Internal error"}}}\n\n'],
+  ] as const)('retries structured transient failures after HTTP 200 on %s', async (protocol, body) => {
+    const server = createServer((_request, response) => { response.writeHead(200, { 'content-type': 'text/event-stream' }); response.end(body); });
+    const baseUrl = await listen(server);
+    try {
+      const error = await generate(new PiChatProvider({ protocol, modelName: 'example', apiKey: 'YOUR_API_KEY', baseUrl }), '', [], []).catch(error => error);
+      expect(isTransientGenerateError(error)).toBe(true);
+      expect(error.details).toMatchObject({ statusCode: 200 });
+    } finally { await close(server); }
+  });
+  it('classifies an upstream interruption after streamed content as recoverable', async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/event-stream', 'x-request-id': 'example-interruption' });
+      response.end([
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'partial' }, finish_reason: null }] })}`,
+        `data: ${JSON.stringify({ error: { message: 'Upstream response stream was interrupted', type: 'upstream_error' } })}`,
+        '',
+      ].join('\n\n'));
+    });
+    const baseUrl = await listen(server);
+    try {
+      const provider = new ProtocolAdapterRegistry().createChatProvider({ protocol: 'openai', providerType: 'openai', modelName: 'glm-5.3-flash', apiKey: 'YOUR_API_KEY', baseUrl });
+      const error = await generate(provider, '', [], []).catch((error: unknown) => error);
+      expect(error).toMatchObject({ code: 'provider.incomplete_stream', details: { statusCode: 200, requestId: 'example-interruption' } });
+      expect(isTransientGenerateError(error)).toBe(true);
+    } finally { await close(server); }
+  });
+
+  it.each([400, 401, 403])('keeps HTTP %s non-recoverable despite interruption wording', status => {
+    const error = convertPiError(new Error('Upstream response stream was interrupted'), { status });
+    expect(error).toMatchObject({ statusCode: status });
+    expect(isTransientGenerateError(error)).toBe(false);
+  });
+
+  it('does not retry arbitrary provider errors mentioning interrupted work', () => {
+    expect(isTransientGenerateError(convertPiError('Tool validation interrupted by invalid arguments', { status: 200 }))).toBe(false);
+  });
+
+  it.each([
     ['responses events', 'text/event-stream', 'data: {"type":"response.output_text.delta","delta":"private-output"}\n\n', 'openai_responses'],
     ['anthropic events', 'text/event-stream', 'data: {"type":"message_start","message":{"role":"assistant"}}\n\n', 'anthropic'],
     ['HTML page', 'text/html', '<!doctype html><html>private-output</html>', 'html'],
@@ -190,6 +281,57 @@ describe('provider response diagnosis', () => {
     try {
       const provider = new PiChatProvider({ protocol: 'openai', modelName: 'example-model', apiKey: 'YOUR_API_KEY', baseUrl });
       await expect(generate(provider, '', [], [])).rejects.toMatchObject({ code: 'provider.auth_error', statusCode: 401 });
+    } finally { await close(server); }
+  });
+});
+
+describe('Kimi tool schemas behind a Chat relay', () => {
+  const parameters = {
+    type: 'object',
+    properties: { parent: { anyOf: [{ $ref: '#/$defs/page' }, { type: 'null' }] } },
+    $defs: { page: { type: 'object', properties: { page_id: { type: 'string' } }, required: ['page_id'] } },
+  };
+
+  it.each([
+    { modelName: 'kimi-k3', reasoningKey: undefined },
+    { modelName: 'example/k3-256k', reasoningKey: undefined },
+    { modelName: 'kimi-k3', reasoningKey: 'reasoning_content' },
+  ])('normalizes tool references for $modelName with reasoningKey=$reasoningKey', async ({ modelName, reasoningKey }) => {
+    let received: Record<string, unknown> = {};
+    const server = createTestHttpServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      received = JSON.parse(Buffer.concat(chunks).toString());
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+    });
+    const baseUrl = await listen(server);
+    try {
+      const provider = new ProtocolAdapterRegistry().createChatProvider({ protocol: 'openai', providerType: 'openai', modelName, baseUrl, apiKey: 'YOUR_API_KEY', providerOptions: { reasoningKey } });
+      const original = structuredClone(parameters);
+      await generate(provider, '', [{ name: 'example_create_page', description: 'Example page tool', parameters }], []);
+      expect(received['tools']).toMatchObject([{ function: { parameters: {
+        type: 'object', properties: { parent: { anyOf: [{ type: 'object', properties: { page_id: { type: 'string' } }, required: ['page_id'] }, { type: 'null' }] } },
+      } } }]);
+      expect(JSON.stringify(received['tools'])).not.toContain('$ref');
+      expect(parameters).toEqual(original);
+    } finally { await close(server); }
+  });
+
+  it('leaves tool schemas for non-Kimi models unchanged', async () => {
+    let received: Record<string, unknown> = {};
+    const server = createTestHttpServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      received = JSON.parse(Buffer.concat(chunks).toString());
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+    });
+    const baseUrl = await listen(server);
+    try {
+      const provider = new ProtocolAdapterRegistry().createChatProvider({ protocol: 'openai', providerType: 'openai', modelName: 'glm-5.3-flash', baseUrl, apiKey: 'YOUR_API_KEY' });
+      await generate(provider, '', [{ name: 'example_create_page', description: 'Example page tool', parameters }], []);
+      expect(received['tools']).toMatchObject([{ function: { parameters } }]);
     } finally { await close(server); }
   });
 });
@@ -655,7 +797,7 @@ describe('PiChatProvider real transport', () => {
             maxCompletionTokens: 5000,
           },
         ),
-      ).rejects.toMatchObject({ name: 'APIProviderQuotaExhaustedError' });
+      ).rejects.toMatchObject({ code: 'provider.api_error', details: { kind: 'quota_exhausted', providerErrorType: 'exceeded_current_quota_error' } });
       expect(body).toMatchObject({
         thinking: { type: 'enabled', effort: 'high', keep: 'all' },
         prompt_cache_key: 'example-session',
@@ -702,7 +844,8 @@ describe('PiChatProvider real transport', () => {
         toolCalls: [],
       },
     ];
-    expect(await provider.generate('', [], history)).toBe(finalMessage);
+    const result = await generate(provider, '', [], history);
+    expect(result.message.content).toEqual([{ type: 'text', text: 'ok' }]);
     expect(legacy.generate).toHaveBeenCalledWith('', [], history, {});
     await expect(
       provider.uploadVideo({ data: new Uint8Array([0]), mimeType: 'video/mp4' }),

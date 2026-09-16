@@ -45,13 +45,13 @@ import { registerTelemetryServices } from '../telemetry/stubs';
 import { stubAgentIdentity } from '../../app/agentIdentity/stubs';
 
 const OAUTH_PROVIDER = 'managed:kimi-code';
-const piMocks = vi.hoisted(() => ({ oauth: undefined as OAuthAuth | undefined }));
+const piMocks = vi.hoisted(() => ({ oauth: undefined as OAuthAuth | undefined, provider: 'anthropic' }));
 vi.mock('@earendil-works/pi-ai/providers/all', async (importOriginal) => {
   const original = await importOriginal<typeof import('@earendil-works/pi-ai/providers/all')>();
   return {
     ...original,
     builtinProviders: () => original.builtinProviders().map((provider) =>
-      provider.id === 'anthropic' && piMocks.oauth !== undefined
+      provider.id === piMocks.provider && piMocks.oauth !== undefined
         ? { ...provider, auth: { oauth: piMocks.oauth } } : provider,
     ),
   };
@@ -110,6 +110,7 @@ describe('OAuthService', () => {
   let services: Record<string, unknown> | undefined;
   let defaultModel: string | undefined;
   let thinking: { enabled?: boolean; effort?: string } | undefined;
+  let oauthNetwork: { openaiProxyPort: number } | undefined;
   let toolkit: FakeToolkit;
   let providerSet: ReturnType<typeof vi.fn<(name: string, config: ProviderConfig) => Promise<void>>>;
   let configSet: ReturnType<typeof vi.fn>;
@@ -137,6 +138,7 @@ describe('OAuthService', () => {
     services = undefined;
     defaultModel = undefined;
     thinking = undefined;
+    oauthNetwork = undefined;
     configSet = vi.fn(async (domain: string, value: unknown) => {
       if (domain === 'defaultModel') {
         defaultModel = value as string | undefined;
@@ -229,6 +231,7 @@ describe('OAuthService', () => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
     piMocks.oauth = undefined;
+    piMocks.provider = 'anthropic';
   });
 
   function createService(): IOAuthService {
@@ -250,6 +253,21 @@ describe('OAuthService', () => {
   it('lists the public pi OAuth providers alongside Kimi', () => {
     expect(createService().listLoginProviders().map((entry) => entry.id))
       .toEqual(expect.arrayContaining(['managed:kimi-code', 'anthropic', 'openai-codex', 'github-copilot']));
+  });
+
+  it('keeps the OpenAI proxy attached to refreshed request auth without storing it in credentials', async () => {
+    piMocks.provider = 'openai-codex';
+    oauthNetwork = { openaiProxyPort: 7890 };
+    const refresh = vi.fn(async (credential: OAuthCredential) => ({ ...credential, access: 'new-access', expires: Date.now() + 3600000 }));
+    registerPi(async () => piCredentials, refresh);
+    providers['openai-codex'] = { type: 'openai-codex', oauth: { storage: 'file', key: 'pi-ai/openai-codex/openai-codex' } };
+    documents.set('pi-ai/openai-codex/openai-codex', piCredentials);
+    const service = createService();
+    expect(await service.resolveRequestAuth('openai-codex', providers['openai-codex'].oauth)).toMatchObject({ apiKey: 'runtime:new-access', proxyUrl: 'http://127.0.0.1:7890' });
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(documents.get('pi-ai/openai-codex/openai-codex')).not.toHaveProperty('proxyUrl');
+    oauthNetwork = { openaiProxyPort: 0 };
+    expect((await service.resolveRequestAuth('openai-codex', providers['openai-codex'].oauth)).proxyUrl).toBeUndefined();
   });
 
   it('bridges browser and prompt login without exposing credentials in flow or config', async () => {
@@ -422,7 +440,7 @@ describe('OAuthService', () => {
   });
 
   function configBacking(): Record<string, unknown> {
-    return { providers, models, services, defaultModel, thinking };
+    return { providers, models, services, defaultModel, thinking, oauthNetwork };
   }
 
   function stubManagedModelsFetch(): ReturnType<typeof vi.fn> {

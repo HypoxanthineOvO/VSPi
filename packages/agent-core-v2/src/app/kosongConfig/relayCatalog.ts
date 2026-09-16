@@ -6,6 +6,7 @@ import { ProtocolSchema } from '#/kosong/protocol/protocol';
 import { applyModelEffortProfile } from '#/kosong/model/effortProfiles';
 import { EFFORT_PROFILE_REVISION, modelEffortProfile } from '#/kosong/provider/effortProfiles';
 import { currentModelId } from '#/kosong/model/retiredModelIds';
+import { providerFetch } from '#/kosong/provider/transport';
 
 const costRate = z.number().finite().nonnegative();
 const costSchema = z.object({
@@ -155,7 +156,7 @@ export function mergeRelayCatalog(
 }
 
 export async function fetchRelayCatalog(provider: ProviderConfig): Promise<unknown> {
-  const response = await fetch(relayCatalogUrl(provider), { signal: AbortSignal.timeout(4000), headers: { Accept: 'application/json' }, redirect: 'error' });
+  const response = await providerFetch(relayCatalogUrl(provider), { signal: AbortSignal.timeout(4000), headers: { Accept: 'application/json' }, redirect: 'error' });
   if (!response.ok) throw new Error(`Relay catalog HTTP ${response.status}`);
   const reader = response.body?.getReader();
   if (!reader) throw new Error('Empty relay catalog response');

@@ -109,7 +109,7 @@ export class APIStatusError extends ChatProviderError {
     code: ProviderErrorCode = codeForStatusError(statusCode),
   ) {
     super(sanitizeStatusErrorMessage(message), code, {
-      details: { statusCode, requestId: requestId ?? null, traceId: traceId ?? null },
+      details: { statusCode, requestId: requestId ?? null, traceId: traceId ?? null, retryAfterMs: retryAfterMs ?? null },
     });
     this.name = 'APIStatusError';
     this.statusCode = statusCode;
@@ -142,6 +142,28 @@ export class APIRequestTooLargeError extends APIStatusError {
   ) {
     super(statusCode, message, requestId, retryAfterMs, traceId);
     this.name = 'APIRequestTooLargeError';
+  }
+}
+
+export class APIProviderBusinessError extends APIStatusError {
+  override readonly details: Readonly<Record<string, unknown>>;
+
+  constructor(
+    readonly kind: ApiErrorKind,
+    readonly retryable: boolean,
+    statusCode: number,
+    message: string,
+    details: Readonly<Record<string, unknown>>,
+    retryAfterMs?: number | null,
+  ) {
+    const code = kind === 'auth' ? PROVIDER_AUTH_ERROR_CODE
+      : kind === 'rate_limit' ? PROVIDER_RATE_LIMIT_ERROR_CODE
+      : kind === 'overloaded' ? PROVIDER_OVERLOADED_ERROR_CODE
+      : kind === 'filtered' ? PROVIDER_FILTERED_ERROR_CODE : PROVIDER_API_ERROR_CODE;
+    super(statusCode, message, typeof details['requestId'] === 'string' ? details['requestId'] : undefined,
+      retryAfterMs, typeof details['traceId'] === 'string' ? details['traceId'] : undefined, code);
+    this.name = 'APIProviderBusinessError';
+    this.details = { statusCode, requestId: this.requestId, traceId: this.traceId, retryAfterMs: this.retryAfterMs, ...details, kind, retryable };
   }
 }
 
@@ -263,6 +285,7 @@ export function isImageFormatError(error: unknown): boolean {
 }
 
 export function isRetryableGenerateError(error: unknown): boolean {
+  if (error instanceof APIProviderBusinessError) return error.retryable;
   if (error instanceof APIStreamParseError) return true;
   if (error instanceof APIProtocolError) return false;
   if (error instanceof APIIncompleteStreamError) return true;
@@ -285,6 +308,7 @@ export function isRetryableGenerateError(error: unknown): boolean {
 }
 
 export function isTransientGenerateError(error: unknown): boolean {
+  if (error instanceof APIProviderBusinessError) return error.retryable;
   if (error instanceof APIStreamParseError) return true;
   if (error instanceof APIIncompleteStreamError) return true;
   if (error instanceof APIConnectionError || error instanceof APITimeoutError) return true;
@@ -393,7 +417,7 @@ export function normalizeAPIStatusError(
   );
 }
 
-export function parseRetryAfterMs(headers: unknown): number | null {
+export function parseRetryAfterMs(headers: unknown, now = Date.now()): number | null {
   const raw =
     headers !== null &&
     typeof headers === 'object' &&
@@ -401,9 +425,13 @@ export function parseRetryAfterMs(headers: unknown): number | null {
       ? (headers as { get(name: string): string | null }).get('retry-after')
       : null;
   if (raw === null || raw === undefined) return null;
-  const seconds = Number.parseInt(raw, 10);
-  if (!Number.isFinite(seconds) || seconds < 0) return null;
-  return seconds * 1000;
+  const value = raw.trim();
+  if (/^\d+(?:\.\d+)?$/.test(value)) {
+    const milliseconds = Number(value) * 1000;
+    return Number.isFinite(milliseconds) ? milliseconds : null;
+  }
+  const date = /^[A-Za-z]/.test(value) ? Date.parse(value) : NaN;
+  return Number.isFinite(date) ? Math.max(0, date - now) : null;
 }
 
 export function parseTraceId(headers: unknown): string | null {
@@ -475,6 +503,7 @@ export function isRecoverableRequestStructureError(error: unknown): boolean {
 }
 
 export function isProviderRateLimitError(error: unknown): boolean {
+  if (error instanceof APIProviderBusinessError) return error.kind === 'rate_limit';
   if (error instanceof APIProviderQuotaExhaustedError) return false;
   if (error instanceof APIProviderRateLimitError) return true;
 
@@ -508,6 +537,7 @@ function errorMessage(error: unknown): string {
 }
 
 export type ApiErrorKind =
+  | 'filtered'
   | 'context_overflow'
   | 'overloaded'
   | 'rate_limit'
@@ -530,6 +560,7 @@ export interface ApiErrorClassification {
 
 export function classifyApiError(error: unknown): ApiErrorClassification {
   const statusCode = getStatusCode(error);
+  if (error instanceof APIProviderBusinessError) return { kind: error.kind, statusCode };
   if (error instanceof APIStreamParseError) return { kind: 'stream_parse', statusCode };
   if (error instanceof APIProtocolError) return { kind: 'protocol', statusCode };
   if (error instanceof APIIncompleteStreamError) return { kind: 'incomplete_stream', statusCode };

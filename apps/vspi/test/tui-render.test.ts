@@ -63,6 +63,7 @@ import {
 } from "../src/v1/ui/subagent-display.js";
 import {
 	renderTranscript,
+	retainTranscript,
 	renderTranscriptMessage,
 } from "../src/v1/ui/transcript.js";
 
@@ -107,6 +108,17 @@ function panelsFailedAgentRun(): AgentRunSnapshot {
 }
 
 describe("VSPi TUI presentation (preserved frontend identity)", () => {
+	it('bounds a long live transcript while preserving running work and chronological order', () => {
+		let messages: TranscriptMessage[] = [{ id: 'running', role: 'assistant', kind: 'tool', name: 'Task', summary: 'active', status: 'running', expanded: false }];
+		for (let index = 0; index < 20000; index++) {
+			messages.push({ id: `m${index}`, role: 'assistant', kind: 'text', text: 'x'.repeat(100) });
+			messages = retainTranscript(messages, 0, { messages: 100, characters: 20000 }).messages;
+		}
+		expect(messages).toHaveLength(100);
+		expect(messages[0]?.id).toBe('running');
+		expect(messages[1]?.id).toBe('m19901');
+		expect(messages.at(-1)?.id).toBe('m19999');
+	});
 	const capabilities = detectTerminalCapabilities({
 		TERM: "xterm-256color",
 		LANG: "zh_CN.UTF-8",
@@ -512,6 +524,33 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			.map(stripTerminalSequences)
 			.join("\n");
 		expect(output).toContain("退出时 AI 总结标题  开");
+	});
+
+	it('stages the global VSPLab route and only emits it when settings are saved', () => {
+		const panels = new PanelController({ ...DEFAULT_SETTINGS, scope: 'global' });
+		panels.open('settings');
+		const render = () => panels.render(100, 40, theme, DEFAULT_USAGE).map(stripTerminalSequences).join('\n');
+		expect(render()).toContain('cn · 无 SNI 直连');
+		for (let index = 0; index < 11; index++) panels.handleInput('\x1b[B');
+		expect(panels.handleInput(' ')).toBeUndefined();
+		expect(render()).toContain('tech · 常规连接');
+		expect(panels.render(80, 14, theme, DEFAULT_USAGE).map(stripTerminalSequences).join('\n')).toContain('VSPLab 线路');
+		expect(panels.handleInput('\x13')).toMatchObject({ type: 'settings', vsplabEndpoint: 'tech' });
+		panels.handleInput('\x1b');
+		panels.open('settings');
+		expect(render()).toContain('cn · 无 SNI 直连');
+	});
+
+	it('does not let project settings change the global VSPLab route', () => {
+		const global = { ...DEFAULT_SETTINGS, scope: 'global' as const };
+		const project = { ...DEFAULT_SETTINGS, scope: 'project' as const };
+		const panels = new PanelController(project);
+		panels.setSettingsLayers({ global, project, projectInherited: false });
+		panels.setVsplabEndpoint('tech');
+		panels.open('settings');
+		for (let index = 0; index < 11; index++) panels.handleInput('\x1b[B');
+		expect(panels.handleInput(' ')).toMatchObject({ type: 'notice', text: expect.stringContaining('全局') });
+		expect(panels.handleInput('\x13')).toMatchObject({ type: 'notice', text: '设置没有变化' });
 	});
 
 	it("shows provider-specific and fixed effort values safely", () => {
@@ -2315,7 +2354,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(lines).toHaveLength(2);
 		expect(lines.map(visibleWidth)).toEqual([120, 120]);
 		expect(lines[0]).toContain("GPT-5.6 · High");
-		expect(lines[0]).toContain("Speed 42.8 tok/s");
+		expect(lines[0]).toContain("Speed ~42.8 tok/s");
 		expect(lines[0]).toContain("Context 61K / 128K 48%");
 		expect(lines[1]).toContain("~/Workspace/VSPi · Auto");
 		expect(lines[1]).toContain("↑ 18.4k  ↓ 3.2k");
@@ -2347,7 +2386,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		).map(stripTerminalSequences);
 
 		expect(lines.map(visibleWidth)).toEqual([80, 80]);
-		expect(lines[0]).toContain("Speed 42.8 tok/s");
+		expect(lines[0]).toContain("Speed ~42.8 tok/s");
 		expect(lines[0]?.endsWith("Context 61K / 128K 48%")).toBe(true);
 		expect(lines[1]?.endsWith("—")).toBe(true);
 	});

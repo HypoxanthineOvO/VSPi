@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { assign, fromCallback, sendTo, setup, type Snapshot } from 'xstate';
 
 import { MutableDisposable, type IDisposable } from '#/_base/di/lifecycle';
-import { abortError } from '#/_base/utils/abort';
+import { abortError, RuntimeShutdownCancellation } from '#/_base/utils/abort';
 import { isPlainRecord } from '#/_base/utils/canonical-args';
 import { AgentReminder } from '#/features/reminder/reminderAgentRuntime';
 import { AgentCron } from '#/features/cron/cronAgentRuntime';
@@ -54,6 +54,7 @@ import type { ExecutableToolResult } from '#/tool/toolContract';
 
 import type { GoalReasonInput, ResumeGoalInput } from './goal';
 import { IGoalDeadlineScheduler } from './goalDeadlineScheduler';
+import { GOAL_RESTART_RECOVERY_FLAG } from './flag';
 import {
   GoalClear,
   GoalCreate,
@@ -185,6 +186,8 @@ interface ResumeContinuation {
 }
 
 interface GoalEffectState {
+  runtimeStopping?: boolean;
+  restartGoalId?: string;
   pendingContinuation?: PendingContinuation;
   liveTurnId?: number;
   readonly goalDrivenTurns: Map<number, string>;
@@ -248,6 +251,39 @@ function reminderOf(runtime: AgentRuntimeContext<GoalRuntimeState>) {
 
 export class GoalRuntime {
   constructor(private readonly runtime: AgentRuntimeContext<GoalRuntimeState>) {}
+
+  async prepareForRuntimeShutdown(): Promise<void> {
+    if (!this.runtime.get(IFlagService).enabled(GOAL_RESTART_RECOVERY_FLAG)) return;
+    const context = goalOperationContext(this.runtime);
+    context.effects.runtimeStopping = true;
+    context.effects.restartGoalId = undefined;
+    const state = this.runtime.getState().goal;
+    if (state?.status === 'active') {
+      await this.runtime.dispatch(new GoalUpdate({ agentId: this.runtime.agent.agentId,
+        wallClockMs: settleWallClock(context, state), wallClockResumedAt: Date.now(), actor: 'runtime' }));
+    }
+    context.effects.liveWallClockStartedAt = undefined;
+    this.runtime.send({ type: 'goal.deadline.clear' });
+    const loop = this.runtime.get(IAgentLoopService);
+    const pending = loop.status().pendingTurnIds;
+    const reason = new RuntimeShutdownCancellation();
+    loop.cancel(undefined, reason);
+    for (const id of pending) loop.cancel(id, reason);
+  }
+
+  resumeAfterRuntimeRestart(): boolean {
+    const context = goalOperationContext(this.runtime);
+    const id = context.effects.restartGoalId;
+    context.effects.restartGoalId = undefined;
+    if (context.effects.runtimeStopping || id === undefined || !isActiveGoal(context, id)) return false;
+    if (!this.runtime.get(IFlagService).enabled(GOAL_RESTART_RECOVERY_FLAG)) return false;
+    const state = requireState(context);
+    if (blockIfBudgetReached(context, state) !== null) return false;
+    if (!canLaunchContinuation(context)) return false;
+    launchContinuationTurn(context, id, false,
+      'The runtime restarted. Resume the active goal from persisted progress. Previously running tools may have had external effects before shutdown: inspect their state before repeating operations, and do not assume they completed.');
+    return true;
+  }
 
   getGoal(): GoalToolResult {
     return getGoal(goalOperationContext(this.runtime));
@@ -663,9 +699,10 @@ function enqueueGoalOutcomeContinuation(context: GoalOperationContext, ctx: Afte
 
 async function handleTurnEnded(context: GoalOperationContext,
   turnId: number,
-  result: Pick<TurnEnded, 'reason' | 'error'>,
+  result: Pick<TurnEnded, 'reason' | 'error' | 'runtimeShutdown'>,
 ): Promise<void> {
   const { goalId, lifecycleGoalId, starterTurn } = clearTurnTracking(context, turnId);
+  if (result.runtimeShutdown === true || (context.effects.runtimeStopping && result.reason === 'completed')) return;
   const resumeContinuation = context.effects.resumeContinuation;
   if (resumeContinuation?.turnId === turnId) context.effects.resumeContinuation = undefined;
   if (resumeContinuation?.turnId === turnId && result.reason === 'cancelled') {
@@ -776,10 +813,11 @@ function isWaitForAvailable(context: GoalOperationContext): boolean {
   );
 }
 
-function launchContinuationTurn(context: GoalOperationContext, goalId: string, stepCapped = false): void {
+function launchContinuationTurn(context: GoalOperationContext, goalId: string, stepCapped = false, recoveryPrompt?: string): void {
+  if (context.effects.runtimeStopping) return;
   if (!isActiveGoal(context, goalId)) return;
   if (context.effects.pendingContinuation !== undefined) return;
-  const prompt = stepCapped ? GOAL_STEP_CAP_CONTINUATION_PROMPT : GOAL_CONTINUATION_PROMPT;
+  const prompt = recoveryPrompt ?? (stepCapped ? GOAL_STEP_CAP_CONTINUATION_PROMPT : GOAL_CONTINUATION_PROMPT);
   const message: ContextMessage = {
     role: 'user',
     content: [
@@ -862,6 +900,15 @@ function normalizeAfterReplay(context: GoalOperationContext): void {
     return;
   }
   if (state.status !== 'active') return;
+
+  if (context.runtime.get(IFlagService).enabled(GOAL_RESTART_RECOVERY_FLAG)) {
+    context.effects.restartGoalId = state.goalId;
+    context.effects.liveWallClockStartedAt = context.runtime.get(IGoalDeadlineScheduler).now();
+    void context.runtime.dispatch(new GoalUpdate({ agentId: context.runtime.agent.agentId,
+      wallClockResumedAt: Date.now(), actor: 'runtime' }));
+    refreshWallClockDeadline(context, requireState(context));
+    return;
+  }
 
   const reason = 'Paused after agent resume';
   void context.runtime.dispatch(
@@ -1233,7 +1280,7 @@ function createGoalEffectHandlers(runtime: AgentRuntimeContext<GoalRuntimeState>
     },
     turnEnded: (event: TurnEnded) => {
       const goalId = goalTurnTarget(context, event.turnId);
-      void handleTurnEnded(context, event.turnId, { reason: event.reason, error: event.error }).catch(
+      void handleTurnEnded(context, event.turnId, { reason: event.reason, error: event.error, runtimeShutdown: event.runtimeShutdown }).catch(
         (error) => settleGoalAfterContinuationFailure(context, error, goalId),
       );
     },
@@ -1441,4 +1488,3 @@ export const goalAgentRuntimeProvider = defineAgentRuntimeProvider<GoalRuntimeSt
     };
   },
 });
-

@@ -23,6 +23,16 @@ export function errorDiagnostic(value: unknown): Record<string, unknown>[] {
       'requestId',
       'traceId',
       'statusCode',
+      'provider',
+      'providerErrorCode',
+      'providerErrorType',
+      'kind',
+      'retryable',
+      'retryAfterMs',
+      'retryBudgetMs',
+      'retryDelayMs',
+      'remainingBudgetMs',
+      'failedAttempt',
       'bytesReceived',
       'sampledBytes',
       'sampleLimitBytes',
@@ -39,6 +49,7 @@ export function errorDiagnostic(value: unknown): Record<string, unknown>[] {
       const field = details[key];
       if (typeof field === 'string') item[key] = redactFeedbackText(field).slice(0, 160);
       else if (typeof field === 'number' && Number.isFinite(field)) item[key] = field;
+      else if (typeof field === 'boolean') item[key] = field;
     }
     if (Object.keys(item).length > 0) chain.push(item);
     value = source.cause;

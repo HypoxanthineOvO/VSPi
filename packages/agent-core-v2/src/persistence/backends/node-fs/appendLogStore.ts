@@ -61,13 +61,18 @@ export class AppendLogStore extends Disposable implements IAppendLogStore {
     const textDecoder = new TextDecoder();
     let pending = '';
     let lineNumber = 0;
-    for await (const chunk of this.storage.readStream(scope, key)) {
+    let offset = options?.fromByte ?? 0;
+    const end = await this.storage.size(scope, key);
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > (end ?? 0)) throw new RangeError('Invalid append-log cursor');
+    if (end !== undefined && offset === end) return;
+    for await (const chunk of this.storage.readStream(scope, key, end === undefined ? undefined : { start: offset, end: end - 1 })) {
       pending += textDecoder.decode(chunk, { stream: true });
       let newlineIndex = pending.indexOf('\n');
       while (newlineIndex !== -1) {
         const raw = pending.slice(0, newlineIndex);
         pending = pending.slice(newlineIndex + 1);
         lineNumber++;
+        offset += Buffer.byteLength(raw) + 1;
         let record: R | undefined;
         try {
           record = this.parseLine<R>(raw, scope, key, lineNumber, false);
@@ -76,6 +81,7 @@ export class AppendLogStore extends Disposable implements IAppendLogStore {
           onTruncate({ lineNumber, reason: 'corrupted', cause: error });
           return;
         }
+        options?.onCursor?.(offset);
         if (record !== undefined) yield record;
         newlineIndex = pending.indexOf('\n');
       }
@@ -85,6 +91,7 @@ export class AppendLogStore extends Disposable implements IAppendLogStore {
       lineNumber++;
       const record = this.parseLine<R>(pending, scope, key, lineNumber, true);
       if (record !== undefined) {
+        options?.onCursor?.(offset + Buffer.byteLength(pending));
         yield record;
       } else if (onTruncate !== undefined) {
         const line = pending.endsWith('\r') ? pending.slice(0, -1) : pending;
@@ -130,6 +137,7 @@ export class AppendLogStore extends Disposable implements IAppendLogStore {
       }
     });
     await this.ownFlush(scope, key, state, rewrite, { value: false });
+    this.writeEmitter.fire({ scope, key, rewritten: true });
   }
 
   async flush(): Promise<void> {

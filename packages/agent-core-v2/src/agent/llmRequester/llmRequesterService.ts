@@ -245,8 +245,8 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
     signal?.throwIfAborted();
     const startedAt = Date.now();
     trace.set(undefined);
-    const deadline = overrides.source?.type === 'turn' && this.states.has(stepRetryRecoveryDeadlineKey)
-      ? this.states.get(stepRetryRecoveryDeadlineKey) : undefined;
+    const deadline = overrides.recoveryDeadlineAt ?? (overrides.source?.type === 'turn' && this.states.has(stepRetryRecoveryDeadlineKey)
+      ? this.states.get(stepRetryRecoveryDeadlineKey) : undefined);
     const budget = deadline === undefined ? undefined : new AbortController();
     const unlink = signal && budget ? linkAbortSignal(signal, budget) : () => {};
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -403,8 +403,8 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
       };
 
       try {
-        const deadlineAt = request.source?.type === 'turn' && this.states.has(stepRetryRecoveryDeadlineKey)
-          ? this.states.get(stepRetryRecoveryDeadlineKey) : undefined;
+        const deadlineAt = request.params.deadlineAt ?? (request.source?.type === 'turn' && this.states.has(stepRetryRecoveryDeadlineKey)
+          ? this.states.get(stepRetryRecoveryDeadlineKey) : undefined);
         if (deadlineAt !== undefined && Date.now() >= deadlineAt) throw new LoopError(LoopErrors.codes.LOOP_RETRY_BUDGET_EXCEEDED, 'Provider retry recovery budget exhausted; this turn has stopped.');
         for await (const event of request.requester.request(input, signal, {
           ...request.params,
@@ -694,7 +694,7 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
     return {
       requester,
       model: requester.model,
-      params: { ...baseParams, ...budgetParams },
+      params: { ...baseParams, ...budgetParams, deadlineAt: overrides.recoveryDeadlineAt },
       modelAlias: resolved.modelAlias,
       thinkingEffort: resolved.thinkingLevel,
       systemPrompt: overrides.systemPrompt ?? turnConfig?.systemPrompt ?? this.profile.getSystemPrompt(),

@@ -447,6 +447,8 @@ export interface ChatBackend {
 	getModelOptions?(): Promise<RuntimeModelOption[]>;
 	getModelGroups?(): Promise<ModelGroup[]>;
 	getProviderOptions?(): Promise<ProviderOption[]>;
+	getVsplabEndpoint?(): Promise<'cn' | 'tech'>;
+	setVsplabEndpoint?(endpoint: 'cn' | 'tech'): Promise<void>;
 	selectModel?(provider: string, id: string, effort?: EffortLevel): Promise<ModelSelectionResult>;
 	getPreferredModelEffort?(provider: string, id: string): Promise<{ effort: EffortLevel; warning?: string }>;
 	rememberModelEffort?(provider: string, id: string, effort: EffortLevel): Promise<void>;

@@ -413,7 +413,7 @@ export async function configureDefaultModel(
 	});
 }
 
-async function loginProvider(
+export async function loginProvider(
 	klient: Klient,
 	providerId: string,
 	type: CredentialType,
@@ -442,6 +442,22 @@ async function loginProvider(
 			message: "API Key 已保存到 VSPi Core 配置",
 		});
 		return;
+	}
+	if (providerId === 'openai-codex') {
+		const choice = await interaction.prompt({
+			type: 'select', message: 'OpenAI OAuth：先选择代理',
+			options: [{ id: 'port', label: '输入本机 HTTP / mixed 代理端口并保存' }, { id: 'skip', label: 'Skip · 使用已有环境代理，不额外配置' }],
+			signal: interaction.signal,
+		});
+		let port = 0;
+		if (choice === 'port') {
+			const raw = await interaction.prompt({ type: 'text', message: '代理端口（daemon 所在机器的 127.0.0.1）', placeholder: '7890', signal: interaction.signal });
+			if (!/^\d+$/.test(raw.trim()) || !Number.isInteger(Number(raw)) || Number(raw) < 1 || Number(raw) > 65535) throw new Error('代理端口必须是 1–65535 的整数');
+			port = Number(raw);
+		} else if (choice !== 'skip') throw new Error('代理选项无效');
+		interaction.signal?.throwIfAborted();
+		await klient.global.config.set({ domain: 'oauthNetwork', patch: { openaiProxyPort: port } });
+		interaction.notify({ type: 'info', message: port === 0 ? '将沿用当前环境的代理配置；现在进入 OpenAI 官方登录。' : `已保存 OpenAI 专用代理 127.0.0.1:${port}，用于登录、令牌刷新和模型调用。浏览器仍使用自身代理设置。` });
 	}
 	await loginWithOAuth(klient.global.auth, providerId, interaction);
 }
@@ -480,7 +496,7 @@ function entriesForProvider(
 	if (canLogin || provider.id === "kimi" || config?.oauth !== undefined) {
 		entries.push({
 			providerId: provider.id,
-			providerName: provider.id,
+			providerName: provider.id === 'openai-codex' ? 'OpenAI OAuth (ChatGPT / Codex)' : provider.id,
 			type: "oauth",
 			label: "订阅账号",
 			configured: configuredType === "oauth" && provider.status === "connected",

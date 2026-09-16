@@ -1,5 +1,6 @@
 import type { Protocol } from '#/kosong/protocol/protocol';
 import { APIProtocolError, APIStreamParseError } from '#/kosong/contract/errors';
+import { providerErrorDetail, type ProviderErrorDetail } from './providerErrors';
 
 type ResponseFormat = 'openai' | 'openai_responses' | 'anthropic' | 'html' | 'non_streaming_json';
 const SAMPLE_BYTES = 64 * 1024;
@@ -11,6 +12,7 @@ function object(value: unknown): Record<string, unknown> | undefined {
 }
 
 export class ResponseDiagnostics {
+  error: ProviderErrorDetail | undefined;
   private readonly started = Date.now();
   private readonly decoder = new TextDecoder();
   private buffer = '';
@@ -25,6 +27,8 @@ export class ResponseDiagnostics {
   private parseOffset: number | undefined;
   private prefix = '';
   private done = false;
+  private ended = false;
+  private terminal = false;
   private sampledBytes = 0;
   private bytesReceived = 0;
   private firstByteMs: number | undefined;
@@ -82,6 +86,7 @@ export class ResponseDiagnostics {
   }
 
   end(): void {
+    this.ended = true;
     if (this.mediaType === 'application/json') this.inspect(this.buffer, false);
     this.buffer = '';
     this.line = '';
@@ -140,6 +145,12 @@ export class ResponseDiagnostics {
 
   get parseFailure(): 'invalid_json' | 'event_too_large' | undefined { return this.failureType; }
 
+  get incomplete(): boolean {
+    return this.ended && !this.terminal && this.error === undefined && this.mediaType === 'text/event-stream' &&
+      this.status !== undefined && this.status >= 200 && this.status < 300 &&
+      ['openai', 'openai_responses', 'anthropic'].includes(this.expectedProtocol);
+  }
+
   failure(error: unknown): void {
     let value = error;
     for (let depth = 0; depth < 5; depth++) {
@@ -195,11 +206,19 @@ export class ResponseDiagnostics {
   private classify(value: unknown, streaming: boolean): void {
     const record = object(value);
     if (!record) return;
+    const error = record['error'] ?? object(record['response'])?.['error'] ?? record['base_resp'] ?? (record['type'] === 'error' ? record : undefined);
+    if (error !== undefined) this.error = providerErrorDetail(error) ?? { message: 'Provider returned an unrecognized error envelope.' };
     if (!streaming) {
       this.format = 'non_streaming_json';
       return;
     }
     const type = record['type'];
+    if (type === 'message_stop' || type === 'response.completed' || type === 'response.incomplete' || type === 'response.failed' ||
+      (Array.isArray(record['choices']) && record['choices'].some(choice => {
+        const reason = object(choice)?.['finish_reason'];
+        return typeof reason === 'string' && reason.length > 0;
+      })))
+      this.terminal = true;
     if (typeof type === 'string' && ['response.created', 'response.in_progress', 'response.output_text.delta', 'response.output_item.added', 'response.completed', 'response.failed', 'response.incomplete'].includes(type)) {
       this.format = 'openai_responses';
     } else if (typeof type === 'string' && ['message_start', 'message_delta', 'message_stop', 'content_block_start', 'content_block_delta', 'content_block_stop'].includes(type)) {

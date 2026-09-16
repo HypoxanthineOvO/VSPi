@@ -10,6 +10,7 @@ import {
   ChatProviderError,
   createAbortError,
   isRetryableGenerateError,
+  parseRetryAfterMs,
 } from '#/kosong/contract/errors';
 import type { ProtocolAdapterConfig } from '#/kosong/protocol/protocol';
 import { traitConvertError, type TraitContext } from '#/kosong/protocol/protocolTrait';
@@ -22,6 +23,16 @@ import { kimiAnthropicTrait, kimiOpenAITrait } from '#/kosong/provider/providers
 import { classifyKimiQuotaError } from '#/kosong/provider/providers/kimi/kimi-errors';
 
 const APIUserAbortError = class extends Error {};
+
+describe('Retry-After parsing', () => {
+  it('honors an HTTP date relative to the supplied clock', () => {
+    expect(parseRetryAfterMs(new Headers({ 'retry-after': 'Wed, 16 Sep 2026 12:00:10 GMT' }), Date.parse('2026-09-16T12:00:00Z'))).toBe(10000);
+  });
+  it('rejects invalid or negative delays instead of shortening them', () => {
+    expect(parseRetryAfterMs(new Headers({ 'retry-after': '-10' }))).toBeNull();
+    expect(parseRetryAfterMs(new Headers({ 'retry-after': '2 garbage' }))).toBeNull();
+  });
+});
 
 function expectStandardAbort(run: () => unknown): void {
   let thrown: unknown;

@@ -40,6 +40,7 @@ export class Ledger {
   private _state: LedgerState = 'active';
   private readonly _records: EntryRecord[] = [];
   private _teardownPromise: Promise<void> | undefined;
+  private _clearPromise: Promise<void> | undefined;
   private _parentEntry: LedgerEntry | undefined;
 
   constructor(readonly label: string = 'ledger') {}
@@ -126,7 +127,9 @@ export class Ledger {
     }
     this._state = 'disposing';
     this._detachFromParent();
-    const out = drainRecords(this._records, reason);
+    const records = this._records.splice(0);
+    const out = this._clearPromise === undefined ? drainRecords(records, reason)
+      : this._clearPromise.then(() => drainRecords(records, reason));
     if (isPromiseLike(out)) {
       this._teardownPromise = Promise.resolve(out).then(() => {
         this._state = 'disposed';
@@ -139,7 +142,15 @@ export class Ledger {
 
   clear(reason: TeardownReason = 'scope-close'): void | Promise<void> {
     this._assertActive('clear');
-    return drainRecords(this._records, reason);
+    const records = this._records.splice(0);
+    const out = this._clearPromise === undefined ? drainRecords(records, reason)
+      : this._clearPromise.then(() => drainRecords(records, reason));
+    if (!isPromiseLike(out)) return;
+    const pending = Promise.resolve(out).finally(() => {
+      if (this._clearPromise === pending) this._clearPromise = undefined;
+    });
+    this._clearPromise = pending;
+    return pending;
   }
 
   entries(): LedgerEntryInfo[] {

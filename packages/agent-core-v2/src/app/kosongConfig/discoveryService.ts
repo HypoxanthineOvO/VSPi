@@ -11,6 +11,7 @@ import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
 import { Error2 } from '#/_base/errors/errors';
 import { LifecycleScope } from '#/app/scopes';
 import { IOAuthService } from '#/app/auth/auth';
+import { providerFetch } from '#/kosong/provider/transport';
 import { AuthErrors } from '#/app/auth/errors';
 import { IAgentIdentity } from '#/app/agentIdentity/agentIdentity';
 import { IConfigService } from '#/app/config/config';
@@ -107,7 +108,7 @@ export class ProviderDiscoveryService implements IProviderDiscoveryService {
     headers.set('Authorization', `Bearer ${apiKey}`);
     let response: Response;
     try {
-      response = await fetch(`${baseUrl.replace(/\/+$/, '')}/models`, {
+      response = await providerFetch(`${baseUrl.replace(/\/+$/, '')}/models`, {
         method: 'GET',
         headers,
         signal: AbortSignal.timeout(AVAILABILITY_TIMEOUT_MS),
