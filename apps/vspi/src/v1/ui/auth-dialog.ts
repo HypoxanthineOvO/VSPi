@@ -23,6 +23,7 @@ export class AuthDialog implements ProviderAuthInteraction {
   private messages: Array<{ text: string; tone: "text" | "muted" | "focus" | "warning" }> = [];
   private pending: PendingPrompt | undefined;
   private input = "";
+  private inputError: string | undefined;
   private readonly textInput = new Input();
   private pasteBuffer = "";
   private inBracketedPaste = false;
@@ -70,7 +71,7 @@ export class AuthDialog implements ProviderAuthInteraction {
   }
 
   prompt(prompt: ProviderAuthPrompt): Promise<string> {
-    if (this.cancelled || this.signal.aborted) return Promise.reject(new Error("Login cancelled"));
+    if (this.cancelled || this.signal.aborted || prompt.signal?.aborted) return Promise.reject(new Error("Login cancelled"));
     this.rejectPending(new Error("Authentication prompt replaced"));
     prompt = preferDeviceCodeInRemoteSession(prompt);
     this.resetInput();
@@ -100,7 +101,7 @@ export class AuthDialog implements ProviderAuthInteraction {
   handleInput(data: string): void {
     const prompt = this.pending?.prompt;
     if (prompt && prompt.type !== "select" && this.handleBracketedPaste(data)) return;
-    if (matchesKey(data, Key.escape)) {
+    if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) {
       this.cancel();
       return;
     }
@@ -115,12 +116,34 @@ export class AuthDialog implements ProviderAuthInteraction {
       this.requestRender();
       return;
     }
+    if (prompt.skip) {
+      const next = matchesKey(data, Key.tab) || matchesKey(data, Key.down) || (this.selected > 0 && matchesKey(data, Key.right));
+      const previous = matchesKey(data, Key.shift('tab')) || matchesKey(data, Key.up) || (this.selected > 0 && matchesKey(data, Key.left));
+      if (next || previous) {
+        this.selected = (this.selected + (next ? 1 : 2)) % 3;
+        this.requestRender();
+        return;
+      }
+      if (this.selected > 0) {
+        if (matchesKey(data, Key.enter)) {
+          if (this.selected === 1) this.resolvePending(prompt.skip.value);
+          else this.cancel();
+        }
+        return;
+      }
+    }
     if (matchesKey(data, Key.enter)) {
+      this.inputError = prompt.validate?.(this.input);
+      if (this.inputError) {
+        this.requestRender();
+        return;
+      }
       if (this.input || prompt.allowEmpty) this.resolvePending(this.input);
       return;
     }
     if (this.textInput.getValue() !== this.input) this.textInput.setValue(this.input);
     this.textInput.handleInput(data);
+    if (this.input !== this.textInput.getValue()) this.inputError = undefined;
     this.input = this.textInput.getValue();
     this.requestRender();
   }
@@ -142,7 +165,7 @@ export class AuthDialog implements ProviderAuthInteraction {
     const prompt = this.pending?.prompt;
     if (prompt) {
       if (body.length > 0) body.push("");
-      body.push(theme.bold(prompt.message));
+      body.push(...wrapTextWithAnsi(theme.bold(prompt.message), bodyWidth));
       if (prompt.type === "select") {
         const visibleCount = Math.max(3, (process.stdout.rows ?? 24) - body.length - 7);
         const start = Math.max(0, Math.min(this.selected - Math.floor(visibleCount / 2), prompt.options.length - visibleCount));
@@ -162,11 +185,18 @@ export class AuthDialog implements ProviderAuthInteraction {
             : (this.textInput.render(Math.max(1, bodyWidth - 2))[0] ?? "");
         const placeholder = !inputValue && prompt.placeholder ? theme.muted(prompt.placeholder) : visible;
         body.push(theme.selected(padLine(`  ${placeholder}`, bodyWidth)));
+        if (prompt.description) body.push(...wrapTextWithAnsi(theme.muted(prompt.description), bodyWidth));
+        if (this.inputError) body.push(...wrapTextWithAnsi(theme.warning(this.inputError), bodyWidth));
       }
     } else if (body.length === 0) {
       body.push(theme.muted(this.purpose === "配置" ? "正在保存配置…" : "正在建立登录…"));
     }
-    body.push("", theme.muted(prompt ? "Enter 确认 · Esc 取消" : "Esc 取消"));
+    if (prompt && prompt.type !== 'select' && prompt.skip) {
+      const actions = ['确认', prompt.skip.label, '取消'].map((label, index) =>
+        index === this.selected ? theme.inverse(`【${label}】`) : theme.muted(`【${label}】`));
+      body.push('', ...wrapTextWithAnsi(actions.join(' '), bodyWidth),
+        ...wrapTextWithAnsi(theme.muted('Enter 确认 · Tab 切换 · Esc 取消'), bodyWidth));
+    } else body.push("", theme.muted(prompt ? "Enter 确认 · Esc 取消" : "Esc 取消"));
     return frame(body, width, theme, { title: `${this.providerName} · ${this.purpose}`, focused: true });
   }
 
@@ -215,6 +245,8 @@ export class AuthDialog implements ProviderAuthInteraction {
     if (pasted) {
       this.input += pasted;
       this.textInput.setValue(this.input);
+      this.inputError = undefined;
+      this.selected = 0;
     }
     const remaining = this.pasteBuffer.slice(endIndex + endMarker.length);
     this.pasteBuffer = "";
@@ -226,6 +258,7 @@ export class AuthDialog implements ProviderAuthInteraction {
 
   private resetInput(): void {
     this.input = "";
+    this.inputError = undefined;
     this.textInput.setValue("");
     this.pasteBuffer = "";
     this.inBracketedPaste = false;

@@ -8,7 +8,7 @@
 # commented "# field: type" lines describe the remaining schema fields.
 # Values resolve as: default -> config.toml -> env overlay -> memory.
 
-# Index (28 sections · 3 overlay(s))
+# Index (29 sections · 3 overlay(s))
 #   background               src/agent/task/configSection.ts
 #   builtinProductSkills     src/features/skill/catalog/configSection.ts
 #   cron                     src/features/cron/configSection.ts
@@ -28,6 +28,7 @@
 #   oauthNetwork             src/app/auth/configSection.ts
 #   permission               src/agent/permissionRules/configSection.ts
 #   providers                src/app/kosongConfig/configSection.ts
+#   proxy                    src/app/auth/configSection.ts
 #   secondaryModel           src/session/subagent/configSection.ts
 #   services                 src/app/auth/configSection.ts
 #   subagent                 src/session/subagent/configSection.ts
@@ -361,6 +362,15 @@ merge_all_available_skills = true
     # oauth_host: string
   # env: record<string, string>
   # source: record<string, any>
+
+# ##########################################################################
+# proxy
+#   owner: src/app/auth/configSection.ts
+#   scope: core
+# ##########################################################################
+
+[proxy]
+# url: string
 
 # ##########################################################################
 # secondaryModel (config.toml: secondary_model)

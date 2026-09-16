@@ -13,6 +13,7 @@ import type {
 } from "@moonshot-ai/klient";
 import { RuntimeStoppedError, type RuntimeConnection } from "@vsp/vsp-runtime";
 import { loginWithOAuth } from "../providers/oauth-login.js";
+import { ensureProviderProxy } from '../providers/proxy-setup.js';
 
 import type { AgentSnapshot } from "../agents/types.js";
 import type { CompactOptions } from "../continuity/compaction-profiles.js";
@@ -763,6 +764,7 @@ export class KlientChatBackend implements ChatBackend {
 		type: "api_key" | "oauth",
 		interaction: ProviderAuthInteraction,
 	): Promise<void> {
+		await ensureProviderProxy(this.connection.klient, providerId, interaction);
 		if (type === "api_key") {
 			const apiKey = await interaction.prompt({
 				type: "secret",

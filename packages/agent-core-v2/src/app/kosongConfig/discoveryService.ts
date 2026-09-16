@@ -12,6 +12,9 @@ import { Error2 } from '#/_base/errors/errors';
 import { LifecycleScope } from '#/app/scopes';
 import { IOAuthService } from '#/app/auth/auth';
 import { providerFetch } from '#/kosong/provider/transport';
+import { withScopedProxy } from '#/_base/utils/scopedProxy';
+import { accountProxyForUrl, accountProxyPreference } from '#/app/auth/proxy';
+import { OAUTH_NETWORK_SECTION, PROXY_SECTION, type OAuthNetworkConfig, type ProxyConfig } from '#/app/auth/configSection';
 import { AuthErrors } from '#/app/auth/errors';
 import { IAgentIdentity } from '#/app/agentIdentity/agentIdentity';
 import { IConfigService } from '#/app/config/config';
@@ -84,6 +87,11 @@ export class ProviderDiscoveryService implements IProviderDiscoveryService {
   async queryAvailableModels(providerId: string): Promise<QueryAvailableModelsResponse> {
     await this.config.reload();
     const provider = this.providerService.get(providerId);
+    const preference = accountProxyPreference(this.config.get<ProxyConfig>(PROXY_SECTION), this.config.get<OAuthNetworkConfig>(OAUTH_NETWORK_SECTION));
+    return withScopedProxy(accountProxyForUrl(provider?.baseUrl, preference), () => this.queryProviderModels(providerId, provider));
+  }
+
+  private async queryProviderModels(providerId: string, provider: ProviderConfig | undefined): Promise<QueryAvailableModelsResponse> {
     if (provider === undefined) {
       throw new Error2(
         ModelCatalogErrors.codes.PROVIDER_NOT_FOUND,

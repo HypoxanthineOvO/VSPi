@@ -33,6 +33,7 @@ Commands:
   vspi feedback --help    导出、预览并主动提交错误反馈
   vspi init [provider]    初始化 Provider 和默认模型
   vspi config [provider]  配置 Provider 或读写 Core 配置（--help 查看用法）
+  vspi proxy              配置国外模型服务共用的代理
   vspi inspect [paths|models|session <id>]  只读检查运行中的 daemon
   vspi login|logout [provider]  登录 / 移除 Provider 凭据
   vspi web                输出 Web runtime 地址
@@ -40,19 +41,14 @@ Commands:
   vspi --version|-v       输出版本号
   vspi --help|-h          显示本帮助
 
-配置（TOML，修改后重启 VSPi 生效）:
+配置（TOML，修改后用 vspi config reload 重新读取）:
   路径: ~/.vspi/config.toml（用 VSPI_HOME 环境变量可改根目录）
   默认模型: default_model = "vsplab/gpt-6-astra"
   Provider: [providers.<id>] 段声明 base_url 与 type
-  模型: [models."provider/model"] 段，示例:
-    [models."vsplab/gpt-6-astra"]
-    protocol = "openai_responses"
-    provider = "vsplab"
-    model = "gpt-6-astra"
-    max_context_size = 1050000
-    capabilities = [ "image_in", "thinking" ]
-    support_efforts = [ "low", "medium", "high", "xhigh", "max" ]
-    default_effort = "high"
+  内置模型随版本更新，用户只需写要覆盖的字段，例如:
+    [models."vsplab/deepseek-flash"]
+    display_name = "我的 Flash"
+  不再读取 ~/.pi 或旧版 runtime-defaults.json
   凭据: vspi login <provider>
   日志: vspi daemon logs
 `;
@@ -65,6 +61,7 @@ export const VSPI_CONFIG_USAGE = `Usage: vspi config [provider]
        vspi config set <section> <json>
        vspi config diagnostics
        vspi config reload
+       vspi config refresh [provider]
 
 不带参数时打开交互式 Provider 配置。
 path 输出实际 config.toml 路径，不启动 runtime。
@@ -74,6 +71,9 @@ inspect 显示各配置层；diagnostics 只读检查，不重载配置。
 patch 通过 Core schema 校验并合并给定字段，保留其它字段。
 set 通过 Core schema 校验并原子写入配置；JSON 参数必须是完整 section 值。
 reload 重新读取磁盘配置并输出 diagnostics。
+refresh 更新可发现的自定义 Provider 目录；内置 Provider 随版本更新，不被远端目录覆盖。
+内置模型在 [models."provider/model"] 中只写要覆盖的字段，例如 display_name；删除字段恢复内置值。
+旧 overrides 子表仍兼容且优先；自定义远端目录的持久覆盖仍使用 overrides。
 `;
 
 export async function dispatchCliCommand(
@@ -113,7 +113,12 @@ export async function dispatchCliCommand(
 		await dispatchInspect(args.slice(1), dependencies, write);
 		return true;
 	}
-	if (command !== "config" && command !== "init" && command !== "login" && command !== "logout") {
+	if (command === 'proxy' && args.length > 1) {
+		if (args.length !== 2 || !['--help', '-h', 'help'].includes(args[1] ?? '')) throw new Error('Usage: vspi proxy [--help]');
+		write('Usage: vspi proxy\n配置 OpenAI、Anthropic、Gemini 和 xAI 官方接口共用的代理。\n支持本机端口、主机或域名[:端口]、HTTP/HTTPS 地址。\n选择“跳过”沿用已有环境网络；已配置后登录不再重复询问。\n不会修改系统代理，也不影响国内厂商或自定义中转地址。\n');
+		return true;
+	}
+	if (command !== "config" && command !== "init" && command !== "login" && command !== "logout" && command !== 'proxy') {
 		if (
 			command === undefined ||
 			command === "continue" ||
@@ -131,13 +136,13 @@ export async function dispatchCliCommand(
 		return true;
 	if (args.length > 2) throw new Error(`Usage: vspi ${command}${command === "config" || command === "init" ? " [custom]" : " [provider]"}`);
 	if (!(dependencies.stdinIsTTY?.() ?? process.stdin.isTTY) || !(dependencies.stdoutIsTTY?.() ?? process.stdout.isTTY))
-		throw new Error("vspi config/login/logout 需要交互式 TTY");
+		throw new Error("vspi config/login/logout/proxy 需要交互式 TTY");
 	const connection = await (dependencies.connect ?? (() => Promise.reject(new Error("Runtime connection is not configured"))))();
 	try {
 		const setup = dependencies.authSetup ?? runAuthSetup;
 		const settings = await (dependencies.loadSettings ?? (() => loadSettings(process.cwd())))();
 		await setup({
-			mode: command === "logout" ? "logout" : command === "login" ? "login" : "config",
+			mode: command === 'proxy' ? 'proxy' : command === "logout" ? "logout" : command === "login" ? "login" : "config",
 			settings,
 			connection,
 			stdinIsTTY: dependencies.stdinIsTTY,
@@ -168,7 +173,7 @@ async function dispatchNonInteractiveConfig(
 	}
 	if (subcommand?.startsWith("-"))
 		throw new Error(`Unknown option for vspi config: ${subcommand}\nRun vspi config --help for usage.`);
-	if (!["get", "inspect", "patch", "set", "diagnostics", "reload"].includes(subcommand ?? ""))
+	if (!["get", "inspect", "patch", "set", "diagnostics", "reload", "refresh"].includes(subcommand ?? ""))
 		return false;
 	if ((subcommand === "get" || subcommand === "inspect") && args.length !== 2)
 		throw new Error(`Usage: vspi config ${subcommand} <section>`);
@@ -178,6 +183,8 @@ async function dispatchNonInteractiveConfig(
 		throw new Error("Usage: vspi config diagnostics");
 	if (subcommand === "reload" && args.length !== 1)
 		throw new Error("Usage: vspi config reload");
+	if (subcommand === "refresh" && args.length > 2)
+		throw new Error("Usage: vspi config refresh [provider]");
 	let section = "";
 	let setValue: unknown;
 	if (subcommand === "get" || subcommand === "inspect" || subcommand === "patch" || subcommand === "set")
@@ -203,6 +210,12 @@ async function dispatchNonInteractiveConfig(
 		: dependencies.connect ?? (() => Promise.reject(new Error("Runtime connection is not configured")));
 	const connection = await connect();
 	try {
+		if (subcommand === "refresh") {
+			const result = await connection.klient.global.kosong.refreshProviders({ providerId: args[1] });
+			writeJson(write, result);
+			if (result.failed.length > 0) throw new Error("模型目录刷新未全部成功；请检查 failed，失败的 Provider 保留本地快照。");
+			return true;
+		}
 		if (subcommand === "get") {
 			const value = await connection.klient.global.config.get(section);
 			writeJson(write, value);

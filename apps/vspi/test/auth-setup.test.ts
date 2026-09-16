@@ -3,9 +3,13 @@ import type { Klient, OAuthFlowSnapshot } from "@moonshot-ai/klient";
 
 import { configureDefaultModel, loginProvider, runAuthSetup } from "../src/v1/app/auth-setup.js";
 import { loginWithOAuth } from "../src/v1/providers/oauth-login.js";
+import { configureProxy, ensureProviderProxy } from '../src/v1/providers/proxy-setup.js';
 import { AuthDialog } from "../src/v1/ui/auth-dialog.js";
+import { KlientChatBackend } from '../src/v1/backend/klient-backend.js';
+import type { RuntimeConnection } from '@vsp/vsp-runtime';
 import { createTheme } from "../src/v1/ui/theme.js";
 import { detectTerminalCapabilities } from "../src/v1/ui/capabilities.js";
+import { stripAnsi, visibleWidth } from '../src/v1/ui/ansi.js';
 import {
 	discoverProviderModels,
 	modelsFromManualInput,
@@ -23,28 +27,157 @@ function fakeConnection() {
 }
 
 describe("VSPi auth setup", () => {
-	it.each([['port', '7890', 7890], ['skip', undefined, 0]] as const)('saves OpenAI proxy choice %s before starting official OAuth', async (choice, input, port) => {
+	it.each([
+		['7890', 'http://127.0.0.1:7890'],
+		['proxy.example.com:7890', 'http://proxy.example.com:7890'],
+		['192.0.2.10:3128', 'http://192.0.2.10:3128'],
+		['https://proxy.example.com:8443', 'https://proxy.example.com:8443'],
+		['[2001:db8::1]:7890', 'http://[2001:db8::1]:7890'],
+		['proxy.example.com', 'http://proxy.example.com'],
+		['', ''],
+	])('saves proxy input %s before starting official OAuth', async (input, url) => {
 		let saved: unknown;
 		const set = vi.fn(async (value: unknown) => { saved = value; });
 		const startLogin = vi.fn(async () => {
-			expect(saved).toEqual({ domain: 'oauthNetwork', patch: { openaiProxyPort: port } });
+			expect(saved).toEqual({ domain: 'proxy', patch: { url } });
 			return { status: 'authenticated' };
 		});
-		const klient = { global: { config: { set }, auth: { startLogin } } } as unknown as Klient;
-		const prompt = vi.fn().mockResolvedValueOnce(choice).mockResolvedValueOnce(input);
+		const klient = { global: { config: { set, get: async () => undefined }, auth: { startLogin } } } as unknown as Klient;
+		const prompt = vi.fn().mockResolvedValueOnce(input);
 		await loginProvider(klient, 'openai-codex', 'oauth', { prompt, notify: vi.fn() });
+		expect(prompt).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: 'text', message: '请输入代理地址', skip: { label: '跳过', value: '' } }));
 		expect(startLogin).toHaveBeenCalledWith('openai-codex');
 	});
 
-	it.each(['0', '65536', '7890; command', 'http://example.test', '1.2'])('rejects invalid OAuth proxy port %s before any login or config write', async port => {
+	it.each(['0', '65536', '7890; command', 'http://example.test:0', 'socks5://example.test:1080', 'https://user:password@example.test:3128', 'example.test/path', 'example.test?key=value', 'example.test#fragment'])('rejects invalid OAuth proxy %s before any login or config write', async input => {
+		const set = vi.fn();
+		const startLogin = vi.fn();
+		const klient = { global: { config: { set, get: async () => undefined }, auth: { startLogin } } } as unknown as Klient;
+		await expect(loginProvider(klient, 'openai-codex', 'oauth', {
+			prompt: vi.fn().mockResolvedValueOnce(input), notify: vi.fn(),
+		})).rejects.toThrow('代理地址');
+		expect(set).not.toHaveBeenCalled();
+		expect(startLogin).not.toHaveBeenCalled();
+	});
+
+	it('lets invalid proxy input be corrected in place before saving', async () => {
+		const set = vi.fn(async () => {});
+		const startLogin = vi.fn(async () => ({ status: 'authenticated' }));
+		const klient = { global: { config: { set }, auth: { startLogin } } } as unknown as Klient;
+		const dialog = new AuthDialog('OpenAI OAuth', vi.fn(), vi.fn());
+		const login = configureProxy(klient, dialog);
+		dialog.handleInput('65536');
+		dialog.handleInput('\r');
+		expect(stripAnsi(dialog.render(80, createTheme(detectTerminalCapabilities(), 'Terminal')).join('\n'))).toContain('请输入有效的代理地址');
+		expect(set).not.toHaveBeenCalled();
+		expect(startLogin).not.toHaveBeenCalled();
+		dialog.handleInput('\u0015');
+		dialog.handleInput('proxy.example.com:7890');
+		dialog.handleInput('\r');
+		await login;
+		expect(set).toHaveBeenCalledWith({ domain: 'proxy', patch: { url: 'http://proxy.example.com:7890' } });
+	});
+
+	it.each(['tab', 'down'])('skips proxy setup explicitly with %s instead of treating an empty Enter as skipping', async mode => {
+		const set = vi.fn(async () => {});
+		const startLogin = vi.fn(async () => ({ status: 'authenticated' }));
+		const klient = { global: { config: { set }, auth: { startLogin } } } as unknown as Klient;
+		const dialog = new AuthDialog('OpenAI OAuth', vi.fn(), vi.fn());
+		const login = configureProxy(klient, dialog);
+		dialog.handleInput('\r');
+		expect(set).not.toHaveBeenCalled();
+		dialog.handleInput(mode === 'tab' ? '\t' : '\u001B[B');
+		dialog.handleInput('\r');
+		await login;
+		expect(set).toHaveBeenCalledWith({ domain: 'proxy', patch: { url: '' } });
+		expect(startLogin).not.toHaveBeenCalled();
+	});
+
+	it.each(['escape', 'button', 'ctrl-c'])('cancels proxy entry with %s without saving or starting OAuth', async mode => {
 		const set = vi.fn();
 		const startLogin = vi.fn();
 		const klient = { global: { config: { set }, auth: { startLogin } } } as unknown as Klient;
-		await expect(loginProvider(klient, 'openai-codex', 'oauth', {
-			prompt: vi.fn().mockResolvedValueOnce('port').mockResolvedValueOnce(port), notify: vi.fn(),
-		})).rejects.toThrow('代理端口');
+		const dialog = new AuthDialog('OpenAI OAuth', vi.fn(), vi.fn());
+		const login = configureProxy(klient, dialog);
+		dialog.handleInput('proxy.example.com:7890');
+		if (mode === 'button') { dialog.handleInput('\t'); dialog.handleInput('\t'); dialog.handleInput('\r'); }
+		else dialog.handleInput(mode === 'escape' ? '\u001B' : '\u0003');
+		await expect(login).rejects.toThrow('cancelled');
 		expect(set).not.toHaveBeenCalled();
 		expect(startLogin).not.toHaveBeenCalled();
+	});
+
+	it.each([24, 40, 80])('shows the proxy input and all three actions within %s columns', async width => {
+		const dialog = new AuthDialog('OpenAI OAuth', vi.fn(), vi.fn());
+		const login = configureProxy({} as Klient, dialog);
+		const lines = dialog.render(width, createTheme(detectTerminalCapabilities(), 'Terminal'));
+		const rendered = stripAnsi(lines.join('\n'));
+		expect(rendered).toContain('请输入代理地址');
+		expect(rendered).toContain('确认');
+		expect(rendered).toContain('跳过');
+		expect(rendered).not.toContain('Skip');
+		expect(rendered).toContain('取消');
+		expect(lines.every(line => visibleWidth(line) <= width)).toBe(true);
+		dialog.handleInput('65536');
+		dialog.handleInput('\r');
+		expect(dialog.render(width, createTheme(detectTerminalCapabilities(), 'Terminal')).length).toBeLessThanOrEqual(24);
+		dialog.cancel();
+		await expect(login).rejects.toThrow('cancelled');
+	});
+
+	it.each(['anthropic', 'openai-codex', 'google', 'xai'])('asks %s for a shared proxy only when no preference is saved', async provider => {
+		const set = vi.fn(async () => {});
+		const klient = { global: { config: { set, get: async () => undefined } } } as unknown as Klient;
+		const prompt = vi.fn(async () => 'proxy.example.com:7890');
+		await ensureProviderProxy(klient, provider, { prompt, notify: vi.fn() });
+		expect(prompt).toHaveBeenCalledOnce();
+		expect(set).toHaveBeenCalledWith({ domain: 'proxy', patch: { url: 'http://proxy.example.com:7890' } });
+	});
+
+	it.each([{ url: 'http://proxy.example.com:7890' }, { url: '' }])('does not repeat the proxy prompt for a saved preference %j', async preference => {
+		const prompt = vi.fn();
+		const set = vi.fn();
+		const klient = { global: { config: { set, get: async (domain: string) => domain === 'proxy' ? preference : undefined } } } as unknown as Klient;
+		await ensureProviderProxy(klient, 'anthropic', { prompt, notify: vi.fn() });
+		expect(prompt).not.toHaveBeenCalled();
+		expect(set).not.toHaveBeenCalled();
+	});
+
+	it.each([0, 7890])('recognizes the released proxy port preference %s without prompting again', async openaiProxyPort => {
+		const prompt = vi.fn();
+		const klient = { global: { config: { get: async (domain: string) => domain === 'oauthNetwork' ? { openaiProxyPort } : undefined } } } as unknown as Klient;
+		await ensureProviderProxy(klient, 'xai', { prompt, notify: vi.fn() });
+		expect(prompt).not.toHaveBeenCalled();
+	});
+
+	it('uses the same proxy setup for an OAuth login inside the main TUI', async () => {
+		const set = vi.fn(async () => {});
+		const startLogin = vi.fn(async () => ({ status: 'authenticated' }));
+		const connection = { klient: { global: { config: { set, get: async () => undefined }, auth: { startLogin } } } } as unknown as RuntimeConnection;
+		const backend = new KlientChatBackend(connection, '/project', 'new');
+		await backend.loginProvider('anthropic', 'oauth', { prompt: async () => 'proxy.example.com:3128', notify: vi.fn() });
+		expect(set).toHaveBeenCalledWith({ domain: 'proxy', patch: { url: 'http://proxy.example.com:3128' } });
+		expect(startLogin).toHaveBeenCalledWith('anthropic');
+	});
+
+	it('configures the shared proxy before requesting a Gemini API key', async () => {
+		let configured = false;
+		const configureBuiltinProvider = vi.fn(async () => {});
+		const klient = { global: { config: { get: async () => undefined, set: async () => { configured = true; }, inspect: async () => ({ userValue: {} }) }, kosong: { configureBuiltinProvider } } } as unknown as Klient;
+		await loginProvider(klient, 'google', 'api_key', { notify: vi.fn(), prompt: async prompt => {
+			if (prompt.type === 'secret') { expect(configured).toBe(true); return 'YOUR_API_KEY'; }
+			return 'proxy.example.com:3128';
+		} });
+		expect(configureBuiltinProvider).toHaveBeenCalledWith('google', 'YOUR_API_KEY');
+	});
+
+	it.each(['kimi', 'vsplab', 'deepseek'])('does not ask the domestic provider %s for this proxy', async provider => {
+		const prompt = vi.fn();
+		const get = vi.fn();
+		const klient = { global: { config: { get }, kosong: { listProviders: async () => [{ id: provider, type: provider }] } } } as unknown as Klient;
+		await ensureProviderProxy(klient, provider, { prompt, notify: vi.fn() });
+		expect(prompt).not.toHaveBeenCalled();
+		expect(get).not.toHaveBeenCalled();
 	});
 	afterEach(() => vi.useRealTimers());
 	it("rejects non-interactive execution before touching the runtime", async () => {

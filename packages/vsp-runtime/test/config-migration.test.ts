@@ -1,710 +1,138 @@
-import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+/**
+ * Scenario: VSPi owns its config and no longer imports Pi state.
+ * Responsibilities: safe migration, user overrides, backup and rollback.
+ * Wiring: real files and isolated homes; injected write failures only.
+ */
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-
 import { parse, stringify } from 'smol-toml';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-
-import {
-  migrateRuntimeConfig,
-  resolveRuntimePaths,
-  startRuntimeDaemon,
-} from '../src/index.js';
-
-const identity = {
-  productName: 'vspi-test',
-  version: '0.1.0-test',
-  platform: 'vspi_test',
-};
+import { migrateRuntimeConfig, resolveRuntimePaths, startRuntimeDaemon } from '../src/index.js';
 
 const homes: string[] = [];
+afterEach(async () => { await Promise.all(homes.splice(0).map(home => rm(home, { recursive: true, force: true }))); });
 
-afterEach(async () => {
-  await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
-});
-
-describe('pre-bootstrap config migration', () => {
-  it('retires expired DeepSeek entries and rewrites dependent preferences without deleting history', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    const paths = resolveRuntimePaths(homeDir);
-    const old = 'vsplab/deepseek-v4.1-flash-expires-on-0910';
-    const current = 'vsplab/deepseek-flash';
-    const original = stringify({
-      providers: { vsplab: { type: 'openai', base_url: 'https://relay.example.test/v1', api_key: 'YOUR_API_KEY' } },
-      models: { [old]: { provider: 'vsplab', model: 'deepseek-v4.1-flash-expires-on-0910', support_efforts: ['medium'], max_context_size: 1048576 } },
-      default_model: old, thinking: { model_efforts: { [old]: 'medium' } },
-      secondary_model: { default_model: old, models: { [old]: 'Review code' }, force: false },
-    });
-    await writeFile(paths.configPath, original);
-    await writeLegacy(agentDir, { providers: { vsplab: { api: 'openai-completions', baseUrl: 'https://relay.example.test/v1', models: [{ id: 'deepseek-v4.1-flash-expires-on-0910' }] } } });
-    const history = join(homeDir, 'example-wire.jsonl'); await writeFile(history, `original binding ${old}`);
-    const result = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    const output = await readFile(paths.configPath, 'utf8');
-    expect(output).not.toContain('expires-on');
-    expect(parse(output)).toMatchObject({
-      default_model: current,
-      models: { [current]: { model: 'deepseek-flash', display_name: 'DeepSeek V4.1 Flash', thinking: { efforts: ['low', 'high', 'max'] } } },
-      thinking: { model_efforts: { [current]: 'high' } },
-      secondary_model: { default_model: current, models: { [current]: 'Review code' }, force: false },
-    });
-    expect(await readFile(result.report!.backupPath, 'utf8')).toBe(original);
-    expect(await readFile(history, 'utf8')).toBe(`original binding ${old}`);
-    await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    expect(await readFile(paths.configPath, 'utf8')).toBe(output);
-  });
-
-  it('preserves an already configured canonical model when retiring an older duplicate', async () => {
-    const { root, homeDir, agentDir } = await fixture(); const paths = resolveRuntimePaths(homeDir);
-    const target = 'vsplab/deepseek-flash'; const old = 'vsplab/deepseek-v4.1-flash';
-    await writeFile(paths.configPath, stringify({
-      providers: { vsplab: { type: 'openai' } },
-      models: { [old]: { provider: 'vsplab', model: 'deepseek-v4.1-flash', max_context_size: 4096 }, [target]: { provider: 'vsplab', model: 'deepseek-flash', max_context_size: 100000, overrides: { default_effort: 'low' } } },
-      default_model: old, thinking: { model_efforts: { [old]: 'high', [target]: 'low' } },
-    }));
-    await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    const value = parse(await readFile(paths.configPath, 'utf8'));
-    expect(value).toMatchObject({ default_model: target, models: { [target]: { max_context_size: 100000, overrides: { default_effort: 'low' } } }, thinking: { model_efforts: { [target]: 'low' } } });
-    expect(value['models']).not.toHaveProperty(old);
-  });
-
-  it('backs up generated relay protocols and stale effort defaults while preserving user preferences', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    const paths = resolveRuntimePaths(homeDir);
-    const original = stringify({
-      providers: { vsplab: { type: 'openai_responses', base_url: 'https://relay.example.test/v1', api_key: 'YOUR_API_KEY' } },
-      models: { 'vsplab/kimi-k3': { provider: 'vsplab', model: 'kimi-k3', protocol: 'openai_responses', max_context_size: 1048576, support_efforts: ['off', 'minimal', 'medium', 'high'], overrides: { thinking: { efforts: ['low', 'high'], default_effort: 'high' } } } },
-      thinking: { model_efforts: { 'vsplab/kimi-k3': 'high' } },
-      secondary_model: { default_model: 'vsplab/kimi-k3', models: { 'vsplab/kimi-k3': 'Review code' } },
-    });
-    await writeFile(paths.configPath, original);
-    await writeLegacy(agentDir, { providers: { vsplab: { api: 'openai-responses', baseUrl: 'https://relay.example.test/v1', models: [{ id: 'kimi-k3', reasoning: true }] } } });
-    const result = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    const config = parse(await readFile(paths.configPath, 'utf8'));
-    const models = config['models'] as Record<string, Record<string, unknown>>;
-    expect(models['vsplab/kimi-k3']).not.toHaveProperty('protocol');
-    expect(models['vsplab/kimi-k3']).toMatchObject({ default_protocol: 'openai', effort_profile_revision: 2, thinking: { efforts: ['low', 'high', 'max'], default_effort: 'max' }, overrides: { thinking: { efforts: ['low', 'high'], default_effort: 'high' } } });
-    expect(config['thinking']).toEqual({ model_efforts: { 'vsplab/kimi-k3': 'high' } });
-    expect(config['secondary_model']).toEqual({ default_model: 'vsplab/kimi-k3', models: { 'vsplab/kimi-k3': 'Review code' } });
-    expect(await readFile(result.report!.backupPath, 'utf8')).toBe(original);
-    expect(JSON.stringify(result.report)).not.toContain('YOUR_API_KEY');
-  });
-
-  it('does not remove a protocol explicitly written after the one-time cleanup', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    const paths = resolveRuntimePaths(homeDir);
-    await writeLegacy(agentDir, { providers: { vsplab: { api: 'openai-responses', baseUrl: 'https://relay.example.test/v1', models: [{ id: 'kimi-k3', reasoning: true }] } } });
-    await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    const config = parse(await readFile(paths.configPath, 'utf8'));
-    (config['models'] as Record<string, Record<string, unknown>>)['vsplab/kimi-k3']!['protocol'] = 'openai_responses';
-    await writeFile(paths.configPath, `${stringify(config)}\n`);
-    await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    const after = parse(await readFile(paths.configPath, 'utf8'));
-    expect((after['models'] as Record<string, Record<string, unknown>>)['vsplab/kimi-k3']?.['protocol']).toBe('openai_responses');
-  });
-
-  it('preserves unproven explicit protocols and custom endpoint records', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    const paths = resolveRuntimePaths(homeDir);
-    const custom = { provider: 'vsplab', model: 'glm-5.3', base_url: 'https://custom.example.test/v1', protocol: 'anthropic', support_efforts: ['medium'], max_context_size: 8192 };
-    await writeFile(paths.configPath, stringify({ providers: { vsplab: { type: 'openai_responses', base_url: 'https://relay.example.test/v1' } }, models: { 'vsplab/kimi-k3': { provider: 'vsplab', model: 'kimi-k3', protocol: 'anthropic', max_context_size: 8192 }, 'vsplab/glm-5.3': custom } }));
-    const result = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    const models = parse(await readFile(paths.configPath, 'utf8'))['models'] as Record<string, Record<string, unknown>>;
-    expect(models['vsplab/kimi-k3']?.['protocol']).toBe('anthropic');
-    expect(models['vsplab/glm-5.3']).toEqual(custom);
-    expect(result.report?.diagnostics.some((message) => message.includes('unproven explicit protocol'))).toBe(true);
-  });
-
-  it('restores the original configuration if documented-profile migration fails after writing', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    const paths = resolveRuntimePaths(homeDir);
-    const original = stringify({ providers: { vsplab: { type: 'openai', base_url: 'https://relay.example.test/v1' } }, models: { 'vsplab/glm-5.3': { provider: 'vsplab', model: 'glm-5.3', protocol: 'openai', max_context_size: 8192 } } });
-    await writeFile(paths.configPath, original);
-    await expect(migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir, faultInjector: { reach(stage) { if (stage === 'after-target-write') throw new Error('injected profile failure'); } } })).rejects.toThrow('injected profile failure');
-    expect(await readFile(paths.configPath, 'utf8')).toBe(original);
-  });
-
-  it('merges valid entries independently with target-wins and repairs a dangling default', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    await writeFile(join(homeDir, 'config.toml'), [
-      'default_model = "missing/model"',
-      '',
-      '[providers.relay]',
-      'type = "anthropic"',
-      'api_key = "target-key"',
-      '',
-      '[models."relay/existing"]',
-      'provider = "relay"',
-      'model = "existing"',
-      'protocol = "anthropic"',
-      'max_context_size = 64000',
-      '',
-      '[models."relay/new"]',
-      'provider = "relay"',
-      'model = "new"',
-      'protocol = "anthropic"',
-      'max_context_size = 200000',
-      '',
-      '[models."relay/new".thinking]',
-      'availability = "always"',
-      'efforts = ["low", "medium", "high"]',
-      'default_effort = "medium"',
-      '',
-      '[unrelated]',
-      'preserved = true',
-      '',
-    ].join('\n'));
-    await writeLegacy(agentDir, {
-      providers: {
-        relay: {
-          api: 'openai-responses',
-          baseUrl: 'https://legacy.example/v1',
-          models: [
-            { id: 'existing', contextWindow: 1 },
-            { id: 'new', contextWindow: 200_000 },
-            { id: 'bad', api: 'mystery-protocol' },
-          ],
-        },
-        unknown: { api: 'mystery-protocol', models: [{ id: 'ignored' }] },
-      },
-    });
-    await mkdir(join(root, '.config', 'vspi'), { recursive: true });
-    await writeFile(join(root, '.config', 'vspi', 'runtime-defaults.json'), JSON.stringify({
-      model: { provider: 'relay', id: 'new' },
-      effort: 'high',
-    }));
-
-    const result = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    const config = parse(await readFile(join(homeDir, 'config.toml'), 'utf8')) as Record<string, unknown>;
-    const providers = config['providers'] as Record<string, Record<string, unknown>>;
-    const models = config['models'] as Record<string, Record<string, unknown>>;
-
-    expect(result.status).toBe('migrated');
-    expect(result.warning).toEqual({ status: 'repaired', reason: 'default-model-repair' });
-    expect(providers['relay']).toMatchObject({ type: 'anthropic', api_key: 'target-key' });
-    expect(providers['unknown']).toBeUndefined();
-    expect(models['relay/existing']).toMatchObject({ protocol: 'anthropic', max_context_size: 64_000 });
-    expect(models['relay/new']).toMatchObject({ protocol: 'anthropic', max_context_size: 200_000 });
-    expect(models['relay/bad']).toBeUndefined();
-    expect(config['default_model']).toBe('relay/new');
-    expect(config['thinking']).toEqual({ effort: 'high' });
-    expect(result.report?.effortRepair).toEqual({
-      status: 'applied',
-      reason: 'effort-supported',
-      changed: false,
-    });
-    expect(config['unrelated']).toEqual({ preserved: true });
-    expect(result.report?.diagnostics).toEqual(expect.arrayContaining([
-      expect.stringContaining('unknown protocol'),
-    ]));
-  });
-
-  it('normalizes old localized defaults and records a redacted conservative action', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    await writeLegacy(agentDir, { providers: { relay: { api: 'openai', models: [{ id: 'safe' }] } } });
-    await mkdir(join(root, '.config', 'vspi'), { recursive: true });
-    await writeFile(join(root, '.config', 'vspi', 'runtime-defaults.json'), JSON.stringify({
-      model: { provider: 'relay', id: 'safe' },
-      effort: '高',
-      apiKey: 'DEFAULTS-SECRET',
-    }));
-
-    const result = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    const paths = resolveRuntimePaths(homeDir);
-    const config = parse(await readFile(paths.configPath, 'utf8')) as Record<string, unknown>;
-    const reportText = await readFile(paths.configMigrationReportPath, 'utf8');
-
-    expect(config['thinking']).toEqual({ effort: 'off' });
-    expect(result.report?.effortRepair).toEqual({
-      status: 'applied',
-      reason: 'missing-capability',
-      changed: true,
-    });
-    expect(result.warning).toEqual({ status: 'repaired', reason: 'effort-repair' });
-    expect(result.report?.diagnostics).toContain(
-      'thinking effort repaired to off because the default model has no structured thinking capability',
-    );
-    expect(reportText).not.toContain('DEFAULTS-SECRET');
-  });
-
-  it('preserves an existing target thinking section over legacy defaults', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    await writeFile(join(homeDir, 'config.toml'), '[thinking]\neffort = "vendor-custom"\n');
-    await mkdir(join(root, '.config', 'vspi'), { recursive: true });
-    await writeFile(join(root, '.config', 'vspi', 'runtime-defaults.json'), JSON.stringify({ effort: 'off' }));
-
-    const result = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    const paths = resolveRuntimePaths(homeDir);
-    const config = parse(await readFile(paths.configPath, 'utf8')) as Record<string, unknown>;
-    const reportText = await readFile(paths.configMigrationReportPath, 'utf8');
-
-    expect(config['thinking']).toEqual({ effort: 'vendor-custom' });
-    expect(result.report?.effortRepair).toEqual({
-      status: 'preserved',
-      reason: 'target-preserved',
-      changed: false,
-    });
-    expect(reportText).not.toContain('vendor-custom');
-  });
-
-  it('ignores malformed old defaults without breaking bad TOML repair', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    await writeFile(join(homeDir, 'config.toml'), '[broken\n');
-    await mkdir(join(root, '.config', 'vspi'), { recursive: true });
-    await writeFile(join(root, '.config', 'vspi', 'runtime-defaults.json'), '{ invalid');
-    await writeLegacy(agentDir, { providers: { relay: { api: 'openai', models: [{ id: 'safe' }] } } });
-
-    const result = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    const configText = await readFile(join(homeDir, 'config.toml'), 'utf8');
-
-    expect(result.status).toBe('repaired');
-    expect(result.warning).toEqual({ status: 'repaired', reason: 'bad-toml' });
-    expect(JSON.stringify(result.warning)).not.toContain(homeDir);
-    expect(() => parse(configText)).not.toThrow();
-    expect(result.report?.diagnostics).toEqual(expect.arrayContaining([expect.stringContaining('invalid JSON')]));
-    expect(result.report?.effortRepair).toBeUndefined();
-  });
-
-  it('backs up bad TOML and writes a parseable repair, marker, and redacted report', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    const broken = 'api_key = "TOP-SECRET"\n[broken\n';
-    await writeFile(join(homeDir, 'config.toml'), broken);
-    await writeLegacy(agentDir, {
-      providers: {
-        relay: {
-          api: 'openai',
-          headers: { Authorization: 'Bearer HEADER-SECRET' },
-          models: [{ id: 'safe' }],
-        },
-      },
-    });
-    await writeFile(join(agentDir, 'auth.json'), JSON.stringify({
-      relay: { type: 'api_key', key: 'AUTH-SECRET' },
-    }));
-
-    const result = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    const paths = resolveRuntimePaths(homeDir);
-    const repaired = await readFile(paths.configPath, 'utf8');
-    const marker = JSON.parse(await readFile(paths.configMigrationMarkerPath, 'utf8')) as Record<string, unknown>;
-    const reportText = await readFile(paths.configMigrationReportPath, 'utf8');
-    const report = JSON.parse(reportText) as Record<string, unknown>;
-    const backupPath = report['backupPath'] as string;
-    const backup = await readFile(backupPath, 'utf8');
-
-    expect(result.status).toBe('repaired');
-    expect(backup).toBe(broken);
-    expect(() => parse(repaired)).not.toThrow();
-    expect(marker['targetFingerprint']).toBe(createHash('sha256').update(repaired).digest('hex'));
-    expect(report['status']).toBe('repaired');
-    expect(reportText).not.toContain('AUTH-SECRET');
-    expect(reportText).not.toContain('HEADER-SECRET');
-    expect(reportText).not.toContain('TOP-SECRET');
-    expect((await stat(paths.configPath)).mode & 0o777).toBe(0o600);
-    expect((await stat(backupPath)).mode & 0o777).toBe(0o600);
-  });
-
-  it('fills an existing provider and missing aliases without replacing target configuration', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    await writeFile(join(homeDir, 'config.toml'), [
-      '[providers.vsplab]',
-      'type = ""',
-      'base_url = ""',
-      'api_key = "target-key"',
-      '',
-      '[providers.vsplab.custom_headers]',
-      'Authorization = "target-header"',
-      '',
-      '[models."vsplab/glm-5.3"]',
-      'provider = "vsplab"',
-      'model = "target-glm-5.3"',
-      'protocol = "anthropic"',
-      'display_name = "Target GLM 5.3"',
-      'max_context_size = 64000',
-      '',
-    ].join('\n'));
-    const legacyProvider = {
-      api: 'openai-completions',
-      baseUrl: 'https://vsplab.example/v1',
-      apiKey: 'legacy-key',
-      headers: { Authorization: 'legacy-header', 'X-Legacy': 'legacy-value' },
-      models: [
-        { id: 'glm-5.3', name: 'Legacy GLM 5.3', contextWindow: 200_000 },
-        { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash', contextWindow: 128_000 },
-      ],
-    };
-    await writeLegacy(agentDir, { providers: { vsplab: legacyProvider } });
-
-    const first = await migrateRuntimeConfig({
-      homeDir,
-      osHomeDir: root,
-      agentDir,
-      now: () => new Date('2026-01-01T00:00:00.000Z'),
-    });
-    const paths = resolveRuntimePaths(homeDir);
-    const firstConfigText = await readFile(paths.configPath, 'utf8');
-    const firstConfig = parse(firstConfigText) as Record<string, unknown>;
-    const firstProviders = firstConfig['providers'] as Record<string, Record<string, unknown>>;
-    const firstModels = firstConfig['models'] as Record<string, Record<string, unknown>>;
-    const firstMarkerText = await readFile(paths.configMigrationMarkerPath, 'utf8');
-    const firstMarker = JSON.parse(firstMarkerText) as Record<string, unknown>;
-
-    expect(first.status).toBe('migrated');
-    expect(firstProviders['vsplab']).toEqual({
-      type: 'openai',
-      base_url: 'https://vsplab.example/v1',
-      api_key: 'target-key',
-      custom_headers: { Authorization: 'target-header' },
-    });
-    expect(firstModels['vsplab/glm-5.3']).toEqual({
-      provider: 'vsplab',
-      model: 'target-glm-5.3',
-      protocol: 'anthropic',
-      display_name: 'Target GLM 5.3',
-      max_context_size: 64_000,
-    });
-    expect(firstModels['vsplab/glm-5.3-flash']).toMatchObject({
-      provider: 'vsplab',
-      model: 'glm-5.3-flash',
-      default_protocol: 'openai',
-      display_name: 'GLM 5.3 Flash',
-      max_context_size: 128_000,
-    });
-    expect(firstModels['glm-5.3-flash']).toBeUndefined();
-
-    const unchanged = await migrateRuntimeConfig({
-      homeDir,
-      osHomeDir: root,
-      agentDir,
-      now: () => new Date('2027-01-01T00:00:00.000Z'),
-    });
-    expect(unchanged.status).toBe('unchanged');
-    expect(await readFile(paths.configPath, 'utf8')).toBe(firstConfigText);
-    expect(await readFile(paths.configMigrationMarkerPath, 'utf8')).toBe(firstMarkerText);
-
-    await writeLegacy(agentDir, {
-      providers: {
-        vsplab: {
-          ...legacyProvider,
-          models: [...legacyProvider.models, { id: 'glm-5.3-air', contextWindow: 96_000 }],
-        },
-      },
-    });
-    const sourceChanged = await migrateRuntimeConfig({
-      homeDir,
-      osHomeDir: root,
-      agentDir,
-      now: () => new Date('2028-01-01T00:00:00.000Z'),
-    });
-    const changedConfig = parse(await readFile(paths.configPath, 'utf8')) as Record<string, unknown>;
-    const changedProviders = changedConfig['providers'] as Record<string, Record<string, unknown>>;
-    const changedModels = changedConfig['models'] as Record<string, Record<string, unknown>>;
-    const changedMarker = JSON.parse(await readFile(paths.configMigrationMarkerPath, 'utf8')) as Record<string, unknown>;
-
-    expect(sourceChanged.status).toBe('migrated');
-    expect(changedMarker['sourceFingerprint']).not.toBe(firstMarker['sourceFingerprint']);
-    expect(changedProviders['vsplab']).toEqual(firstProviders['vsplab']);
-    expect(changedModels['vsplab/glm-5.3']).toEqual(firstModels['vsplab/glm-5.3']);
-    expect(changedModels['vsplab/glm-5.3-flash']).toEqual(firstModels['vsplab/glm-5.3-flash']);
-    expect(changedModels['vsplab/glm-5.3-air']).toMatchObject({
-      provider: 'vsplab',
-      model: 'glm-5.3-air',
-      default_protocol: 'openai',
-      max_context_size: 96_000,
-    });
-  });
-
-  it('preserves VSPLab cn URLs instead of forcing the tech route during legacy migration', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    await writeFile(join(homeDir, 'config.toml'), [
-      '[providers.vsplab]',
-      'type = "openai"',
-      'base_url = "https://api.vsplab.cn/v1"',
-      'api_key = "target-key"',
-      '',
-      '[providers.moonshot]',
-      'type = "openai"',
-      'base_url = "https://api.moonshot.cn/v1"',
-      '',
-      '[models."vsplab/gpt-5.6"]',
-      'provider = "vsplab"',
-      'model = "gpt-5.6"',
-      'protocol = "openai"',
-      'base_url = "https://api.vsplab.cn/v1"',
-      'max_context_size = 200000',
-      '',
-    ].join('\n'));
-    await writeLegacy(agentDir, {
-      providers: {
-        vsplab: {
-          api: 'openai-completions',
-          baseUrl: 'https://api.vsplab.cn/v1',
-          models: [{ id: 'glm-5.3', contextWindow: 200_000, baseUrl: 'https://api.vsplab.cn/v1' }],
-        },
-      },
-    });
-
-    const result = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    const config = parse(await readFile(resolveRuntimePaths(homeDir).configPath, 'utf8')) as Record<string, unknown>;
-    const providers = config['providers'] as Record<string, Record<string, unknown>>;
-    const models = config['models'] as Record<string, Record<string, unknown>>;
-
-    expect(result.status).toBe('migrated');
-    expect(providers['vsplab']?.['base_url']).toBe('https://api.vsplab.cn/v1');
-    expect(providers['moonshot']?.['base_url']).toBe('https://api.moonshot.cn/v1');
-    expect(models['vsplab/gpt-5.6']?.['base_url']).toBe('https://api.vsplab.cn/v1');
-    expect(models['vsplab/glm-5.3']?.['base_url']).toBe('https://api.vsplab.cn/v1');
-    expect(result.report?.diagnostics.some(message => message.includes('migrated from api.vsplab.cn'))).toBe(false);
-
-    const again = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    expect(again.status).toBe('unchanged');
-  });
-
-  it('repairs known VSPLab GPT limits without overriding unrelated models', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    const aliases = [
-      'vsplab/gpt-5.2',
-      'vsplab/gpt-5.2-pro',
-      'vsplab/gpt-5.4',
-      'vsplab/gpt-5.4-mini',
-      'vsplab/gpt-5.5',
-      'vsplab/gpt-5.6-luna',
-      'vsplab/gpt-5.6-sol',
-      'vsplab/gpt-5.6-terra',
-    ];
-    await writeFile(join(homeDir, 'config.toml'), [
-      ...aliases.flatMap((alias) => [
-        `[models."${alias}"]`,
-        'provider = "vsplab"',
-        `model = "${alias.slice('vsplab/'.length)}"`,
-        'protocol = "openai_responses"',
-        `max_context_size = ${alias === 'vsplab/gpt-5.6-luna' ? '1050000' : '128000'}`,
-        '',
-      ]),
-      '[models."vsplab/gpt-custom"]',
-      'provider = "vsplab"',
-      'model = "gpt-custom"',
-      'protocol = "openai_responses"',
-      'max_context_size = 900000',
-      'max_output_size = 64000',
-      '',
-      '[models."relay/gpt-5.6-sol"]',
-      'provider = "relay"',
-      'model = "gpt-5.6-sol"',
-      'protocol = "openai_responses"',
-      'max_context_size = 128000',
-      '',
-    ].join('\n'));
-
-    const first = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    const paths = resolveRuntimePaths(homeDir);
-    const firstConfigText = await readFile(paths.configPath, 'utf8');
-    const config = parse(firstConfigText) as Record<string, unknown>;
-    const models = config['models'] as Record<string, Record<string, unknown>>;
-
-    expect(first.status).toBe('migrated');
-    for (const alias of aliases) {
-      expect(models[alias]).toMatchObject({
-        max_context_size: 1_000_000,
-        max_output_size: 128_000,
-      });
-    }
-    expect(models['vsplab/gpt-custom']).toMatchObject({
-      max_context_size: 900_000,
-      max_output_size: 64_000,
-    });
-    expect(models['relay/gpt-5.6-sol']).toMatchObject({
-      max_context_size: 128_000,
-    });
-    expect(models['relay/gpt-5.6-sol']?.['max_output_size']).toBeUndefined();
-
-    const unchanged = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    expect(unchanged.status).toBe('unchanged');
-    expect(await readFile(paths.configPath, 'utf8')).toBe(firstConfigText);
-  });
-
-  it('is idempotent when source and target fingerprints are unchanged', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    await writeLegacy(agentDir, { providers: { relay: { api: 'openai', models: [{ id: 'safe' }] } } });
-    const first = await migrateRuntimeConfig({
-      homeDir,
-      osHomeDir: root,
-      agentDir,
-      now: () => new Date('2026-01-01T00:00:00.000Z'),
-    });
-    const paths = resolveRuntimePaths(homeDir);
-    const markerBefore = await readFile(paths.configMigrationMarkerPath, 'utf8');
-    const configBefore = await readFile(paths.configPath, 'utf8');
-
-    const second = await migrateRuntimeConfig({
-      homeDir,
-      osHomeDir: root,
-      agentDir,
-      now: () => new Date('2027-01-01T00:00:00.000Z'),
-    });
-
-    expect(first.status).toBe('migrated');
-    expect(second.status).toBe('unchanged');
-    expect(await readFile(paths.configMigrationMarkerPath, 'utf8')).toBe(markerBefore);
-    expect(await readFile(paths.configPath, 'utf8')).toBe(configBefore);
-  });
-
-  it('keeps content-addressed backups immutable across source changes', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    const original = 'default_permission_mode = "manual"\n';
-    const paths = resolveRuntimePaths(homeDir);
-    await writeFile(paths.configPath, original);
-    await writeLegacy(agentDir, { providers: { relay: { api: 'openai', models: [{ id: 'first' }] } } });
-
-    const first = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    const firstBackupPath = first.report?.backupPath as string;
-    const firstBackup = await readFile(firstBackupPath, 'utf8');
-    await writeLegacy(agentDir, { providers: { second: { api: 'anthropic', models: [{ id: 'second' }] } } });
-
-    const second = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    const secondBackupPath = second.report?.backupPath as string;
-
-    expect(secondBackupPath).not.toBe(firstBackupPath);
-    expect(await readFile(firstBackupPath, 'utf8')).toBe(firstBackup);
-    expect(await readFile(secondBackupPath, 'utf8')).toContain('[models."relay/first"]');
-  });
-
-  it('recovers target and report without a marker, then completes one consistent transaction', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    const original = 'default_permission_mode = "manual"\n';
-    const paths = resolveRuntimePaths(homeDir);
-    await writeFile(paths.configPath, original);
-    await writeLegacy(agentDir, { providers: { relay: { api: 'openai', models: [{ id: 'safe' }] } } });
-    await migrateRuntimeConfig({
-      homeDir,
-      osHomeDir: root,
-      agentDir,
-      now: () => new Date('2026-01-01T00:00:00.000Z'),
-    });
-    const interruptedTarget = await readFile(paths.configPath, 'utf8');
-    const interruptedReport = JSON.parse(await readFile(paths.configMigrationReportPath, 'utf8')) as Record<string, unknown>;
-    await rm(paths.configMigrationMarkerPath);
-
-    const recovered = await migrateRuntimeConfig({
-      homeDir,
-      osHomeDir: root,
-      agentDir,
-      now: () => new Date('2026-01-02T00:00:00.000Z'),
-    });
-    const finalConfig = await readFile(paths.configPath, 'utf8');
-    const finalReport = JSON.parse(await readFile(paths.configMigrationReportPath, 'utf8')) as Record<string, unknown>;
-    const finalMarker = JSON.parse(await readFile(paths.configMigrationMarkerPath, 'utf8')) as Record<string, unknown>;
-
-    expect(recovered.status).toBe('migrated');
-    expect(finalConfig).toBe(interruptedTarget);
-    expect(finalReport['completedAt']).not.toBe(interruptedReport['completedAt']);
-    expect(finalMarker['completedAt']).toBe(finalReport['completedAt']);
-    expect(finalMarker['sourceFingerprint']).toBe(finalReport['sourceFingerprint']);
-    expect(finalMarker['targetFingerprint']).toBe(finalReport['targetFingerprint']);
-    expect(finalMarker['targetFingerprint']).toBe(createHash('sha256').update(finalConfig).digest('hex'));
-    expect(await readFile(finalReport['backupPath'] as string, 'utf8')).toBe(original);
-  });
-
-  it('rolls back config and completion files when a post-write stage fails', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    const original = 'default_permission_mode = "manual"\n';
-    const oldMarker = '{"old":true}\n';
-    const oldReport = '{"oldReport":true}\n';
-    const paths = resolveRuntimePaths(homeDir);
-    await writeFile(paths.configPath, original);
-    await mkdir(paths.serverDir, { recursive: true });
-    await writeFile(paths.configMigrationMarkerPath, oldMarker);
-    await writeFile(paths.configMigrationReportPath, oldReport);
-    await writeLegacy(agentDir, { providers: { relay: { api: 'openai', models: [{ id: 'safe' }] } } });
-
-    await expect(migrateRuntimeConfig({
-      homeDir,
-      osHomeDir: root,
-      agentDir,
-      faultInjector: {
-        reach(stage) {
-          if (stage === 'after-report-write') throw new Error('injected report failure');
-        },
-      },
-    })).rejects.toThrow('injected report failure');
-
-    const beforeFingerprint = createHash('sha256').update(original).digest('hex');
-    const backupPath = join(paths.configMigrationBackupDir, `config.${beforeFingerprint}.backup`);
-    expect(await readFile(paths.configPath, 'utf8')).toBe(original);
-    expect(await readFile(backupPath, 'utf8')).toBe(original);
-    expect(await readFile(paths.configMigrationMarkerPath, 'utf8')).toBe(oldMarker);
-    expect(await readFile(paths.configMigrationReportPath, 'utf8')).toBe(oldReport);
-  });
-
-  it('keeps the transaction committed when a post-marker hook fails', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    const paths = resolveRuntimePaths(homeDir);
-    await writeLegacy(agentDir, { providers: { relay: { api: 'openai', models: [{ id: 'safe' }] } } });
-
-    await expect(migrateRuntimeConfig({
-      homeDir,
-      osHomeDir: root,
-      agentDir,
-      faultInjector: {
-        reach(stage) {
-          if (stage === 'after-marker-write') throw new Error('post-commit failure');
-        },
-      },
-    })).rejects.toThrow('post-commit failure');
-
-    const config = await readFile(paths.configPath, 'utf8');
-    const report = JSON.parse(await readFile(paths.configMigrationReportPath, 'utf8')) as Record<string, unknown>;
-    const marker = JSON.parse(await readFile(paths.configMigrationMarkerPath, 'utf8')) as Record<string, unknown>;
-    expect(marker['completedAt']).toBe(report['completedAt']);
-    expect(marker['targetFingerprint']).toBe(report['targetFingerprint']);
-    expect(marker['targetFingerprint']).toBe(createHash('sha256').update(config).digest('hex'));
-    await expect(migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir })).resolves.toMatchObject({ status: 'unchanged' });
-  });
-
-  it('does not report a warning for a normal unchanged config', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    const result = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    expect(result.status).toBe('migrated');
-    expect(result.warning).toBeUndefined();
-    const unchanged = await migrateRuntimeConfig({ homeDir, osHomeDir: root, agentDir });
-    expect(unchanged.status).toBe('unchanged');
-    expect(unchanged.warning).toBeUndefined();
-  });
-
-  it('does not start Core and releases the lease when migration fails', async () => {
-    const { root, homeDir, agentDir } = await fixture();
-    await writeLegacy(agentDir, { providers: { relay: { api: 'openai', models: [{ id: 'safe' }] } } });
-    const startServer = vi.fn();
-    const options = {
-      homeDir,
-      hostIdentity: identity,
-      env: { ...process.env, HOME: root },
-      startServer,
-      configMigration: {
-        faultInjector: {
-          reach(stage: 'after-target-write' | 'after-marker-write' | 'after-report-write') {
-            if (stage === 'after-target-write') throw new Error('injected migration failure');
-          },
-        },
-      },
-    };
-
-    await expect(startRuntimeDaemon(options)).rejects.toThrow('injected migration failure');
-    expect(startServer).not.toHaveBeenCalled();
-    await expect(startRuntimeDaemon(options)).rejects.toThrow('injected migration failure');
-    expect(startServer).not.toHaveBeenCalled();
-  });
-});
-
-async function fixture(): Promise<{ root: string; homeDir: string; agentDir: string }> {
+async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'vsp-config-migration-'));
   homes.push(root);
   const homeDir = join(root, '.vspi');
   const agentDir = join(root, '.pi', 'agent');
   await mkdir(homeDir, { recursive: true });
   await mkdir(agentDir, { recursive: true });
-  return { root, homeDir, agentDir };
+  return { root, homeDir, agentDir, path: resolveRuntimePaths(homeDir).configPath };
 }
 
-async function writeLegacy(agentDir: string, models: unknown): Promise<void> {
-  await writeFile(join(agentDir, 'models.json'), JSON.stringify(models));
-}
+describe('VSPi-owned config migration', () => {
+  it('ignores Pi models and credentials even when legacy paths are supplied', async () => {
+    const f = await fixture();
+    await writeFile(join(f.agentDir, 'models.json'), JSON.stringify({ providers: { example: { api: 'openai', models: [{ id: 'legacy-model' }] } } }));
+    await writeFile(join(f.agentDir, 'auth.json'), JSON.stringify({ example: { type: 'api_key', key: 'YOUR_API_KEY' } }));
+    await migrateRuntimeConfig({ homeDir: f.homeDir, osHomeDir: f.root, agentDir: f.agentDir });
+    expect(parse(await readFile(f.path, 'utf8'))).toEqual({});
+    await writeFile(join(f.agentDir, 'models.json'), 'invalid changed legacy data');
+    expect(await migrateRuntimeConfig({ homeDir: f.homeDir, osHomeDir: f.root, agentDir: f.agentDir })).toMatchObject({ status: 'unchanged' });
+  });
+
+  it('ignores old runtime defaults rather than importing a model or effort', async () => {
+    const f = await fixture();
+    const dir = join(f.root, '.config', 'vspi');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'runtime-defaults.json'), JSON.stringify({ model: 'example/old', effort: 'high' }));
+    await migrateRuntimeConfig({ homeDir: f.homeDir, osHomeDir: f.root });
+    expect(parse(await readFile(f.path, 'utf8'))).toEqual({});
+  });
+
+  it('preserves malformed VSPi config and refuses to start instead of replacing it', async () => {
+    const f = await fixture();
+    await writeFile(f.path, '[broken');
+    await expect(migrateRuntimeConfig({ homeDir: f.homeDir })).rejects.toThrow('Invalid VSPi config.toml');
+    expect(await readFile(f.path, 'utf8')).toBe('[broken');
+  });
+
+  it('retires expired references without touching history or user overrides', async () => {
+    const f = await fixture();
+    const old = 'vsplab/deepseek-v4.1-flash-expires-on-0910';
+    const current = 'vsplab/deepseek-flash';
+    await writeFile(f.path, stringify({
+      providers: { vsplab: { type: 'openai' } },
+      models: { [old]: { provider: 'vsplab', model: 'deepseek-v4.1-flash-expires-on-0910', overrides: { display_name: 'My Flash' } } },
+      default_model: old, thinking: { model_efforts: { [old]: 'high' } },
+      secondary_model: { default_model: old, models: { [old]: 'Review' } },
+    }));
+    const history = join(f.homeDir, 'history.jsonl');
+    await writeFile(history, old);
+    await migrateRuntimeConfig({ homeDir: f.homeDir });
+    expect(parse(await readFile(f.path, 'utf8'))).toMatchObject({
+      default_model: current, models: { [current]: { overrides: { display_name: 'My Flash' } } },
+      thinking: { model_efforts: { [current]: 'high' } },
+      secondary_model: { default_model: current, models: { [current]: 'Review' } },
+    });
+    expect(await readFile(history, 'utf8')).toBe(old);
+  });
+
+  it('backs up stale generated names while preserving unrelated explicit fields', async () => {
+    const f = await fixture();
+    const original = stringify({
+      providers: { vsplab: { type: 'openai', api_key: 'YOUR_API_KEY' } },
+      models: { 'vsplab/deepseek-flash': { provider: 'vsplab', model: 'deepseek-flash', display_name: 'DeepSeek V4 Flash', max_context_size: 4096 } },
+      default_model: 'vsplab/gpt-6-astra',
+    });
+    await writeFile(f.path, original);
+    const result = await migrateRuntimeConfig({ homeDir: f.homeDir });
+    const data = parse(await readFile(f.path, 'utf8'));
+    expect(data).toMatchObject({ default_model: 'vsplab/gpt-6-astra', models: { 'vsplab/deepseek-flash': { max_context_size: 4096 } } });
+    expect((data['models'] as Record<string, unknown>)['vsplab/deepseek-flash']).not.toHaveProperty('display_name');
+    expect(await readFile(result.report!.backupPath, 'utf8')).toBe(original);
+    expect(JSON.stringify(result.report)).not.toContain('YOUR_API_KEY');
+  });
+
+  it('preserves an existing canonical entry when retiring a duplicate alias', async () => {
+    const f = await fixture();
+    await writeFile(f.path, stringify({
+      providers: { vsplab: { type: 'openai' } },
+      models: {
+        'vsplab/deepseek-v4.1-flash': { provider: 'vsplab', model: 'deepseek-v4.1-flash', max_context_size: 2000 },
+        'vsplab/deepseek-flash': { provider: 'vsplab', model: 'deepseek-flash', max_context_size: 4096 },
+      },
+      default_model: 'vsplab/deepseek-v4.1-flash',
+    }));
+    await migrateRuntimeConfig({ homeDir: f.homeDir });
+    expect(parse(await readFile(f.path, 'utf8'))).toMatchObject({ default_model: 'vsplab/deepseek-flash', models: { 'vsplab/deepseek-flash': { max_context_size: 4096 } } });
+  });
+
+  it('does not reinterpret explicit edits after the one-time snapshot migration', async () => {
+    const f = await fixture();
+    await migrateRuntimeConfig({ homeDir: f.homeDir });
+    const edited = stringify({ providers: { vsplab: { type: 'openai' } }, models: { 'vsplab/deepseek-flash': { display_name: 'My model' } } }) + '\n';
+    await writeFile(f.path, edited);
+    await migrateRuntimeConfig({ homeDir: f.homeDir });
+    expect(await readFile(f.path, 'utf8')).toBe(edited);
+    expect(await migrateRuntimeConfig({ homeDir: f.homeDir })).toMatchObject({ status: 'unchanged' });
+  });
+
+  it.each(['after-target-write', 'after-report-write'] as const)('rolls back when a migration fails at %s', async (stage) => {
+    const f = await fixture();
+    const original = 'default_model = "example/model"';
+    await writeFile(f.path, original);
+    await expect(migrateRuntimeConfig({ homeDir: f.homeDir, faultInjector: { reach(point) { if (point === stage) throw new Error('injected'); } } })).rejects.toThrow('injected');
+    expect(await readFile(f.path, 'utf8')).toBe(original);
+    await expect(readFile(resolveRuntimePaths(f.homeDir).configMigrationMarkerPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('keeps a completed transaction after a post-marker failure', async () => {
+    const f = await fixture();
+    await expect(migrateRuntimeConfig({ homeDir: f.homeDir, faultInjector: { reach(point) { if (point === 'after-marker-write') throw new Error('injected'); } } })).rejects.toThrow('injected');
+    expect(await migrateRuntimeConfig({ homeDir: f.homeDir })).toMatchObject({ status: 'unchanged' });
+  });
+
+  it('does not start Core and releases the lease when migration fails', async () => {
+    const f = await fixture();
+    await writeFile(f.path, '[broken');
+    const startServer = vi.fn();
+    const options = { homeDir: f.homeDir, hostIdentity: { productName: 'test', version: 'test', platform: 'test' }, startServer };
+    await expect(startRuntimeDaemon(options)).rejects.toThrow('Invalid VSPi config.toml');
+    await expect(startRuntimeDaemon(options)).rejects.toThrow('Invalid VSPi config.toml');
+    expect(startServer).not.toHaveBeenCalled();
+  });
+});

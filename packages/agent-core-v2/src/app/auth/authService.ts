@@ -33,6 +33,7 @@ import type {
 } from './oauthProtocol';
 
 import { Disposable } from '#/_base/di/lifecycle';
+import { accountProxyPreference, usesAccountProxy } from './proxy';
 import { LifecycleScope } from '#/app/scopes';
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
 import { Error2, ErrorCodes } from '#/errors';
@@ -66,7 +67,7 @@ import { isOAuthCatalogVendor } from '#/kosong/provider/providerDefinition';
 import { ITelemetryService } from '#/app/telemetry/telemetry';
 import { IAtomicDocumentStore } from '#/persistence/interface/atomicDocumentStore';
 import { PiOAuthAdapter } from './piOAuthAdapter';
-import { OAUTH_NETWORK_SECTION, type OAuthNetworkConfig } from './configSection';
+import { OAUTH_NETWORK_SECTION, PROXY_SECTION, type OAuthNetworkConfig, type ProxyConfig } from './configSection';
 import { listPiModelRecords } from '#/kosong/provider/pi/catalog';
 import type { ProviderRequestAuth } from '#/kosong/contract/provider';
 
@@ -124,8 +125,9 @@ export class OAuthService extends Disposable implements IOAuthService {
       bootstrap.scope('credentials'),
       (provider, type) => this.provisionPiModels(provider, type),
       (provider) => {
-        const port = this.config.get<OAuthNetworkConfig>(OAUTH_NETWORK_SECTION)?.openaiProxyPort;
-        return provider === 'openai-codex' && port !== undefined && port > 0 ? `http://127.0.0.1:${port}` : undefined;
+        if (!usesAccountProxy(provider)) return undefined;
+        const preference = accountProxyPreference(this.config.get<ProxyConfig>(PROXY_SECTION), this.config.get<OAuthNetworkConfig>(OAUTH_NETWORK_SECTION));
+        return preference === '' ? undefined : preference;
       },
     ));
     this._register(providerService.onDidChangeProviders((event) => {

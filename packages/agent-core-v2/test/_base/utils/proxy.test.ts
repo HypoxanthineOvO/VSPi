@@ -5,6 +5,8 @@ import { Socket } from 'node:net';
 import { getGlobalDispatcher, setGlobalDispatcher, MockAgent } from 'undici';
 import { withScopedProxy, withOriginDispatcher } from '#/_base/utils/scopedProxy';
 import { createNoSniConnector } from '#/_base/utils/tls';
+import { normalizeProxyAddress } from '#/_base/utils/proxyAddress';
+import { accountProxyForUrl, accountProxyPreference } from '#/app/auth/proxy';
 
 import {
   createProxyDispatcher,
@@ -18,6 +20,34 @@ import {
 } from '#/_base/utils/proxy';
 
 describe('proxy utilities', () => {
+  it.each([
+    ['7890', 'http://127.0.0.1:7890'], [' 3128 ', 'http://127.0.0.1:3128'],
+    ['proxy.example.com:7890', 'http://proxy.example.com:7890'], ['proxy.example.com', 'http://proxy.example.com'],
+    ['192.0.2.10:3128', 'http://192.0.2.10:3128'], ['[2001:db8::1]:7890', 'http://[2001:db8::1]:7890'],
+    ['HTTPS://proxy.example.com:443/', 'https://proxy.example.com'],
+  ])('normalizes the proxy address %s', (input, expected) => {
+    expect(normalizeProxyAddress(input)).toBe(expected);
+  });
+
+  it.each(['', '0', '65536', 'proxy.example.com:0', 'proxy.example.com:', 'http://proxy.example.com:65536',
+    'socks5://proxy.example.com:1080', 'http://user:password@proxy.example.com', 'http://proxy.example.com/path',
+    'proxy.example.com?x=y', 'proxy.example.com#x', 'proxy.example.com\\path', 'proxy.example.com\n:7890'])('rejects unsupported proxy input %j', input => {
+    expect(normalizeProxyAddress(input)).toBeUndefined();
+  });
+
+  it('lets the explicit shared skip override an old OpenAI port', () => {
+    expect(accountProxyPreference({ url: '' }, { openaiProxyPort: 7890 })).toBe('');
+  });
+
+  it.each(['https://api.openai.com/v1', 'https://api.anthropic.com', 'https://generativelanguage.googleapis.com/v1beta',
+    'https://us-central1-aiplatform.googleapis.com', 'https://api.x.ai/v1'])('selects the shared proxy for official endpoint %s', url => {
+    expect(accountProxyForUrl(url, 'http://proxy.example.com:3128')).toBe('http://proxy.example.com:3128');
+  });
+
+  it.each(['https://relay.example.test/v1', 'http://127.0.0.1:8080', 'https://api.openai.com.example.test',
+    'https://api.vsplab.cn/v1', 'https://api.vsplab.tech/v1', 'https://api.deepseek.com'])('does not reroute the unrelated endpoint %s', url => {
+    expect(accountProxyForUrl(url, 'http://proxy.example.com:3128')).toBeUndefined();
+  });
   it('omits SNI without disabling certificate or URL-hostname verification', async () => {
     const socket = new tls.TLSSocket(new Socket());
     let options: tls.ConnectionOptions | undefined;

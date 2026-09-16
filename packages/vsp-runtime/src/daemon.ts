@@ -5,6 +5,7 @@ import { serveKlientIpc } from '@moonshot-ai/klient/ipc';
 import { ISessionManager, IAgentLifecycleService, IAgentActivityView, IAgentTaskService, AgentCron, AgentGoal, MAIN_AGENT_ID } from '@moonshot-ai/agent-core-v2';
 
 import './feature-defaults.js';
+import './model-defaults.js';
 
 import {
   migrateRuntimeConfig,
@@ -98,8 +99,6 @@ export async function startRuntimeDaemon(options: StartRuntimeDaemonOptions): Pr
     const migration = await migrateRuntimeConfig({
       ...options.configMigration,
       homeDir: paths.homeDir,
-      osHomeDir: options.env?.['HOME'],
-      agentDir: options.env?.['PI_CODING_AGENT_DIR'],
       env: options.env ?? process.env,
     });
     server = await (options.startServer ?? startServer)({

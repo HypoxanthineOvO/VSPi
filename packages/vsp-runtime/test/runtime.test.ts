@@ -475,6 +475,7 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 	});
 
 	it("enables audited VSP features by default when the user has no override", async () => {
+
 		homeDir = await mkdtemp(join(tmpdir(), "vsp-runtime-features-"));
 		daemon = await startTestDaemon(homeDir);
 		const connection = await connectRuntime(homeDir);
@@ -913,195 +914,97 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 		} finally { await witness.close(); await rm(witnessHome, { recursive: true, force: true }); }
 	});
 
-	it("repairs invalid TOML before Core starts and reaches a connectable state", async () => {
-		homeDir = await mkdtemp(join(tmpdir(), "vsp-runtime-invalid-config-"));
-		await writeFile(join(homeDir, "config.toml"), "[broken\napi_key = 'secret'\n");
+	it("refuses invalid TOML without modifying user configuration", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-invalid-config-"));
+		await writeFile(resolveRuntimePaths(homeDir).configPath, "[broken");
+		await expect(startTestDaemon(homeDir)).rejects.toThrow("Invalid VSPi config.toml");
+		expect(await readFile(resolveRuntimePaths(homeDir).configPath, "utf8")).toBe("[broken");
+	});
 
+	it("ignores legacy Pi configuration when starting an empty VSPi home", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-no-pi-"));
+		const agentDir = join(homeDir, ".pi", "agent");
+		await mkdir(agentDir, { recursive: true });
+		await writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: { relay: { api: "openai", models: [{ id: "old" }] } } }));
 		daemon = await startTestDaemon(homeDir);
 		const connection = await connectRuntime(homeDir);
 		try {
-			expect(connection.env.homeDir).toBe(homeDir);
-			expect(connection.migrationWarning).toEqual({ status: "repaired", reason: "bad-toml" });
-			expect(JSON.stringify(connection.migrationWarning)).not.toContain(homeDir);
-			await expect(connection.klient.global.config.get("providers")).resolves.toEqual({});
-		} finally {
-			await connection.close();
-		}
+			expect(await connection.klient.global.kosong.listModels()).toEqual([]);
+		} finally { await connection.close(); }
 	});
 
-	it("imports legacy Pi providers and VSPi defaults without overwriting new config", async () => {
-		const root = await mkdtemp(join(tmpdir(), "vsp-runtime-legacy-provider-"));
-		homeDir = root;
-		const runtimeHome = join(root, ".vspi");
-		const agentDir = join(root, ".pi", "agent");
-		await mkdir(agentDir, { recursive: true });
-		await mkdir(join(root, ".config", "vspi"), { recursive: true });
-		await writeFile(
-			join(agentDir, "models.json"),
-			JSON.stringify({
-				providers: {
-					"custom-gemini-via-legacybridge-32efcb06": {
-						name: "Legacy Gemini Bridge",
-						baseUrl: "https://legacy.example/v1",
-						api: "openai",
-						models: [{ id: "gemini-test", name: "Gemini Test" }],
-					},
-					relay: {
-						name: "Relay",
-						baseUrl: "https://relay.example/v1",
-						api: "openai-responses",
-						models: [
-							{
-								id: "reasoner",
-								name: "Reasoner",
-								contextWindow: 200_000,
-								maxTokens: 32_000,
-								input: ["text", "image"],
-							},
-							{
-								id: "gpt-5.6-sol",
-								name: "GPT-5.6 Sol",
-								contextWindow: 128_000,
-								maxTokens: 32_000,
-								input: ["text"],
-							},
-						],
-					},
-				},
-			}),
-		);
-		await writeFile(
-			join(agentDir, "models-store.json"),
-			JSON.stringify({
-				upstream: {
-					models: [
-						{
-							id: "reasoner",
-							name: "Upstream Reasoner",
-							api: "anthropic-messages",
-							baseUrl: "https://upstream.example/v1",
-							contextWindow: 128_000,
-							maxTokens: 8_000,
-							input: ["text"],
-							reasoning: true,
-							thinkingLevelMap: { low: "low", high: "high" },
-						},
-					],
-				},
-			}),
-		);
-		await writeFile(
-			join(agentDir, "auth.json"),
-			JSON.stringify({
-				relay: { type: "api_key", key: "legacy-key" },
-			}),
-		);
-		await writeFile(
-			join(root, ".config", "vspi", "runtime-defaults.json"),
-			JSON.stringify({
-				model: { provider: "relay", id: "reasoner" },
-				effort: "high",
-			}),
-		);
-
-		daemon = await startRuntimeDaemon({
-			homeDir: runtimeHome,
-			hostIdentity: identity,
-			env: { ...process.env, HOME: root },
-		});
-		let connection = await connectRuntime(runtimeHome);
-		expect(
-			await connection.klient.global.kosong.getProvider("relay"),
-		).toMatchObject({
-			id: "relay",
-			type: "openai_responses",
-			base_url: "https://relay.example/v1",
-			has_api_key: true,
-			models: expect.arrayContaining(["relay/reasoner", "relay/gpt-5.6-sol"]),
-		});
-		expect(await connection.klient.global.config.get("defaultModel")).toBe(
-			"relay/reasoner",
-		);
-		expect(await connection.klient.global.config.get("thinking")).toEqual({ effort: "off" });
-		expect(
-			await connection.klient.global.kosong.listProviders(),
-		).not.toContainEqual(
-			expect.objectContaining({
-				id: "custom-gemini-via-legacybridge-32efcb06",
-			}),
-		);
-		expect(await connection.klient.global.kosong.listModels()).toContainEqual(
-			expect.objectContaining({
-				provider: "relay",
-				model: "relay/reasoner",
-				max_context_size: 200_000,
-				capabilities: expect.arrayContaining(["image_in", "thinking"]),
-				support_efforts: expect.arrayContaining(["low", "high"]),
-			}),
-		);
-		const migratedModels =
-			await connection.klient.global.config.inspect<
-				Record<string, Record<string, unknown>>
-			>("models");
-		expect(migratedModels.userValue?.["relay/reasoner"]).toMatchObject({
-			protocol: "openai_responses",
-			displayName: "Reasoner",
-			maxContextSize: 200_000,
-		});
-		expect(
-			migratedModels.userValue?.["relay/reasoner"]?.["baseUrl"],
-		).toBeUndefined();
-		const unverifiedModel = migratedModels.userValue?.["relay/gpt-5.6-sol"];
-		expect(unverifiedModel?.["capabilities"]).toBeUndefined();
-		expect(unverifiedModel?.["supportEfforts"]).toBeUndefined();
-		expect(unverifiedModel?.["defaultEffort"]).toBeUndefined();
-
-		const providers =
-			await connection.klient.global.config.inspect<
-				Record<string, Record<string, unknown>>
-			>("providers");
-		await connection.klient.global.config.replace({
-			domain: "providers",
-			value: {
-				...providers.userValue,
-				relay: { ...providers.userValue?.["relay"], apiKey: "new-key" },
-			},
-		});
-		await connection.klient.global.config.replace({
-			domain: "thinking",
-			value: { effort: "off" },
-		});
-		await connection.klient.global.config.replace({
-			domain: "defaultModel",
-			value: "relay/gpt-5.6-sol",
-		});
-		await connection.close();
-		await daemon.close();
-		daemon = await startRuntimeDaemon({
-			homeDir: runtimeHome,
-			hostIdentity: identity,
-			env: { ...process.env, HOME: root },
-		});
-		connection = await connectRuntime(runtimeHome);
+	it("supplies the approved relay and DeepSeek models without writing a generated model catalog", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-bundled-models-"));
+		await writeFile(resolveRuntimePaths(homeDir).configPath, '[providers.vsplab]\ntype = "openai"\n[providers.deepseek]\ntype = "deepseek"\n');
+		daemon = await startTestDaemon(homeDir);
+		const connection = await connectRuntime(homeDir);
 		try {
-			const current =
-				await connection.klient.global.config.inspect<
-					Record<string, Record<string, unknown>>
-				>("providers");
-			expect(current.userValue?.["relay"]?.["apiKey"]).toBe("new-key");
-			const currentModels =
-				await connection.klient.global.config.inspect<
-					Record<string, Record<string, unknown>>
-				>("models");
-			const currentUnverifiedModel = currentModels.userValue?.["relay/gpt-5.6-sol"];
-			expect(currentUnverifiedModel?.["capabilities"]).toBeUndefined();
-			expect(currentUnverifiedModel?.["supportEfforts"]).toBeUndefined();
-			expect(currentUnverifiedModel?.["defaultEffort"]).toBeUndefined();
-			expect(await connection.klient.global.config.get("thinking")).toEqual({ effort: "off" });
-			expect(await connection.klient.global.config.get("defaultModel")).toBe("relay/gpt-5.6-sol");
-		} finally {
-			await connection.close();
-		}
+			const models = await connection.klient.global.kosong.listModels();
+			expect(models).toEqual(expect.arrayContaining([
+				expect.objectContaining({ model: "vsplab/deepseek-flash", display_name: "DeepSeek V4.1 Flash" }),
+				expect.objectContaining({ model: "vsplab/gpt-6-astra", display_name: "GPT-6 Astra" }),
+				expect.objectContaining({ model: "deepseek/deepseek-flash", display_name: "DeepSeek V4.1 Flash" }),
+			]));
+			expect(await readFile(resolveRuntimePaths(homeDir).configPath, "utf8")).not.toContain("[models");
+		} finally { await connection.close(); }
+	});
+
+	it("preserves a flat user override through refresh and reload without persisting builtin defaults", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-model-overrides-"));
+		await writeFile(resolveRuntimePaths(homeDir).configPath, '[providers.vsplab]\ntype = "openai"\n');
+		daemon = await startTestDaemon(homeDir);
+		const connection = await connectRuntime(homeDir);
+		try {
+			await connection.klient.global.config.set({ domain: "models", patch: { "vsplab/deepseek-flash": { displayName: "My Flash", maxContextSize: 4096 } } });
+			await connection.klient.global.kosong.refreshProviders({ providerId: "vsplab" });
+			await connection.klient.global.config.reload();
+			expect(await connection.klient.global.kosong.listModels()).toEqual(expect.arrayContaining([
+				expect.objectContaining({ model: "vsplab/deepseek-flash", display_name: "My Flash", max_context_size: 4096 }),
+			]));
+			const disk = await readFile(resolveRuntimePaths(homeDir).configPath, "utf8");
+			expect(disk).toContain('display_name = "My Flash"');
+			expect(disk).not.toContain("gpt-6-astra");
+			expect(disk).not.toContain("overrides");
+			await connection.klient.global.config.replace({ domain: "models", value: {} });
+			expect(await connection.klient.global.kosong.listModels()).toEqual(expect.arrayContaining([
+				expect.objectContaining({ model: "vsplab/deepseek-flash", display_name: "DeepSeek V4.1 Flash", max_context_size: 1048576 }),
+			]));
+		} finally { await connection.close(); }
+	});
+
+	it("adds bundled models after configuring a provider on an already running daemon", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-model-provider-change-"));
+		daemon = await startTestDaemon(homeDir);
+		const connection = await connectRuntime(homeDir);
+		try {
+			await connection.klient.global.config.set({ domain: "providers", patch: { vsplab: { type: "openai" } } });
+			expect(await connection.klient.global.kosong.listModels()).toEqual(expect.arrayContaining([
+				expect.objectContaining({ model: "vsplab/gpt-6-astra" }),
+			]));
+		} finally { await connection.close(); }
+	});
+
+	it("keeps a flat native-provider thinking override above the shipped effort profile", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-native-effort-"));
+		await writeFile(resolveRuntimePaths(homeDir).configPath, '[providers.deepseek]\ntype = "deepseek"\n');
+		daemon = await startTestDaemon(homeDir);
+		const connection = await connectRuntime(homeDir);
+		try {
+			await connection.klient.global.config.set({ domain: "models", patch: { "deepseek/deepseek-flash": { thinking: { efforts: ["low", "high"], defaultEffort: "low" } } } });
+			expect(await connection.klient.global.kosong.listModels()).toEqual(expect.arrayContaining([
+				expect.objectContaining({ model: "deepseek/deepseek-flash", thinking: expect.objectContaining({ efforts: ["low", "high"], default_effort: "low" }) }),
+			]));
+		} finally { await connection.close(); }
+	});
+
+	it("keeps custom provider models separate from builtin defaults", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-custom-model-"));
+		await writeFile(resolveRuntimePaths(homeDir).configPath, '[providers.example]\ntype = "openai"\n[models."example/custom"]\nprovider = "example"\nmodel = "custom"\nmax_context_size = 4096\n');
+		daemon = await startTestDaemon(homeDir);
+		const connection = await connectRuntime(homeDir);
+		try {
+			expect((await connection.klient.global.kosong.listModels()).map(model => model.model)).toEqual(["example/custom"]);
+		} finally { await connection.close(); }
 	});
 });
 

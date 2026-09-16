@@ -44,6 +44,18 @@ export function piProtocolForApi(api: Api): Protocol | undefined {
 export function listPiProviders() {
   return providers.flatMap((provider) => {
     const models = provider.getModels().filter((model) => piProtocolForApi(model.api) !== undefined);
+    if (provider.id === 'deepseek' && !models.some((model) => model.id === 'deepseek-flash')) {
+      const legacy = models.find((model) => model.id === 'deepseek-v4-flash');
+      if (legacy) models.unshift({
+        ...legacy,
+        id: 'deepseek-flash',
+        name: 'DeepSeek V4.1 Flash',
+        input: ['text', 'image'],
+        contextWindow: 1000000,
+        maxTokens: 384000,
+        cost: { input: 0.15, output: 0.6, cacheRead: 0.003, cacheWrite: 0 },
+      });
+    }
     const first = models[0];
     return first === undefined ? [] : [{
       id: provider.id,

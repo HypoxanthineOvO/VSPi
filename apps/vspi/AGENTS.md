@@ -19,6 +19,7 @@ VSPi is a separate product from Kimi Code. Treat `apps/vspi/src/v1` as the sourc
 - Live Subagent state belongs in the docked Agents surface and `/agents`, never in chronological transcript child cards.
 - Model context, price, usage, and cache labels must state one coherent metric and provenance. Do not present cumulative counters as current context.
 - Main-model stars are the official common-model selection, independent of Subagent membership. `/model` defaults to stars and offers all models; only `/subagent-model` edits user candidates in core `secondary_model`. Never generate that pool from stars or change the main model while editing it.
+- From 2.5.1, builtin model defaults ship with the product and user differences live only in VSPi home `config.toml`; never import `.pi` or old runtime-defaults. Remote catalogs must not overwrite builtin defaults or user fields. Preserve legacy `overrides` precedence and verify the resolved catalog, not just the source JSON.
 - `/model` stages the model until Effort confirmation, and Escape must leave the live binding unchanged. Hide Off in the pickers, remember efforts per model alias in core `thinking.modelEfforts`, and never overwrite a resumed session from global defaults.
 - Keep daemon/client compatibility explicit. A client must not silently attach to a daemon running a different build or unsupported Node version.
 - The backend permission mode is authoritative. Reflect permission events in the UI, and never reapply draft permission choices while restoring an existing session.

@@ -5,7 +5,7 @@ interface RecommendedModel {
 }
 
 export const RECOMMENDED_MODELS: readonly RecommendedModel[] = [
-	{ label: "GPT 6", ids: ["gpt-6", "gpt-6-astra"] },
+	{ label: "GPT 6 Astra", ids: ["gpt-6", "gpt-6-astra"] },
 	{ label: "GPT 5.6 Sol", ids: ["gpt-5.6-sol"] },
 	{ label: "GPT 5.6 Luna", ids: ["gpt-5.6-luna"] },
 	{ label: "Claude Fable 5.1", ids: ["claude-fable-5-1"] },
@@ -15,7 +15,7 @@ export const RECOMMENDED_MODELS: readonly RecommendedModel[] = [
 	{ label: "Kimi K2.8 Preview", ids: [], names: ["Kimi K2.8", "Kimi K2.8 Preview"] },
 	{ label: "GLM 5.3", ids: ["glm-5.3"] },
 	{ label: "GLM 5.3 Flash", ids: ["glm-5.3-flash"] },
-	{ label: "DeepSeek V4.1 Flash", ids: ["deepseek-flash"] },
+	{ label: "DeepSeek V4.1 Flash", ids: ["deepseek-flash", "deepseek-v4.1-flash"] },
 	{ label: "DeepSeek V4 Pro", ids: ["deepseek-v4-pro"] },
 	{ label: "MiniMax M3", ids: ["minimax-m3"] },
 	{ label: "MiMo V2.5", ids: ["mimo-v2.5"] },

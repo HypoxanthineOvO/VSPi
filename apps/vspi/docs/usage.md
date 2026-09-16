@@ -119,9 +119,22 @@ vspi exec resume SESSION_ID --permission manual "只做无需审批的检查"
 
 VSPi 支持内置 Provider 和自定义兼容端点。首次使用运行 `vspi init`；之后用 `vspi config` 调整 Provider，用 `vspi login <provider>` 登录账号或配置 API Key。界面内也提供 `/providers`、`/login` 和 `/logout`。
 
-在 `vspi config` 选择 **OpenAI OAuth (ChatGPT / Codex)**，或运行 `vspi login openai-codex`，会先选择代理，再进入官方账号授权。可以输入 daemon 所在机器的本机 HTTP/mixed 代理端口（例如 `7890`）并保存；选择 **Skip** 则不使用 VSPi 专用代理，沿用 daemon 已有的环境代理配置。此设置只作用于 OpenAI OAuth 登录、令牌刷新和该账号的模型调用，不修改系统代理，也不改变其他 Provider 的路由。浏览器仍需使用自身可用的网络配置；远程 daemon 的 `127.0.0.1` 指远程机器，不是浏览器所在机器。
+运行 `vspi proxy` 可单独配置 OpenAI、Anthropic、Gemini 和 xAI 官方接口共用的代理。直接显示“请输入代理地址”，操作按钮统一为“确认／跳过／取消”：Enter 确认，Tab 切换，Esc 取消。格式错误会留在原输入框内提示；确认前取消不会保存或启动登录。
 
-代理端口保存在 `config.toml` 的 `[oauth_network] openai_proxy_port`；`0` 或未配置表示沿用环境。令牌仍保存在私有凭据存储中，不写进这项网络配置。登录取消或端口无效时不会继续发起授权。
+支持输入 `7890`（后台所在机器的 `127.0.0.1:7890`）、`proxy.example.com:7890`、`192.0.2.10:3128`、`[2001:db8::1]:7890` 或完整 `http://` / `https://` 代理地址。未写协议默认 HTTP，仅域名使用 HTTP 默认端口 80。支持 HTTP/HTTPS 代理及提供 HTTP 接口的混合端口，不接受 SOCKS 协议、URL 中的账号密码、路径或查询参数。
+
+首次配置适用厂商时，如果尚未选择代理，会先出现同一输入页；已有配置或已选择“跳过”则不重复询问。命令行 `vspi config`、`vspi login` 和界面内 `/login` 使用相同规则。随时运行 `vspi proxy` 可以修改。当前 provider 中，Anthropic、OpenAI Codex 和 xAI 支持 OAuth；Gemini 使用 `google` Provider 的 API Key，尚无 OAuth 登录入口。
+
+代理偏好保存在 Core `config.toml`，例如：
+
+```toml
+[proxy]
+url = "http://proxy.example.com:7890"
+```
+
+选择“跳过”保存 `url = ""`，表示沿用后台已有的环境网络，而非强制直连。兼容已发布版本的 `[oauth_network] openai_proxy_port`；新版 `[proxy]` 的显式选择优先，包括“跳过”。修改后用于后续请求，不中断已发起的请求。
+
+此配置覆盖适用厂商的 OAuth 登录、令牌刷新及官方模型接口调用（含 API Key 模式）；不会把国内厂商、VSPLab 或自定义中转地址一并改走代理，也不修改系统代理。浏览器仍使用自身网络设置；远程后台的 `127.0.0.1` 指远程机器。只使用可信代理，令牌仍保存在私有凭据存储中。
 
 模型故障恢复会区分 HTTP 状态和厂商业务码。例如 GLM `1302` 限流会进行有限重试，`1113` 欠费及 `1309`/`1310` 套餐或周期额度问题会停止并显示原因；Kimi 额度耗尽、DeepSeek 余额不足也不会作为普通限流反复请求。未知错误不会被默认为可无限重试。
 
@@ -129,7 +142,7 @@ VSPi 支持内置 Provider 和自定义兼容端点。首次使用运行 `vspi i
 
 VSPLab 中转站是内置 Provider：`vspi init` 时选择 VSPLab 并配置 API Key 即可。默认线路为 `cn`，接入 `https://api.vsplab.cn/v1`；在 `/settings` 的**全局 → 网络 → VSPLab 线路**中用 Enter/Space 切换 `cn` / `tech`，按 Ctrl+S 保存，Escape 放弃未保存的切换。项目设置不能改共享线路。
 
-`cn` 使用 HTTPS 无 SNI **直连**，仍校验证书链和 URL 主机名，不降级 HTTP、不关闭证书验证；该处理同时覆盖模型调用、可用模型列表和模型目录。`tech` 使用 `https://api.vsplab.tech/v1`，保留常规 TLS 与当前网络连接行为。需要代理或 cn 不可达时可选 tech；OpenAI OAuth 的专用代理设置不用于 cn 直连。
+`cn` 使用 HTTPS 无 SNI **直连**，仍校验证书链和 URL 主机名，不降级 HTTP、不关闭证书验证；该处理同时覆盖模型调用、可用模型列表和模型目录。`tech` 使用 `https://api.vsplab.tech/v1`，保留常规 TLS 与当前网络连接行为。需要环境代理或 cn 不可达时可选 tech；`vspi proxy` 的国外官方接口代理不用于这两条 VSPLab 线路。
 
 线路偏好统一保存在 Core `config.toml`，例如：
 
@@ -180,7 +193,7 @@ VSPLab 的内置协议默认值为：GPT 使用 `openai_responses`，Claude 使�
 
 Kimi K2.8 Preview 尚未核实到独立的官方档位说明，不套用 K3 的配置。每项基线的来源位于 `packages/agent-core-v2/src/kosong/provider/effortProfiles.ts`，没有公开确认的情况单独标注。GPT 6 的官方页面明确列出了档位，但本轮未确认单独的 API 默认档位，因此 medium 明确标为 VSPi 的产品默认。
 
-旧版未带能力版本的远程列表不能把已知模型覆盖回通用六档。新网关声明使用 `effortRevision`、`effortMode`、`effortLevels`、`defaultEffort` 更新能力；用户明确写在 `overrides` 中的设置仍然优先。初始化迁移保留 `[thinking.model_efforts]` 和 `[secondary_model]`，备份与脱敏报告放在 VSPi home 的 `server/config-migration-backups/` 和 `server/config-migration.report.json`。升级完成后用户再手动写入的协议覆盖不会在每次启动时被重复删除。
+2.5.1 起内置模型能力随安装包更新，用户普通字段可覆盖内置值；旧 `overrides` 保持更高优先级。自定义远端目录仍使用 `effortRevision` 等版本化能力声明。迁移保留 `[thinking.model_efforts]` 和 `[secondary_model]`，备份与脱敏报告放在 VSPi home 的 `server/config-migration-backups/` 和 `server/config-migration.report.json`，不反复删除用户的协议设置。
 
 `/subagent-model` 单独管理用户的 `[secondary_model]`：`Enter` 加入或移除候选，`Ctrl+D` 设置默认模型，`Ctrl+P` 编辑能力/用途说明。候选使用已有的 `Provider/model` 配置引用，不自动从星标生成，也不自动跨 Provider 选路。清空候选后继承主模型；保存只影响后续创建的 Subagent，不改变主模型或已运行的子任务。已有 `force=true` 时该候选界面只读，需要先通过 core 配置明确关闭强制模式。
 
@@ -214,6 +227,38 @@ vspi config reload
 `config inspect` 和 `config diagnostics` 只读连接已有 daemon；`config reload` 才会重新读取磁盘配置。命令行 section 使用 `defaultModel` 等 Core 名称，TOML 使用 `default_model` 等磁盘字段名。
 
 `config get/inspect` 的输出会隐藏凭据，不要把脱敏后的整段值写回。修改少数字段优先使用 `config patch`；`config set` 要求完整 section 值，语法见 `vspi config --help`。
+
+### 模型目录与本地覆盖
+
+从 2.5.1 起，VSPi 只读取自己的配置，不再读取或自动导入 `~/.pi/agent/`、`PI_CODING_AGENT_DIR` 或旧的 `~/.config/vspi/runtime-defaults.json`。已有 VSPi 配置、凭据和会话保留；首次启动会备份并压缩与内置目录相同的历史模型快照，不能确认来源的差异保留为用户设置。无效 TOML 会阻止启动，不会被清空重建。
+
+内置 Provider 的模型默认值随安装包发布；VSPLab 的维护源是 `ops/vsplab/model-catalog.json`，其他内置 Provider 使用随包固定的目录。线上目录不再自动改写这些内置默认值。账号权限仍由服务端决定，目录中有模型不等于账号有权调用。
+
+用户只需要在 `vspi config path` 指向的文件中写差异，不复制整个模型目录。例如已有 VSPLab Provider 时：
+
+```toml
+[models."vsplab/deepseek-flash"]
+display_name = "我的 Flash"
+max_context_size = 1000000
+
+[models."vsplab/deepseek-flash".thinking]
+default_effort = "high"
+```
+
+优先级为 **旧 overrides 子表（兼容） > 用户普通字段 > 内置默认值**。新配置直接写普通字段即可；删除相应字段恢复内置值。若旧配置已有同字段的 `overrides`，先原地修改或移除它，避免较高优先级的旧值继续生效。不要重复声明同名 TOML 表。
+
+同样的局部修改可通过 CLI 完成：
+
+```sh
+vspi config patch models '{"vsplab/deepseek-flash":{"displayName":"我的 Flash","thinking":{"defaultEffort":"high"}}}'
+vspi inspect models
+```
+
+编辑磁盘文件后运行 `vspi config reload`，检查 diagnostics，再用 `vspi inspect models` 核对实际目录。API 写入会立即生效；设置默认模型不替换当前会话正在使用的模型，当前会话使用 `/model` 选择。
+
+`deepseek-flash` 显示为 **DeepSeek V4.1 Flash**并星标；旧 `deepseek-v4.1-flash` 配置引用会迁到它。保留独立的 `deepseek-v4-flash`，不跟着星标；V4 Pro 继续独立星标。GPT-6 Astra 的请求 ID 是 `gpt-6-astra`。星标只筛选已有模型，不代表权限；`/model` 内 `Ctrl+O` 查看全部。
+
+自定义 Provider 仍可完整声明模型，也可显式配置远端发现。只有这类目录使用 `vspi config refresh example` 刷新；内置 Provider 返回 unchanged，升级 VSPi 才更新内置目录。自定义远端目录的持久用户覆盖继续放在 `overrides` 子表，避免被其远端刷新替换。新模型至少声明 `provider`、`model` 和正数 `max_context_size`，根据实际接口设置 `protocol`。不要删除 home、历史或重新初始化来修复模型缺项。
 
 ## 升级、诊断与运行边界
 

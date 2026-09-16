@@ -4,6 +4,15 @@
 
 发行包本地构建并直接发布，发版流程见[开发指南](development.md#发布)。各版本的平台验收范围分别记录；2.4.0 按 Linux 先行发布，Windows 验收后置，不沿用旧版本的结论。
 
+## 2.5.1 — 内置模型目录与用户配置分层（Linux 先行）
+
+- 内置模型目录随安装包更新，不再被线上目录覆盖；补齐 DeepSeek V4.1 Flash，确保 VSPLab 的 Flash 与 GPT-6 Astra 无需依赖历史配置即可出现。
+- 只读取 VSPi home 的 `config.toml`，停止读取 `.pi` 和旧 runtime-defaults。用户只写覆盖字段，旧 overrides 保持优先；历史快照迁移前备份，无法判断来源的差异保留。损坏 TOML 不再被自动清空。
+- 更新内置 `vspi-self` 自管理 Skill，补充路径、模型来源、覆盖优先级、刷新和验证方法；新增 `vspi config refresh [provider]` 用于可发现的自定义 Provider。
+- 独立的 `vspi proxy` 统一配置国外官方接口代理，支持本机端口、远程主机和完整 HTTP/HTTPS 地址；已配置或跳过后不再重复询问。
+
+Linux 全量 `check:vspi`：8,333 项测试通过、27 项跳过，类型检查、lint（0 错误）和 import 边界通过；同一 tarball 在 Node 24.16.0 / 22.19.0 完成隔离安装和 daemon 启停。已有用户配置的隔离副本已验证模型名称与目录，不进行付费模型调用；Windows/macOS 未做本轮实机验收。
+
 ## 2.5.0 — 长任务恢复、OAuth 与 VSPLab 线路选择（Linux 先行）
 
 - 活动 Goal 在 daemon 停止或崩溃后保留恢复意图，下次启动自动继续；显式暂停、取消或打断 Agent 不自动恢复。停止 daemon 不会自行重启，停机时间不计入运行预算；恢复先核对外部操作，不保证工具恰好执行一次。升级前未建立恢复索引的旧会话需手动恢复一次。

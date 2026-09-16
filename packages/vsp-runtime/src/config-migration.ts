@@ -91,27 +91,26 @@ export async function migrateRuntimeConfig(
   const beforeFingerprint = fingerprint(original ?? Buffer.alloc(0));
   const backupPath = configBackupPath(paths.configMigrationBackupDir, beforeFingerprint);
   let target: Record<string, unknown>;
-  let repaired = false;
+  const repaired = false;
   if (original === undefined) {
     target = {};
   } else {
     try {
       target = parse(original.toString('utf8')) as Record<string, unknown>;
     } catch {
-      target = {};
-      repaired = true;
+      throw new Error('Invalid VSPi config.toml; repair the file before starting. The original has not been modified.');
     }
   }
   const marker = parseMarker(originalMarker);
   const migration = await migrateLegacyVspiProviders(target, {
     ...options,
-    cleanProtocolDefaults: options.cleanProtocolDefaults ?? ((marker?.modelDefaultsVersion ?? 0) < 1),
+    cleanProtocolDefaults: options.cleanProtocolDefaults ?? ((marker?.modelDefaultsVersion ?? 0) < 2),
   });
   const targetBytes = Buffer.from(`${stringify(migration.config)}\n`);
   const targetFingerprint = fingerprint(targetBytes);
   const report = parseReport(originalReport);
   if (
-    !repaired && original !== undefined && original.equals(targetBytes) && (marker?.modelDefaultsVersion ?? 0) >= 1 &&
+    !repaired && original !== undefined && original.equals(targetBytes) && (marker?.modelDefaultsVersion ?? 0) >= 2 &&
     completionMatches(marker, report, migration.sourceFingerprint, targetFingerprint)
   ) {
     return { status: 'unchanged', targetFingerprint };
@@ -200,7 +199,7 @@ async function writeCompletionFiles(
   };
   const marker: ConfigMigrationMarker = {
     version: MIGRATION_VERSION,
-    modelDefaultsVersion: 1,
+    modelDefaultsVersion: 2,
     sourceFingerprint: migration.sourceFingerprint,
     targetFingerprint,
     completedAt,

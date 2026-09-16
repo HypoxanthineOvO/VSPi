@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { normalizeProxyAddress } from '#/_base/utils/proxyAddress';
 
 import {
   type ConfigEffectiveOverlay,
@@ -29,6 +30,14 @@ export type OAuthNetworkConfig = z.infer<typeof OAuthNetworkSchema>;
 registerConfigSection(OAUTH_NETWORK_SECTION, OAuthNetworkSchema, {
   toToml: (value, raw) => plainObjectToToml(value as Record<string, unknown>, raw),
 });
+
+export const PROXY_SECTION = 'proxy';
+export const ProxyConfigSchema = z.object({
+  url: z.string().max(2048).refine(value => value === '' || normalizeProxyAddress(value) !== undefined,
+    'Proxy must be an HTTP/HTTPS address, hostname or port without credentials, path, query or fragment.').optional(),
+});
+export type ProxyConfig = z.infer<typeof ProxyConfigSchema>;
+registerConfigSection(PROXY_SECTION, ProxyConfigSchema);
 
 const StringRecordSchema = z.record(z.string(), z.string());
 

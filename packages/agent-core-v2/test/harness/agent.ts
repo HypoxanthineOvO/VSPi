@@ -6,7 +6,8 @@ import { createControlledPromise } from '@antfu/utils';
 import { expect, vi } from 'vitest';
 
 import { toDisposable } from '#/_base/di/lifecycle';
-import type { IInstantiationService } from '#/_base/di/instantiation';
+import { ref, type LiveRef, type IInstantiationService } from '#/_base/di/instantiation';
+import { IModelRequestNetwork } from '#/kosong/model/modelNetwork';
 import type { IAgentScopeHandle } from '#/_base/di/scope';
 import type { AgentContext } from '#/agent/agentContext/agentContext';
 import type {
@@ -1042,8 +1043,9 @@ class ConfigBackedModelCatalog extends ModelCatalog {
     @IModelOAuthTokens oauthTokens: IModelOAuthTokens,
     @IProtocolAdapterRegistry protocolRegistry: IProtocolAdapterRegistry,
     @IHostRequestHeaders hostRequestHeaders: IHostRequestHeaders,
+    @ref(IModelRequestNetwork) network: LiveRef<IModelRequestNetwork>,
   ) {
-    super(providerRegistry, modelRegistry, oauthTokens, protocolRegistry, hostRequestHeaders);
+    super(providerRegistry, modelRegistry, oauthTokens, protocolRegistry, hostRequestHeaders, network);
   }
 
   private syncRegistriesFromConfig(): void {

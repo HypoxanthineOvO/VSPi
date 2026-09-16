@@ -12,6 +12,7 @@ import {
 import type { ProviderAuthInteraction } from "../backend/types.js";
 import type { AppSettings } from "../domain/types.js";
 import { loginWithOAuth } from "../providers/oauth-login.js";
+import { configureProxy, ensureProviderProxy } from '../providers/proxy-setup.js';
 import { catalogEffortCapability } from "../domain/effort.js";
 import { frame, padLine, wrapTextWithAnsi, alignRight } from "../ui/ansi.js";
 import { AuthDialog } from "../ui/auth-dialog.js";
@@ -26,7 +27,7 @@ import {
 	type CustomProviderProtocol,
 } from "../providers/custom-provider.js";
 
-export type AuthSetupMode = "config" | "login" | "logout";
+export type AuthSetupMode = "config" | "login" | "logout" | "proxy";
 
 type CredentialType = "api_key" | "oauth";
 
@@ -49,7 +50,7 @@ export interface AuthSetupOptions {
 
 export async function runAuthSetup(options: AuthSetupOptions): Promise<void> {
 	if (!(options.stdinIsTTY?.() ?? process.stdin.isTTY) || !(options.stdoutIsTTY?.() ?? process.stdout.isTTY)) {
-		throw new Error("vspi config/login/logout 需要交互式 TTY");
+		throw new Error("vspi config/login/logout/proxy 需要交互式 TTY");
 	}
 	const terminal = new ProcessTerminal();
 	const tui = new TuiMainScreen(terminal, true);
@@ -115,6 +116,7 @@ class AuthSetupApp implements Component, Focusable {
 	}
 
 	async load(): Promise<void> {
+		if (this.mode === 'proxy') return;
 		const [providers, inspection, builtinProviders, loginProviders] = await Promise.all([
 			this.klient.global.kosong.listProviders(),
 			this.klient.global.config.inspect<Record<string, Record<string, unknown>>>(
@@ -137,6 +139,16 @@ class AuthSetupApp implements Component, Focusable {
 	}
 
 	async startInitial(providerRef?: string): Promise<void> {
+		if (this.mode === 'proxy') {
+			const dialog = new AuthDialog('代理', () => { this.tui.requestRender(); }, () => { this.finish(); }, '配置');
+			this.dialog = dialog;
+			try {
+				await configureProxy(this.klient, dialog);
+				if (!dialog.signal.aborted) this.finish('代理配置已保存。');
+			} catch (error) { if (!dialog.signal.aborted) throw error; }
+			finally { this.dialog = undefined; }
+			return;
+		}
 		if (!providerRef) return;
 		const normalized = providerRef.toLowerCase();
 		const matches = this.entries.filter(
@@ -419,6 +431,7 @@ export async function loginProvider(
 	type: CredentialType,
 	interaction: ProviderAuthInteraction,
 ): Promise<void> {
+	await ensureProviderProxy(klient, providerId, interaction);
 	if (type === "api_key") {
 		const apiKey = await interaction.prompt({
 			type: "secret",
@@ -442,22 +455,6 @@ export async function loginProvider(
 			message: "API Key 已保存到 VSPi Core 配置",
 		});
 		return;
-	}
-	if (providerId === 'openai-codex') {
-		const choice = await interaction.prompt({
-			type: 'select', message: 'OpenAI OAuth：先选择代理',
-			options: [{ id: 'port', label: '输入本机 HTTP / mixed 代理端口并保存' }, { id: 'skip', label: 'Skip · 使用已有环境代理，不额外配置' }],
-			signal: interaction.signal,
-		});
-		let port = 0;
-		if (choice === 'port') {
-			const raw = await interaction.prompt({ type: 'text', message: '代理端口（daemon 所在机器的 127.0.0.1）', placeholder: '7890', signal: interaction.signal });
-			if (!/^\d+$/.test(raw.trim()) || !Number.isInteger(Number(raw)) || Number(raw) < 1 || Number(raw) > 65535) throw new Error('代理端口必须是 1–65535 的整数');
-			port = Number(raw);
-		} else if (choice !== 'skip') throw new Error('代理选项无效');
-		interaction.signal?.throwIfAborted();
-		await klient.global.config.set({ domain: 'oauthNetwork', patch: { openaiProxyPort: port } });
-		interaction.notify({ type: 'info', message: port === 0 ? '将沿用当前环境的代理配置；现在进入 OpenAI 官方登录。' : `已保存 OpenAI 专用代理 127.0.0.1:${port}，用于登录、令牌刷新和模型调用。浏览器仍使用自身代理设置。` });
 	}
 	await loginWithOAuth(klient.global.auth, providerId, interaction);
 }

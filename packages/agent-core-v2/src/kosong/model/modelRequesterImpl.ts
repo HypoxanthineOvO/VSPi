@@ -30,6 +30,7 @@ export class ModelRequesterImpl implements ModelRequester {
   constructor(
     readonly model: Model,
     private readonly protocolRegistry: IProtocolAdapterRegistry,
+    private readonly proxyForUrl?: (url: string | undefined, fallback?: string) => string | undefined,
   ) {}
 
   private resolveChatProvider(): ChatProvider {
@@ -228,14 +229,14 @@ export class ModelRequesterImpl implements ModelRequester {
   ): Promise<T> {
     const auth = await this.authProvider.getAuth();
     try {
-      return await withScopedProxy(auth?.proxyUrl, () => withProviderTransport(() => run(auth)));
+      return await withScopedProxy(this.requestProxy(auth), () => withProviderTransport(() => run(auth)));
     } catch (error) {
       if (!this.shouldForceRefresh(error)) throw error;
     }
 
     const refreshedAuth = await this.authProvider.getAuth({ force: true });
     try {
-      return await withScopedProxy(refreshedAuth?.proxyUrl, () => withProviderTransport(() => run(refreshedAuth)));
+      return await withScopedProxy(this.requestProxy(refreshedAuth), () => withProviderTransport(() => run(refreshedAuth)));
     } catch (error) {
       if (isUnauthorizedStatusError(error)) throw translateProviderError(error);
       throw error;
@@ -244,6 +245,10 @@ export class ModelRequesterImpl implements ModelRequester {
 
   private get authProvider(): AuthProvider {
     return this.model.authProvider;
+  }
+
+  private requestProxy(auth: ProviderRequestAuth | undefined): string | undefined {
+    return this.proxyForUrl === undefined ? auth?.proxyUrl : this.proxyForUrl(auth?.baseUrl ?? this.model.baseUrl, auth?.proxyUrl);
   }
 
   private shouldForceRefresh(error: unknown): boolean {

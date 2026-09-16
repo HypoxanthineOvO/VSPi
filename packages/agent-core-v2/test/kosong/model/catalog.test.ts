@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createServer } from 'node:http';
+import { getGlobalDispatcher, setGlobalDispatcher } from 'undici';
+import '#/app/kosongConfig/modelNetworkAdapter';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { getBuiltinModel } from '@earendil-works/pi-ai/providers/all';
 
@@ -856,8 +859,50 @@ describe('ModelCatalog inspect', () => {
 });
 
 describe('ModelCatalog ping', () => {
+  it.each([
+    ['https://api.openai.com/v1', false, 'proxied'], ['https://api.anthropic.com', false, 'proxied'],
+    ['https://generativelanguage.googleapis.com/v1beta', false, 'proxied'], ['https://api.x.ai/v1', false, 'proxied'],
+    [undefined, false, 'proxied'], ['https://api.openai.com/v1', true, 'proxied'],
+    ['https://relay.example.test/v1', false, 'direct'], ['https://relay.example.test/v1', true, 'direct'],
+  ] as const)('applies shared proxy policy to cached requesters for %s with OAuth=%s', async (baseUrl, oauth, expected) => {
+    const original = getGlobalDispatcher();
+    const direct = createServer((_request, response) => response.end('direct'));
+    const gateway = createServer();
+    gateway.on('connect', (_request, socket) => {
+      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      socket.once('data', () => socket.end('HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nproxied'));
+    });
+    await Promise.all([new Promise<void>(resolve => direct.listen(0, '127.0.0.1', resolve)), new Promise<void>(resolve => gateway.listen(0, '127.0.0.1', resolve))]);
+    const target = direct.address();
+    const proxy = gateway.address();
+    if (!target || !proxy || typeof target === 'string' || typeof proxy === 'string') throw new Error('Missing local server');
+    const r = createHost({
+      proxy: { url: `http://localhost:${proxy.port}` },
+      providers: { example: { type: 'openai', apiKey: oauth ? undefined : 'YOUR_API_KEY', oauth: oauth ? { storage: 'file', key: 'example' } : undefined, baseUrl } },
+      models: { target: { provider: 'example', model: 'example', protocol: 'openai', maxContextSize: 128000 } },
+    }, { ...stubModelOAuthTokens(), getRequestAuth: async () => ({ apiKey: 'YOUR_API_KEY', proxyUrl: `http://localhost:${proxy.port}` }) });
+    const provider: ChatProvider = {
+      name: 'fixture', modelName: 'example', thinkingEffort: null,
+      async generate() {
+        const text = await (await fetch(`http://127.0.0.1:${target.port}/`)).text();
+        return { id: 'fixture', usage: emptyUsage(), finishReason: 'completed', rawFinishReason: 'stop', traceId: null,
+          async *[Symbol.asyncIterator]() { yield { type: 'text', text }; } };
+      },
+    };
+    const boundary = vi.spyOn(r.host.app.accessor.get(IProtocolAdapterRegistry), 'createChatProvider').mockReturnValue(provider);
+    try {
+      expect(await r.catalog.ping('target')).toMatchObject({ ok: true, text: expected });
+      await r.config.set('proxy', { url: '' });
+      expect(await r.catalog.ping('target')).toMatchObject({ ok: true, text: 'direct' });
+    } finally {
+      boundary.mockRestore(); r.host.dispose(); setGlobalDispatcher(original);
+      direct.closeAllConnections(); gateway.closeAllConnections();
+      await Promise.all([new Promise<void>(resolve => direct.close(() => resolve())), new Promise<void>(resolve => gateway.close(() => resolve()))]);
+    }
+  });
+
   it('returns the streamed text and usage on a live success', async () => {
-    const { host, models, providers } = createHost(kimiSections, stubModelOAuthTokens());
+    const { host } = createHost(kimiSections, stubModelOAuthTokens());
     try {
       const fakeProvider: ChatProvider = {
         name: 'fake-base',
@@ -892,13 +937,8 @@ describe('ModelCatalog ping', () => {
         }),
         createChatProvider: () => fakeProvider,
       } as unknown as IProtocolAdapterRegistry;
-      const catalog = new ModelCatalog(
-        providers,
-        models,
-        stubModelOAuthTokens(),
-        registry,
-        { headers: {}, thirdPartyHeaders: {} },
-      );
+      host.app.instantiation.provide(IProtocolAdapterRegistry, registry);
+      const catalog = host.app.accessor.get(IModelCatalog);
       const result = await catalog.ping('k1');
       expect(result).toMatchObject({ ok: true, text: 'pong', finishReason: 'completed' });
       expect(result.usage).toEqual(emptyUsage());
@@ -1164,6 +1204,20 @@ describe('ModelCatalog enumeration', () => {
     } finally {
       host.dispose();
     }
+  });
+
+  it('configures the current DeepSeek Flash model when the dependency catalog only has legacy IDs', async () => {
+    const { host, catalog } = createHost();
+    try {
+      await catalog.configureBuiltinProvider('deepseek', 'YOUR_API_KEY');
+      const models = await catalog.listModels();
+      expect(models).toEqual(expect.arrayContaining([expect.objectContaining({
+        model: 'deepseek/deepseek-flash',
+        display_name: 'DeepSeek V4.1 Flash',
+        max_context_size: 1000000,
+        capabilities: expect.arrayContaining(['image_in', 'tool_use']),
+      })]));
+    } finally { host.dispose(); }
   });
 
   it('configures a builtin provider without replacing user model overrides or defaults', async () => {

@@ -210,6 +210,8 @@ export * from '#/app/kosongConfig/kosongConfig';
 export * from '#/app/kosongConfig/kosongConfigService';
 export * from '#/kosong/model/modelOAuth';
 export * from '#/app/kosongConfig/oauthTokenAdapter';
+export * from '#/app/kosongConfig/modelNetworkAdapter';
+export * from '#/kosong/model/modelNetwork';
 export * from '#/app/kosongConfig/hostRequestHeadersAdapter';
 export * from '#/app/kosongConfig/discovery';
 export * from '#/app/kosongConfig/discoveryService';

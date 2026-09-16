@@ -185,6 +185,9 @@ export type ProviderAuthPrompt =
 			type: "text" | "secret" | "manual_code";
 			message: string;
 			placeholder?: string;
+			description?: string;
+			skip?: { label: string; value: string };
+			validate?: (value: string) => string | undefined;
 			allowEmpty?: boolean;
 			signal?: AbortSignal;
 	  }

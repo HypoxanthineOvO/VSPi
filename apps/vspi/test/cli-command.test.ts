@@ -5,6 +5,28 @@ import { customProviderId, modelsFromManualInput } from "../src/v1/providers/cus
 
 
 describe("VSPi CLI command dispatch", () => {
+  it('opens proxy configuration without selecting or logging in to a provider', async () => {
+    const connection = fakeConnection();
+    const authSetup = vi.fn(async () => {});
+    await dispatchCliCommand(['proxy'], { connect: async () => connection, authSetup,
+      loadSettings: async () => ({ scope: 'global' }) as never, stdinIsTTY: () => true, stdoutIsTTY: () => true });
+    expect(authSetup).toHaveBeenCalledWith(expect.objectContaining({ mode: 'proxy', providerRef: undefined }));
+    expect(connection.close).toHaveBeenCalledOnce();
+  });
+
+  it('prints proxy help without a runtime or terminal', async () => {
+    const connect = vi.fn();
+    const write = vi.fn();
+    await dispatchCliCommand(['proxy', '--help'], { connect, write, stdinIsTTY: () => false, stdoutIsTTY: () => false });
+    expect(connect).not.toHaveBeenCalled();
+    expect(write).toHaveBeenCalledWith(expect.stringContaining('HTTP/HTTPS'));
+  });
+
+  it.each([{ args: ['proxy', 'unexpected'] }, { args: ['proxy', '--help', 'unexpected'] }])('rejects invalid proxy arguments $args before connecting', async ({ args }) => {
+    const connect = vi.fn();
+    await expect(dispatchCliCommand(args, { connect })).rejects.toThrow('Usage: vspi proxy');
+    expect(connect).not.toHaveBeenCalled();
+  });
 	it("dispatches update before runtime startup and requests a restart", async () => {
 		const update = vi.fn(async (currentVersion: string) => ({
 			status: "updated" as const,
@@ -128,6 +150,33 @@ describe("VSPi CLI command dispatch", () => {
 		expect(config.diagnostics).toHaveBeenCalledOnce();
 		expect(messages.join("")).toContain('"example/model"');
 		expect(connection.close).toHaveBeenCalledTimes(3);
+	});
+
+	it.each([undefined, "example"])("refreshes the requested provider catalog without replacing config for %s", async (providerId) => {
+		const result = { changed: [], unchanged: ["example"], failed: [] };
+		const refreshProviders = vi.fn(async () => result);
+		const connection = fakeConnection({ global: { kosong: { refreshProviders } } });
+		const write = vi.fn();
+		const args = providerId === undefined ? ["config", "refresh"] : ["config", "refresh", providerId];
+		await expect(dispatchCliCommand(args, { connect: async () => connection, write })).resolves.toBe(true);
+		expect(refreshProviders).toHaveBeenCalledExactlyOnceWith({ providerId });
+		expect(JSON.parse(write.mock.calls[0]![0])).toEqual(result);
+		expect(connection.close).toHaveBeenCalledOnce();
+	});
+
+	it("reports partial catalog refresh failures rather than claiming success", async () => {
+		const result = { changed: [], unchanged: [], failed: [{ provider: "example", reason: "Catalog unavailable" }] };
+		const connection = fakeConnection({ global: { kosong: { refreshProviders: async () => result } } });
+		const write = vi.fn();
+		await expect(dispatchCliCommand(["config", "refresh", "example"], { connect: async () => connection, write })).rejects.toThrow("模型目录刷新未全部成功");
+		expect(JSON.parse(write.mock.calls[0]![0])).toEqual(result);
+		expect(connection.close).toHaveBeenCalledOnce();
+	});
+
+	it("rejects surplus catalog refresh arguments before connecting", async () => {
+		const connect = vi.fn();
+		await expect(dispatchCliCommand(["config", "refresh", "example", "extra"], { connect })).rejects.toThrow("Usage:");
+		expect(connect).not.toHaveBeenCalled();
 	});
 
 	it("rejects malformed config JSON before connecting", async () => {

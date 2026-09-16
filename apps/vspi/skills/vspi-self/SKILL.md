@@ -27,6 +27,8 @@ printf 'home=%s\nconfig=%s\nsessions=%s\nlog=%s\n' "$vspi_home" "$config_path" "
 
 Normally VSPi home is `$VSPI_HOME` when set, otherwise `~/.vspi`. Use the current session directory to select the runtime, then verify the paths reported by the running daemon:
 
+From 2.5.1, `.pi/agent`, `PI_CODING_AGENT_DIR`, and the old `.config/vspi/runtime-defaults.json` are not configuration sources. Do not inspect, edit, or import them to configure VSPi. Existing VSPi configuration and session history remain in the selected VSPi home.
+
 ```bash
 VSPI_HOME="$vspi_home" vspi inspect paths
 VSPI_HOME="$vspi_home" vspi inspect session '${KIMI_SESSION_ID}'
@@ -72,16 +74,27 @@ VSPI_HOME="$vspi_home" vspi inspect models
 VSPI_HOME="$vspi_home" vspi config inspect models
 ```
 
-`inspect models` reads the same resolved Core catalog that VSPi uses. Use the matching model's `capabilities`, `thinking`, `support_efforts`, and `default_effort` instead of guessing from its name or fetching another catalog. The provider adapter supplies the pinned pi-ai definitions; explicit user model overrides are maintained through Core configuration. Do not edit a generated catalog or install another provider library to change one model.
+`inspect models` reads the same resolved Core catalog that VSPi uses. Builtin provider catalogs ship with the application; VSPLab uses the bundled product catalog, other builtin providers use the pinned provider definitions. Remote metadata cannot overwrite builtin names or capabilities. Model availability still depends on the account and endpoint. Do not edit an installed bundle or install another provider library to change one model.
 
-If the user explicitly asks for a capability override, inspect the existing alias and patch its `overrides` block, the highest-priority user layer. Use canonical `thinking.efforts` and `thinking.defaultEffort` there. Old flat `supportEfforts` and `defaultEffort` fields are compatibility inputs; canonical thinking in the same layer takes priority, including thinking saved during initial provider setup. Do not try to change those flat fields underneath an existing canonical thinking definition.
+For builtin models, patch only the requested fields directly under the model alias; they override builtin defaults and survive upgrades. Removing the user field restores its builtin value. A legacy `overrides` block remains higher priority: inspect it first and update/remove conflicting values there. For a custom provider using remote discovery, continue using `overrides` to protect values from its remote refresh. Use canonical `thinking.efforts` and `thinking.defaultEffort`, not flat effort fields underneath an existing canonical thinking definition.
 
 ```bash
-VSPI_HOME="$vspi_home" vspi config patch models '{"provider/model":{"overrides":{"capabilities":["image_in","thinking","tool_use"],"thinking":{"efforts":["low","medium","high"],"defaultEffort":"medium"}}}}'
+VSPI_HOME="$vspi_home" vspi config patch models '{"provider/model":{"capabilities":["image_in","thinking","tool_use"],"thinking":{"efforts":["low","medium","high"],"defaultEffort":"medium"}}}'
 VSPI_HOME="$vspi_home" vspi inspect models
 ```
 
 The example is not a declaration about any real model. Verify the provider's supported values before writing. A custom base URL can serve a different model behind an alias. Preserve other capability entries because arrays are replaced. Only claim success when the read-back catalog matches the requested result.
+
+For builtin models, a display-name-only TOML override is sufficient:
+
+```toml
+[models."vsplab/deepseek-flash"]
+display_name = "My Flash"
+```
+
+The builtin `deepseek-flash` is DeepSeek V4.1 Flash and starred; `deepseek-v4-flash` is a separate non-starred entry; V4 Pro is independently starred. GPT-6 Astra uses `gpt-6-astra`. Do not invent model IDs from display names. `/model` defaults to stars; Ctrl+O shows all. Stars are independent of Subagent membership and cannot grant API access. For a missing model, distinguish the installed version, configured provider, resolved catalog and account availability; do not relabel an unrelated model to make it appear.
+
+`vspi config refresh [provider]` refreshes discoverable custom providers; builtin providers return unchanged because their defaults update with VSPi releases. `config reload` only reloads the local file. Do not repeatedly refresh a builtin provider to try to download a newer model.
 
 If direct TOML editing is specifically required, read the existing file first, keep a timestamped backup, edit a candidate copy, and use `vspi config reload` after replacement. If reload fails, restore the backup. Never overwrite invalid TOML from scratch or drop unrelated sections.
 
@@ -109,7 +122,7 @@ For VSPLab, product defaults route GPT through Responses, Claude through Anthrop
 
 Effort levels are model-specific, not a universal ladder. Kimi K3 and GLM 5.3 use low/high/max with max as default; DeepSeek V4 uses the same levels with high as default. Qwen 3.8 uses low/medium/xhigh. MiMo V2.5 and MiniMax M3 have no independently documented fine-grained effort control: the UI uses a fixed thinking-on choice, not fabricated Low/Medium/High levels. Keep compatible aliases distinct from real model levels. The source-backed baseline is owned by core `effortProfiles.ts`; versioned relay declarations can update it, while old unversioned lists cannot overwrite it.
 
-The pre-bootstrap migration backs up the configuration and performs a one-time cleanup of provably inherited or redundant relay `protocol` fields, plus stale managed effort metadata. It preserves API keys, custom endpoints, user `overrides`, per-model effort preferences, and `secondary_model`. Do not run destructive blanket cleanup or tell users to delete their home directory; inspect the migration report for ambiguous explicit overrides instead.
+The 2.5.1 pre-bootstrap migration backs up VSPi configuration, retires expired model references and removes fields identical to shipped defaults. It corrects the known generated V4 label on `deepseek-flash`, but preserves other differences of uncertain origin, API keys, custom endpoints, legacy `overrides`, per-model effort preferences and `secondary_model`. It does not read Pi state to infer user intent. Invalid TOML stops startup without modifying the original file. Do not run blanket cleanup or tell users to delete their home directory.
 
 ## Add or change subagent profiles
 

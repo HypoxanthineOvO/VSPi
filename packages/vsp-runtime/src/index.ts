@@ -8,3 +8,6 @@ export * from './paths.js';
 export * from './state.js';
 export * from './thinking-effort-repair.js';
 export * from './types.js';
+export { normalizeProxyAddress } from '@moonshot-ai/agent-core-v2/_base/utils/proxyAddress';
+export { accountProxyPreference, usesAccountProxy } from '@moonshot-ai/agent-core-v2/app/auth/proxy';
+export type { ProxyConfig, OAuthNetworkConfig } from '@moonshot-ai/agent-core-v2/app/auth/configSection';

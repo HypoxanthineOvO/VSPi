@@ -1,5 +1,7 @@
 # VSPLab 中转站模型目录（Golden）
 
+2026-09-16：已备份并同步到 Babel，tech 公网及 Babel 本机 cn/tech 虚拟主机回读 SHA-256 均为 `acb1d4e239893e354e18d917345c52d531c7ae1a93096b459f8435d296d5f027`。修复 `deepseek-flash` 的 V4.1 名称、V4 Pro 隐藏状态及 K3 元数据差异。2.5.1 起该文件同时打包为客户端内置默认值；服务端目录供旧客户端/其他调用方使用，不再覆盖新版客户端的用户配置。
+
 2026-09-13 更新：用户确认本文件为模型元数据标准。DeepSeek 四个现有可见条目的价格按当前官方 USD 价格页修正，并在 `metadataSources.cost` 标记空闲基价、峰值倍率和时段；不再使用人民币固定汇率换算 DeepSeek。官方当前价格页已撤回 9 月 14 日将 V4 Pro 改按 Flash 计费的旧安排，Pro 仍按独立费率。此次不修改模型 ID、协议或思考档位，不新增提供商接入。**本次更新尚未发布到 Babel**，实施前线上文件仍是较早快照，与本文件不一致；下文历史同步记录不代表当前线上已同步。
 
 `model-catalog.json` 是 `/vsp/models` 端点的权威内容（Golden 标准目录）。2026-09-08 由联网核实产出：逐模型对照官方文档（智谱 / Moonshot / OpenAI / Anthropic / DeepSeek / 阿里云百炼 / MiniMax 等），修正了旧快照中 37 处与官方不一致的声明（effort 档位照抄模板、上下文/输出上限抄错、定价币种与倍率错误等）。2026-09-10 与线上部署内容对齐回写，并将 DeepSeek V4.1 Flash 转正（去掉内测期的 `expires-on-0910` 后缀），价格按官方当日新定价（空闲时段、7.2 汇率）修正。逐模型来源记录在 `metadataSources`（官方 URL 与核对时间），顶层 `metadataSourceSnapshot` 记录快照级来源；这些 provenance 字段客户端解析时会忽略。
@@ -25,4 +27,4 @@
 scp ops/vsplab/model-catalog.json <relay-host>:/etc/vsp-sub2api/model-catalog.json
 ```
 
-客户端在下次目录刷新（TUI 启动或每 6 小时自动刷新）时自动拉取生效，无需重启。
+2.5.0 及更早客户端在下次目录刷新时拉取；2.5.1 起内置目录随客户端发布更新，用户在 VSPi `config.toml` 中写差异覆盖。

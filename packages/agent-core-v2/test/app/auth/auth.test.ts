@@ -1,6 +1,8 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
+import { getGlobalDispatcher, setGlobalDispatcher } from 'undici';
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { OAuthCredential, OAuthAuth } from '@earendil-works/pi-ai';
@@ -17,6 +19,7 @@ import { IAuthSummaryService, IOAuthService, IOAuthToolkit } from '#/app/auth/au
 import { AuthSummaryService, OAuthService } from '#/app/auth/authService';
 import {
   SERVICES_SECTION,
+  PROXY_SECTION,
   servicesFromToml,
   servicesToToml,
   ServicesConfigSchema,
@@ -111,6 +114,7 @@ describe('OAuthService', () => {
   let defaultModel: string | undefined;
   let thinking: { enabled?: boolean; effort?: string } | undefined;
   let oauthNetwork: { openaiProxyPort: number } | undefined;
+  let proxy: { url: string } | undefined;
   let toolkit: FakeToolkit;
   let providerSet: ReturnType<typeof vi.fn<(name: string, config: ProviderConfig) => Promise<void>>>;
   let configSet: ReturnType<typeof vi.fn>;
@@ -139,6 +143,7 @@ describe('OAuthService', () => {
     defaultModel = undefined;
     thinking = undefined;
     oauthNetwork = undefined;
+    proxy = undefined;
     configSet = vi.fn(async (domain: string, value: unknown) => {
       if (domain === 'defaultModel') {
         defaultModel = value as string | undefined;
@@ -268,6 +273,54 @@ describe('OAuthService', () => {
     expect(documents.get('pi-ai/openai-codex/openai-codex')).not.toHaveProperty('proxyUrl');
     oauthNetwork = { openaiProxyPort: 0 };
     expect((await service.resolveRequestAuth('openai-codex', providers['openai-codex'].oauth)).proxyUrl).toBeUndefined();
+  });
+
+  it.each(['anthropic', 'openai-codex', 'xai'])('uses the shared remote proxy for %s request auth', async provider => {
+    piMocks.provider = provider;
+    proxy = { url: 'https://proxy.example.com:8443' };
+    registerPi(async () => piCredentials, async credential => ({ ...credential, expires: Date.now() + 3600000 }));
+    const key = `pi-ai/${provider}/${provider}`;
+    const oauth = { storage: 'file', key } as const;
+    providers[provider] = { type: provider, oauth };
+    documents.set(key, { ...piCredentials, expires: Date.now() + 3600000 });
+    expect(await createService().resolveRequestAuth(provider, oauth)).toMatchObject({ proxyUrl: 'https://proxy.example.com:8443' });
+  });
+
+  it.each(['anthropic', 'openai-codex', 'xai'])('routes %s OAuth login through the configured proxy', async provider => {
+    const original = getGlobalDispatcher();
+    const gateway = createServer();
+    gateway.on('connect', (_request, socket) => {
+      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      socket.once('data', () => socket.end('HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nproxied'));
+    });
+    await new Promise<void>(resolve => gateway.listen(0, '127.0.0.1', resolve));
+    const address = gateway.address();
+    if (!address || typeof address === 'string') throw new Error('Missing local proxy');
+    try {
+      piMocks.provider = provider;
+      proxy = { url: `http://localhost:${address.port}` };
+      let route: string | undefined;
+      registerPi(async () => {
+        route = await (await fetch('http://oauth.example.test/authorize')).text();
+        return { ...piCredentials, expires: Date.now() + 3600000 };
+      });
+      expect(await createService().startLogin(provider)).toMatchObject({ status: 'authenticated' });
+      expect(route).toBe('proxied');
+    } finally {
+      setGlobalDispatcher(original); gateway.closeAllConnections();
+      await new Promise<void>(resolve => gateway.close(() => resolve()));
+    }
+  });
+
+  it('honors a saved shared skip even when a legacy OpenAI port exists', async () => {
+    piMocks.provider = 'openai-codex';
+    oauthNetwork = { openaiProxyPort: 7890 };
+    proxy = { url: '' };
+    registerPi(async () => piCredentials);
+    const oauth = { storage: 'file', key: 'pi-ai/openai-codex/openai-codex' } as const;
+    providers['openai-codex'] = { type: 'openai-codex', oauth };
+    documents.set(oauth.key, { ...piCredentials, expires: Date.now() + 3600000 });
+    expect((await createService().resolveRequestAuth('openai-codex', oauth)).proxyUrl).toBeUndefined();
   });
 
   it('bridges browser and prompt login without exposing credentials in flow or config', async () => {
@@ -440,7 +493,7 @@ describe('OAuthService', () => {
   });
 
   function configBacking(): Record<string, unknown> {
-    return { providers, models, services, defaultModel, thinking, oauthNetwork };
+    return { providers, models, services, defaultModel, thinking, oauthNetwork, proxy };
   }
 
   function stubManagedModelsFetch(): ReturnType<typeof vi.fn> {
@@ -1678,6 +1731,14 @@ describe('WebSearchProviderService', () => {
 });
 
 describe('services config section', () => {
+  it.each(['socks5://proxy.example.com:1080', 'https://user:password@proxy.example.com', 'http://proxy.example.com:0'])('rejects unsafe proxy preference %s at the server config boundary', value => {
+    const registry = new ConfigRegistry();
+    expect(() => registry.validate(PROXY_SECTION, { url: value })).toThrow();
+  });
+
+  it.each(['http://proxy.example.com:3128', 'https://proxy.example.com:8443', ''])('accepts the shared proxy preference %s', url => {
+    expect(new ConfigRegistry().validate(PROXY_SECTION, { url })).toEqual({ url });
+  });
   it('registers the services section and validates its schema', () => {
     const registry = new ConfigRegistry();
 

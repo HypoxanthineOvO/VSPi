@@ -1,6 +1,8 @@
 import { parseKimiCodeCustomHeaders } from '@moonshot-ai/kimi-code-oauth';
 
 import { Disposable } from '#/_base/di/lifecycle';
+import { ref, type LiveRef } from '#/_base/di/instantiation';
+import { IModelRequestNetwork } from './modelNetwork';
 import { currentModelId } from './retiredModelIds';
 import { LifecycleScope } from '#/app/scopes';
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
@@ -90,6 +92,7 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
     @IProtocolAdapterRegistry
     private readonly protocolRegistry: IProtocolAdapterRegistry,
     @IHostRequestHeaders private readonly hostRequestHeaders: IHostRequestHeaders,
+    @ref(IModelRequestNetwork) private readonly network: LiveRef<IModelRequestNetwork>,
   ) {
     super();
     this._register(this.models.onDidChangeModels(() => this.notifyConfigChanged()));
@@ -126,7 +129,10 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
     const model = this.buildModel(id, trace);
     const entry: CatalogEntry = {
       model,
-      requester: new ModelRequesterImpl(model, this.protocolRegistry),
+      requester: new ModelRequesterImpl(model, this.protocolRegistry, (url, fallback) => {
+        const network = this.network.current;
+        return network === undefined ? fallback : network.proxyForUrl(url, model.providerType, fallback);
+      }),
       trace,
     };
     this.cache.set(id, entry);
