@@ -2390,6 +2390,16 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		expect(formatProviderDisplayName("opencode-go")).toBe("OpenCode Go");
 	});
 
+	it('preserves actual model IDs and declared aliases from the Core catalog', async () => {
+	 const listed = { ...model('example', 'review-fast'), wire_model: 'deepseek-flash', aliases: ['deepseek-v4.1-flash'], base_url: 'https://example.test/v1' };
+	 const connection = { klient: { global: { kosong: {
+	 listModels: async () => [listed], listProviders: async () => [provider('example')],
+	 getProvider: async () => provider('example'), queryAvailableModels: async () => ({ modelIds: [listed.model] }),
+	 } } } } as unknown as RuntimeConnection;
+	 const backend = new KlientChatBackend(connection, '/workspace', 'new');
+	 expect(await backend.getModelOptions()).toMatchObject([{ id: 'review-fast', wireId: 'deepseek-flash', modelAliases: ['deepseek-v4.1-flash'], endpoint: 'https://example.test/v1', curated: true }]);
+	});
+
 	it("uses the effective Core price and capability projection without a second catalog", async () => {
 	 const listed = { ...model("example", "reasoner"), pricing_source: "official", capabilities: ["image_in"] };
 	 const connection = { klient: { global: { kosong: {

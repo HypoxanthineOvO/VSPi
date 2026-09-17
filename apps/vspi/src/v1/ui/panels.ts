@@ -46,6 +46,7 @@ import {
 } from "../policy/execution-policy.js";
 import { redactPrompt } from "../prompts/effective-prompt.js";
 import { BRAND_PRIORITY, providerPriorityIndex } from "../providers/order.js";
+import { compareModelFamily, groupModelAliases, modelHasIdentity, modelIdentityKey as modelKey } from '../domain/model-presentation.js';
 import type {
 	ExternalSessionSource,
 	ExternalSessionSummary,
@@ -988,7 +989,7 @@ export class PanelController {
 		this.selectedGroupId =
 			this.modelGroups.find((group) => group.id === this.selectedGroupId)?.id ??
 			"";
-		if (this.kind === "models") this.state.selected = Math.max(0, this.filteredModels().findIndex((model) => modelKey(model) === focused));
+		if (this.kind === "models") this.state.selected = Math.max(0, this.filteredModels().findIndex((model) => focused !== undefined && modelHasIdentity(model, focused)));
 	}
 
 	setSubagentModelPreferences(preferences: SubagentModelPreferences): void {
@@ -1007,7 +1008,12 @@ export class PanelController {
 							(identity.provider === undefined ||
 								item.provider === identity.provider),
 					);
-		if (model) this.selectedModelKey = modelKey(model);
+		if (model) {
+			const focused = modelKey(this.filteredModels()[this.state.selected]);
+			this.selectedModelKey = modelKey(model);
+			this.filteredModelCache = undefined;
+			if (this.kind === 'models') this.state.selected = Math.max(0, this.filteredModels().findIndex(item => modelHasIdentity(item, focused)));
+		}
 	}
 
 	confirmModelGroupSelection(groupId: string): void {
@@ -2730,12 +2736,12 @@ export class PanelController {
 			const index = BRAND_PRIORITY.indexOf(brand);
 			return index === -1 ? BRAND_PRIORITY.length : index;
 		};
-		const models = this.models
+		const models = groupModelAliases(this.models, this.selectedModelKey)
 			.filter((model) => this.modelExpandCollapsed || model.curated === true)
 			.filter(
 				(model) =>
 					!query ||
-					`${model.brand} ${model.label} ${model.id}`
+					`${model.brand} ${model.label} ${(model.displayIds ?? [model.id]).join(' ')}`
 						.toLowerCase()
 						.includes(query),
 			)
@@ -2744,6 +2750,8 @@ export class PanelController {
 				if (priority !== 0) return priority;
 				const brand = left.brand.localeCompare(right.brand);
 				if (brand !== 0) return brand;
+				const family = compareModelFamily(left, right);
+				if (family !== 0) return family;
 				const generation = compareModelGeneration(left, right);
 				if (generation !== 0) return generation;
 				const leftPrice = modelCombinedPrice(left);
@@ -2950,7 +2958,7 @@ export class PanelController {
 				? undefined
 				: model.price.cacheWriteUsdPerMillion * FX.fxRate;
 		const provider = `${theme.muted("Provider  ")}${model.brand}`;
-		const modelId = `${theme.muted("Model ID  ")}${model.id}`;
+		const modelId = `${theme.muted("Model ID: ")}${(model.displayIds ?? [model.id]).join(', ')}`;
 		const protocol = model.protocol ? `${theme.muted("协议  ")}${model.protocol === "openai" ? "Chat Completions" : model.protocol === "openai_responses" ? "Responses" : model.protocol}` : undefined;
 		const capability = `${theme.muted("能力      ")}${model.vision ? "文本 · 图片 · Tools" : "文本 · Tools"}`;
 		const effort = `${theme.muted("Effort  ")}${visibleEffortLevels(model.efforts).map(effortLabel).join(" / ") || "不可调"}`;
@@ -2979,7 +2987,7 @@ export class PanelController {
 		];
 		const details = [
 			theme.bold(theme.focus(model.label)),
-			combinedIdentity,
+			...(visibleWidth(combinedIdentity) <= width ? [combinedIdentity] : [provider, ...wrapTextWithAnsi(modelId, width)]),
 			...(protocol ? [protocol] : []),
 			capabilityRelease,
 			...effortRows,
@@ -4902,12 +4910,6 @@ function planTreePrefix(
 	return theme.muted(
 		`${prefix}${hasLaterPlanSibling(items, index) ? "├─ " : "╰─ "}`,
 	);
-}
-
-function modelKey(
-	model: { provider?: string; id: string } | undefined,
-): string {
-	return model ? `${model.provider ?? ""}\u0000${model.id}` : "";
 }
 
 function flattenPlanItems(plan: StoredPlan): PlanItem[] {

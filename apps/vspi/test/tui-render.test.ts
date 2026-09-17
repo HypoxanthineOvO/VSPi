@@ -4,7 +4,7 @@
  * Wiring: real VSPi renderers and xterm terminal emulation; a backend boundary fixture for runtime events.
  * Run: pnpm -C apps/vspi test
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -30,7 +30,7 @@ import { resolveCommand } from "../src/v1/domain/commands.js";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/v1/domain/defaults.js";
 import { editSubagentModels } from "../src/v1/domain/subagent-models.js";
 import { isOfficialRecommendedModel } from "../src/v1/domain/recommended-models.js";
-import type { TranscriptMessage } from "../src/v1/domain/types.js";
+import type { ModelOption, TranscriptMessage } from "../src/v1/domain/types.js";
 import { AgentsDock } from "../src/v1/ui/agents-dock.js";
 import {
 	renderActivityRail,
@@ -237,6 +237,49 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		tui.setFocus(app);
 		return { terminal, tui, app, backend, events: () => events, setPolicy };
 	}
+
+	it('copies a completed reply through the SSH terminal from the slash command', async () => {
+		vi.stubEnv('SSH_CONNECTION', 'example'); vi.stubEnv('TMUX', ''); vi.stubEnv('TMUX_PANE', '');
+		const home = await mkdtemp(join(tmpdir(), 'vspi-copy-'));
+		const { app, terminal, events } = renderFixture(home);
+		const write = vi.spyOn(terminal, 'write');
+		try {
+			await app.start();
+			events().onMessage({ id: 'reply', role: 'assistant', kind: 'text', text: 'hello' });
+			app.composer.setText('/copy'); app.handleInput('\r');
+			await vi.waitFor(() => expect(write).toHaveBeenCalledWith('\u001B]52;c;aGVsbG8=\u0007'));
+			expect(app.render(120).map(stripTerminalSequences).join('\n')).not.toContain('没有可用的系统剪贴板');
+		} finally { write.mockRestore(); await app.dispose(); await rm(home, { recursive: true, force: true }); vi.unstubAllEnvs(); }
+	});
+
+	it('sends the image attachment when Enter follows a pasted image path immediately', async () => {
+		const home = await mkdtemp(join(tmpdir(), 'vspi-path-paste-'));
+		const path = join(home, 'example image.png');
+		await writeFile(path, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lX8AAAAASUVORK5CYII=', 'base64'));
+		const { app, backend } = renderFixture(home);
+		Object.assign(backend, { supportsVision: true });
+		const original = backend.start;
+		backend.start = async events => { await original(events); events.onSessionReset?.({ id: 'layout-test', reason: 'resume', effort: 'high' }); };
+		const send = vi.fn(async () => {}); backend.send = send;
+		try {
+			await app.start();
+			app.handleInput(`\u001B[200~"${path}"\u001B[201~\r`);
+			await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+			expect(send).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ attachments: [expect.objectContaining({ mimeType: 'image/png', width: 1, height: 1 })] }));
+		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it('does not bring the Core consumed label back when history is restored', async () => {
+		const home = await mkdtemp(join(tmpdir(), 'vspi-consumed-history-'));
+		const { app, events } = renderFixture(home);
+		try {
+			await app.start();
+			events().onHistory?.([{ id: 'restored', role: 'user', kind: 'text', text: '示例用户消息', delivery: 'steer', deliveryState: 'consuming' }], false);
+			const output = app.render(120).map(stripTerminalSequences).join('\n');
+			expect(output).toContain('示例用户消息');
+			expect(output).not.toContain('Core 已消费');
+		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
 
 	it("removes the retry status from the rendered screen when recovery clears it", async () => {
 		const home = await mkdtemp(join(tmpdir(), "vspi-retry-notice-"));
@@ -789,6 +832,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 
 	it("clears compaction state during session reset", () => {
 		const app = Object.assign(Object.create(VspiApp.prototype), {
+			imagePathPaste: { reset: vi.fn() },
 			sessionEpoch: 0,
 			compaction: {
 				status: "blocked",
@@ -917,7 +961,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		});
 	});
 
-	it("removes the lifecycle label after a steer message completes", () => {
+	it.each(['consuming', 'completed'] as const)("does not render internal delivery labels for %s user messages", deliveryState => {
 		const output = renderTranscriptMessage(
 			{
 				id: "steer-completed",
@@ -925,13 +969,15 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 				kind: "text",
 				text: "继续处理",
 				delivery: "steer",
-				deliveryState: "completed",
+				deliveryState,
 			},
 			90,
 			theme,
 		).map(stripTerminalSequences).join("\n");
 		expect(output).toContain("继续处理");
 		expect(output).not.toContain("已完成");
+		expect(output).not.toContain('Core');
+		expect(output).not.toContain('已消费');
 	});
 
 	it("detaches the newest foreground task without cancelling it", async () => {
@@ -1328,6 +1374,131 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(output).toContain("开始规划");
 		expect(output).not.toContain("EnterPlanMode");
 		expect(output).not.toContain("Requesting to enter plan mode");
+	});
+
+	it.each(['k3', 'kimi-k3'])('shows both K3 identities without switching the currently selected %s', id => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		const models: ModelOption[] = ['k3', 'kimi-k3'].map(id => ({ id, provider: 'example', alias: `example/${id}`, brand: 'Example', label: 'Kimi K3', wireId: id, curated: true, vision: true, efforts: ['high'], price: {} }));
+		panels.setModels(models, [], { provider: 'example', id });
+		panels.open('models');
+		const output = panels.render(160, 16, theme, DEFAULT_USAGE).map(stripTerminalSequences).join('\n');
+		expect(output).toContain('Model ID: kimi-k3, k3');
+		expect(panels.handleInput('\r')).toMatchObject({ type: 'model', model: { id, alias: `example/${id}` } });
+		panels.handleInput('\u001B[B');
+		expect(panels.handleInput('\r')).toMatchObject({ type: 'model', model: { id } });
+	});
+
+	it('merges arbitrary configuration names that point to the same actual model', () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.setModels(['review-fast', 'daily-coder'].map(id => ({ id, wireId: 'qwen3.8-max', provider: 'example', brand: 'Example', label: 'Qwen 3.8 Max', curated: true, vision: false, efforts: ['high'], price: {} })), [], { provider: 'example', id: 'daily-coder' });
+		panels.open('models');
+		panels.handleInput('review-fast');
+		expect(panels.handleInput('\r')).toMatchObject({ type: 'model', model: { id: 'daily-coder', displayIds: ['review-fast', 'qwen3.8-max', 'daily-coder'] } });
+	});
+
+	it('keeps the alias group focused when an external model selection or catalog refresh arrives', () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		const models: ModelOption[] = ['kimi-k3', 'k3'].map(id => ({ id, wireId: id, provider: 'example', brand: 'Example', label: 'Kimi K3', curated: true, vision: true, efforts: ['high'], price: {} }));
+		panels.setModels(models, [], { provider: 'example', id: 'kimi-k3' });
+		panels.open('models');
+		panels.confirmModelSelection({ provider: 'example', id: 'k3' });
+		panels.setModels(models.toReversed(), [], { provider: 'example', id: 'k3' });
+		expect(panels.handleInput('\r')).toMatchObject({ type: 'model', model: { id: 'k3', displayIds: ['kimi-k3', 'k3'] } });
+	});
+
+	it('does not guess aliases solely from matching display names', () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.setModels(['model-a', 'model-b'].map(id => ({ id, provider: 'example', brand: 'Example', label: 'Same Display Name', curated: true, vision: false, efforts: ['high'], price: {} })));
+		panels.open('models');
+		expect(panels.handleInput('\r')).toMatchObject({ type: 'model', model: { id: 'model-a' } });
+		panels.handleInput('\u001B[B');
+		expect(panels.handleInput('\r')).toMatchObject({ type: 'model', model: { id: 'model-b' } });
+	});
+
+	it('combines an explicit alias chain into a single model row', () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		const base: ModelOption = { id: 'primary', provider: 'example', brand: 'Example', label: 'Example Model', curated: true, vision: false, efforts: ['high'], price: {} };
+		panels.setModels([{ ...base, modelAliases: ['middle'] }, { ...base, id: 'last' }, { ...base, id: 'middle', modelAliases: ['last'] }]);
+		panels.open('models');
+		panels.handleInput('last');
+		expect(panels.handleInput('\r')).toMatchObject({ type: 'model', model: { displayIds: ['primary', 'middle', 'last'] } });
+		panels.handleInput('\u001B[B');
+		expect(panels.handleInput('\r')).toMatchObject({ type: 'model', model: { id: 'primary' } });
+	});
+
+	it('orders subagent candidates by family without merging their independently configured aliases', () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.setModels([
+			['a-review', 'kimi-k3'], ['b-chat', 'gpt-6-astra'], ['c-code', 'k3'],
+		].map(([id, wireId]) => ({ id: id!, wireId, alias: `example/${id}`, provider: 'example', brand: 'Example', label: id!, vision: false, efforts: ['high'], price: {} })));
+		panels.open('subagentModels');
+		expect(panels.handleInput('\r')).toMatchObject({ type: 'subagentModel', edit: { model: 'example/b-chat' } });
+		panels.handleInput('\u001B[B');
+		expect(panels.handleInput('\r')).toMatchObject({ type: 'subagentModel', edit: { model: 'example/a-review' } });
+		panels.handleInput('\u001B[B');
+		expect(panels.handleInput('\r')).toMatchObject({ type: 'subagentModel', edit: { model: 'example/c-code' } });
+	});
+
+	it('finds a catalog-declared alias even when it has no separate model row', () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.setModels([{ id: 'deepseek-flash', wireId: 'deepseek-flash', modelAliases: ['deepseek-v4.1-flash'], provider: 'example', brand: 'Example', label: 'DeepSeek V4.1 Flash', curated: true, vision: true, efforts: ['high'], price: {} }]);
+		panels.open('models');
+		panels.handleInput('deepseek-v4.1-flash');
+		expect(panels.handleInput('\r')).toMatchObject({ type: 'model', model: { id: 'deepseek-flash', displayIds: ['deepseek-flash', 'deepseek-v4.1-flash'] } });
+	});
+
+	it.each(['provider', 'protocol', 'endpoint', 'wireId'])('does not merge matching labels when the models differ by %s', field => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		const first: ModelOption = { id: 'k3', wireId: 'k3', provider: 'example', protocol: 'openai', endpoint: 'https://example.test/v1', brand: 'Example', label: 'Kimi K3', curated: true, vision: true, efforts: ['high'], price: {} };
+		const values = { provider: 'other', protocol: 'anthropic', endpoint: 'https://other.example.test/v1', wireId: 'different-model' };
+		panels.setModels([first, { ...first, id: 'kimi-k3', [field]: values[field as keyof typeof values] }]);
+		panels.open('models');
+		const before = panels.handleInput('\r');
+		panels.handleInput('\u001B[B');
+		expect(panels.handleInput('\r')).not.toEqual(before);
+	});
+
+	it('keeps K3 context variants distinct while grouping the aliases within each variant', () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.setModels(['k3', 'kimi-k3', 'k3-256k', 'kimi-k3-256k'].map(id => ({ id, wireId: id, provider: 'example', brand: 'Example', label: id, curated: true, vision: true, efforts: ['high'], price: {} })));
+		panels.open('models');
+		const first = panels.handleInput('\r');
+		panels.handleInput('\u001B[B');
+		const second = panels.handleInput('\r');
+		expect(first).not.toEqual(second);
+		panels.handleInput('\u001B[B');
+		expect(panels.handleInput('\r')).toEqual(second);
+	});
+
+	it('keeps family members adjacent before applying release dates and price ordering', () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.setModels([
+			['gpt-5.6-sol', 'GPT 5.6 Sol', '2026-04-01', 10],
+			['kimi-k3', 'Kimi K3', '2026-07-16', 15],
+			['claude-opus-5', 'Claude Opus 5', '2026-08-01', 25],
+			['gpt-6-astra', 'GPT 6 Astra', '2026-08-15', 30],
+			['claude-fable-5', 'Claude Fable 5', '2026-09-01', 5],
+		].map(([id, label, releasedAt, price]) => ({ id: String(id), label: String(label), releasedAt: String(releasedAt), brand: 'Example', provider: 'example', curated: true, vision: false, efforts: ['high'], price: { inputUsdPerMillion: Number(price), outputUsdPerMillion: Number(price) } })));
+		panels.open('models');
+		const ids: string[] = [];
+		for (let index = 0; index < 5; index++) {
+			const event = panels.handleInput('\r');
+			if (event?.type === 'model') ids.push(event.model.id);
+			panels.handleInput('\u001B[B');
+		}
+		expect(ids).toEqual(['gpt-6-astra', 'gpt-5.6-sol', 'claude-fable-5', 'claude-opus-5', 'kimi-k3']);
+	});
+
+	it.each([36, 80, 120])('keeps model identity aliases readable at %s columns', width => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.setModels(['k3', 'kimi-k3'].map(id => ({ id, provider: 'example', brand: 'Example', label: 'Kimi K3', curated: true, vision: true, efforts: ['high'], price: {} })));
+		panels.open('models');
+		panels.render(width, 16, theme, DEFAULT_USAGE);
+		panels.handleInput('\u001B[C');
+		const lines = panels.render(width, 16, theme, DEFAULT_USAGE);
+		expect(lines.every(line => visibleWidth(line) <= width)).toBe(true);
+		const output = lines.map(stripTerminalSequences).join('\n');
+		expect(output).toContain('kimi-k3, k3');
 	});
 
 	it.each(["glm", "5.3", "flash", "vsplab"])(

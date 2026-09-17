@@ -1,5 +1,6 @@
 import { type Terminal, TuiAltScreen, type TuiAltScreenOptions, type TuiStopOptions } from "@moonshot-ai/pi-tui";
 import { recordFrameRenderMs } from "./scrollback-terminal.js";
+import { writeClipboardText } from '../attachments/clipboard.js';
 
 export const DEFAULT_TUI_FRAME_INTERVAL_MS = 33;
 export const DEFAULT_TUI_SCROLL_INTERVAL_MS = 100;
@@ -81,7 +82,8 @@ export class VspiTuiAltScreen extends TuiAltScreen {
     logDirectory?: string,
     options: TuiAltScreenOptions = {},
   ) {
-    super(terminal, showHardwareCursor, logDirectory, { wheelScrollLines: 3, ...options });
+    super(terminal, showHardwareCursor, logDirectory, { wheelScrollLines: 3,
+      copyToClipboard: text => writeClipboardText(text, { writeTerminal: sequence => { terminal.write(sequence); } }), ...options });
     this.defaultFrameIntervalMs = resolveTuiFrameInterval();
     this.scrollFrameIntervalMs = resolveTuiScrollFrameInterval();
     this.framePacer = new TuiFramePacer(this.defaultFrameIntervalMs);

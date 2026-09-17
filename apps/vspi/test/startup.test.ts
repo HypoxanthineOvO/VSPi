@@ -111,6 +111,7 @@ function createDisposableApp(options: {
 	disposeAttachments?: () => Promise<void>;
 }): VspiApp & { dispose(mode?: "detach" | "cancel"): Promise<void> } {
 	return Object.assign(Object.create(VspiApp.prototype), {
+		imagePathPaste: { reset: vi.fn() },
 		disposing: false,
 		renderReady: true,
 		yoloAcknowledgementBroker: { cancel: vi.fn() },

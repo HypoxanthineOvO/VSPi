@@ -195,6 +195,10 @@ export interface ModelPrice {
 
 export interface ModelOption {
 	id: string;
+	displayIds?: string[];
+	wireId?: string;
+	modelAliases?: string[];
+	endpoint?: string;
 	protocol?: string;
 	alias?: string;
 	provider?: string;

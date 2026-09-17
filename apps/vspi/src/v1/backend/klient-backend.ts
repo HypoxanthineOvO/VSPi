@@ -533,6 +533,9 @@ export class KlientChatBackend implements ChatBackend {
 			.filter((model) => selectableProviders.has(model.provider))
 			.map((model) => ({
 				id: displayModelId(model.provider, model.model),
+				wireId: model.wire_model,
+				modelAliases: model.aliases?.map(id => displayModelId(model.provider, id)),
+				endpoint: model.base_url,
 				protocol: model.protocol,
 				provider: model.provider,
 				alias: model.model,
@@ -543,7 +546,8 @@ export class KlientChatBackend implements ChatBackend {
 					model.display_name,
 				),
 				vision: model.capabilities?.includes("image_in") ?? false,
-				curated: isOfficialRecommendedModel(displayModelId(model.provider, model.model), model.display_name),
+				curated: [displayModelId(model.provider, model.model), model.wire_model, ...model.aliases ?? []]
+					.some(id => id !== undefined && isOfficialRecommendedModel(id, model.display_name)),
 				releasedAt: model.released_at,
 				efforts: visibleEffortLevels(catalogEffortCapability(model.thinking, {
 					identity: model.provider,

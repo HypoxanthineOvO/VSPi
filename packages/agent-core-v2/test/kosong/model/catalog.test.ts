@@ -124,6 +124,18 @@ afterEach(() => {
 });
 
 describe('Model assembly (pure data)', () => {
+  it('projects the effective API model ID and aliases without replacing the config key', () => {
+    const { host, catalog } = createHost({
+      providers: { example: { type: 'openai', apiKey: 'YOUR_API_KEY', baseUrl: 'https://example.test/v1' } },
+      models: { 'example/review': { provider: 'example', model: 'old-model', aliases: ['old-alias'], maxContextSize: 8192,
+        overrides: { model: 'new-model', aliases: ['new-alias'], baseUrl: 'https://overridden.example.test/v1' } } },
+    });
+    try {
+      const projected = toProtocolModel(catalog.get('example/review'), host.app.accessor.get(IModelService).get('example/review')!);
+      expect(projected).toMatchObject({ model: 'example/review', wire_model: 'new-model', aliases: ['new-alias'], base_url: 'https://overridden.example.test/v1' });
+    } finally { host.dispose(); }
+  });
+
   it('resolves a historical expired DeepSeek binding through its current model without listing the retired ID', async () => {
     const r = createHost({
       providers: { vsplab: { type: 'openai', apiKey: 'YOUR_API_KEY', baseUrl: 'https://relay.example.test/v1' } },
@@ -1009,6 +1021,8 @@ describe('wire projection (pure)', () => {
         provider: 'kimi',
         protocol: 'openai',
         model: 'k2',
+        wire_model: 'kimi-k2',
+        base_url: 'https://api.example.test/v1',
         display_name: 'Kimi K2',
         max_context_size: 131072,
         capabilities: ['thinking'],
@@ -1040,6 +1054,7 @@ describe('wire projection (pure)', () => {
       provider: 'kimi',
       protocol: 'openai',
       model: 'k2',
+      wire_model: 'kimi-k2',
       display_name: 'Kimi K2',
       max_context_size: 131072,
       capabilities: ['thinking'],

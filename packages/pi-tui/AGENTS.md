@@ -18,6 +18,8 @@ Never overwrite this directory wholesale when syncing from upstream. Each of the
 
 ## Acceptance after syncing from upstream
 
+`TuiAltScreenOptions.copyToClipboard` lets the host own clipboard routing for selected text. Preserve the optional hook and its mouse-selection test; absent the hook, upstream OSC 52 behavior remains unchanged. VSPi supplies the same SSH/tmux-aware policy used by `/copy`.
+
 - `pnpm --filter @moonshot-ai/pi-tui test` must pass in full; any failure among the guarding tests above means a local divergence was overwritten and lost.
 
 ## Testing

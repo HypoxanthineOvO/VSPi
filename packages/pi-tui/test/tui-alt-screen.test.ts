@@ -974,6 +974,19 @@ describe("TuiAltScreen", () => {
 		tui.stop();
 	});
 
+	it('uses the host clipboard policy for mouse-selected text when provided', async () => {
+		const terminal = new RecordingTerminal(20, 4);
+		const copied: string[] = [];
+		const tui = new TuiAltScreen(terminal, false, undefined, { copyToClipboard: async text => { copied.push(text); return 'requested'; } });
+		try {
+			tui.addChild(new Text('alpha\nbeta', 0, 0)); tui.start(); await terminal.waitForRender();
+			terminal.sendInput('\x1b[<0;1;1M'); terminal.sendInput('\x1b[<32;4;2M'); terminal.sendInput('\x1b[<0;4;2m');
+			await terminal.waitForRender();
+			assert.deepStrictEqual(copied, ['alpha\nbeta']);
+			assert.ok(!terminal.events.some(event => event.type === 'write' && event.data.includes('\x1b]52;c;')));
+		} finally { tui.stop(); }
+	});
+
 	it("selects visible text with the mouse and copies it with OSC 52", async () => {
 		const terminal = new RecordingTerminal(20, 4);
 		const tui = new TuiAltScreen(terminal);

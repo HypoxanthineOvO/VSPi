@@ -485,6 +485,22 @@ export function defineKlientConformance(
       expect(await config.inspect('models')).toEqual(beforeModels);
     });
 
+    it('lists configuration aliases separately from the actual API model ID', async () => {
+      const config = target.klient.global.config;
+      const beforeProviders = await config.inspect<Record<string, unknown>>('providers');
+      const beforeModels = await config.inspect<Record<string, unknown>>('models');
+      try {
+        await config.replaceSections({ sections: {
+          providers: { ...beforeProviders.userValue, example: { type: 'openai', baseUrl: 'https://example.test/v1', apiKey: 'YOUR_API_KEY' } },
+          models: { ...beforeModels.userValue, 'example/review': { provider: 'example', model: 'actual-model', aliases: ['alternate-model'], maxContextSize: 8192 } },
+        } });
+        const model = (await target.klient.global.kosong.listModels()).find(item => item.model === 'example/review');
+        expect(model).toMatchObject({ model: 'example/review', wire_model: 'actual-model', aliases: ['alternate-model'], base_url: 'https://example.test/v1' });
+      } finally {
+        await config.replaceSections({ sections: { providers: beforeProviders.userValue ?? {}, models: beforeModels.userValue ?? {} } });
+      }
+    });
+
     it('configures builtin providers persistently while retaining user model overrides and the default', async () => {
       const config = target.klient.global.config;
       const kosong = target.klient.global.kosong;

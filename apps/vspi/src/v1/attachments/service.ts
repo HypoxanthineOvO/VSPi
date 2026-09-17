@@ -2,6 +2,7 @@ import { Image } from "@moonshot-ai/pi-tui";
 import type { Attachment } from "../domain/types.js";
 import type { VspiTheme } from "../ui/theme.js";
 import { readClipboardImage } from "./clipboard.js";
+import { readImagePath } from './image-path.js';
 import { AttachmentStore, readVerifiedAttachmentBytes, type AttachmentStoreOptions } from "./store.js";
 
 export interface AttachmentServiceEvents {
@@ -80,6 +81,10 @@ export class AttachmentService {
   }
 
   async pasteLocal(): Promise<Attachment | undefined> {
+    if (process.env.SSH_TTY || process.env.SSH_CONNECTION || process.env.SSH_CLIENT) {
+      this.events?.onNotice('SSH 下请粘贴运行 VSPi 的机器上的图片路径；无法直接读取你电脑的图片剪贴板', 'info');
+      return undefined;
+    }
     const ownership = this.ownership();
     const store = this.store;
     const image = await readClipboardImage();
@@ -87,10 +92,22 @@ export class AttachmentService {
       this.events?.onNotice("剪贴板中没有可读取的图片", "warning");
       return undefined;
     }
+    return this.deliverImage(image, store, ownership);
+  }
+
+  async importPath(path: string, signal?: AbortSignal): Promise<Attachment | undefined> {
+    const store = this.store;
+    const ownership = this.ownership();
+    const image = await readImagePath(path, store.maxBytes, signal);
+    return this.deliverImage(image, store, ownership, signal);
+  }
+
+  private deliverImage(image: { bytes: Uint8Array; mimeType: string }, store: AttachmentStore, ownership: AttachmentSessionOwnership, signal?: AbortSignal): Promise<Attachment | undefined> {
     return this.enqueue(async () => {
+      signal?.throwIfAborted();
       if (!this.isCurrent(store, ownership)) return undefined;
       const attachment = await store.add(image.bytes, image.mimeType);
-      if (!this.isCurrent(store, ownership)) {
+      if (!this.isCurrent(store, ownership) || signal?.aborted) {
         await store.remove(attachment.id);
         return undefined;
       }

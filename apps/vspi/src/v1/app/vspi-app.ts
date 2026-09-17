@@ -22,6 +22,7 @@ import {
 import type { AgentRole } from "../agents/types.js";
 import type { AttachmentService } from "../attachments/service.js";
 import { writeClipboardText } from "../attachments/clipboard.js";
+import { ImagePathPasteHandler } from '../attachments/image-path.js';
 import type {
 	BackendSubscription,
 	ChatBackend,
@@ -437,6 +438,7 @@ export class VspiApp implements Component, Focusable {
 	private readonly transcriptRenderCache = new TranscriptRenderCache();
 	private readonly thinkingTranslator: ThinkingTranslator;
 	private thinkingTranslationQueue: Promise<void> = Promise.resolve();
+	private readonly imagePathPaste: ImagePathPasteHandler;
 	private thinkingTranslationAbort: AbortController | undefined;
 	private thinkingTranslationRevision = 0;
 	private readonly translatedThinkingSources = new Map<string, string>();
@@ -483,6 +485,12 @@ export class VspiApp implements Component, Focusable {
 			requestRender: (force?: boolean) => this.requestRender(force),
 		} as TUI;
 		this.composer = new Composer(renderingTui, theme, options.cwd);
+		this.imagePathPaste = new ImagePathPasteHandler({ cwd: options.cwd,
+			attach: (path, signal) => options.attachments.importPath(path, signal),
+			insert: data => { this.composer.handleInput(data); this.requestRender(); },
+			replay: data => { this.handleInput(data); },
+			notice: message => { this.showNotice(message, 'warning'); },
+		});
 		this.panels = new PanelController(options.settings);
 		this.fullscreenTranscriptSurface = this.createRenderSurface((width) =>
 			this.renderFullscreenBody(width),
@@ -937,6 +945,7 @@ export class VspiApp implements Component, Focusable {
 	}
 
 	async dispose(mode: "detach" | "cancel" = "detach"): Promise<void> {
+		this.imagePathPaste.reset();
 		this.feedbackUpload?.abort();
 		this.feedbackUpload = undefined;
 		if (this.preview === this.feedbackPreview) this.preview = undefined;
@@ -1081,6 +1090,7 @@ export class VspiApp implements Component, Focusable {
 			void this.detachForegroundTask();
 			return;
 		}
+		if (this.imagePathPaste.active && this.imagePathPaste.handle(data)) return;
 		if (
 			this.notice &&
 			!this.notice.progress &&
@@ -1299,7 +1309,7 @@ export class VspiApp implements Component, Focusable {
 			this.handleInspectInput(data);
 			return;
 		}
-		this.composer.handleInput(data);
+		if (!this.imagePathPaste.handle(data)) this.composer.handleInput(data);
 	}
 
 	private completeCommandToken(): boolean {
@@ -1799,6 +1809,7 @@ export class VspiApp implements Component, Focusable {
 	}
 
 	private beginSessionTransition(): number {
+		this.imagePathPaste.reset();
 		this.sessionTransition = true;
 		this.sessionResetObserved = false;
 		this.sessionHydrationTasks = [];
@@ -2692,8 +2703,10 @@ export class VspiApp implements Component, Focusable {
 				this.showNotice("当前没有可复制的正式回复", "warning");
 				return;
 			}
-			if (writeClipboardText(latest.text)) this.showNotice("已复制最近一条回复", "success");
-			else this.showNotice("复制失败：当前环境没有可用的系统剪贴板", "error");
+			try {
+				const message = await writeClipboardText(latest.text, { writeTerminal: sequence => { this.tui.terminal.write(sequence); } });
+				this.showNotice(message, 'success');
+			} catch (error) { this.showNotice(`复制失败：${error instanceof Error ? error.message : '未知错误'}`, 'error'); }
 			return;
 		}
 		if (action.handler === "newSession") {
@@ -5439,6 +5452,7 @@ export class VspiApp implements Component, Focusable {
 	}
 
 	private resetSessionState(): number {
+		this.imagePathPaste.reset();
 		this.sessionEpoch += 1;
 		this.pendingModelSelection = undefined;
 		this.cancelPendingQuestion(

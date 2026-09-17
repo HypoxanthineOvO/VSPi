@@ -613,7 +613,7 @@ function deliverySummary(
 ): string {
 	if (message.delivery === "cancelled" || message.deliveryState === "cancelled")
 		return "〔队列已取消〕";
-	if (message.deliveryState === "consuming") return "〔Core 已消费〕";
+	if (message.deliveryState === "consuming") return "";
 	if (message.deliveryState === "started") return "〔模型步骤已开始〕";
 	if (message.deliveryState === "responding") return "〔正在回复〕";
 	if (message.deliveryState === "failed") return "〔回复失败〕";

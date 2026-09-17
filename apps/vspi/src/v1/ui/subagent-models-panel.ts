@@ -1,6 +1,7 @@
 import { Input, Key, matchesKey } from "@moonshot-ai/pi-tui";
 import type { SubagentModelEdit, SubagentModelPreferences } from "../backend/types.js";
 import type { ModelOption } from "../domain/types.js";
+import { compareModelFamily } from '../domain/model-presentation.js';
 import { padLine, stripAnsi, truncateToWidth, wrapTextWithAnsi } from "./ansi.js";
 import type { VspiTheme } from "./theme.js";
 
@@ -126,9 +127,22 @@ export class SubagentModelsPanel {
 			if (!byAlias.has(alias)) byAlias.set(alias, { alias, label: alias, available: false });
 		}
 		const query = this.search.getValue().trim().toLowerCase();
+		const modelsByAlias = new Map(this.models.map(model => [model.alias ?? `${model.provider ?? model.brand}/${model.id}`, model]));
 		this.candidateCache = [...byAlias.values()]
 			.filter((candidate) => `${candidate.alias} ${candidate.label}`.toLowerCase().includes(query))
-			.toSorted((left, right) => Number(Object.hasOwn(this.preferences.models, right.alias)) - Number(Object.hasOwn(this.preferences.models, left.alias)) || left.alias.localeCompare(right.alias));
+			.toSorted((left, right) => {
+				const enabled = Number(Object.hasOwn(this.preferences.models, right.alias)) - Number(Object.hasOwn(this.preferences.models, left.alias));
+				if (enabled) return enabled;
+				if (left.available !== right.available) return left.available ? -1 : 1;
+				const a = modelsByAlias.get(left.alias);
+				const b = modelsByAlias.get(right.alias);
+				if (a && b) {
+					const provider = (a.provider ?? a.brand).localeCompare(b.provider ?? b.brand);
+					const family = compareModelFamily(a, b);
+					if (provider || family) return provider || family;
+				}
+				return left.alias.localeCompare(right.alias);
+			});
 		return this.candidateCache;
 	}
 }
