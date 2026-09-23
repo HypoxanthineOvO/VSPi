@@ -9,6 +9,7 @@
 - 修复 VSPLab DeepSeek Flash 在思考模式下调用工具后，下一次请求未完整回传 `reasoning_content` 导致上游返回 400 的问题；历史 assistant 消息没有思考内容时也会携带该字段。
 - Linux 全量 `check:vspi`、发布器 2 项测试、2.5.4 tarball 隔离安装及打包 daemon 7 项定向测试通过；同一 tarball 在 Node 24.16.0 与最低支持的 22.19.0 下完成安装和 daemon 启停。
 - Windows Node 24.20.0 已验证同一 tarball 的安装、版本和 daemon 启停；VSPLab DeepSeek Flash 的实际两轮思考模式工具调用已成功。Windows 源码构建与 macOS 本轮未验收。
+- 已发布到 GitHub Release 并更新共享 `latest`；发布包和校验文件经过远端字节回读验证。
 
 ## 2.5.3 — 更新常用模型目录（Linux 先行）
 
