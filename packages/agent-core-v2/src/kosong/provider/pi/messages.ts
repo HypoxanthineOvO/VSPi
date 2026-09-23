@@ -168,6 +168,11 @@ function convertAssistant(
 ): AssistantMessage {
   const content: AssistantMessage['content'] = [];
   let origin: Signature | undefined;
+  const requiresReasoningContent = model.api === 'openai-completions' &&
+    (model.provider === 'deepseek' ||
+      (model.compat !== undefined &&
+        'requiresReasoningContentOnAssistantMessages' in model.compat &&
+        model.compat.requiresReasoningContentOnAssistantMessages === true));
   for (const part of message.content) {
     if (part.type === 'text') {
       const signature = decodeSignature(part.textSignature);
@@ -183,7 +188,9 @@ function convertAssistant(
       const thinking: ThinkingContent = {
         type: 'thinking',
         thinking: part.think,
-        thinkingSignature: signature?.signature ?? part.encrypted,
+        thinkingSignature: requiresReasoningContent
+          ? 'reasoning_content'
+          : signature?.signature ?? part.encrypted,
         redacted: signature?.redacted,
       };
       content.push(thinking);

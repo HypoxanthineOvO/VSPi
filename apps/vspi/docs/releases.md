@@ -4,6 +4,12 @@
 
 发行包本地构建并直接发布，发版流程见[开发指南](development.md#发布)。各版本的平台验收范围分别记录；2.4.0 按 Linux 先行发布，Windows 验收后置，不沿用旧版本的结论。
 
+## 2.5.4 — DeepSeek 思考模式回传修复（Linux 先行）
+
+- 修复 VSPLab DeepSeek Flash 在思考模式下调用工具后，下一次请求未完整回传 `reasoning_content` 导致上游返回 400 的问题；历史 assistant 消息没有思考内容时也会携带该字段。
+- Linux 全量 `check:vspi`、发布器 2 项测试、2.5.4 tarball 隔离安装及打包 daemon 7 项定向测试通过；同一 tarball 在 Node 24.16.0 与最低支持的 22.19.0 下完成安装和 daemon 启停。
+- Windows Node 24.20.0 已验证同一 tarball 的安装、版本和 daemon 启停；VSPLab DeepSeek Flash 的实际两轮思考模式工具调用已成功。Windows 源码构建与 macOS 本轮未验收。
+
 ## 2.5.3 — 更新常用模型目录（Linux 先行）
 
 - 内置 VSPLab 模型目录加入 Claude Opus 5.5、MiMo V2.6 Flash/Pro、GPT-6 Sol/Luna、Grok 4.7，记录官方型号、发布日期、已核实能力、上下文、参考价格及思考档位。

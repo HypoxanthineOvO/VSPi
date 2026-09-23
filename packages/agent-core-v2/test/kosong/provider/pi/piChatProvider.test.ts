@@ -149,6 +149,74 @@ describe('Chat system role compatibility behind a custom relay', () => {
   });
 });
 
+describe('DeepSeek relay history', () => {
+  it.each(['deepseek-flash', 'deepseek-v4.1-flash'])(
+    'returns empty reasoning_content for an earlier assistant without thinking on %s', async modelName => {
+      let received: Record<string, unknown> = {};
+      const server = createTestHttpServer(async (request, response) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        received = JSON.parse(Buffer.concat(chunks).toString());
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: 'assistant', content: 'pong' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+      });
+      const baseUrl = await listen(server);
+      try {
+        const provider = new ProtocolAdapterRegistry().createChatProvider({
+          protocol: 'openai', providerType: 'example-relay', modelName, baseUrl,
+          apiKey: 'YOUR_API_KEY', providerOptions: { relay: true },
+          thinking: { availability: 'always', canDisable: false, controls: ['effort'], efforts: ['high'] },
+        });
+        await generate(provider, '', [{ name: 'lookup', description: 'Look up a value', parameters: { type: 'object' } }], [
+          { role: 'assistant', content: [{ type: 'text', text: 'Earlier response' }], toolCalls: [] },
+          { role: 'user', content: [{ type: 'text', text: 'Continue' }], toolCalls: [] },
+        ], undefined, { thinking: { effort: 'high' } });
+        const messages = received['messages'] as Array<Record<string, unknown>>;
+        expect(messages[0]).toMatchObject({ role: 'assistant', reasoning_content: '' });
+      } finally { await close(server); }
+    },
+  );
+
+  it.each(['deepseek-flash', 'deepseek-v4.1-flash'])(
+    'returns the full reasoning_content after a tool call on the next %s request', async modelName => {
+      const requests: Array<Record<string, unknown>> = [];
+      const server = createTestHttpServer(async (request, response) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        requests.push(JSON.parse(Buffer.concat(chunks).toString()));
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        const delta = requests.length === 1
+          ? {
+              role: 'assistant',
+              reasoning_content: 'Need the lookup result.',
+              tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'lookup', arguments: '{}' } }],
+            }
+          : { role: 'assistant', content: 'Done.' };
+        response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: requests.length === 1 ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`);
+      });
+      const baseUrl = await listen(server);
+      try {
+        const provider = new ProtocolAdapterRegistry().createChatProvider({
+          protocol: 'openai', providerType: 'example-relay', modelName, baseUrl,
+          apiKey: 'YOUR_API_KEY', providerOptions: { relay: true },
+          thinking: { availability: 'always', canDisable: false, controls: ['effort'], efforts: ['high'] },
+        });
+        const tools = [{ name: 'lookup', description: 'Look up a value', parameters: { type: 'object' } }];
+        const user: Message = { role: 'user', content: [{ type: 'text', text: 'Look this up' }], toolCalls: [] };
+        const first = await generate(provider, '', tools, [user], undefined, { thinking: { effort: 'high' } });
+        expect(first.message.toolCalls).toMatchObject([{ id: 'call_1', name: 'lookup' }]);
+        await generate(provider, '', tools, [
+          user,
+          first.message,
+          { role: 'tool', name: 'lookup', toolCallId: 'call_1', content: [{ type: 'text', text: 'Found it' }], toolCalls: [] },
+        ], undefined, { thinking: { effort: 'high' } });
+        const messages = requests[1]?.['messages'] as Array<Record<string, unknown>>;
+        expect(messages[1]).toMatchObject({ role: 'assistant', reasoning_content: 'Need the lookup result.' });
+      } finally { await close(server); }
+    },
+  );
+});
+
 describe('provider response diagnosis', () => {
   it.each([
     ['glm-5.3', 429, '1113', 'quota_exhausted', false],

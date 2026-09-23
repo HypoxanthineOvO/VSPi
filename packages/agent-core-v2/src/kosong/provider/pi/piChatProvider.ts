@@ -211,6 +211,10 @@ export class PiChatProvider implements ChatProvider {
     const declaredDeveloperRole = model?.compat !== undefined && 'supportsDeveloperRole' in model.compat
       ? model.compat.supportsDeveloperRole
       : undefined;
+    const declaredReasoningContent = model?.compat !== undefined &&
+      'requiresReasoningContentOnAssistantMessages' in model.compat
+        ? model.compat.requiresReasoningContentOnAssistantMessages
+        : undefined;
     this.model = {
       id: config.modelName,
       name: model?.name ?? config.modelName,
@@ -241,6 +245,11 @@ export class PiChatProvider implements ChatProvider {
             ...model?.compat,
             supportsDeveloperRole: declaredDeveloperRole ??
               relayNativeProvider(config.modelName) === 'openai',
+            requiresReasoningContentOnAssistantMessages:
+              config.providerOptions?.relay === true &&
+              relayNativeProvider(config.modelName) === 'deepseek'
+                ? true
+                : declaredReasoningContent,
           }
         : model?.compat,
     };
