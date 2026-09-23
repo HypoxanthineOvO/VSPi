@@ -6,10 +6,13 @@ interface RecommendedModel {
 
 export const RECOMMENDED_MODELS: readonly RecommendedModel[] = [
 	{ label: "GPT 6 Astra", ids: ["gpt-6", "gpt-6-astra"] },
+	{ label: "GPT 6 Sol", ids: ["gpt-6-sol"] },
+	{ label: "GPT 6 Luna", ids: ["gpt-6-luna"] },
 	{ label: "GPT 5.6 Sol", ids: ["gpt-5.6-sol"] },
 	{ label: "GPT 5.6 Luna", ids: ["gpt-5.6-luna"] },
 	{ label: "Claude Fable 5.1", ids: ["claude-fable-5-1"] },
 	{ label: "Claude Fable 5", ids: ["claude-fable-5"] },
+	{ label: "Claude Opus 5.5", ids: ["claude-opus-5-5"] },
 	{ label: "Claude Opus 5", ids: ["claude-opus-5"] },
 	{ label: "Kimi K3", ids: ["kimi-k3", "k3"] },
 	{ label: "Kimi K2.8 Preview", ids: [], names: ["Kimi K2.8", "Kimi K2.8 Preview"] },
@@ -18,6 +21,9 @@ export const RECOMMENDED_MODELS: readonly RecommendedModel[] = [
 	{ label: "DeepSeek V4.1 Flash", ids: ["deepseek-flash", "deepseek-v4.1-flash"] },
 	{ label: "DeepSeek V4 Pro", ids: ["deepseek-v4-pro"] },
 	{ label: "MiniMax M3", ids: ["minimax-m3"] },
+	{ label: "MiMo V2.6 Flash", ids: ["mimo-v2.6-flash"] },
+	{ label: "MiMo V2.6 Pro", ids: ["mimo-v2.6-pro"] },
+	{ label: "Grok 4.7", ids: ["grok-4.7"] },
 	{ label: "MiMo V2.5", ids: ["mimo-v2.5"] },
 	{ label: "MiMo V2.5 Pro", ids: ["mimo-v2.5-pro"] },
 	{ label: "Qwen 3.8 Max", ids: ["qwen3.8-max"] },

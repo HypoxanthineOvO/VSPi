@@ -1,5 +1,7 @@
 # VSPLab 中转站模型目录（Golden）
 
+2026-09-23：维护源增补 GPT-6 Sol/Luna、Claude Opus 5.5、MiMo V2.6 Flash/Pro、Grok 4.7 的官方元数据，并更新 VSPi 常用模型推荐。当前维护源和 Babel 用户目录暂存文件 SHA-256 均为 `41a7011dc0c4001f77a76f95c4c05166e922e6abc752330305d6923bd13ab6bf`。Babel 的 root 所有线上 `/etc/vsp-sub2api/model-catalog.json` 已通过受限免密安装工具替换，cn/tech 回包及 Windows 公网 tech 均核对为同一 SHA-256 和 70 条；旧文件备份在 `/var/backups/vsp-model-catalog/`。VSPi 2.5.3 候选包仍在验证，已安装的 2.5.2 尚未更新。模型目录不受 Sub2API 账户、分组和路由是否可用的约束。
+
 2026-09-16：已备份并同步到 Babel，tech 公网及 Babel 本机 cn/tech 虚拟主机回读 SHA-256 均为 `acb1d4e239893e354e18d917345c52d531c7ae1a93096b459f8435d296d5f027`。修复 `deepseek-flash` 的 V4.1 名称、V4 Pro 隐藏状态及 K3 元数据差异。2.5.1 起该文件同时打包为客户端内置默认值；服务端目录供旧客户端/其他调用方使用，不再覆盖新版客户端的用户配置。
 
 2026-09-13 更新：用户确认本文件为模型元数据标准。DeepSeek 四个现有可见条目的价格按当前官方 USD 价格页修正，并在 `metadataSources.cost` 标记空闲基价、峰值倍率和时段；不再使用人民币固定汇率换算 DeepSeek。官方当前价格页已撤回 9 月 14 日将 V4 Pro 改按 Flash 计费的旧安排，Pro 仍按独立费率。此次不修改模型 ID、协议或思考档位，不新增提供商接入。**本次更新尚未发布到 Babel**，实施前线上文件仍是较早快照，与本文件不一致；下文历史同步记录不代表当前线上已同步。

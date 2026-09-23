@@ -1605,7 +1605,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(panels.handleInput("\r")).toBeUndefined();
 	});
 
-	it.each(["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna", "claude-fable-5-1", "claude-opus-5", "kimi-k3", "k3", "glm-5.3", "glm-5.3-flash", "deepseek-flash", "deepseek-v4-pro", "MiniMax-M3", "mimo-v2.5", "mimo-v2.5-pro", "qwen3.8-max", "google/gemini-3.8-flash", "google/gemini-3.1-pro-preview", "tencent/hy4-preview"])("recognizes the approved recommendation %s independently of subagent configuration", (id) => {
+	it.each(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-luna", "claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "kimi-k3", "k3", "glm-5.3", "glm-5.3-flash", "deepseek-flash", "deepseek-v4-pro", "MiniMax-M3", "mimo-v2.6-flash", "mimo-v2.6-pro", "grok-4.7", "mimo-v2.5", "mimo-v2.5-pro", "qwen3.8-max", "google/gemini-3.8-flash", "google/gemini-3.1-pro-preview", "tencent/hy4-preview"])("recognizes the approved recommendation %s independently of subagent configuration", (id) => {
 		expect(isOfficialRecommendedModel(id)).toBe(true);
 	});
 
