@@ -4,11 +4,11 @@
 
 发行包本地构建并直接发布，发版流程见[开发指南](development.md#发布)。各版本的平台验收范围分别记录；2.4.0 按 Linux 先行发布，Windows 验收后置，不沿用旧版本的结论。
 
-## 2.5.3 — 更新常用模型目录（Linux 先行，候选）
+## 2.5.3 — 更新常用模型目录（Linux 先行）
 
 - 内置 VSPLab 模型目录加入 Claude Opus 5.5、MiMo V2.6 Flash/Pro、GPT-6 Sol/Luna、Grok 4.7，记录官方型号、发布日期、已核实能力、上下文、参考价格及思考档位。
 - 六款加入常用模型推荐。目录记录不授予中转站调用权限；账户、分组、路由及实际可用性由服务端独立决定。
-- Linux 全量 `check:vspi`、发布器 2 项测试、2.5.3 tarball 打包/隔离安装验证和打包 daemon 7 项定向测试已通过；该 tarball 尚未发布。Windows/macOS 本轮未实机验收，不能沿用旧版本结论。
+- Linux 全量 `check:vspi`、发布器 2 项测试、2.5.3 tarball 打包/隔离安装验证和打包 daemon 7 项定向测试已通过；已发布到 GitHub Release 并更新共享 latest。Windows/macOS 本轮未实机验收，不能沿用旧版本结论。
 
 ## 2.5.2 — SSH 复制、图片路径粘贴与模型列表（Linux 先行）
 
