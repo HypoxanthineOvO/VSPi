@@ -378,6 +378,7 @@ export class AgentPromptService implements IAgentPromptService {
       void this.dispatcher.dispatch(
         new TurnSteer({
           agentId: this.scopeContext.agentId,
+          promptIds: selected.map((item) => item.id),
           input: materialized.content,
           origin: materialized.origin ?? USER_PROMPT_ORIGIN,
         }),

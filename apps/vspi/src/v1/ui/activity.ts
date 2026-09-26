@@ -69,9 +69,12 @@ export function renderQueuedMessage(
 		.filter(Boolean)
 		.join(" · ");
 	const label = message.delivery === "followUp" ? "Follow-up" : "Steer";
+	const status = message.deliveryState === "cancelled" ? "已取消 · 未送达"
+		: message.deliveryState === "failed" || message.deliveryState === "completed" ? "未送达"
+		: message.delivery === "followUp" ? "等待当前任务结束" : "等待下一次模型调用";
 	const animated = !presentation.reducedMotion;
 	const marker = animated && presentation.frame % 2 === 0 ? "▐" : "▌";
-	const left = `${theme.focus(marker)} ${theme.bold(label)} · ${theme.muted(content)}`;
+	const left = `${theme.focus(marker)} ${theme.bold(label)} · ${theme.muted(status)} · ${theme.muted(content)}`;
 	const arrow = "↪";
 	const right = theme.muted(theme.capabilities.unicode ? arrow : ">");
 	return theme.activitySurface(alignRight(left, right, width));

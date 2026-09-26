@@ -183,6 +183,9 @@ export class KlientChatBackend implements ChatBackend {
 	private queuedPrompts = new Map<string, QueuedPrompt>();
 	private promptPhases = new Map<string, PromptLifecyclePhase>();
 	private promptTurns = new Map<number, Set<string>>();
+	private steeredPrompts = new Map<string, number>();
+	private callModelAlias: string | undefined;
+	private boundModelAlias: string | undefined;
 	private turnEndWaiters = new Map<number, Set<() => void>>();
 	private tasks = new Map<string, AgentTaskInfo>();
 	private taskOutputs = new Map<string, string>();
@@ -695,6 +698,7 @@ export class KlientChatBackend implements ChatBackend {
 		const applied = binding?.thinking ?? (agent ? await agent.getThinking() : effort);
 		if (epoch !== this.submissionEpoch || agent !== this.agent) throw new Error("Session changed");
 		this.effort = normalizeEffortLevel(applied, effort);
+		this.trackModelBinding(alias);
 		this.draftModelAlias = alias;
 		this.applyModel(
 			model.provider,
@@ -1423,6 +1427,8 @@ export class KlientChatBackend implements ChatBackend {
 	private subscribe(): void {
 		const agent = this.requireAgent();
 		const session = this.requireSession();
+		this.boundModelAlias = `${this.currentProvider}/${this.currentModel}`;
+		this.callModelAlias = this.boundModelAlias;
 		const events = {
 			on: <E extends keyof AgentEventPayloads>(name: E, listener: (event: AgentEventPayloads[E]) => void) => agent.events.on(name, event => {
 				if (this.agent !== agent) return;
@@ -1438,6 +1444,7 @@ export class KlientChatBackend implements ChatBackend {
 		};
 		this.subscriptions.push(
 			events.on("agent.status.updated", (event) => {
+				if (typeof event['model'] === 'string') this.trackModelBinding(event['model']);
 				if (event['usage'] !== undefined || event['contextTokens'] !== undefined) void this.publishUsage();
 				if (event['model'] !== undefined || event['thinkingEffort'] !== undefined) void this.refreshModelBinding(agent);
 			}),
@@ -1475,6 +1482,25 @@ export class KlientChatBackend implements ChatBackend {
 				this.appendStream(id, event.delta, "thinking");
 			}),
 			events.on("turn.step.started", (event) => {
+				for (const [promptId, turnId] of this.steeredPrompts) {
+					if (turnId !== event.turnId) continue;
+					this.consumeQueuedPrompt(promptId);
+					this.steeredPrompts.delete(promptId);
+					const prompts = this.promptTurns.get(event.turnId) ?? new Set<string>();
+					prompts.add(promptId);
+					this.promptTurns.set(event.turnId, prompts);
+				}
+				if (this.boundModelAlias !== this.callModelAlias) {
+					this.advanceTurnSegment();
+					this.events?.onMessage({
+						id: `model-switch:${event.turnId}:${event.step}`,
+						role: 'assistant', kind: 'session',
+						text: `模型 ${this.callModelAlias} → ${this.boundModelAlias}`,
+						presentation: { kind: 'modelSwitch', from: this.callModelAlias ?? '', to: this.boundModelAlias ?? '' },
+					});
+					this.callModelAlias = this.boundModelAlias;
+					this.events?.onModelSwitchPending?.(undefined);
+				}
 				if (this.turn) this.turn.effort = this.effort;
 				this.setPromptPhaseForTurn(event.turnId, "started");
 			}),
@@ -1573,15 +1599,10 @@ export class KlientChatBackend implements ChatBackend {
 					this.setPromptPhase(event.promptId, "queued");
 				this.publishQueueState();
 			}),
-			events.on("prompt.steered", (event) => {
-				const turnPrompts =
-					this.promptTurns.get(this.turn?.id ?? -1) ?? new Set<string>();
-					for (const promptId of event.promptIds) {
-						this.consumeQueuedPrompt(promptId);
-						turnPrompts.add(promptId);
-					}
-					if (this.turn !== undefined)
-						this.promptTurns.set(this.turn.id, turnPrompts);
+			events.on("turn.steer", (event) => {
+				for (const promptId of event.promptIds ?? []) {
+					if (this.turn) this.steeredPrompts.set(promptId, this.turn.id);
+				}
 			}),
 			events.on("goal.updated", (event) => {
 				this.setRuntimeGoalStatus(event.snapshot?.status, true);
@@ -2252,6 +2273,7 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	private removeQueuedPrompt(promptId: string): void {
+		this.steeredPrompts.delete(promptId);
 		if (!this.queuedPrompts.delete(promptId)) return;
 		this.publishQueueState();
 	}
@@ -2275,6 +2297,15 @@ export class KlientChatBackend implements ChatBackend {
 		if (waiters === undefined) return;
 		this.turnEndWaiters.delete(turnId);
 		for (const resolve of waiters) resolve();
+	}
+
+	private trackModelBinding(alias: string): void {
+		this.boundModelAlias = alias;
+		this.events?.onModelSwitchPending?.(
+			this.callModelAlias !== undefined && this.callModelAlias !== alias
+				? { from: this.callModelAlias, to: alias }
+				: undefined,
+		);
 	}
 
 	private applyModel(
@@ -2308,6 +2339,10 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	private clearBindings(): void {
+		this.steeredPrompts.clear();
+		this.callModelAlias = undefined;
+		this.boundModelAlias = undefined;
+		this.events?.onModelSwitchPending?.(undefined);
 		this.clearRetryNotice();
 		this.lastRetryKey = undefined;
 		this.hydrating = false;

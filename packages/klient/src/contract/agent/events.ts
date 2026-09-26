@@ -187,6 +187,12 @@ export const promptSteeredEventSchema = z.object({
   steeredAt: z.string(),
 });
 
+export const turnSteerEventSchema = z.object({
+  type: z.literal('turn.steer'),
+  time: z.number().optional(),
+  promptIds: z.array(z.string()).optional(),
+});
+
 export const compactionStartedEventSchema = z.object({
   type: z.literal('compaction.started'),
   time: z.number().optional(),
@@ -301,6 +307,7 @@ export interface AgentEventPayloads {
   'prompt.submitted': z.infer<typeof promptSubmittedEventSchema>;
   'prompt.queued': z.infer<typeof promptQueuedEventSchema>;
   'prompt.steered': z.infer<typeof promptSteeredEventSchema>;
+  'turn.steer': z.infer<typeof turnSteerEventSchema>;
   'compaction.started': z.infer<typeof compactionStartedEventSchema>;
   'compaction.blocked': z.infer<typeof compactionBlockedEventSchema>;
   'compaction.cancelled': z.infer<typeof compactionCancelledEventSchema>;
@@ -339,6 +346,7 @@ export const agentEvents = {
   'prompt.submitted': { kind: 'stream', name: 'events', type: 'prompt.submitted', schema: promptSubmittedEventSchema },
   'prompt.queued': { kind: 'stream', name: 'events', type: 'prompt.queued', schema: promptQueuedEventSchema },
   'prompt.steered': { kind: 'stream', name: 'events', type: 'prompt.steered', schema: promptSteeredEventSchema },
+  'turn.steer': { kind: 'stream', name: 'events', type: 'turn.steer', schema: turnSteerEventSchema },
   'compaction.started': {
     kind: 'stream',
     name: 'events',

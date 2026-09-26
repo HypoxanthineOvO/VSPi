@@ -261,7 +261,7 @@ describe('AgentPromptService', () => {
     expect(event === 'completed' ? aborted : completed).toEqual([]);
   });
 
-  it('publishes turn.steer at materialize time without altering the wire payload shape', async () => {
+  it('publishes the consumed prompt ids only when a steer is materialized', async () => {
     const { prompt, context, loop, eventBus } = harness();
     const events: TurnSteer[] = [];
     eventBus.subscribe(TurnSteer, (event) => events.push(event));
@@ -271,6 +271,7 @@ describe('AgentPromptService', () => {
     const two = await prompt.enqueue({ message: message('two') });
 
     await prompt.steer([two.id, one.id]);
+    expect(events).toHaveLength(0);
     loop.drainNextBatch(context);
     await Promise.resolve();
 
@@ -280,7 +281,7 @@ describe('AgentPromptService', () => {
       { type: 'text', text: 'two' },
     ]);
     expect(events[0]).not.toHaveProperty('messageId');
-    expect(events[0]).not.toHaveProperty('promptIds');
+    expect(events[0]?.promptIds).toEqual([one.id, two.id]);
   });
 
   it('aborts pending prompts and settles completion', async () => {

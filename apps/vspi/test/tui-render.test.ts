@@ -269,6 +269,45 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
 	});
 
+	it('keeps a pending model switch in the dock until the backend confirms the call boundary', async () => {
+		const home = await mkdtemp(join(tmpdir(), 'vspi-model-boundary-'));
+		const { app, events } = renderFixture(home);
+		try {
+			await app.start();
+			events().onModelSwitchPending?.({ from: 'example/old', to: 'example/new' });
+			const pending = app.render(120).map(stripTerminalSequences).join('\n');
+			expect(pending).toContain('模型待生效');
+			expect(pending).toContain('example/old → example/new');
+			expect(pending).not.toContain('模型 --------');
+			events().onMessage({ id: 'model-switch:1:2', role: 'assistant', kind: 'session', text: '模型 example/old → example/new', presentation: { kind: 'modelSwitch', from: 'example/old', to: 'example/new' } });
+			events().onModelSwitchPending?.(undefined);
+			const applied = app.render(120).map(stripTerminalSequences).join('\n');
+			expect(applied).not.toContain('模型待生效');
+			expect(applied).toContain('模型 example/old → example/new');
+		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it('keeps a cancelled undelivered steer out of the transcript', async () => {
+		const home = await mkdtemp(join(tmpdir(), 'vspi-steer-cancel-'));
+		const { app, backend, events } = renderFixture(home);
+		const send = vi.fn<ChatBackend['send']>(async () => ({ status: 'queued', delivery: 'steer' }));
+		backend.send = send;
+		try {
+			await app.start();
+			events().onBusy(true);
+			app.composer.setText('Queued instruction');
+			app.handleInput('\r');
+			await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+			const id = send.mock.calls[0]?.[1].clientMessageId;
+			expect(id).toBeDefined();
+			events().onPromptLifecycle?.(id!, 'cancelled');
+			const output = app.render(120).map(stripTerminalSequences).join('\n');
+			expect(output).toContain('已取消 · 未送达');
+			expect(output).toContain('Queued instruction');
+			expect(output).not.toContain('〔队列已取消〕');
+		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
 	it('does not bring the Core consumed label back when history is restored', async () => {
 		const home = await mkdtemp(join(tmpdir(), 'vspi-consumed-history-'));
 		const { app, events } = renderFixture(home);
@@ -648,6 +687,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			}),
 		);
 		expect(entering0).toContain("Steer");
+		expect(entering0).toContain("等待下一次模型调用");
 		expect(entering1).toContain("Steer");
 		expect(entering0).not.toBe(entering1);
 		expect(
@@ -917,6 +957,27 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(detachAgentTask).not.toHaveBeenCalled();
 		expect(cancel).not.toHaveBeenCalled();
 		expect(showNotice).toHaveBeenCalledWith("已转入后台 2 个任务", "success");
+	});
+
+	it.each([40, 80, 120])("centers the model switch label in a full-width rule at %i columns", (width) => {
+		const lines = renderTranscriptMessage({
+			id: 'switch', role: 'assistant', kind: 'session', text: '模型 A → B',
+			presentation: { kind: 'modelSwitch', from: 'A', to: 'B' },
+		}, width, theme).map(stripTerminalSequences);
+		expect(lines).toHaveLength(1);
+		expect(visibleWidth(lines[0]!)).toBe(width);
+		const match = lines[0]!.match(/^([─-]+) 模型 A → B ([─-]+)$/u);
+		expect(match).not.toBeNull();
+		expect(Math.abs(match![1]!.length - match![2]!.length)).toBeLessThanOrEqual(1);
+	});
+
+	it.each([1, 2, 4, 12, 24])("fits a long model switch into %i columns without wrapping", (width) => {
+		const lines = renderTranscriptMessage({
+			id: 'switch', role: 'assistant', kind: 'session', text: '模型切换',
+			presentation: { kind: 'modelSwitch', from: 'example/very-long-model', to: 'example/another-long-model' },
+		}, width, theme).map(stripTerminalSequences);
+		expect(lines).toHaveLength(1);
+		expect(visibleWidth(lines[0]!)).toBe(width);
 	});
 
 	it("keeps queued steer in the dock until consuming", () => {

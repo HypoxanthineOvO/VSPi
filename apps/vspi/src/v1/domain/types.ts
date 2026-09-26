@@ -158,7 +158,7 @@ export interface SessionMarkerMessage {
 	role: "assistant";
 	kind: "session";
 	text: string;
-	presentation?: CronSessionPresentation;
+	presentation?: CronSessionPresentation | { kind: "modelSwitch"; from: string; to: string };
 }
 
 export interface ErrorMessage {

@@ -12,7 +12,19 @@ import { pluginManifestSchema } from '../src/contract/global/plugins.js';
 import { mcpServerAuthFlowHandleSchema } from '../src/contract/global/mcpManagement.js';
 import { createSessionOptionsSchema } from '../src/contract/session/lifecycle.js';
 import { goalToolResultSchema, promptPayloadSchema } from '../src/contract/agent/schemas.js';
-import { goalUpdatedEventSchema } from '../src/contract/agent/events.js';
+import { goalUpdatedEventSchema, turnSteerEventSchema } from '../src/contract/agent/events.js';
+
+describe('steer materialization events', () => {
+  it('retains the prompt ids needed to acknowledge delivered input', () => {
+    expect(turnSteerEventSchema.parse({ type: 'turn.steer', promptIds: ['prompt-1', 'prompt-2'] })).toEqual({
+      type: 'turn.steer', promptIds: ['prompt-1', 'prompt-2'],
+    });
+  });
+
+  it('accepts historical steer events without prompt ids', () => {
+    expect(turnSteerEventSchema.parse({ type: 'turn.steer' })).toEqual({ type: 'turn.steer' });
+  });
+});
 
 type McpTimeoutField = 'startupTimeoutMs' | 'toolTimeoutMs';
 

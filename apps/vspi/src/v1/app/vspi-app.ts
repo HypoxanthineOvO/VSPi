@@ -18,6 +18,7 @@ import {
 	type TuiMainScreenRenderState,
 	type TuiMode,
 	VStack,
+	wrapTextWithAnsi,
 } from "@moonshot-ai/pi-tui";
 import type { AgentRole } from "../agents/types.js";
 import type { AttachmentService } from "../attachments/service.js";
@@ -346,7 +347,7 @@ export class VspiApp implements Component, Focusable {
 	private usage: UsageSnapshot = DEFAULT_USAGE;
 	private effort: EffortLevel = "medium";
 	private modelLabel: string;
-	private pendingModelLabel: string | undefined;
+	private pendingModelSwitch: { from: string; to: string } | undefined;
 	private pendingModelSelection: { model: ModelOption; epoch: number } | undefined;
 	private modelSelectionCommitting = false;
 	private busy = false;
@@ -639,6 +640,10 @@ export class VspiApp implements Component, Focusable {
 					this.modelLabel = this.backend.modelLabel;
 					this.currentModelIdentity = this.backend.modelProvider ? { provider: this.backend.modelProvider, id: this.backend.modelId } : undefined;
 					if (this.currentModelIdentity) this.panels.confirmModelSelection(this.currentModelIdentity);
+					this.requestRender();
+				},
+				onModelSwitchPending: (change) => {
+					this.pendingModelSwitch = change;
 					this.requestRender();
 				},
 				onQuestion: (questions, signal) =>
@@ -1528,6 +1533,12 @@ export class VspiApp implements Component, Focusable {
 						reducedMotion: this.activityReducedMotion(),
 					});
 				});
+		if (!questionActive && this.pendingModelSwitch) {
+			queuedMessages.push(...wrapTextWithAnsi(
+				this.theme.muted(`模型待生效 · ${this.pendingModelSwitch.from} → ${this.pendingModelSwitch.to} · 等待下一次调用`),
+				width,
+			));
+		}
 		const status = this.renderStatus(width);
 		const agents = questionActive
 			? []
@@ -2199,8 +2210,8 @@ export class VspiApp implements Component, Focusable {
 								? "Recovery"
 								: undefined;
 				const runtime = this.startupStatus();
-				const statusModel = this.pendingModelLabel
-					? `Next ${this.pendingModelLabel}`
+				const statusModel = this.pendingModelSwitch
+					? `${this.pendingModelSwitch.to}（待生效）`
 					: this.modelLabel;
 				lines = renderStatusLines(
 					{
@@ -2438,6 +2449,11 @@ export class VspiApp implements Component, Focusable {
 		const message = queued ?? existing;
 		if (!message || message.kind !== "text") return;
 		message.deliveryState = phase;
+		if (queued !== undefined && (phase === "cancelled" || phase === "failed" || phase === "completed")) {
+			this.queuedPresentations.delete(messageId);
+			this.requestRender();
+			return;
+		}
 		if (queued !== undefined) this.promoteQueuedMessage(messageId);
 		this.queuedPresentations.delete(messageId);
 		this.syncActivityPresentation();
@@ -2521,7 +2537,6 @@ export class VspiApp implements Component, Focusable {
 		if (!active) {
 			this.workingStartedAt = undefined;
 			this.workingFrame = 0;
-			this.pendingModelLabel = undefined;
 		}
 		if (completedActivity) this.scheduleStableTranscriptCommit();
 		if (this.renderReady) this.tui.terminal.setProgress(active);
@@ -3185,8 +3200,6 @@ export class VspiApp implements Component, Focusable {
 					selected.effort = await this.backend.setEffort(role.effort) ?? role.effort;
 				}
 				this.modelLabel = this.backend.modelLabel;
-				if (switchingDuringActivity && this.activityActive())
-					this.pendingModelLabel = this.modelLabel;
 				this.currentModelIdentity = {
 					provider: model.provider,
 					id: selected.modelId,
@@ -4735,7 +4748,6 @@ export class VspiApp implements Component, Focusable {
 			if (selection.epoch !== this.sessionEpoch) return;
 			this.pendingModelSelection = undefined;
 			this.modelLabel = this.backend.modelLabel;
-			if (switchingDuringActivity && this.activityActive()) this.pendingModelLabel = this.modelLabel;
 			this.currentModelIdentity = { provider: selection.model.provider, id: selected.modelId };
 			this.effort = selected.effort;
 			this.refreshModelPresentation();
@@ -5455,6 +5467,7 @@ export class VspiApp implements Component, Focusable {
 		this.imagePathPaste.reset();
 		this.sessionEpoch += 1;
 		this.pendingModelSelection = undefined;
+		this.pendingModelSwitch = undefined;
 		this.cancelPendingQuestion(
 			"Question cancelled because the session changed",
 		);

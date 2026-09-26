@@ -787,8 +787,17 @@ export function renderTranscriptMessage(
 				(line) => `   ${line}`,
 			),
 		];
+	} else if (message.kind === "session" && message.presentation?.kind === "modelSwitch") {
+		const text = `模型 ${message.presentation.from} → ${message.presentation.to}`;
+		const label = width > 4
+			? ` ${truncateToWidth(text, width - 4, "…")} `
+			: truncateToWidth(text, width, "");
+		const remaining = Math.max(0, width - visibleWidth(label));
+		const left = Math.floor(remaining / 2);
+		const rule = theme.capabilities.unicode ? "─" : "-";
+		lines = [theme.muted(`${rule.repeat(left)}${label}${rule.repeat(remaining - left)}`)];
 	} else if (message.kind === "session") {
-		lines = [theme.muted(`◇ ${message.text}`)];
+		lines = wrapTextWithAnsi(theme.muted(`◇ ${message.text}`), width);
 	} else if (message.kind === "error") {
 		const metadata = [message.summary, message.model]
 			.filter(Boolean)

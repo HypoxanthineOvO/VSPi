@@ -101,6 +101,7 @@ function draftBackendFixture(
 		getGoal: vi.fn(async () => ({})), getTasks: vi.fn(async () => []), getCronTasks: vi.fn(async () => []),
 		getUsage: vi.fn<AgentHandle['getUsage']>(async () => { throw new Error("no usage"); }), getContext: vi.fn(async () => ({ history: [], tokenCount: 0 })),
 		prompt: vi.fn(async ({ promptId }: { promptId: string }) => { listeners.get("prompt.completed")?.({ promptId, reason: "completed" }); }),
+		steer: vi.fn(async ({ promptId }: { promptId: string }) => { listeners.get("prompt.steered")?.({ promptIds: [promptId] }); }),
 	};
 	const create = vi.fn(async () => ({ id: "new-session" }));
 	const remove = vi.fn(async () => undefined);
@@ -121,6 +122,75 @@ function draftBackendFixture(
 }
 
 describe('model retry projection', () => {
+	it('keeps an admitted steer queued while the previous model call is still streaming', async () => {
+		const fixture = draftBackendFixture();
+		const onPromptLifecycle = vi.fn();
+		try {
+			await fixture.start({ onPromptLifecycle });
+			await fixture.backend.switchSession('old-session');
+			fixture.listeners.get('turn.started')?.({ turnId: 7 });
+			fixture.listeners.get('turn.step.started')?.({ turnId: 7, step: 1 });
+			await fixture.backend.send('Please inspect the tests', { attachments: [], effort: 'off', behavior: 'prompt', clientMessageId: 'steer-1' });
+			fixture.listeners.get('assistant.delta')?.({ turnId: 7, delta: 'Previous response' });
+			fixture.listeners.get('turn.step.started')?.({ turnId: 7, step: 2 });
+			expect(onPromptLifecycle.mock.calls.filter(([id]) => id === 'steer-1')).toEqual([['steer-1', 'queued']]);
+		} finally { await fixture.backend.dispose(); }
+	});
+
+	it('delivers an admitted steer at the next model step only once', async () => {
+		const fixture = draftBackendFixture();
+		const onPromptLifecycle = vi.fn();
+		try {
+			await fixture.start({ onPromptLifecycle });
+			await fixture.backend.switchSession('old-session');
+			fixture.listeners.get('turn.started')?.({ turnId: 7 });
+			await fixture.backend.send('Please inspect the tests', { attachments: [], effort: 'off', behavior: 'prompt', clientMessageId: 'steer-1' });
+			fixture.listeners.get('turn.steer')?.({ promptIds: ['steer-1'] });
+			fixture.listeners.get('turn.step.started')?.({ turnId: 7, step: 2 });
+			fixture.listeners.get('turn.step.started')?.({ turnId: 7, step: 2 });
+			expect(onPromptLifecycle.mock.calls.filter(([id]) => id === 'steer-1')).toEqual([
+				['steer-1', 'queued'], ['steer-1', 'consuming'], ['steer-1', 'started'],
+			]);
+		} finally { await fixture.backend.dispose(); }
+	});
+
+	it('inserts a model switch marker only at the next model step', async () => {
+		const fixture = draftBackendFixture();
+		const onMessage = vi.fn();
+		const onModelSwitchPending = vi.fn();
+		try {
+			await fixture.start({ onMessage, onModelSwitchPending });
+			await fixture.backend.switchSession('old-session');
+			onMessage.mockClear();
+			fixture.listeners.get('turn.started')?.({ turnId: 7 });
+			fixture.listeners.get('agent.status.updated')?.({ model: 'example/next' });
+			expect(onMessage).not.toHaveBeenCalled();
+			expect(onModelSwitchPending).toHaveBeenLastCalledWith({ from: 'example/code', to: 'example/next' });
+			fixture.listeners.get('turn.step.started')?.({ turnId: 7, step: 2 });
+			fixture.listeners.get('turn.step.started')?.({ turnId: 7, step: 2 });
+			expect(onMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+				kind: 'session', text: '模型 example/code → example/next',
+				presentation: { kind: 'modelSwitch', from: 'example/code', to: 'example/next' },
+			}));
+			expect(onModelSwitchPending).toHaveBeenLastCalledWith(undefined);
+		} finally { await fixture.backend.dispose(); }
+	});
+
+	it('does not announce a model switch when the selection returns to the active model before a step', async () => {
+		const fixture = draftBackendFixture();
+		const onMessage = vi.fn();
+		const onModelSwitchPending = vi.fn();
+		try {
+			await fixture.start({ onMessage, onModelSwitchPending });
+			await fixture.backend.switchSession('old-session');
+			onMessage.mockClear();
+			fixture.listeners.get('agent.status.updated')?.({ model: 'example/next' });
+			fixture.listeners.get('agent.status.updated')?.({ model: 'example/code' });
+			fixture.listeners.get('turn.step.started')?.({ turnId: 7, step: 2 });
+			expect(onMessage).not.toHaveBeenCalled();
+			expect(onModelSwitchPending).toHaveBeenLastCalledWith(undefined);
+		} finally { await fixture.backend.dispose(); }
+	});
   it('refreshes usage when the runtime publishes new usage instead of only refreshing model metadata', async () => {
     const fixture = draftBackendFixture();
     const onUsage = vi.fn();
