@@ -8,6 +8,7 @@ export interface CommandDefinition {
 }
 
 export type ActionHandler =
+	| "sideQuestion"
 	| "feedback"
 	| "newSession"
 	| "sessions"
@@ -58,6 +59,7 @@ export interface CommandMatch {
 export const BUILTIN_COMMAND_SOURCE = "builtin";
 
 export const ACTION_REGISTRY: ActionDefinition[] = [
+	{ id: "btw", aliases: ["side"], label: "/btw", description: "旁路问答：查阅当前上下文与文件，主任务继续", group: "VSPi", availability: "enabled", handler: "sideQuestion" },
 	{ id: 'feedback', aliases: [], label: '/feedback', description: '预览并主动提交错误、对话及中间输出', group: 'VSPi', availability: 'enabled', handler: 'feedback' },
 	{ id: 'history', aliases: [], label: '/history', description: '分页加载更早的持久化会话记录', group: 'VSPi', availability: 'enabled', handler: 'history' },
 	{
@@ -414,7 +416,7 @@ export function filterCommands(
 			(entry): entry is { command: CommandDefinition; score: number } =>
 				entry.score !== null,
 		)
-		.sort(
+		.toSorted(
 			(left, right) =>
 				left.score - right.score ||
 				left.command.label.localeCompare(right.command.label, "zh-CN"),

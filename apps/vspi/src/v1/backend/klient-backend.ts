@@ -49,6 +49,8 @@ import { isOfficialRecommendedModel } from "../domain/recommended-models.js";
 import { errorDiagnostic, FeedbackDiagnosticLog } from '../feedback/diagnostics.js';
 import type { SubagentModelEdit, SubagentModelPreferences } from "./types.js";
 import type {
+	SideQuestionEvent,
+	SideQuestionSession,
 	AgentConversationActivity,
 	AgentConversationBlock,
 	AgentConversationPage,
@@ -131,7 +133,7 @@ export function sessionDisplayLabel(item: {
 }
 
 function normalizeSessionLabel(value: string | undefined): string | undefined {
-	const normalized = value?.replace(/\s+/gu, " ").trim();
+	const normalized = value?.replaceAll(/\s+/gu, " ").trim();
 	return normalized ? normalized : undefined;
 }
 
@@ -189,11 +191,14 @@ export class KlientChatBackend implements ChatBackend {
 	private turnEndWaiters = new Map<number, Set<() => void>>();
 	private tasks = new Map<string, AgentTaskInfo>();
 	private taskOutputs = new Map<string, string>();
+	private childProgress = new Map<string, string>();
+	private childProgressSubscriptions = new Map<string, BackendSubscription>();
 	private parentTaskSummaries = new Map<string, string>();
 	private pendingTodoUpdates = new Map<string, PlanItem[]>();
 	private lastTodoItems: PlanItem[] = [];
 	private towerPlanActive = false;
 	private toolNames = new Map<string, string>();
+	private pendingNotifications = new Map<string, string>();
 	private cronTasks: CronTask[] = [];
 	private runtimeGoalRevision = 0;
 	private taskPoll: NodeJS.Timeout | undefined;
@@ -300,6 +305,7 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	private async prepareDraft(reason: "startup" | "new"): Promise<void> {
+		await Promise.allSettled([...this.sideQuestions].map(side => side.close()));
 		this.clearBindings();
 		await this.feedbackDiagnostics?.drain();
 		this.session = undefined;
@@ -361,6 +367,42 @@ export class KlientChatBackend implements ChatBackend {
 			void pending.finally(() => { if (this.sessionCreation === pending) this.sessionCreation = undefined; }).catch(() => {});
 		}
 		await this.sessionCreation;
+	}
+
+	private sideQuestions = new Set<SideQuestionSession>();
+
+	async startSideQuestion(listener: (event: SideQuestionEvent) => void): Promise<SideQuestionSession> {
+		const epoch = this.submissionEpoch;
+		await this.ensureSession(epoch);
+		if (epoch !== this.submissionEpoch) throw new Error("会话已切换");
+		const session = this.requireSession();
+		const agentId = await session.startSideQuestion();
+		const child = session.agent(agentId);
+		if (epoch !== this.submissionEpoch || session !== this.session) { await session.closeSideQuestion(agentId); throw new Error("会话已切换"); }
+		let closed = false;
+		const emit = (event: SideQuestionEvent) => { if (!closed) listener(event); };
+		const subscriptions = [
+			child.events.on("assistant.delta", event => emit({ kind: "answer", delta: event.delta })),
+			child.events.on("tool.call.started", event => emit({ kind: "tool", name: event.name })),
+			child.events.on("turn.ended", event => emit({ kind: "ended", reason: event.reason })),
+			child.events.onError(error => emit({ kind: "error", message: error.message })),
+		];
+		const connection: SideQuestionSession = {
+			send: async text => {
+				if (closed) throw new Error("旁路问答已关闭");
+				await child.prompt({ input: [{ type: "text", text }], promptId: randomUUID() });
+			},
+			cancel: () => child.cancel({}),
+			close: async () => {
+				if (closed) return;
+				closed = true;
+				for (const subscription of subscriptions) subscription.dispose();
+				this.sideQuestions.delete(connection);
+				await session.closeSideQuestion(agentId);
+			},
+		};
+		this.sideQuestions.add(connection);
+		return connection;
 	}
 
 	async send(text: string, options: SendOptions): Promise<SendResult> {
@@ -613,7 +655,7 @@ export class KlientChatBackend implements ChatBackend {
 				...inspection.userValue,
 				model: undefined,
 				force: false,
-				models: Object.keys(next.models).length ? next.models : undefined,
+				models: Object.keys(next.models).length > 0 ? next.models : undefined,
 				defaultModel: next.defaultModel,
 			} });
 			return this.getSubagentModelPreferences();
@@ -651,7 +693,7 @@ export class KlientChatBackend implements ChatBackend {
 						? [{ type: "oauth" as const, label: "订阅账号" }] : [],
 				],
 				storedCredential: configured.userValue?.[provider.id]?.["oauth"] !== undefined
-					? "oauth" : provider.has_api_key ? "api_key" : undefined,
+					? "oauth" : provider.has_api_key || configured.userValue?.[provider.id]?.["apiKeyEnv"] !== undefined ? "api_key" : undefined,
 			}));
 	}
 
@@ -790,7 +832,7 @@ export class KlientChatBackend implements ChatBackend {
 				await this.connection.klient.global.kosong.configureBuiltinProvider(providerId, apiKey);
 				return;
 			}
-			providers[providerId] = { ...provider, apiKey, oauth: undefined };
+			providers[providerId] = { ...provider, apiKey, apiKeyEnv: undefined, oauth: undefined };
 			await this.connection.klient.global.config.replace({
 				domain: "providers",
 				value: providers,
@@ -817,7 +859,7 @@ export class KlientChatBackend implements ChatBackend {
 			await this.connection.klient.global.auth.logout(providerId);
 			return;
 		}
-		providers[providerId] = { ...provider, apiKey: undefined };
+		providers[providerId] = { ...provider, apiKey: undefined, apiKeyEnv: undefined };
 		await this.connection.klient.global.config.replace({
 			domain: "providers",
 			value: providers,
@@ -930,7 +972,7 @@ export class KlientChatBackend implements ChatBackend {
 					task.kind === "agent" && task.status === "running",
 			)
 			.map((task) =>
-				toAgentRunSnapshot(task, this.taskOutputs.get(task.taskId)),
+				({ ...toAgentRunSnapshot(task, this.taskOutputs.get(task.taskId)), progress: this.childProgress.get(task.taskId) }),
 			);
 		const recent = [...this.tasks.values()]
 			.filter(
@@ -938,7 +980,7 @@ export class KlientChatBackend implements ChatBackend {
 					task.kind === "agent" && task.status !== "running",
 			)
 			.map((task) =>
-				toAgentRunSnapshot(task, this.taskOutputs.get(task.taskId)),
+				({ ...toAgentRunSnapshot(task, this.taskOutputs.get(task.taskId)), progress: this.childProgress.get(task.taskId) }),
 			);
 		return {
 			enabled: true,
@@ -1010,6 +1052,7 @@ export class KlientChatBackend implements ChatBackend {
 		const agentId = run.agentId ?? run.taskId;
 		this.childConversationSubscription?.dispose();
 		const child = this.requireSession().agent(agentId);
+		const notifications = new Map<string, string>();
 		const subscriptions = [
 			child.events.on("turn.started", (event) => {
 				listener({ kind: "turn", state: "started", turnId: event.turnId });
@@ -1032,6 +1075,10 @@ export class KlientChatBackend implements ChatBackend {
 				});
 			}),
 			child.events.on("tool.call.started", (event) => {
+				if (event.name === "NotifyUser") {
+					const text = notificationText(event.args);
+					if (text) notifications.set(event.toolCallId, text);
+				}
 				listener({
 					kind: "tool",
 					state: "started",
@@ -1051,12 +1098,14 @@ export class KlientChatBackend implements ChatBackend {
 				});
 			}),
 			child.events.on("tool.result", (event) => {
+				const text = !event.isError && summarizeOutput(event.output) === "Update shown to the user." ? notifications.get(event.toolCallId) : undefined;
+				notifications.delete(event.toolCallId);
 				listener({
 					kind: "tool",
 					state: event.isError ? "error" : "completed",
 					turnId: event.turnId,
 					toolCallId: event.toolCallId,
-					text: summarizeOutput(event.output),
+					text: text ?? summarizeOutput(event.output),
 				});
 			}),
 		];
@@ -1515,6 +1564,10 @@ export class KlientChatBackend implements ChatBackend {
 			events.on("tool.call.started", (event) => {
 				this.advanceTurnSegment();
 				this.toolNames.set(event.toolCallId, event.name);
+				if (event.name === "NotifyUser") {
+					const text = notificationText(event.args);
+					if (text) this.pendingNotifications.set(event.toolCallId, text);
+				}
 				if (event.name === "TodoList") {
 					const items = projectTodoPlanItems(event.args);
 					if (items !== undefined)
@@ -1533,6 +1586,8 @@ export class KlientChatBackend implements ChatBackend {
 			events.on("tool.result", (event) => {
 				const toolName = this.toolNames.get(event.toolCallId);
 				this.toolNames.delete(event.toolCallId);
+				const notification = this.pendingNotifications.get(event.toolCallId);
+				this.pendingNotifications.delete(event.toolCallId);
 				const todoItems = this.pendingTodoUpdates.get(event.toolCallId);
 				this.pendingTodoUpdates.delete(event.toolCallId);
 				if (!event.isError && todoItems !== undefined) {
@@ -1543,6 +1598,9 @@ export class KlientChatBackend implements ChatBackend {
 					status: event.isError ? "error" : "success",
 					output: summarizeOutput(event.output),
 				});
+				if (notification && !event.isError && summarizeOutput(event.output) === "Update shown to the user.") {
+					this.events?.onMessageUpdate(event.toolCallId, { kind: "text", text: notification, streaming: false, presentation: "intermediate" });
+				}
 				if (toolName === "CronCreate" || toolName === "CronDelete")
 					void this.publishCronTasks();
 				void this.refreshTasks();
@@ -1722,6 +1780,7 @@ export class KlientChatBackend implements ChatBackend {
 			else emit({ id, role: 'assistant', kind: 'tool', name: 'Tool', summary: '', status: 'success', expanded: false, ...patch } as TranscriptMessage);
 		};
 		const toolNames = new Map<string, string>();
+		const notifications = new Map<string, string>();
 		const todoUpdates = new Map<string, PlanItem[]>();
 		let latestTodoItems: PlanItem[] | undefined;
 		for (const [index, raw] of history.entries()) {
@@ -1795,6 +1854,10 @@ export class KlientChatBackend implements ChatBackend {
 					const name =
 						typeof toolCall["name"] === "string" ? toolCall["name"] : "Tool";
 					toolNames.set(id, name);
+					if (name === "NotifyUser") {
+						const text = notificationText(toolCall["arguments"]);
+						if (text) notifications.set(id, text);
+					}
 					if (name === "TodoList") {
 						const items = projectTodoPlanItems(toolCall["arguments"]);
 						if (items !== undefined) todoUpdates.set(id, items);
@@ -1827,6 +1890,9 @@ export class KlientChatBackend implements ChatBackend {
 					status: message["isError"] === true ? "error" : "success",
 					output: contentText(content),
 				});
+				const notification = notifications.get(toolCallId);
+				if (notification && message["isError"] !== true && contentText(content) === "Update shown to the user.")
+					update(toolCallId, { kind: "text", text: notification, streaming: false, presentation: "intermediate" });
 			}
 		}
 		if (this.events?.onHistory) this.events.onHistory(messages, prepend);
@@ -1975,6 +2041,35 @@ export class KlientChatBackend implements ChatBackend {
 		});
 	}
 
+	private watchChildProgress(): void {
+    for (const [id, subscription] of this.childProgressSubscriptions) {
+      if (this.tasks.get(id)?.status === 'running') continue;
+      subscription.dispose();
+      this.childProgressSubscriptions.delete(id);
+    }
+    for (const id of this.childProgress.keys()) if (!this.tasks.has(id)) this.childProgress.delete(id);
+    for (const task of this.tasks.values()) {
+      if (task.kind !== 'agent' || task.status !== 'running' || this.childProgressSubscriptions.has(task.taskId)) continue;
+      const child = this.requireSession().agent(task.agentId ?? task.taskId);
+      const pending = new Map<string, string>();
+      const subscriptions = [
+        child.events.on('tool.call.started', event => {
+          if (event.name !== 'NotifyUser') return;
+          const text = notificationText(event.args);
+          if (text) pending.set(event.toolCallId, text);
+        }),
+        child.events.on('tool.result', event => {
+          const text = pending.get(event.toolCallId);
+          pending.delete(event.toolCallId);
+          if (!text || event.isError || summarizeOutput(event.output) !== 'Update shown to the user.') return;
+          this.childProgress.set(task.taskId, text.replace(/^\*\*进度(?: · )?/, '').replace('**\n\n', ' · '));
+          this.events?.onAgentSnapshot?.(this.getAgentSnapshot());
+        }),
+      ];
+      this.childProgressSubscriptions.set(task.taskId, { dispose: () => { for (const subscription of subscriptions) subscription.dispose(); } });
+    }
+  }
+
 	private refreshTasks(strict = false): Promise<void> {
 		return this.poll('tasks', () => this.readTasks(strict));
 	}
@@ -2013,6 +2108,7 @@ export class KlientChatBackend implements ChatBackend {
 		];
 		if (this.agent !== agent) return;
 		this.tasks = reconcileTaskSnapshot(previous, mergedTasks, Date.now());
+		this.watchChildProgress();
 		for (const id of this.taskOutputs.keys()) if (!this.tasks.has(id)) this.taskOutputs.delete(id);
 		const retainedParents = new Set([...this.tasks.values()].flatMap(task => task.kind === 'agent' && task.parentToolCallId ? [task.parentToolCallId] : []));
 		for (const id of this.parentTaskSummaries.keys()) if (!retainedParents.has(id)) this.parentTaskSummaries.delete(id);
@@ -2339,6 +2435,10 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	private clearBindings(): void {
+		for (const subscription of this.childProgressSubscriptions.values()) subscription.dispose();
+		this.childProgressSubscriptions.clear();
+		this.childProgress.clear();
+		for (const side of this.sideQuestions) void side.close().catch(() => {});
 		this.steeredPrompts.clear();
 		this.callModelAlias = undefined;
 		this.boundModelAlias = undefined;
@@ -2379,6 +2479,7 @@ export class KlientChatBackend implements ChatBackend {
 		this.lastTodoItems = [];
 		this.towerPlanActive = false;
 		this.toolNames.clear();
+		this.pendingNotifications.clear();
 		this.cronTasks = [];
 		this.runtimeGoalRevision += 1;
 		this.outputSpeed.reset();
@@ -2749,13 +2850,14 @@ export function projectAgentConversation(
 	);
 	const toolCalls = new Map(
 		rawBlocks.flatMap((block) =>
-			block.kind === "tool" && block.toolCallId !== undefined
+			block.kind === "tool" && block.sourceRole === "assistant" && block.toolCallId !== undefined
 				? [[block.toolCallId, block] as const]
 				: [],
 		),
 	);
+	const notifications = new Set(rawBlocks.filter(block => block.sourceRole === "tool" && !block.isError && block.text === "Update shown to the user.").map(block => block.toolCallId));
 	const blocks = rawBlocks.flatMap((block) =>
-		projectCompactConversationBlock(block, toolCalls),
+		projectCompactConversationBlock(block, toolCalls, notifications),
 	);
 	const limit = Math.min(200, Math.max(1, options.limit ?? 100));
 	const requestedEnd = parseConversationCursor(options.cursor);
@@ -2865,6 +2967,7 @@ function isMutationTool(toolName: string | undefined): boolean {
 function projectCompactConversationBlock(
 	block: AgentConversationBlock,
 	toolCalls: ReadonlyMap<string, AgentConversationBlock>,
+	notifications: ReadonlySet<string | undefined>,
 ): AgentConversationBlock[] {
 	const text = block.text.trim();
 	if (block.isError === true) {
@@ -2883,6 +2986,10 @@ function projectCompactConversationBlock(
 				];
 	}
 	if (block.sourceRole === "tool") return [];
+	if (block.toolName === "NotifyUser" && notifications.has(block.toolCallId)) {
+		const notification = notificationText(block.toolArguments);
+		if (notification) return [{ ...block, kind: "commentary", text: notification, presentation: "message" }];
+	}
 	if (block.kind === "tool" && isMutationTool(block.toolName)) {
 		const path = mutationPath(block.toolArguments);
 		return [
@@ -3283,4 +3390,13 @@ function fromApprovalResponse(response: ApprovalResponse) {
 	if (response.type === "allow-once" || response.type === "elevate")
 		return { decision: "approved" as const };
 	return { decision: "rejected" as const, feedback: response.reason };
+}
+
+function notificationText(value: unknown): string | undefined {
+  const args = typeof value === 'string' ? parseJsonRecord(value) : record(value);
+  const title = args['title'];
+  const message = args['message'];
+  if (typeof message !== 'string' || !message.trim()) return undefined;
+  if (title !== undefined && (typeof title !== 'string' || !title.trim() || /[\r\n]/u.test(title))) return undefined;
+  return `**进度${title ? ` · ${title}` : ''}**\n\n${message}`;
 }

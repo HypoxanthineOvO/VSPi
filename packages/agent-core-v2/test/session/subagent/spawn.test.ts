@@ -18,20 +18,18 @@ import { IAgentPermissionModeService } from '#/agent/permissionMode/permissionMo
 import { IAgentUserToolService } from '#/agent/userTool/userTool';
 import { IAgentRuntimeService } from '#/agent/runtimeBinding/agentRuntime';
 import { Error2, ErrorCodes, isError2 } from '#/errors';
-import { UNKNOWN_CAPABILITY } from '#/kosong/contract/capability';
-import { IModelCatalog, type Model } from '#/kosong/model/catalog';
+import { UNKNOWN_CAPABILITY } from '#/llm-adapter/contract/capability';
+import { IModelCatalog, type Model } from '#/llm-adapter/model/catalog';
 import { FakeRuntime } from '#/runtime/fakeRuntime';
 import type { RuntimeLease } from '#/runtime/runtime';
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
 import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 import { ISessionAgentProfileCatalog } from '#/session/sessionAgentProfileCatalog/sessionAgentProfileCatalog';
+import { ISessionMetadata, type AgentMeta, type SessionMetadataChangedEvent } from '#/session/sessionMetadata/sessionMetadata';
 import { ISessionContext } from '#/session/sessionContext/sessionContext';
-import { ISessionMetadata, type AgentMeta } from '#/session/sessionMetadata/sessionMetadata';
 import { SECONDARY_MODEL_SECTION } from '#/session/subagent/configSection';
-import { SECONDARY_MODEL_FLAG_ID } from '#/session/subagent/flag';
 import { ISessionSubagentService } from '#/session/subagent/subagent';
 import { SessionSubagentService } from '#/session/subagent/subagentService';
-import { selectSubagentIdentity, taskTitle } from '#/session/subagent/codename';
 import {
   FORK_CONTEXT_NOTICE,
   type SpawnedSubagent,
@@ -39,10 +37,11 @@ import {
   type SubagentSpawnPlan,
   type SubagentSpawnPlanInput,
 } from '#/session/subagent/spawn';
+import { IAgentReminderService } from '#/features/reminder/reminderService';
 
 import { stubLog } from '../../_base/log/stubs';
 import { stubFlag } from '../../app/flag/stubs';
-import { StubConfigService } from '../../kosong/stubs';
+import { StubConfigService } from '../../stubs';
 import { stubAgentContext } from '../../agent/agentContext/stubs';
 
 const CALLER_ID = 'main';
@@ -59,12 +58,12 @@ describe('SessionSubagentService planSpawn and spawn', () => {
   let createAgent: ReturnType<typeof vi.fn>;
   let forkAgent: ReturnType<typeof vi.fn>;
   let acquireRuntime: ReturnType<typeof vi.fn>;
-  let callerPermissionMode: { mode: string; getMode: () => string; setMode: ReturnType<typeof vi.fn> };
-  let createdPermissionMode: { mode: string; setMode: ReturnType<typeof vi.fn> };
+  let callerPermissionMode: { mode: string; getMode(): string; setMode: ReturnType<typeof vi.fn> };
+  let createdPermissionMode: { mode: string; getMode(): string; setMode: ReturnType<typeof vi.fn> };
   let callerUserTools: IAgentUserToolService;
   let createdUserTools: IAgentUserToolService;
+  let createdReminder: { notify: ReturnType<typeof vi.fn> };
   let lease: RuntimeLease;
-  let agentMetadata: Record<string, AgentMeta>;
 
   function userToolsStub(): IAgentUserToolService {
     return {
@@ -95,6 +94,7 @@ describe('SessionSubagentService planSpawn and spawn', () => {
           }
           if (serviceId === IAgentPermissionModeService) return createdPermissionMode;
           if (serviceId === IAgentUserToolService) return createdUserTools;
+          if (serviceId === IAgentReminderService) return createdReminder;
           return undefined;
         },
       } as IAgentScopeHandle['accessor'],
@@ -105,6 +105,7 @@ describe('SessionSubagentService planSpawn and spawn', () => {
   beforeEach(() => {
     disposables = new DisposableStore();
     ix = disposables.add(new TestInstantiationService());
+    ix.stub(IFlagService, stubFlag(true));
     callerData = {
       profileName: 'orchestrator',
       modelAlias: 'main-model',
@@ -127,9 +128,10 @@ describe('SessionSubagentService planSpawn and spawn', () => {
     modelIds = new Set(['main-model']);
     modelMeta = new Map();
     callerPermissionMode = { mode: 'auto', getMode: () => callerPermissionMode.mode, setMode: vi.fn() };
-    createdPermissionMode = { mode: 'manual', setMode: vi.fn() };
+    createdPermissionMode = { mode: 'manual', getMode: () => createdPermissionMode.mode, setMode: vi.fn() };
     callerUserTools = userToolsStub();
     createdUserTools = userToolsStub();
+    createdReminder = { notify: vi.fn() };
     lease = {
       runtime: new FakeRuntime({ workspaceId: 'w1', runtimeId: 'acp:s1', generation: 'g1' }),
       track: (resource) => resource,
@@ -164,7 +166,6 @@ describe('SessionSubagentService planSpawn and spawn', () => {
       dispose: () => {},
     };
     createdHandles = new Map();
-    agentMetadata = {};
     createAgent = vi.fn(async (input: { readonly agentId?: string } = {}) => {
       const agentId = input.agentId ?? 'agent-child';
       createdHandles.set(agentId, createdHandle(agentId));
@@ -182,12 +183,7 @@ describe('SessionSubagentService planSpawn and spawn', () => {
       onDidClose: Event.None,
       create: createAgent,
       fork: forkAgent,
-      get: (agentId: string) =>
-        agentId === CALLER_ID
-          ? stubAgentContext(CALLER_ID, 1)
-          : createdHandles.has(agentId)
-            ? stubAgentContext(agentId, 1)
-            : undefined,
+      get: (agentId: string) => (agentId === CALLER_ID ? stubAgentContext(CALLER_ID, 1) : undefined),
       handleOf: (agentId: string) =>
         agentId === CALLER_ID ? caller : createdHandles.get(agentId),
       list: () => [stubAgentContext(CALLER_ID, 1)],
@@ -217,26 +213,18 @@ describe('SessionSubagentService planSpawn and spawn', () => {
         return { id: alias, ...modelMeta.get(alias) } as Model;
       },
     } as unknown as IModelCatalog);
-    ix.stub(ISessionContext, {
-      _serviceBrand: undefined,
-      sessionId: 'session-alpha',
-      cwd: '/repo',
-    } as unknown as ISessionContext);
+    const agents: Record<string, AgentMeta> = {};
     ix.stub(ISessionMetadata, {
       _serviceBrand: undefined,
       ready: Promise.resolve(),
-      onDidChangeMetadata: Event.None,
-      read: async () => ({
-        id: 'session-alpha',
-        createdAt: 0,
-        updatedAt: 0,
-        archived: false,
-        agents: agentMetadata,
-      }),
-      registerAgent: async (agentId: string, meta: AgentMeta) => {
-        agentMetadata[agentId] = meta;
-      },
-    } as unknown as ISessionMetadata);
+      onDidChangeMetadata: Event.None as Event<SessionMetadataChangedEvent>,
+      read: async () => ({ id: 'test-session', createdAt: 0, updatedAt: 0, archived: false, agents }),
+      update: async () => {},
+      setTitle: async () => {},
+      setArchived: async () => {},
+      registerAgent: async (id, meta) => { agents[id] = meta; },
+    });
+    ix.stub(ISessionContext, { _serviceBrand: undefined, sessionId: 'test-session', cwd: '/repo' } as unknown as ISessionContext);
     ix.stub(ILogService, stubLog());
   });
 
@@ -244,15 +232,8 @@ describe('SessionSubagentService planSpawn and spawn', () => {
     disposables.dispose();
   });
 
-  function service(
-    configValues: Record<string, unknown> = {},
-    secondaryModelEnabled = false,
-  ): ISessionSubagentService {
+  function service(configValues: Record<string, unknown> = {}): ISessionSubagentService {
     ix.stub(IConfigService, new StubConfigService(configValues));
-    ix.stub(
-      IFlagService,
-      stubFlag((id) => secondaryModelEnabled && id === SECONDARY_MODEL_FLAG_ID),
-    );
     ix.set(ISessionSubagentService, new SyncDescriptor(SessionSubagentService));
     return ix.get(ISessionSubagentService);
   }
@@ -286,7 +267,7 @@ describe('SessionSubagentService planSpawn and spawn', () => {
   function spawnNonForkChild(svc: ISessionSubagentService): Promise<SpawnedSubagent> {
     return svc.spawn({
       callerAgentId: CALLER_ID,
-      plan: { profileName: 'coder', model: 'provider/fast', thinking: 'low', fork: false },
+      plan: { profileName: 'coder', model: 'provider/fast', modelSource: 'secondary_pool', thinking: 'low', fork: false },
       labels: { parentAgentId: 'main' },
       prompt: 'Review the file',
     });
@@ -295,7 +276,7 @@ describe('SessionSubagentService planSpawn and spawn', () => {
   function spawnForkChild(svc: ISessionSubagentService): Promise<SpawnedSubagent> {
     return svc.spawn({
       callerAgentId: CALLER_ID,
-      plan: { profileName: 'orchestrator', model: 'main-model', thinking: 'high', fork: true },
+      plan: { profileName: 'orchestrator', model: 'main-model', modelSource: 'inherited', thinking: 'high', fork: true },
       labels: { parentAgentId: 'main' },
       prompt: 'Continue the analysis',
     });
@@ -340,7 +321,6 @@ describe('SessionSubagentService planSpawn and spawn', () => {
           models: { 'provider/bad': 'broken' },
         },
       },
-      true,
     );
 
     const error = await planSpawnError(svc, { callerAgentId: CALLER_ID, profileName: 'coder' });
@@ -361,7 +341,6 @@ describe('SessionSubagentService planSpawn and spawn', () => {
         },
         thinking: { enabled: false },
       },
-      true,
     );
 
     const plan = await svc.planSpawn({ callerAgentId: CALLER_ID, profileName: 'coder' });
@@ -369,6 +348,7 @@ describe('SessionSubagentService planSpawn and spawn', () => {
     expect(plan).toEqual({
       profileName: 'coder',
       model: 'provider/fast',
+      modelSource: 'secondary_pool',
       thinking: 'max',
       fork: false,
     });
@@ -389,7 +369,6 @@ describe('SessionSubagentService planSpawn and spawn', () => {
           defaultEffort: 'max',
         },
       },
-      true,
     );
 
     const plan = await svc.planSpawn({ callerAgentId: CALLER_ID, profileName: 'coder' });
@@ -411,7 +390,6 @@ describe('SessionSubagentService planSpawn and spawn', () => {
           models: { 'provider/fast': 'fast model' },
         },
       },
-      true,
     );
 
     const plan = await svc.planSpawn({ callerAgentId: CALLER_ID, profileName: 'coder' });
@@ -434,7 +412,6 @@ describe('SessionSubagentService planSpawn and spawn', () => {
         },
         thinking: { enabled: false },
       },
-      true,
     );
 
     const plan = await svc.planSpawn({ callerAgentId: CALLER_ID, profileName: 'coder' });
@@ -456,7 +433,6 @@ describe('SessionSubagentService planSpawn and spawn', () => {
           models: { 'provider/fast': 'fast model' },
         },
       },
-      true,
     );
 
     const plan = await svc.planSpawn({ callerAgentId: CALLER_ID, profileName: 'coder' });
@@ -474,7 +450,6 @@ describe('SessionSubagentService planSpawn and spawn', () => {
           defaultEffort: 'max',
         },
       },
-      true,
     );
 
     const plan = await svc.planSpawn({ callerAgentId: CALLER_ID, profileName: 'coder' });
@@ -482,25 +457,21 @@ describe('SessionSubagentService planSpawn and spawn', () => {
     expect(plan).toEqual({
       profileName: 'coder',
       model: 'provider/fast',
+      modelSource: 'forced',
       thinking: 'max',
       fork: false,
     });
   });
 
-  it('inherits the caller model and thinking when the secondary-model experiment is off', async () => {
-    const svc = service({
-      [SECONDARY_MODEL_SECTION]: {
-        defaultModel: 'provider/fast',
-        models: { 'provider/fast': 'fast model' },
-        defaultEffort: 'max',
-      },
-    });
+  it('inherits the caller model and thinking when no pool is configured', async () => {
+    const svc = service({});
 
     const plan = await svc.planSpawn({ callerAgentId: CALLER_ID, profileName: 'coder' });
 
     expect(plan).toEqual({
       profileName: 'coder',
       model: 'main-model',
+      modelSource: 'inherited',
       thinking: 'high',
       fork: false,
     });
@@ -532,6 +503,7 @@ describe('SessionSubagentService planSpawn and spawn', () => {
     expect(plan).toEqual({
       profileName: 'orchestrator',
       model: 'main-model',
+      modelSource: 'inherited',
       thinking: 'high',
       fork: true,
     });
@@ -577,27 +549,6 @@ describe('SessionSubagentService planSpawn and spawn', () => {
     expect(createdUserTools.inheritUserTools).toHaveBeenCalledWith(callerUserTools);
   });
 
-  it('inherits the persistent mode instead of an invocation-only elevation', async () => {
-    callerPermissionMode.mode = 'auto';
-    callerPermissionMode.getMode = () => 'manual';
-    await spawnNonForkChild(service());
-    expect(createdPermissionMode.setMode).toHaveBeenCalledWith('manual');
-  });
-
-  it('does not escape an invocation restriction through a new subagent', async () => {
-    callerPermissionMode.mode = 'manual';
-    callerPermissionMode.getMode = () => 'auto';
-    await spawnNonForkChild(service());
-    expect(createdPermissionMode.setMode).toHaveBeenCalledWith('manual');
-  });
-
-  it('does not elevate a child when a stored permission value is unrecognized', async () => {
-    callerPermissionMode.mode = 'auto';
-    callerPermissionMode.getMode = () => 'unsupported-mode';
-    await spawnNonForkChild(service());
-    expect(createdPermissionMode.setMode).toHaveBeenCalledWith('manual');
-  });
-
   it('applies the profile prompt prefix to the spawned prompt', async () => {
     profiles = [
       normalizeAgentProfile({
@@ -615,12 +566,9 @@ describe('SessionSubagentService planSpawn and spawn', () => {
       agentId: 'agent-child',
       profileName: 'coder',
       model: 'provider/fast',
+      modelSource: 'secondary_pool',
       promptText: 'FIXED-PREFIX\n\nReview the file',
       codename: expect.any(String),
-      taskTitle: 'Review the file',
-    });
-    expect(agentMetadata['agent-child']?.labels).toMatchObject({
-      codename: spawned.codename,
       taskTitle: 'Review the file',
     });
   });
@@ -657,7 +605,7 @@ describe('SessionSubagentService planSpawn and spawn', () => {
     ]);
   });
 
-  it('prefixes the prompt with the fork notice when the plan is a fork', async () => {
+  it('delivers the fork notice as a reminder injection when the plan is a fork', async () => {
     const svc = service();
 
     const spawned = await spawnForkChild(svc);
@@ -666,9 +614,13 @@ describe('SessionSubagentService planSpawn and spawn', () => {
       agentId: 'agent-fork',
       profileName: 'orchestrator',
       model: 'main-model',
-      promptText: `${FORK_CONTEXT_NOTICE}\n\nContinue the analysis`,
+      modelSource: 'inherited',
+      promptText: 'Continue the analysis',
       codename: expect.any(String),
       taskTitle: 'Continue the analysis',
+    });
+    expect(createdReminder.notify).toHaveBeenCalledWith(FORK_CONTEXT_NOTICE, {
+      variant: 'fork_context',
     });
   });
 
@@ -699,7 +651,7 @@ describe('SessionSubagentService planSpawn and spawn', () => {
 
     const error = await spawnError(svc, {
       callerAgentId: CALLER_ID,
-      plan: { profileName: 'coder', model: 'provider/bad', thinking: 'low', fork: false },
+      plan: { profileName: 'coder', model: 'provider/bad', modelSource: 'secondary_pool', thinking: 'low', fork: false },
       prompt: 'Review the file',
     });
 
@@ -726,84 +678,5 @@ describe('SessionSubagentService planSpawn and spawn', () => {
 
     expect(createAgent).not.toHaveBeenCalled();
     expect(forkAgent).not.toHaveBeenCalled();
-  });
-
-  it('selects a stable role-aware identity and avoids an already used codename', () => {
-    const first = selectSubagentIdentity({
-      sessionId: 'session-alpha',
-      agentId: 'agent-7',
-      profileName: 'coder',
-      taskText: '调试 GPU 并行性能',
-    });
-    const repeated = selectSubagentIdentity({
-      sessionId: 'session-alpha',
-      agentId: 'agent-7',
-      profileName: 'coder',
-      taskText: '调试 GPU 并行性能',
-    });
-    const unique = selectSubagentIdentity({
-      sessionId: 'session-alpha',
-      agentId: 'agent-7',
-      profileName: 'coder',
-      taskText: '调试 GPU 并行性能',
-      usedCodenames: new Set([first.codename]),
-    });
-
-    expect(repeated).toEqual(first);
-    expect(unique.codename).not.toBe(first.codename);
-    expect(first.taskTitle).toBe('调试 GPU 并行性能');
-  });
-
-  it('uses the weighted coder pool while preserving keyword priority', () => {
-    const ai = new Set([
-      '梁文锋', '李飞飞', '辛顿', '杨立昆', '杨植麟', '唐杰',
-      '闫俊杰', '姚顺雨', '罗福莉', '奥特曼', '达里奥', '陈天奇',
-    ]);
-    const systems = new Set([
-      '黄仁勋', '苏姿丰', '张忠谋', '图灵', '香农', '诺伊斯', '摩尔',
-      '布兰克', '格里尼奇', '霍尔尼', '克莱纳', '拉斯特', '罗伯茨',
-    ]);
-    const product = new Set([
-      '乔布斯', '库克', '马化腾', '张小龙', '张一鸣', '雷军', '王兴',
-      '丁磊', '李彦宏', '周鸿祎', '盖茨', '扎克伯格', '贝索斯', '马斯克',
-    ]);
-    let aiCount = 0;
-    let weightedCount = 0;
-    for (let index = 0; index < 10_000; index += 1) {
-      const codename = selectSubagentIdentity({
-        sessionId: 'session-alpha',
-        agentId: `coder-${String(index)}`,
-        profileName: 'coder',
-        taskText: 'implement code',
-      }).codename;
-      if (codename === '特朗普') continue;
-      weightedCount += 1;
-      if (ai.has(codename)) aiCount += 1;
-    }
-    expect(aiCount / weightedCount).toBeGreaterThan(0.63);
-    expect(aiCount / weightedCount).toBeLessThan(0.67);
-    expect(product.has(selectSubagentIdentity({ sessionId: 's', agentId: 'ui', profileName: 'coder', taskText: 'render UI' }).codename)).toBe(true);
-    expect(systems.has(selectSubagentIdentity({ sessionId: 's', agentId: 'system', profileName: 'coder', taskText: 'optimize GPU kernel' }).codename)).toBe(true);
-    expect(ai.has(selectSubagentIdentity({ sessionId: 's', agentId: 'ai', profileName: 'coder', taskText: 'research LLM context' }).codename)).toBe(true);
-  });
-
-  it('keeps the Trump easter egg close to two percent', () => {
-    let special = 0;
-    for (let index = 0; index < 10_000; index += 1) {
-      const identity = selectSubagentIdentity({
-        sessionId: 'session-alpha',
-        agentId: `agent-${String(index)}`,
-        profileName: 'coder',
-        taskText: 'test',
-      });
-      if (identity.codename === '特朗普') special += 1;
-    }
-    expect(special).toBeGreaterThanOrEqual(150);
-    expect(special).toBeLessThanOrEqual(250);
-  });
-
-  it('normalizes and truncates task titles', () => {
-    expect(taskTitle('  **Review**   the renderer  ')).toBe('Review the renderer');
-    expect(Array.from(taskTitle('x'.repeat(80)))).toHaveLength(36);
   });
 });

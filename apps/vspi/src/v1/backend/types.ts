@@ -387,7 +387,20 @@ export interface SendOptions {
 	clientMessageId?: string;
 }
 
+export type SideQuestionEvent =
+  | { kind: "answer"; delta: string }
+  | { kind: "tool"; name: string }
+  | { kind: "ended"; reason: string }
+  | { kind: "error"; message: string };
+
+export interface SideQuestionSession {
+  send(text: string): Promise<void>;
+  cancel(): Promise<void>;
+  close(): Promise<void>;
+}
+
 export interface ChatBackend {
+	startSideQuestion?(listener: (event: SideQuestionEvent) => void): Promise<SideQuestionSession>;
   loadOlderHistory?(latest?: boolean): Promise<void>;
 	getSubagentModelPreferences?(): Promise<SubagentModelPreferences>;
 	updateSubagentModelPreferences?(edit: SubagentModelEdit): Promise<SubagentModelPreferences>;

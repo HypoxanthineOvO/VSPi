@@ -749,7 +749,7 @@ describe('AgentTaskService', () => {
       expect(info).toMatchObject({ status: 'killed' });
       expect(output.outputSizeBytes).toBeLessThanOrEqual(LIMIT_BYTES);
     } finally {
-      await rm(sessionDir, { recursive: true, force: true });
+      await rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -775,17 +775,14 @@ describe('AgentTaskService', () => {
       expect(info?.stopReason ?? '').toMatch(/output limit/i);
       expect(output.outputSizeBytes).toBeLessThanOrEqual(LIMIT_BYTES);
     } finally {
-      await rm(sessionDir, { recursive: true, force: true });
+      await rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
   it('does not cap a detached subagent result larger than the process output limit', async () => {
     const sessionDir = await mkdtemp(join(tmpdir(), 'kimi-bg-limit-agent-'));
-    let ctx: TestAgentContext | undefined;
     try {
-      const fixture = createAgentTaskService({ sessionDir });
-      ctx = fixture.ctx;
-      const { manager } = fixture;
+      const { manager } = createAgentTaskService({ sessionDir });
       const result = 'y'.repeat(20 * MiB);
       const taskId = manager.registerTask(
         agentTask(Promise.resolve({ result }), 'big subagent result'),
@@ -798,8 +795,7 @@ describe('AgentTaskService', () => {
       expect(info).toMatchObject({ status: 'completed' });
       expect(output.outputSizeBytes).toBe(Buffer.byteLength(result));
     } finally {
-      await ctx?.dispose();
-      await rm(sessionDir, { recursive: true, force: true });
+      await rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -1131,30 +1127,26 @@ describe('AgentTaskService', () => {
 
   it('persists graceful process shutdown as killed when stop was requested', async () => {
     const sessionDir = await mkdtemp(join(tmpdir(), 'kimi-bg-stop-race-'));
-    let writer: TaskServiceFixture | undefined;
-    let reader: TaskServiceFixture | undefined;
     try {
-      writer = createAgentTaskService({ sessionDir });
+      const writer = createAgentTaskService({ sessionDir }).manager;
       const { proc, resolve } = manuallyResolvedProcess();
-      const taskId = registerProcess(writer.manager, proc, 'sleep 60', 'persisted race');
+      const taskId = registerProcess(writer, proc, 'sleep 60', 'persisted race');
 
-      const stopPromise = writer.manager.stop(taskId, 'user requested');
+      const stopPromise = writer.stop(taskId, 'user requested');
       resolve(0);
       await stopPromise;
 
-      reader = createAgentTaskService({ sessionDir });
-      await reader.manager.loadFromDisk();
+      const reader = createAgentTaskService({ sessionDir }).manager;
+      await reader.loadFromDisk();
 
-      expect(reader.manager.getTask(taskId)).toMatchObject({
+      expect(reader.getTask(taskId)).toMatchObject({
         kind: 'process',
         status: 'killed',
         exitCode: 0,
         stopReason: 'user requested',
       });
     } finally {
-      await reader?.ctx.dispose();
-      await writer?.ctx.dispose();
-      await rm(sessionDir, { recursive: true, force: true });
+      await rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -1349,7 +1341,7 @@ describe('AgentTaskService', () => {
       expect(await persistence!.listTasks()).toEqual([]);
       await ctx.get(ISessionMetadata).ready;
     } finally {
-      await rm(sessionDir, { recursive: true, force: true });
+      await rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 

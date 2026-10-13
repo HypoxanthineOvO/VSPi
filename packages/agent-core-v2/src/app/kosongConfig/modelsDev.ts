@@ -3,8 +3,8 @@ import {
   type ModelCapability,
   type ThinkingCapability,
   type ThinkingControl,
-} from '#/kosong/contract/capability';
-import type { ProviderType } from '#/kosong/provider/provider';
+} from '#/llm-adapter/contract/capability';
+import type { ProviderType } from '#/llm-adapter/provider/provider';
 
 export interface ModelsDevModelEntry {
   readonly id?: string;

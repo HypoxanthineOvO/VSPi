@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { IAgentActivityView, AgentActivityUpdated, type AgentActivityState } from '#/agent/activityView/activityView';
+import { IEventBus } from '#/app/event/eventBus';
 import { IAgentHistoryService } from '#/agent/history/history';
 import { AgentHistoryService } from '#/agent/history/historyService';
 import { AssistantDelta, TurnStarted, TurnStepStarted } from '#/agent/loop/turnEvents';
-import { TurnStepRetrying } from '#/agent/stepRetry/stepRetryService';
+import { TurnStepRetrying } from '#/agent/loop/turnEvents';
 import { IEventDispatcher } from '#/state/eventDispatcher';
-import { ContextApplyCompaction } from '#/agent/contextMemory/contextEvents';
+import { ContextUndo, ContextApplyCompaction } from '#/agent/contextMemory/contextEvents';
 import { agentServices, createTestAgent, type TestAgentContext } from '../../harness';
 
 describe('agent history view', () => {
@@ -14,6 +16,22 @@ describe('agent history view', () => {
     ctx = createTestAgent(agentServices(reg => { reg.define(IAgentHistoryService, AgentHistoryService); }));
     return { context: ctx, history: ctx.get(IAgentHistoryService) };
   };
+
+  it('projects the running turn and its completed state through activity events and history', async () => {
+    const { context, history } = setup();
+    const updates: AgentActivityState[] = [];
+    context.get(IEventBus).subscribe(AgentActivityUpdated, event => updates.push(event));
+    context.mockNextResponse({ type: 'text', text: 'complete response' });
+    await context.rpc.prompt({ input: [{ type: 'text', text: 'show activity' }] });
+    await context.untilTurnEnd();
+    await Promise.resolve();
+    expect(updates.some(update => update.turn?.turnId === 0)).toBe(true);
+    expect(context.get(IAgentActivityView).state()).toMatchObject({
+      lifecycle: 'ready', turn: undefined, lastTurn: { turnId: 0, reason: 'completed' },
+    });
+    expect((await history.page()).activity).toMatchObject({ lastTurn: { reason: 'completed' } });
+    expect(updates.at(-1)?.lastTurn?.reason).toBe('completed');
+  });
 
   it('preserves durable history across a context clear', async () => {
     const { context, history } = setup();
@@ -61,7 +79,7 @@ describe('agent history view', () => {
   it('retains the final visible window when undo removes the newest message', async () => {
     const { context, history } = setup();
     for (let index = 1; index <= 5; index++) context.context.append({ id: `m${index}`, role: 'user', content: [{ type: 'text', text: `message-${index}` }], toolCalls: [], origin: { kind: 'user' } });
-    context.context.undo(1);
+    await context.get(IEventDispatcher).dispatch(new ContextUndo({ agentId: 'main', count: 1 }));
     const page = await history.page({ limit: 2 });
     expect(page.items.map(item => item.content)).toEqual([[{ type: 'text', text: 'message-3' }], [{ type: 'text', text: 'message-4' }]]);
   });

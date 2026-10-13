@@ -1261,6 +1261,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			"new",
 		);
 		Object.assign(backend, {
+			session: { agent: () => ({ events: { on: () => ({ dispose() {} }) } }) },
 			agent: { getTasks },
 			events: { onMessage, onMessageUpdate, onAgentSnapshot, onTaskSnapshot },
 		});
@@ -1326,6 +1327,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			"new",
 		);
 		Object.assign(backend, {
+			session: { agent: () => ({ events: { on: () => ({ dispose() {} }) } }) },
 			agent: { getTasks, getTask, getTaskOutput },
 			events: { onAgentSnapshot, onTaskSnapshot, onMessageUpdate: vi.fn() },
 		});
@@ -1388,6 +1390,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			"new",
 		);
 		Object.assign(backend, {
+			session: { agent: () => ({ events: { on: () => ({ dispose() {} }) } }) },
 			agent: { getTasks, getTask },
 			events: { onAgentSnapshot, onTaskSnapshot },
 		});
@@ -1432,6 +1435,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			"new",
 		);
 		Object.assign(backend, {
+			session: { agent: () => ({ events: { on: () => ({ dispose() {} }) } }) },
 			agent: { getTasks, getTask },
 			events: { onAgentSnapshot, onTaskSnapshot },
 		});
@@ -2479,4 +2483,87 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 	 const backend = new KlientChatBackend(connection, "/workspace", "new");
 	 expect(await backend.getModelOptions()).toMatchObject([{ alias: "example/reasoner", vision: true, price: { inputUsdPerMillion: 1, outputUsdPerMillion: 2, source: "official" } }]);
 	});
+});
+
+
+describe('progress updates and side questions', () => {
+  it.each([
+    ['Update shown to the user.', false, true],
+    ['Notifications are disabled; the update was not displayed.', false, false],
+    ['message must not be empty.', true, false],
+  ])('only displays confirmed NotifyUser progress (%s)', async (output, isError, displayed) => {
+    const fixture = draftBackendFixture();
+    const onMessage = vi.fn();
+    const onMessageUpdate = vi.fn();
+    try {
+      await fixture.start({ onMessage, onMessageUpdate });
+      await fixture.backend.switchSession('old-session');
+      fixture.listeners.get('tool.call.started')?.({ turnId: 7, toolCallId: 'progress', name: 'NotifyUser', args: { title: '定位完成', message: '正在修复并检查测试。' } });
+      expect(onMessage.mock.calls.some(([message]) => message.kind === 'text')).toBe(false);
+      fixture.listeners.get('tool.result')?.({ turnId: 7, toolCallId: 'progress', output, isError });
+      const updates = onMessageUpdate.mock.calls.filter(([id, patch]) => id === 'progress' && patch.kind === 'text');
+      expect(updates).toHaveLength(displayed ? 1 : 0);
+      if (displayed) expect(updates[0]?.[1]).toMatchObject({ text: '**进度 · 定位完成**\n\n正在修复并检查测试。', streaming: false });
+    } finally { await fixture.backend.dispose(); }
+  });
+
+  it('restores confirmed progress at its original position in main history', async () => {
+    const fixture = draftBackendFixture();
+    const onHistory = vi.fn();
+    fixture.agent.getHistory.mockResolvedValue({ items: [
+      { id: 'before', role: 'assistant', content: [{ type: 'text', text: '开始检查。' }], toolCalls: [{ id: 'notice', name: 'NotifyUser', arguments: JSON.stringify({ title: '检查完成', message: '发现两个调用点。' }) }] },
+      { role: 'tool', toolCallId: 'notice', content: [{ type: 'text', text: 'Update shown to the user.' }], isError: false },
+      { id: 'after', role: 'assistant', content: [{ type: 'text', text: '完成。' }] },
+    ], total: 3, revision: 1, truncated: false, activity: { lifecycle: 'ready', background: [] }, model: 'example/code', effort: 'off' } as never);
+    try {
+      await fixture.start({ onHistory });
+      await fixture.backend.switchSession('old-session');
+      const history = onHistory.mock.calls.at(-1)?.[0];
+      expect(history.map((message: { id: string }) => message.id)).toEqual(['before', 'notice', 'after']);
+      expect(history[1]).toMatchObject({ kind: 'text', text: '**进度 · 检查完成**\n\n发现两个调用点。', presentation: 'intermediate' });
+    } finally { await fixture.backend.dispose(); }
+  });
+
+  it('keeps a confirmed child progress message in the child conversation projection', () => {
+    const page = projectAgentConversation('run', 'child', [
+      { role: 'assistant', content: [], toolCalls: [{ id: 'notice', name: 'NotifyUser', arguments: JSON.stringify({ title: '检查完成', message: '发现两个调用点。' }) }] },
+      { role: 'tool', toolCallId: 'notice', content: [{ type: 'text', text: 'Update shown to the user.' }], isError: false },
+    ], 10);
+    expect(page.blocks).toEqual([expect.objectContaining({ kind: 'commentary', text: '**进度 · 检查完成**\n\n发现两个调用点。' })]);
+  });
+
+  it('routes side prompts and cancellation only to the independent agent', async () => {
+    const fixture = draftBackendFixture();
+    const childListeners = new Map<string, (event: never) => void>();
+    const child = {
+      prompt: vi.fn(async () => {}), cancel: vi.fn(async () => {}),
+      events: { on: vi.fn((name: string, listener: (event: never) => void) => { childListeners.set(name, listener); return { dispose: vi.fn() }; }), onError: vi.fn(() => ({ dispose: vi.fn() })) },
+    };
+    const originalSession = fixture.connection.klient.session.bind(fixture.connection.klient);
+    const startSideQuestion = vi.fn(async () => 'side-agent');
+    const closeSideQuestion = vi.fn(async () => {});
+    vi.spyOn(fixture.connection.klient, 'session').mockImplementation(id => ({
+      ...originalSession(id), startSideQuestion, closeSideQuestion,
+      agent: (agentId: string) => (agentId === 'side-agent' ? child : fixture.agent) as unknown as AgentHandle,
+    }));
+    const updates = vi.fn();
+    try {
+      await fixture.start();
+      await fixture.backend.switchSession('old-session');
+      fixture.listeners.get('turn.started')?.({ turnId: 7 });
+      const side = await fixture.backend.startSideQuestion(updates);
+      await side.send('这里为什么这样设计？');
+      expect(child.prompt).toHaveBeenCalledWith(expect.objectContaining({ input: [{ type: 'text', text: '这里为什么这样设计？' }] }));
+      expect(fixture.agent.prompt).not.toHaveBeenCalled();
+      childListeners.get('assistant.delta')?.({ delta: '因为边界需要独立。' } as never);
+      expect(updates).toHaveBeenCalledWith({ kind: 'answer', delta: '因为边界需要独立。' });
+      await side.cancel();
+      await side.close();
+      childListeners.get('assistant.delta')?.({ delta: '晚到的事件' } as never);
+      expect(updates).toHaveBeenCalledTimes(1);
+      expect(child.cancel).toHaveBeenCalledOnce();
+      expect(closeSideQuestion).toHaveBeenCalledWith('side-agent');
+      expect(startSideQuestion).toHaveBeenCalledOnce();
+    } finally { await fixture.backend.dispose(); }
+  });
 });

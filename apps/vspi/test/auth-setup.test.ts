@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Klient, OAuthFlowSnapshot } from "@moonshot-ai/klient";
 
-import { configureDefaultModel, loginProvider, runAuthSetup } from "../src/v1/app/auth-setup.js";
+import { AuthSetupApp, configureDefaultModel, loginProvider, runAuthSetup } from "../src/v1/app/auth-setup.js";
 import { loginWithOAuth } from "../src/v1/providers/oauth-login.js";
 import { configureProxy, ensureProviderProxy } from '../src/v1/providers/proxy-setup.js';
+import { TuiMainScreen } from "@moonshot-ai/pi-tui";
+import { VirtualTerminal } from "../../../packages/pi-tui/test/virtual-terminal.js";
 import { AuthDialog } from "../src/v1/ui/auth-dialog.js";
 import { KlientChatBackend } from '../src/v1/backend/klient-backend.js';
 import type { RuntimeConnection } from '@vsp/vsp-runtime';
@@ -170,6 +172,67 @@ describe("VSPi auth setup", () => {
 		} });
 		expect(configureBuiltinProvider).toHaveBeenCalledWith('google', 'YOUR_API_KEY');
 	});
+
+  it.each(['dialog', 'backend'])('replaces an environment credential with an inline key through %s', async entry => {
+    const replace = vi.fn(async () => {});
+    const klient = { global: { config: {
+      get: async () => ({ url: '' }),
+      inspect: async () => ({ userValue: { anthropic: { type: 'anthropic', apiKeyEnv: 'EXAMPLE_API_KEY' } } }),
+      replace,
+    } } } as unknown as Klient;
+    const interaction = { prompt: async () => 'YOUR_API_KEY', notify: vi.fn() };
+    if (entry === 'dialog') await loginProvider(klient, 'anthropic', 'api_key', interaction);
+    else await new KlientChatBackend({ klient } as RuntimeConnection, '/project', 'new').loginProvider('anthropic', 'api_key', interaction);
+    expect(replace).toHaveBeenCalledWith({ domain: 'providers', value: { anthropic: { type: 'anthropic', apiKey: 'YOUR_API_KEY', apiKeyEnv: undefined, oauth: undefined } } });
+  });
+
+  it.each([true, false])('lists and removes an environment credential in logout setup when its value is present=%s', async hasApiKey => {
+    vi.stubEnv('EXAMPLE_API_KEY', 'YOUR_API_KEY');
+    const replace = vi.fn(async () => {});
+    const logout = vi.fn(async () => {});
+    const config = { anthropic: { type: 'anthropic', apiKeyEnv: 'EXAMPLE_API_KEY', baseUrl: 'https://api.example.test' } };
+    const klient = { global: {
+      config: { inspect: async () => ({ userValue: config }), replace },
+      kosong: {
+        listProviders: async () => [{ id: 'anthropic', type: 'anthropic', has_api_key: hasApiKey, status: hasApiKey ? 'connected' : 'unconfigured', models: [] }],
+        listBuiltinProviders: async () => [],
+      },
+      auth: { listLoginProviders: async () => [{ id: 'anthropic' }], logout },
+    } } as unknown as Klient;
+    const finish = vi.fn();
+    const app = new AuthSetupApp(new TuiMainScreen(new VirtualTerminal(80, 24)), createTheme(detectTerminalCapabilities(), 'Terminal'), klient, 'logout', finish, true);
+    try {
+      await app.load();
+      const menu = stripAnsi(app.render(80).join('\n'));
+      expect(menu).toContain('anthropic · API Key');
+      expect(menu).not.toContain('订阅账号');
+      await app.startInitial('anthropic');
+      expect(replace).toHaveBeenCalledWith({ domain: 'providers', value: { anthropic: { type: 'anthropic', baseUrl: 'https://api.example.test' } } });
+      expect(logout).not.toHaveBeenCalled();
+      expect(finish).toHaveBeenCalledOnce();
+      expect(process.env.EXAMPLE_API_KEY).toBe('YOUR_API_KEY');
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it('offers logout for a configured environment reference even when that variable is unset', async () => {
+    const klient = { global: {
+      config: { inspect: async () => ({ userValue: { anthropic: { type: 'anthropic', apiKeyEnv: 'EXAMPLE_API_KEY' } } }) },
+      kosong: { listProviders: async () => [{ id: 'anthropic', type: 'anthropic', has_api_key: false, status: 'unconfigured', models: [] }], listBuiltinProviders: async () => [] },
+      auth: { listLoginProviders: async () => [{ id: 'anthropic' }] },
+    } } as unknown as Klient;
+    const backend = new KlientChatBackend({ klient } as RuntimeConnection, '/project', 'new');
+    expect(await backend.getProviderOptions()).toEqual([expect.objectContaining({ id: 'anthropic', storedCredential: 'api_key' })]);
+  });
+
+  it('clears environment credential configuration when logging out from the backend', async () => {
+    const replace = vi.fn(async () => {});
+    const klient = { global: { config: {
+      inspect: async () => ({ userValue: { anthropic: { type: 'anthropic', apiKeyEnv: 'EXAMPLE_API_KEY' } } }),
+      replace,
+    } } } as unknown as Klient;
+    await new KlientChatBackend({ klient } as RuntimeConnection, '/project', 'new').logoutProvider('anthropic');
+    expect(replace).toHaveBeenCalledWith({ domain: 'providers', value: { anthropic: { type: 'anthropic', apiKey: undefined, apiKeyEnv: undefined } } });
+  });
 
 	it.each(['kimi', 'vsplab', 'deepseek'])('does not ask the domestic provider %s for this proxy', async provider => {
 		const prompt = vi.fn();

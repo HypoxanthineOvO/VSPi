@@ -5,7 +5,7 @@ import {
   modelSupportsThinkingEffort,
   resolveForcedThinkingEffort,
   resolveThinkingEffortForModel,
-} from '#/kosong/model/thinking';
+} from '#/llm-adapter/model/thinking';
 
 const booleanModel = {
   thinking: { availability: 'dynamic' as const, canDisable: true, controls: ['toggle' as const] },

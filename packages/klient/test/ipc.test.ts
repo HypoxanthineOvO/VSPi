@@ -241,16 +241,16 @@ describe('ipc transport specifics', () => {
     let cancelled!: () => void;
     const cancellation = new Promise<void>((resolve) => { cancelled = resolve; });
     const catalog = app.accessor.get(IModelCatalog);
-    const requester = catalog.getRequester;
-    const request = vi.fn(async function* (_input: unknown, signal: AbortSignal) {
+    const request = vi.fn(async function* (_modelId: string, _input: unknown, signal?: AbortSignal) {
+      if (signal === undefined) throw new Error('missing stream cancellation signal');
       started();
       await new Promise<void>((resolve) => {
         if (signal.aborted) { cancelled(); resolve(); return; }
         signal.addEventListener('abort', () => { cancelled(); resolve(); }, { once: true });
       });
-      yield { type: 'text', text: 'late output' };
+      yield { type: 'part' as const, part: { type: 'text' as const, text: 'late output' } };
     });
-    const spy = vi.spyOn(catalog, 'getRequester').mockReturnValue({ request } as unknown as ReturnType<typeof requester>);
+    const spy = vi.spyOn(catalog, 'generate').mockImplementation(request);
     const channel = new IpcChannel({ socketPath });
     try {
       const iterator = channel.stream({}, 'modelResolver', 'generate', ['example', {}])[Symbol.asyncIterator]();

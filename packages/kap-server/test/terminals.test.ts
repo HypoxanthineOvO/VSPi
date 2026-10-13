@@ -1,3 +1,4 @@
+import { isolateTestWorkspace } from './helpers/workspace';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -12,12 +13,11 @@ import {
 } from '@moonshot-ai/agent-core-v2';
 import { ErrorCode } from '../src/protocol/error-codes';
 import type { Terminal } from '@moonshot-ai/agent-core-v2/os/interface/terminal';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { type RunningServer, startServer } from '../src/start';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
 import { authHeaders } from './helpers/auth';
-import { isolateTestWorkspace } from './helpers/workspace';
 
 class FakeTerminalProcess implements TerminalProcess {
   private readonly dataListeners = new Set<(data: string) => void>();
@@ -91,13 +91,8 @@ describe('server-v2 /api/v1/sessions/{sid}/terminals', () => {
   let work: string | undefined;
   let base: string;
 
-  beforeEach(async () => {
-    spawnOptions.length = 0;
-    processes.length = 0;
-    home = await mkdtemp(join(tmpdir(), 'kimi-server-v2-term-home-'));
-    work = await isolateTestWorkspace(
-      await mkdtemp(join(tmpdir(), 'kimi-server-v2-term-work-')),
-    );
+  beforeAll(async () => {
+    home = await isolateTestWorkspace(await mkdtemp(join(tmpdir(), 'kimi-server-v2-term-home-')));
     await writeFile(
       join(home, 'config.toml'),
       [
@@ -123,7 +118,20 @@ describe('server-v2 /api/v1/sessions/{sid}/terminals', () => {
     base = `http://127.0.0.1:${server.port}`;
   });
 
+  beforeEach(async () => {
+    spawnOptions.length = 0;
+    processes.length = 0;
+    work = await isolateTestWorkspace(await mkdtemp(join(tmpdir(), 'kimi-server-v2-term-work-')));
+  });
+
   afterEach(async () => {
+    if (work !== undefined) {
+      await rm(work, { recursive: true, force: true });
+      work = undefined;
+    }
+  });
+
+  afterAll(async () => {
     if (server !== undefined) {
       await server.close();
       server = undefined;
@@ -131,10 +139,6 @@ describe('server-v2 /api/v1/sessions/{sid}/terminals', () => {
     if (home !== undefined) {
       await rm(home, { recursive: true, force: true });
       home = undefined;
-    }
-    if (work !== undefined) {
-      await rm(work, { recursive: true, force: true });
-      work = undefined;
     }
   });
 
@@ -179,12 +183,8 @@ describe('server-v2 /api/v1/sessions/{sid}/terminals', () => {
   });
 
   it('creates terminals for multiple sessions using each session workspace cwd', async () => {
-    const rootA = await isolateTestWorkspace(
-      await mkdtemp(join(tmpdir(), 'kimi-server-v2-term-a-')),
-    );
-    const rootB = await isolateTestWorkspace(
-      await mkdtemp(join(tmpdir(), 'kimi-server-v2-term-b-')),
-    );
+    const rootA = await mkdtemp(join(tmpdir(), 'kimi-server-v2-term-a-'));
+    const rootB = await mkdtemp(join(tmpdir(), 'kimi-server-v2-term-b-'));
     try {
       const sidA = await createSession(rootA);
       const sidB = await createSession(rootB);

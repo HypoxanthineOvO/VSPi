@@ -3,7 +3,7 @@ import { open, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { startServer } from '@moonshot-ai/kap-server';
 import {
-  AgentGoal, GoalUpdated, IAgentLifecycleService, IEventBus, IFlagService,
+  IAgentGoalService, GoalUpdated, IAgentLifecycleService, IEventBus, IFlagService,
   ISessionManager, type IDisposable, type ISessionScopeHandle,
 } from '@moonshot-ai/agent-core-v2';
 import { GOAL_RESTART_RECOVERY_FLAG } from '@moonshot-ai/agent-core-v2/features/goal/flag';
@@ -39,8 +39,8 @@ export class RuntimeGoalRecovery {
       this.attach(event.handle);
       if (event.source === 'resume' && !this.stopping && this.enabled) {
         const agents = event.handle.accessor.get(IAgentLifecycleService);
-        const main = agents.get('main');
-        if (main) agents.resolve(main, AgentGoal).resumeAfterRuntimeRestart();
+        const main = agents.handleOf('main');
+        if (main) main.accessor.get(IAgentGoalService).resumeAfterRuntimeRestart();
       }
     }));
     if (manager.onWillCloseSession) this.subscriptions.push(manager.onWillCloseSession(event => {
@@ -84,10 +84,10 @@ export class RuntimeGoalRecovery {
       mainSubscription = undefined;
       if (!this.stopping) this.remember(session.id, undefined);
     }));
-    const main = agents.get('main');
+    const main = agents.handleOf('main');
     if (main) {
       watch('main');
-      const goal = agents.resolve(main, AgentGoal).getGoal().goal;
+      const goal = main.accessor.get(IAgentGoalService).getGoal().goal;
       this.remember(session.id, goal?.status === 'active' ? goal.goalId : undefined);
     }
   }
@@ -114,8 +114,8 @@ export class RuntimeGoalRecovery {
     this.stopping = true;
     for (const session of this.core.accessor.get(ISessionManager).list()) {
       const agents = session.accessor.get(IAgentLifecycleService);
-      const main = agents.get('main');
-      if (main) await agents.resolve(main, AgentGoal).prepareForRuntimeShutdown();
+      const main = agents.handleOf('main');
+      if (main) await main.accessor.get(IAgentGoalService).prepareForRuntimeShutdown();
     }
     await this.writing;
   }

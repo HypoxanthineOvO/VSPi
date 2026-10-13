@@ -13,11 +13,12 @@ import {
   DEFAULT_AGENT_PROFILE_NAME,
   normalizeAgentProfile,
 } from '#/app/agentProfileCatalog/agentProfileCatalog';
+import { IAgentProfileRegistry } from '#/app/agentProfileCatalog/agentProfileRegistry';
 import { BuiltinAgentProfileLoaderService } from '#/app/agentProfileCatalog/builtinAgentProfileLoaderService';
 import { registerAgentProfile } from '#/app/agentProfileCatalog/contribution';
-import type { ToolCall } from '#/kosong/contract/message';
+import type { ToolCall } from '#human/llm/message';
 import { IAgentProfileService, type ResolvedAgentProfile } from '#/agent/profile/profile';
-import type { HostFsChange } from '#/os/interface/hostFsWatch';
+import type { WatchChange } from '#human/utils/watch';
 import { IAgentAgentsMdReminderService } from '#/agent/agentsMdReminder/agentsMdReminder';
 import { IAgentToolPolicyService } from '#/agent/toolPolicy/toolPolicy';
 import { IAgentToolExecutorService } from '#/agent/toolExecutor/toolExecutor';
@@ -74,7 +75,6 @@ function createAtomicDocumentStore(): AtomicDocumentStore {
       [...documents.keys()]
         .filter((key) => key.startsWith(`${scope}/${prefix}`))
         .map((key) => key.slice(scope.length + 1)),
-    watch: () => Event.None as Event<void>,
     acquire: () => ({ dispose: () => {} }),
   };
 }
@@ -123,6 +123,72 @@ describe('AgentProfileService.bind', () => {
     expect(svc.isRunnable()).toBe(true);
     expect(svc.getActiveToolNames()?.length).toBeGreaterThan(0);
     expect(svc.getSystemPrompt()).toContain('Kimi Code CLI');
+  });
+
+  it('unions discovered agent profiles into the bound subagents for the main agent', async () => {
+    const { profile: svc } = buildContext();
+    ctx.get(IAgentProfileRegistry).register({
+      sourceId: 'workspace',
+      priority: 30,
+      contribution: {
+        profiles: [
+          normalizeAgentProfile({
+            name: 'code-reviewer',
+            description: 'Reviews code',
+            tools: ['Read'],
+            systemPrompt: () => 'reviewer',
+          }),
+        ],
+      },
+    });
+
+    await svc.bind({ profile: DEFAULT_AGENT_PROFILE_NAME, model: MOCK_MODEL });
+
+    expect(svc.data().subagents).toEqual(['coder', 'explore', 'plan', 'code-reviewer']);
+  });
+
+  it('honors the explicit subagents of a discovered profile bound as main', async () => {
+    const { profile: svc } = buildContext();
+    ctx.get(IAgentProfileRegistry).register({
+      sourceId: 'workspace',
+      priority: 30,
+      contribution: {
+        profiles: [
+          normalizeAgentProfile({
+            name: 'custom-main',
+            description: 'Custom main agent',
+            subagents: ['coder'],
+            systemPrompt: () => 'custom main',
+          }),
+        ],
+      },
+    });
+
+    await svc.bind({ profile: 'custom-main', model: MOCK_MODEL });
+
+    expect(svc.data().subagents).toEqual(['coder']);
+  });
+
+  it('preserves an explicit wildcard subagents on a profile bound as main', async () => {
+    const { profile: svc } = buildContext();
+    ctx.get(IAgentProfileRegistry).register({
+      sourceId: 'workspace',
+      priority: 30,
+      contribution: {
+        profiles: [
+          normalizeAgentProfile({
+            name: 'wild-main',
+            description: 'Wildcard main agent',
+            subagents: ['*'],
+            systemPrompt: () => 'wild main',
+          }),
+        ],
+      },
+    });
+
+    await svc.bind({ profile: 'wild-main', model: MOCK_MODEL });
+
+    expect(svc.data().subagents).toEqual(['*']);
   });
 
   it('waits for the identity freeze instead of racing it', async () => {
@@ -263,7 +329,7 @@ describe('AgentProfileService.bind', () => {
 
   it('freezes the system prompt when the session instructions change', async () => {
     const persistence = new InMemoryWireRecordPersistence();
-    const emitter = new Emitter<readonly HostFsChange[]>();
+    const emitter = new Emitter<readonly WatchChange[]>();
     let agentsMd = 'v1 instructions';
     ctx = createTestAgent(
       { persistence },
@@ -452,6 +518,7 @@ describe('AgentProfileService.bind', () => {
               maxContextSize: 1_000_000,
               capabilities: ['thinking'],
               supportEfforts: ['low', 'high'],
+              defaultEffort: 'high',
             },
           },
         },

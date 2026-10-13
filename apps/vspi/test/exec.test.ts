@@ -524,10 +524,10 @@ describe("turn ownership, output events, and interactions", () => {
 
 	it("responds only to interactions owned by the target turn", async () => {
 		const fake = fixture({ interactions: [
-			{ id: "old", kind: "approval", payload: {}, origin: { agentId: "main", turnId: 1 }, createdAt: 1 },
-			{ id: "child", kind: "question", payload: {}, origin: { agentId: "child", turnId: 7 }, createdAt: 2 },
-			{ id: "a", kind: "approval", payload: {}, origin: { agentId: "main", turnId: 7 }, createdAt: 3 },
-			{ id: "q", kind: "question", payload: {}, origin: { turnId: 7 }, createdAt: 4 },
+			{ id: "old", kind: "approval", payload: {}, tags: { agentId: "main", turnId: 1 }, createdAt: 1 },
+			{ id: "child", kind: "question", payload: {}, tags: { agentId: "child", turnId: 7 }, createdAt: 2 },
+			{ id: "a", kind: "approval", payload: {}, tags: { agentId: "main", turnId: 7 }, createdAt: 3 },
+			{ id: "q", kind: "question", payload: {}, tags: { turnId: 7 }, createdAt: 4 },
 		] });
 		await runExec(fake.klient, options(), io().value);
 		expect(fake.session.interactions.respond).toHaveBeenCalledWith("a", { decision: "rejected" });
@@ -538,7 +538,7 @@ describe("turn ownership, output events, and interactions", () => {
 
 	it("fails and cancels a target user_tool interaction without racing turn end", async () => {
 		const fake = fixture({ interactions: [
-			{ id: "u", kind: "user_tool", payload: {}, origin: { agentId: "main", turnId: 7 }, createdAt: 1 },
+			{ id: "u", kind: "user_tool", payload: {}, tags: { agentId: "main", turnId: 7 }, createdAt: 1 },
 		] });
 		const result = await runExec(fake.klient, options(), io().value);
 		expect(result).toMatchObject({

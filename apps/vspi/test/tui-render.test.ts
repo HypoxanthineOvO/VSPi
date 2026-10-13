@@ -238,6 +238,32 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		return { terminal, tui, app, backend, events: () => events, setPolicy };
 	}
 
+  it('opens side questions while the main agent runs and closes without interrupting it', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'vspi-side-'));
+    const { app, backend, events } = renderFixture(home);
+    const side = { send: vi.fn(async () => {}), cancel: vi.fn(async () => {}), close: vi.fn(async () => {}) };
+    const cancelMain = vi.fn(async () => {});
+    backend.cancel = cancelMain;
+    let receive: Parameters<NonNullable<ChatBackend['startSideQuestion']>>[0] | undefined;
+    backend.startSideQuestion = vi.fn(async listener => { receive = listener; return side; });
+    try {
+      await app.start();
+      events().onBusy(true);
+      app.composer.setText('/side 解释当前设计'); app.handleInput('\r');
+      await vi.waitFor(() => expect(side.send).toHaveBeenCalledWith('解释当前设计'));
+      receive?.({ kind: 'answer', delta: '每个服务拥有独立生命周期。' });
+      expect(app.render(100).map(stripTerminalSequences).join('\n')).toContain('每个服务拥有独立生命周期');
+      app.handleInput('\u0003');
+      await vi.waitFor(() => expect(side.cancel).toHaveBeenCalledOnce());
+      receive?.({ kind: 'ended', reason: 'cancelled' });
+      app.handleInput('\u001B');
+      await vi.waitFor(() => expect(side.close).toHaveBeenCalledOnce());
+      expect(cancelMain).not.toHaveBeenCalled();
+      expect(resolveCommand('/btw')?.id).toBe('btw');
+      expect(resolveCommand('/side')?.id).toBe('btw');
+    } finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
+  });
+
 	it('copies a completed reply through the SSH terminal from the slash command', async () => {
 		vi.stubEnv('SSH_CONNECTION', 'example'); vi.stubEnv('TMUX', ''); vi.stubEnv('TMUX_PANE', '');
 		const home = await mkdtemp(join(tmpdir(), 'vspi-copy-'));
@@ -246,6 +272,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		try {
 			await app.start();
 			events().onMessage({ id: 'reply', role: 'assistant', kind: 'text', text: 'hello' });
+      events().onMessage({ id: 'progress', role: 'assistant', kind: 'text', text: 'still working', presentation: 'intermediate' });
 			app.composer.setText('/copy'); app.handleInput('\r');
 			await vi.waitFor(() => expect(write).toHaveBeenCalledWith('\u001B]52;c;aGVsbG8=\u0007'));
 			expect(app.render(120).map(stripTerminalSequences).join('\n')).not.toContain('没有可用的系统剪贴板');
@@ -405,7 +432,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			app.handleInput("\r");
 			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("确认后切换"));
 			expect(select).not.toHaveBeenCalled();
-			app.handleInput("\u001b");
+			app.handleInput("\u001B");
 			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("当前模型与 Effort 保持不变"));
 			expect(select).not.toHaveBeenCalled();
 		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
@@ -479,7 +506,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		try {
 			app.composer.setText("/policy");
 			app.handleInput("\r");
-			for (let i = 0; i < 3; i += 1) app.handleInput("\u001b[A");
+			for (let i = 0; i < 3; i += 1) app.handleInput("\u001B[A");
 			app.handleInput("\r");
 			await vi.waitFor(() => expect(app.startupStatus().policy).toBe("Safe"));
 			app.composer.setText("/policy");
@@ -512,7 +539,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			setPolicy.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
 			app.composer.setText("/policy");
 			app.handleInput("\r");
-			app.handleInput("\u001b[A");
+			app.handleInput("\u001B[A");
 			app.handleInput("\r");
 			await vi.waitFor(() => expect(release).toBeTypeOf("function"));
 			events().onPolicySnapshot?.({ policy: "Standard", boundary: "Host", sandboxed: false, recovery: false, sessionAllowlist: [] });
@@ -613,12 +640,12 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		panels.open('settings');
 		const render = () => panels.render(100, 40, theme, DEFAULT_USAGE).map(stripTerminalSequences).join('\n');
 		expect(render()).toContain('cn · 无 SNI 直连');
-		for (let index = 0; index < 11; index++) panels.handleInput('\x1b[B');
+		for (let index = 0; index < 11; index++) panels.handleInput('\x1B[B');
 		expect(panels.handleInput(' ')).toBeUndefined();
 		expect(render()).toContain('tech · 常规连接');
 		expect(panels.render(80, 14, theme, DEFAULT_USAGE).map(stripTerminalSequences).join('\n')).toContain('VSPLab 线路');
-		expect(panels.handleInput('\x13')).toMatchObject({ type: 'settings', vsplabEndpoint: 'tech' });
-		panels.handleInput('\x1b');
+		expect(panels.handleInput('\u0013')).toMatchObject({ type: 'settings', vsplabEndpoint: 'tech' });
+		panels.handleInput('\x1B');
 		panels.open('settings');
 		expect(render()).toContain('cn · 无 SNI 直连');
 	});
@@ -630,9 +657,9 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		panels.setSettingsLayers({ global, project, projectInherited: false });
 		panels.setVsplabEndpoint('tech');
 		panels.open('settings');
-		for (let index = 0; index < 11; index++) panels.handleInput('\x1b[B');
+		for (let index = 0; index < 11; index++) panels.handleInput('\x1B[B');
 		expect(panels.handleInput(' ')).toMatchObject({ type: 'notice', text: expect.stringContaining('全局') });
-		expect(panels.handleInput('\x13')).toMatchObject({ type: 'notice', text: '设置没有变化' });
+		expect(panels.handleInput('\u0013')).toMatchObject({ type: 'notice', text: '设置没有变化' });
 	});
 
 	it("shows provider-specific and fixed effort values safely", () => {
@@ -1301,7 +1328,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(stripTerminalSequences(rows[1] ?? "").trimEnd()).toBe(
 			"   Clarifying bug fix intent",
 		);
-		expect(rows[1]).toContain("\u001b[1m");
+		expect(rows[1]).toContain("\u001B[1m");
 	});
 
 	it("separates adjacent thinking bold spans without changing code or default markdown", () => {
@@ -1365,16 +1392,16 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 
 	it("keeps fullscreen row frames lossless when similar panel rows move", () => {
 		const optimizer = new TerminalFrameOptimizer();
-		const begin = "\u001b[?2026h";
-		const end = "\u001b[?2026l";
-		const cursor = "\u001b[10;1H\u001b[?25h";
+		const begin = "\u001B[?2026h";
+		const end = "\u001B[?2026l";
+		const cursor = "\u001B[10;1H\u001B[?25h";
 		const frame = (lines: readonly string[], fullRedraw = false) =>
-			`${begin}${fullRedraw ? "\u001b[2J" : ""}${lines
-				.map((line, index) => `\u001b[${index + 1};1H\u001b[2K${line}`)
+			`${begin}${fullRedraw ? "\u001B[2J" : ""}${lines
+				.map((line, index) => `\u001B[${index + 1};1H\u001B[2K${line}`)
 				.join("")}${cursor}${end}`;
-		const initial = `${begin}\u001b[?1049h\u001b[2J${Array.from(
+		const initial = `${begin}\u001B[?1049h\u001B[2J${Array.from(
 			{ length: 10 },
-			(_, index) => `\u001b[${index + 1};1H\u001b[2Kpanel-${String(index)}`,
+			(_, index) => `\u001B[${index + 1};1H\u001B[2Kpanel-${String(index)}`,
 		).join("")}${cursor}${end}`;
 		optimizer.optimize(initial, 10, 80);
 		const moved = frame([
@@ -1620,7 +1647,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(panels.handleInput("\u0010")).toBeUndefined();
 		panels.handleInput("old");
 		expect(panels.handleInput("\r")).toBeUndefined();
-		panels.handleInput("\u000f");
+		panels.handleInput("\u000F");
 		expect(panels.handleInput("\r")).toMatchObject({ type: "model", model: { id: "old" } });
 	});
 
@@ -1659,7 +1686,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		panels.setModels([{ id: "other", brand: "Example", label: "Other", vision: false, efforts: ["high"], price: {} }]);
 		panels.open("models");
 		expect(panels.handleInput("\r")).toBeUndefined();
-		panels.handleInput("\u000f");
+		panels.handleInput("\u000F");
 		expect(panels.handleInput("\r")).toMatchObject({ type: "model", model: { id: "other" } });
 		panels.close();
 		panels.open("models");
@@ -1971,7 +1998,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		const tailScroll = detailState.state.scroll;
 		expect(tailScroll).toBeGreaterThan(0);
 		expect(detailState.agentDetailFollowTail).toBe(true);
-		panels.handleInput("\u001b[A");
+		panels.handleInput("\u001B[A");
 		const lockedScroll = detailState.state.scroll;
 		expect(lockedScroll).toBe(tailScroll - 1);
 		expect(detailState.agentDetailFollowTail).toBe(false);
@@ -1986,7 +2013,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			.join("\n");
 		expect(detailState.state.scroll).toBe(lockedScroll);
 		expect(locked).not.toContain("LIVE_COMMENTARY");
-		panels.handleInput("\u001b[6~");
+		panels.handleInput("\u001B[6~");
 		const followed = panels
 			.render(42, 10, theme, DEFAULT_USAGE)
 			.map(stripTerminalSequences)
@@ -2008,7 +2035,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 				{ ...run, id: "task-beta", agentId: "agent-1", task: "Second task" },
 			],
 		});
-		expect(panels.handleInput("\u001b[C")).toEqual({
+		expect(panels.handleInput("\u001B[C")).toEqual({
 			type: "agentOpen",
 			runId: "task-beta",
 		});
@@ -2017,15 +2044,15 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(detailState.agentActivity).toEqual([]);
 		expect(detailState.agentDetailFollowTail).toBe(true);
 		expect(detailState.state).toMatchObject({ selected: 1, scroll: 0 });
-		expect(panels.handleInput("\u001b[C")).toBeUndefined();
-		expect(panels.handleInput("\u001b[D")).toEqual({
+		expect(panels.handleInput("\u001B[C")).toBeUndefined();
+		expect(panels.handleInput("\u001B[D")).toEqual({
 			type: "agentOpen",
 			runId: "task-alpha",
 		});
-		expect(panels.handleInput("\u001b")).toEqual({
+		expect(panels.handleInput("\u001B")).toEqual({
 			type: "agentConversationClose",
 		});
-		expect(panels.handleInput("\u001b")).toEqual({ type: "close" });
+		expect(panels.handleInput("\u001B")).toEqual({ type: "close" });
 
 		const dock = new AgentsDock();
 		dock.setSnapshot({
@@ -2192,7 +2219,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 				],
 			},
 		]);
-		panels.handleInput("\u001b[B");
+		panels.handleInput("\u001B[B");
 		const selected = panels
 			.render(90, 18, theme, DEFAULT_USAGE)
 			.map(stripTerminalSequences)

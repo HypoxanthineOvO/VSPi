@@ -3,7 +3,7 @@ import {
   thinkingEffortsForProvider,
   type ThinkingCapabilityInput,
   type ThinkingControl,
-} from '@moonshot-ai/agent-core-v2/kosong/contract/capability';
+} from '@moonshot-ai/agent-core-v2/human/llm/capability';
 
 export type ThinkingEffortRepairReason =
   | 'target-preserved'

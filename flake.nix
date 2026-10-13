@@ -62,12 +62,9 @@
       # pnpmConfigHook (dependencies for that workspace won't be fetched).
       # -------------------------------------------------------------------
       workspacePaths = [
-        ./packages/acp-adapter
         ./packages/acp-server
-        ./packages/agent-core
         ./packages/agent-core-v2
         ./packages/kap-server
-        ./packages/kaos
         ./packages/klient
         ./packages/kosong
         ./packages/migration-legacy
@@ -75,7 +72,7 @@
         ./packages/node-sdk
         ./packages/oauth
         ./packages/pi-tui
-        ./packages/protocol
+        ./packages/remote-control
         ./packages/telemetry
         ./packages/transcript
         ./packages/tree-sitter-bash
@@ -91,12 +88,9 @@
       ];
 
       workspaceNames = [
-        "@moonshot-ai/acp-adapter"
         "@moonshot-ai/acp-server"
-        "@moonshot-ai/agent-core"
         "@moonshot-ai/agent-core-v2"
         "@moonshot-ai/kap-server"
-        "@moonshot-ai/kaos"
         "@moonshot-ai/kosong"
         "@moonshot-ai/migration-legacy"
         "@moonshot-ai/minidb"
@@ -104,7 +98,7 @@
         "@moonshot-ai/kimi-code-oauth"
         "@moonshot-ai/klient"
         "@moonshot-ai/pi-tui"
-        "@moonshot-ai/protocol"
+        "@moonshot-ai/remote-control"
         "@moonshot-ai/kimi-telemetry"
         "@moonshot-ai/transcript"
         "@moonshot-ai/tree-sitter-bash"
@@ -166,7 +160,7 @@
               inherit (finalAttrs) pname version src pnpmWorkspaces;
               inherit pnpm;
               fetcherVersion = 3;
-              hash = "sha256-RrETulxs8rrLHTH3p8O+2XdM3n1//q7k/gnc76jeqN4=";
+              hash = "sha256-XLjspHl3+xErXYH5fMW8J8fDB5m1ZF8MkATKh11odo0=";
             };
 
             nativeBuildInputs = [

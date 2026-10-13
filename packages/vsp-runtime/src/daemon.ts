@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { startServer } from '@moonshot-ai/kap-server';
 import { serveKlientIpc } from '@moonshot-ai/klient/ipc';
-import { ISessionManager, IAgentLifecycleService, IAgentActivityView, IAgentTaskService, AgentCron, AgentGoal, MAIN_AGENT_ID } from '@moonshot-ai/agent-core-v2';
+import { ISessionManager, IAgentLifecycleService, IAgentActivityView, IAgentTaskService, IAgentCronService, IAgentGoalService, MAIN_AGENT_ID } from '@moonshot-ai/agent-core-v2';
 
 import './feature-defaults.js';
 import './model-defaults.js';
@@ -90,7 +90,7 @@ export async function startRuntimeDaemon(options: StartRuntimeDaemonOptions): Pr
         const id = `${session.id}/${agent.agentId}`;
         const activity = handle.accessor.get(IAgentActivityView).state();
         if (activity.turn || activity.background.length > 0 || handle.accessor.get(IAgentTaskService).list(true).length > 0) busyAgents.push(id);
-        if (agent.agentId === MAIN_AGENT_ID && (agents.resolve(agent, AgentCron).list().length > 0 || agents.resolve(agent, AgentGoal).getGoal().goal?.status === 'active')) scheduledAgents.push(id);
+        if (agent.agentId === MAIN_AGENT_ID && (handle.accessor.get(IAgentCronService).list().length > 0 || handle.accessor.get(IAgentGoalService).getGoal().goal?.status === 'active')) scheduledAgents.push(id);
       }
     }
     return { busyAgents, scheduledAgents };

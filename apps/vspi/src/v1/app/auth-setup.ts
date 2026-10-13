@@ -90,7 +90,7 @@ export async function runAuthSetup(options: AuthSetupOptions): Promise<void> {
 	if (resultMessage) process.stdout.write(`${resultMessage}\n`);
 }
 
-class AuthSetupApp implements Component, Focusable {
+export class AuthSetupApp implements Component, Focusable {
 	private entries: SetupEntry[] = [];
 	private selected = 0;
 	private dialog: AuthDialog | undefined;
@@ -448,7 +448,7 @@ export async function loginProvider(
 			await klient.global.kosong.configureBuiltinProvider(providerId, apiKey);
 			return;
 		}
-		providers[providerId] = { ...provider, apiKey, oauth: undefined };
+		providers[providerId] = { ...provider, apiKey, apiKeyEnv: undefined, oauth: undefined };
 		await klient.global.config.replace({ domain: "providers", value: providers });
 		interaction.notify({
 			type: "info",
@@ -474,7 +474,7 @@ async function logoutProvider(
 	const providers = { ...inspection.userValue };
 	const provider = providers[providerId];
 	if (provider === undefined) throw new Error(`Provider ${providerId} 不存在`);
-	const { apiKey: _apiKey, ...withoutKey } = provider;
+	const { apiKey: _apiKey, apiKeyEnv: _apiKeyEnv, ...withoutKey } = provider;
 	providers[providerId] = withoutKey;
 	await klient.global.config.replace({ domain: "providers", value: providers });
 }
@@ -487,10 +487,10 @@ function entriesForProvider(
 ): SetupEntry[] {
 	const configuredType = config?.oauth !== undefined ? "oauth" : "api_key";
 	const hasStoredCredential =
-		config?.apiKey !== undefined || config?.oauth !== undefined;
+		config?.apiKey !== undefined || config?.apiKeyEnv !== undefined || config?.oauth !== undefined;
 	if (mode === "logout" && !hasStoredCredential) return [];
 	const entries: SetupEntry[] = [];
-	if (canLogin || provider.id === "kimi" || config?.oauth !== undefined) {
+	if ((mode !== "logout" && (canLogin || provider.id === "kimi")) || config?.oauth !== undefined) {
 		entries.push({
 			providerId: provider.id,
 			providerName: provider.id === 'openai-codex' ? 'OpenAI OAuth (ChatGPT / Codex)' : provider.id,
@@ -499,7 +499,7 @@ function entriesForProvider(
 			configured: configuredType === "oauth" && provider.status === "connected",
 		});
 	}
-	if (mode !== "logout" || config?.apiKey !== undefined) {
+	if (mode !== "logout" || config?.apiKey !== undefined || config?.apiKeyEnv !== undefined) {
 		entries.push({
 			providerId: provider.id,
 			providerName: provider.id,

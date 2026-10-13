@@ -1,7 +1,7 @@
 import type { GoalSnapshot } from '#/features/goal/types';
 import { Service } from "#/_base/di/service";
 import { renderPrompt } from "#/_base/utils/render-prompt";
-import type { ReminderRuntime } from '#/features/reminder/reminderAgentRuntime';
+import type { IAgentReminderService } from '#/features/reminder/reminderService';
 import GOAL_ACTIVE_REMINDER from './goal-active-reminder.md?raw';
 import GOAL_BLOCKED_REMINDER from './goal-blocked-reminder.md?raw';
 import GOAL_PAUSED_REMINDER from './goal-paused-reminder.md?raw';
@@ -22,7 +22,7 @@ const PENDING_WORK_GUIDANCE = [
 export class GoalInjection extends Service {
   constructor(
     private readonly options: GoalInjectionOptions,
-    injector: ReminderRuntime,
+    injector: IAgentReminderService,
   ) {
     super();
     this._register(
@@ -73,6 +73,7 @@ function buildGoalReminder(goal: GoalSnapshot): string {
     budgets_block: budgets.length > 0 ? `Budgets: ${budgets}.\n` : '',
     budget_guidance: isNearingBudget(goal) ? BUDGET_GUIDANCE_NEARING : BUDGET_GUIDANCE_WITHIN,
     pending_work_guidance: ` ${PENDING_WORK_GUIDANCE}`,
+    wait_for_guidance: '',
   });
 }
 

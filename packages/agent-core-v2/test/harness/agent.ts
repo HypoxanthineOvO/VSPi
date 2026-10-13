@@ -6,19 +6,17 @@ import { createControlledPromise } from '@antfu/utils';
 import { expect, vi } from 'vitest';
 
 import { toDisposable } from '#/_base/di/lifecycle';
-import { ref, type LiveRef, type IInstantiationService } from '#/_base/di/instantiation';
-import { IModelRequestNetwork } from '#/kosong/model/modelNetwork';
+import type { IInstantiationService } from '#/_base/di/instantiation';
 import type { IAgentScopeHandle } from '#/_base/di/scope';
 import type { AgentContext } from '#/agent/agentContext/agentContext';
-import type {
-  AgentRuntimeDefinition,
-  RuntimeOf,
-} from '#/agent/runtime/agentRuntime';
 import { IFeatureManager } from '#/app/feature/featureManager';
+import { IFlagService } from '#/app/flag/flag';
+import { ISessionNotify } from '#/features/notify/sessionNotify';
+import { notifyUserAvailable } from '#/features/notify/notifyUserAvailability';
 import { getConfigSectionContributions } from '#/app/config/configSectionContributions';
+import { applySectionEnv } from '#/app/config/configService';
 import { Emitter, Event, type IWaitUntil } from '#/_base/event';
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
-import type { AgentLifecycleService } from '#/session/agentLifecycle/agentLifecycleService';
 import type { Promisable, PromisifyMethods } from '#/_base/utils/types';
 import type { AgentTaskInfo } from '#/agent/task/task';
 import { IAgentBlobService } from '#/agent/blob/agentBlobService';
@@ -29,9 +27,9 @@ import { HostFileSystem } from '#/os/backends/node-local/hostFsService';
 import '#/features/reminder/reminderFeature';
 import { BUILTIN_REPLAYABLE_STATE_KEYS } from '../state/builtinReplayableKeys';
 import type { ContextMessage } from '#/agent/contextMemory/types';
-import { AgentCron } from '#/features/cron/cronAgentRuntime';
+import { IAgentCronService } from '#/features/cron/cronService';
 import { IAgentIdentity } from '#/app/agentIdentity/agentIdentity';
-import { AgentGoal } from '#/features/goal/goalAgentRuntime';
+import { IAgentGoalService } from '#/features/goal/goalService';
 import { IGoalDeadlineScheduler } from '#/features/goal/goalDeadlineScheduler';
 import { GoalDeadlineSchedulerService } from '#/features/goal/goalDeadlineSchedulerService';
 import { ISessionMcpHandle } from '#/session/mcp/sessionMcpHandle';
@@ -47,12 +45,11 @@ import type { PermissionRule } from '#/agent/permissionRules/permissionRules';
 import { IAgentPlanService, type PlanData } from '#/features/plan/plan';
 import { IAgentProfileService, type AgentConfigData } from '#/agent/profile/profile';
 import { IAgentToolPolicyService } from '#/agent/toolPolicy/toolPolicy';
-import { IAgentPromptService } from '#/agent/prompt/prompt';
 import type {
   PromptLaunchResult,
   PromptPayload,
   SteerPayload,
-} from '#/agent/prompt/prompt';
+} from '#/agent/loop/loop';
 import type { AgentCommandInfo } from '#/agent/command/agentCommand';
 import { IAgentCommandService } from '#/agent/command/agentCommand';
 import type { AgentContextData } from '#/agent/contextMemory/types';
@@ -91,7 +88,7 @@ interface UndoHistoryPayload { readonly count: number }
 interface UnregisterToolPayload { readonly name: string }
 import { type UsageStatus } from '#/agent/usage/usage';
 import { type PromptWithSkillsInput, type PromptWithSkillsResult, type SkillActivationInput } from '#/features/skill/skill';
-import { AgentSkill } from '#/features/skill/skillAgentRuntime';
+import { IAgentSkillService } from '#/features/skill/skillService';
 import { IAgentRuntimeBindingSeed } from '#/agent/runtimeBinding/runtimeBinding';
 import { IAgentRuntimeService } from '#/agent/runtimeBinding/agentRuntime';
 import type { RuntimeLease } from '#/runtime/runtime';
@@ -109,25 +106,21 @@ import type { StateKey } from '#/state/state';
 import { IEventDispatcher } from '#/state/eventDispatcher';
 import { EventDispatcherService } from '#/state/eventDispatcherService';
 import { EVENT2_REGISTRY, event2FromRecord } from '#/app/event/event2';
-import { IProtocolAdapterRegistry, type ProtocolAdapterConfig } from '#/kosong/protocol/protocol';
-import { ProtocolAdapterRegistry } from '#/kosong/provider/protocolAdapterRegistry';
-import { hasProviderDefinition } from '#/kosong/provider/providerDefinition';
+import type { ThinkingCapability } from '#/llm-adapter/contract/capability';
+import { IProtocolAdapterRegistry } from '#/llm-adapter/protocol/protocol';
+import { ProtocolAdapterRegistry } from '#/llm-adapter/protocol/protocolAdapterRegistry';
 import { summarizeSkill, type SkillCatalog } from '#/features/skill/catalog/types';
-import {
-  type ModelCapability,
-  type ThinkingCapabilityInput,
-} from '#/kosong/contract/capability';
-import { isToolCall, isToolCallPart, type ContentPart, type Message as KosongMessage, type StreamedMessagePart } from '#/kosong/contract/message';
-import { type ThinkingEffort } from '#/kosong/contract/provider';
-import { type Tool as KosongTool } from '#/kosong/contract/tool';
-import { type TokenUsage } from '#/kosong/contract/usage';
+import { type ModelCapability } from '#/llm-adapter/contract/capability';
+import { isToolCall, isToolCallPart, type ContentPart, type Message as KosongMessage, type StreamedMessagePart } from '#/llm-adapter/contract/message';
+import { type ThinkingEffort } from '#human/llm/thinking';
+import { type Tool as KosongTool } from '#/llm-adapter/contract/message';
+import { type TokenUsage } from '#human/llm/usage';
 import type { AgentLLMRequestSource } from '#/agent/llmRequester/llmRequester';
 import { type AgentModelDefinition } from '#/state/agentModel';
 import { type AgentModelInstanceOf } from '#/agent/agentContext/agentSpace';
-import { AgentTodo } from '#/features/todo/todoAgentRuntime';
+import { IAgentTodoService } from '#/features/todo/todoService';
 import { type TodoItem } from '#/features/todo/todoItem';
-import type { generate as kosongGenerate } from '#/kosong/contract/generate';
-import type { ChatProvider, GenerateOptions, StreamedMessage } from '#/kosong/contract/provider';
+import type { LlmRequester } from '#human/llm/requester/requester';
 import type { ILogger, LogContext, LogLevel } from '#/_base/log/log';
 import { ILogOptions } from '#/_base/log/logConfig';
 import {
@@ -137,10 +130,8 @@ import {
   FileStorageService,
   InMemoryStorageService,
   AgentFullCompactionService,
-  IAgentActivityView,
   IAppendLogStore,
   IFileSystemStorageService,
-  ISessionApprovalService,
   ISessionMetadata,
   IAgentTaskService,
   IBlobStore,
@@ -158,15 +149,12 @@ import {
   IAgentPermissionModeService,
   IAgentPermissionRulesService,
   IHostFileSystem,
-  IHostFsWatchService,
   IHostProcessService,
   ISessionBtwService,
   ISessionContext,
   IAgentScopeContext,
   makeAgentScopeContext,
   IAgentShellCommandService,
-  IAgentStepRetryService,
-  IAgentLoopContinuationService,
   IAgentSwarmService,
   AgentSwarmService,
   ISessionTokenCountingService,
@@ -201,37 +189,43 @@ import {
   type SessionCreatedEvent,
   type SessionWillCloseEvent,
 } from '#/workspace/sessionLifecycle/sessionLifecycle';
+import { IEventService } from '#/app/event/event';
 import { IEventBus, ISessionEventBus } from '#/app/event/eventBus';
+import { MAIN_AGENT_ID } from '#/session/agentLifecycle/agentLifecycle';
+import { applyPromptMetadataUpdate } from '#/session/sessionMetadata/promptMetadata';
+import { promptMetadataTextFromContentParts } from '#/agent/prompt/promptMetadataText';
 import { ISessionManager } from '#/app/sessionManager/sessionManager';
 import { IWireService } from '#/wire/wire';
 import { WireService } from '#/wire/wireService';
 import { TurnPrompt } from '#/agent/loop/turnOps';
-import { IModelService, type ModelsSection } from '#/kosong/model/model';
+import { IModelService, type ModelsSection } from '#/llm-adapter/model/model';
 import {
   DEFAULT_MODEL_SECTION,
   DEFAULT_PROVIDER_SECTION,
   MODELS_SECTION,
   PROVIDERS_SECTION,
 } from '#/app/kosongConfig/configSection';
-import { IModelCatalog, type Model } from '#/kosong/model/catalog';
-import { ModelCatalog } from '#/kosong/model/catalogService';
-import { IModelOAuthTokens } from '#/kosong/model/modelOAuth';
-import type { ModelRequestParams, ModelRequester } from '#/kosong/model/modelRequester';
-import { IHostRequestHeaders } from '#/kosong/model/hostRequestHeaders';
+import { IModelCatalog, type Model } from '#/llm-adapter/model/catalog';
+import { ModelCatalog } from '#/llm-adapter/model/catalog-service';
+import { IProviderCatalogRuntime } from '#/llm-adapter/model/catalog-runtime';
+import { IModelOAuthTokens } from '#/llm-adapter/model/model-oauth';
+import type { ModelRequestParams, ModelRequester } from '#/llm-adapter/model/model-requester';
+import { IHostRequestHeaders } from '#/llm-adapter/model/host-request-headers';
 import {
   IProviderService,
   type ProviderConfig,
   type ProvidersSection,
-} from '#/kosong/provider/provider';
-import type { ApprovalResponse } from '#/session/approval/approval';
-import type { InteractionRequest } from '#/features/interaction/interaction';
+} from '#/llm-adapter/provider/provider';
+import type { ApprovalRequest, ApprovalResponse } from '#/agent/interaction/approval';
+import type { QuestionRequest, QuestionResult } from '#/agent/interaction/question';
 import {
-  AgentInteraction,
-  type InteractionRuntime,
-} from '#/features/interaction/interactionAgentRuntime';
+  INTERACTION_TAG_SESSION_ID,
+  type Interaction,
+  type InteractionKind,
+} from '#/human/interaction/interaction';
+import { interactions } from '#/human/interaction/facade';
 import type { IHostProcess } from '#/os/interface/hostProcess';
 import type { EnvironmentDisclosureSnapshot } from '#/app/agentProfileCatalog/agentProfileCatalog';
-import { ISessionQuestionService, type QuestionResult } from '#/session/question/question';
 import { ISessionSkillCatalog } from '#/features/skill/session/skillCatalog';
 import { ISessionSwarmService } from '#/features/swarm/session/sessionSwarm';
 import type { PathAccessOperation } from '#/session/workspaceContext/workspaceContext';
@@ -276,22 +270,13 @@ interface KimiConfig {
   readonly [domain: string]: unknown;
 }
 
-type TestThinkingCapabilityInput = Omit<
-  ThinkingCapabilityInput,
-  'controls' | 'efforts' | 'providerEfforts'
-> & {
-  readonly controls?: readonly NonNullable<ThinkingCapabilityInput['controls']>[number][];
-  readonly efforts?: readonly string[];
-  readonly providerEfforts?: Readonly<Record<string, readonly string[]>>;
-};
-
 interface ModelConfigForConfig {
+  readonly thinking?: ThinkingCapability;
   readonly provider: string;
   readonly model: string;
   readonly maxContextSize: number;
   readonly maxOutputSize?: number;
   readonly capabilities?: readonly string[];
-  readonly thinking?: TestThinkingCapabilityInput;
   readonly supportEfforts?: readonly string[];
   readonly defaultEffort?: string;
 }
@@ -414,7 +399,6 @@ interface AgentRpcPassthroughAPI {
 }
 
 type PromiseAgentAPI = PromisifyMethods<AgentRpcPassthroughAPI>;
-type GenerateFn = typeof kosongGenerate;
 
 type TestToolResult = ExecutableToolResult & {
   readonly content?: unknown;
@@ -424,6 +408,17 @@ interface UserToolInteractionPayload {
   readonly turnId?: number;
   readonly toolCallId: string;
   readonly args: unknown;
+}
+
+function interactionRpcMethod(kind: InteractionKind): 'requestApproval' | 'requestQuestion' | 'toolCall' {
+  switch (kind) {
+    case 'approval':
+      return 'requestApproval';
+    case 'question':
+      return 'requestQuestion';
+    case 'user_tool':
+      return 'toolCall';
+  }
 }
 
 interface ResumeStateSnapshot {
@@ -448,13 +443,12 @@ interface ConfigureOptions {
   readonly tools?: readonly string[] | undefined;
   readonly provider?: TestProviderConfig | undefined;
   readonly modelCapabilities?: ModelCapability | undefined;
-  readonly modelThinking?: TestThinkingCapabilityInput | undefined;
 }
 
 export type TestAgentContext = AgentTestContext;
 
 export interface TestAgentOptions {
-  readonly generate?: GenerateFn | undefined;
+  readonly generate?: LlmRequester | undefined;
   readonly telemetry?: ITelemetryService | undefined;
   readonly persistence?: WireRecordPersistence | undefined;
   readonly hookEngine?:
@@ -686,16 +680,12 @@ export function logServices(logger: Logger): TestAgentServiceOverride {
   ];
 }
 
-export function llmGenerateServices(generate: GenerateFn): TestAgentServiceOverride {
-  return appService(IProtocolAdapterRegistry, createGenerateBackedProtocolRegistry(generate));
+export function llmGenerateServices(requester: LlmRequester): TestAgentServiceOverride {
+  return appService(IProtocolAdapterRegistry, createGenerateBackedGateway(requester));
 }
 
 export function telemetryServices(telemetry: ITelemetryService): TestAgentServiceOverride {
   return appService(ITelemetryService, telemetry);
-}
-
-export function questionServices(service: ISessionQuestionService): TestAgentServiceOverride {
-  return sessionService(ISessionQuestionService, service);
 }
 
 export function externalHookServices(
@@ -979,7 +969,7 @@ class PersistenceAppendLogStore implements IAppendLogStore {
   declare readonly _serviceBrand: undefined;
   readonly onDidWrite: IAppendLogStore['onDidWrite'] = Event.None as IAppendLogStore['onDidWrite'];
   private readonly history: WireRecord[] = [];
-  private readSeeded = false;
+  private historySeeded = false;
 
   constructor(
     private readonly persistence: WireRecordPersistence,
@@ -987,7 +977,14 @@ class PersistenceAppendLogStore implements IAppendLogStore {
     private readonly onRead: (event: WireRecord) => void,
   ) { }
 
+  private seedHistory(): void {
+    if (this.historySeeded) return;
+    this.history.push(...this.persistence.records.map(cloneRecord));
+    this.historySeeded = true;
+  }
+
   append<R>(_scope: string, _key: string, record: R): void {
+    this.seedHistory();
     const event = record as WireRecord;
     this.onAppend(event);
     this.persistence.append(event);
@@ -995,13 +992,11 @@ class PersistenceAppendLogStore implements IAppendLogStore {
   }
 
   async *read<R>(_scope: string, _key: string): AsyncIterable<R> {
-    const seeding = !this.readSeeded;
+    this.seedHistory();
     for await (const event of this.persistence.read()) {
       this.onRead(event);
-      if (seeding) this.history.push(cloneRecord(event));
       yield event as R;
     }
-    this.readSeeded = true;
   }
 
   rewrite<R>(_scope: string, _key: string, records: readonly R[]): Promise<void> {
@@ -1010,6 +1005,10 @@ class PersistenceAppendLogStore implements IAppendLogStore {
   }
 
   flush(): Promise<void> {
+    return this.persistence.flush();
+  }
+
+  flushLog(): Promise<void> {
     return this.persistence.flush();
   }
 
@@ -1030,7 +1029,13 @@ class PersistenceAppendLogStore implements IAppendLogStore {
   }
 
   historySnapshot(): WireRecord[] {
+    this.seedHistory();
     return this.history.map(cloneRecord);
+  }
+
+  recordRestore(records: readonly WireRecord[]): void {
+    this.seedHistory();
+    this.history.push(...records.map(cloneRecord));
   }
 }
 
@@ -1038,14 +1043,14 @@ class ConfigBackedModelCatalog extends ModelCatalog {
   constructor(
     private readonly options: TestModelProviderOptions = {},
     @IConfigService private readonly config: IConfigService,
+    @IProviderCatalogRuntime runtime: IProviderCatalogRuntime,
     @IProviderService private readonly providerRegistry: IProviderService,
     @IModelService private readonly modelRegistry: IModelService,
     @IModelOAuthTokens oauthTokens: IModelOAuthTokens,
     @IProtocolAdapterRegistry protocolRegistry: IProtocolAdapterRegistry,
     @IHostRequestHeaders hostRequestHeaders: IHostRequestHeaders,
-    @ref(IModelRequestNetwork) network: LiveRef<IModelRequestNetwork>,
   ) {
-    super(providerRegistry, modelRegistry, oauthTokens, protocolRegistry, hostRequestHeaders, network);
+    super(runtime, providerRegistry, modelRegistry, oauthTokens, protocolRegistry, hostRequestHeaders);
   }
 
   private syncRegistriesFromConfig(): void {
@@ -1057,6 +1062,11 @@ class ConfigBackedModelCatalog extends ModelCatalog {
       this.config.get<ModelsSection>(MODELS_SECTION) ?? {},
       this.config.get<string>(DEFAULT_MODEL_SECTION),
     );
+  }
+
+  override notifyConfigChanged(): void {
+    this.syncRegistriesFromConfig();
+    super.notifyConfigChanged();
   }
 
   override get(id: string): Model {
@@ -1163,8 +1173,8 @@ export class AgentTestContext {
           );
           reg.defineInstance(
             IProtocolAdapterRegistry,
-            createGenerateBackedProtocolRegistry(
-              options.generate ?? this.scriptedGenerate.generate,
+            createGenerateBackedGateway(
+              options.generate ?? this.scriptedGenerate.requester,
             ),
           );
           reg.defineInstance(
@@ -1243,7 +1253,7 @@ export class AgentTestContext {
     const workspaceId = 'test-workspace';
     const agentTelemetry = this.root.accessor
       .get(ITelemetryService)
-      .withContext({ agent_id: agentId });
+      .withContext({ agent_id: agentId, mode: 'agent' });
     const sessionScope = `${bootstrap.scope('sessions')}/${workspaceId}/${sessionId}`;
     this.session = this.root.createChild(LifecycleScope.Session, sessionId, {
       seeds: collectScopeSeed(
@@ -1263,8 +1273,11 @@ export class AgentTestContext {
               onDidCreateSession: Event.None as Event<SessionCreatedEvent & IWaitUntil>,
               onWillCloseSession: Event.None as Event<SessionWillCloseEvent & IWaitUntil>,
             });
-            reg.defineInstance(ISessionApprovalService, this.createApprovalService());
-            reg.defineInstance(ISessionQuestionService, this.createQuestionService());
+            reg.defineInstance(ISessionNotify, {
+              _serviceBrand: undefined,
+              ready: Promise.resolve(),
+              enabled: notifyUserAvailable(this.root.accessor.get(IFlagService), bootstrap),
+            });
             reg.defineInstance(ISessionSkillCatalogData, {
               _serviceBrand: undefined,
               ready: Promise.resolve(),
@@ -1312,16 +1325,19 @@ export class AgentTestContext {
     });
     this.session.accessor.get(ISessionEventBus).activateAgent(agentScopeContext.agentContext);
 
+    let adoptAgent: (() => void) | undefined;
     this.agent = this.session.createChild(LifecycleScope.Agent, agentId, {
       configureContainer: (container) => {
-        this.session.accessor.get(IAgentLifecycleService).adopt({
-          id: agentId,
-          kind: LifecycleScope.Agent,
-          accessor: {
-            get: (id) => container.invokeFunction((accessor) => accessor.get(id)),
-          },
-          dispose: () => { container.dispose(); },
-        });
+        adoptAgent = () => {
+          this.session.accessor.get(IAgentLifecycleService).adopt({
+            id: agentId,
+            kind: LifecycleScope.Agent,
+            accessor: {
+              get: (id) => container.invokeFunction((accessor) => accessor.get(id)),
+            },
+            dispose: () => { container.dispose(); },
+          });
+        };
       },
       seeds: collectScopeSeed(
         [
@@ -1335,7 +1351,6 @@ export class AgentTestContext {
               this.root.accessor.get(IHostEnvironment),
               this.root.accessor.get(IHostFileSystem),
               this.root.accessor.get(IHostProcessService),
-              this.root.accessor.get(IHostFsWatchService),
               this.root.accessor.get(IHostTerminalService),
             );
             reg.defineInstance<IAgentRuntimeService>(IAgentRuntimeService, {
@@ -1406,12 +1421,11 @@ export class AgentTestContext {
     this.session.accessor
       .get(ISessionEventBus)
       .activateAgent(harnessAgentContext);
-    this.session.accessor.get(IAgentLifecycleService).attachRuntimes(harnessAgentContext);
-    this.installInteractionBridge(harnessAgentContext);
+    adoptAgent!();
+    this.installInteractionBridge();
     reassertServiceOverrides(this.serviceOverrides, 'agent', this.agent.instantiation);
 
     this.initializeRestorableServices();
-    this.get(IAgentActivityView);
 
     const eventBus = this.get(IEventBus);
     this.disposables.push(
@@ -1433,12 +1447,6 @@ export class AgentTestContext {
       throw new Error('AgentTestContext.get called with undefined service id');
     }
     return this.agent.accessor.get(id);
-  }
-
-  resolve<Definition extends AgentRuntimeDefinition<any, any>>(
-    definition: Definition,
-  ): RuntimeOf<Definition> {
-    return this.session.accessor.get(IAgentLifecycleService).resolve(this.agentContext, definition);
   }
 
   get modelResolver(): IModelCatalog {
@@ -1508,24 +1516,20 @@ export class AgentTestContext {
     return this.get(IAgentStateService);
   }
 
-  async restorePersisted(): Promise<void> {
-    await this.dispatcher.restore();
-    await this.restoreRuntimes();
-  }
+  private persistedRestored: Promise<void> | undefined;
 
-  restoreRuntimes(): Promise<void> {
-    const agent = this.get(IAgentScopeContext).agentContext;
-    return (this.session.accessor.get(IAgentLifecycleService) as AgentLifecycleService).restoreRuntimes(agent);
+  async restorePersisted(): Promise<void> {
+    this.persistedRestored ??= this.dispatcher.restore();
+    await this.persistedRestored;
   }
 
   private async restoreRecordsOnly(records: readonly WireRecord[]): Promise<void> {
     const scopeContext = this.get(IAgentScopeContext);
     const log = this.get(IAppendLogStore);
+    if (log instanceof PersistenceAppendLogStore) log.recordRestore(records);
     await log.rewrite(scopeContext.scope(), AGENT_WIRE_RECORD_KEY, records);
-    await this.dispatcher.restore();
-    await (this.session.accessor.get(IAgentLifecycleService) as AgentLifecycleService).restoreRuntimes(
-      scopeContext.agentContext,
-    );
+    this.persistedRestored = this.dispatcher.restore();
+    await this.persistedRestored;
   }
 
   private async dispatchRecordsOnly(records: readonly WireRecord[]): Promise<void> {
@@ -1548,33 +1552,80 @@ export class AgentTestContext {
   }
 
   private async closeWire(): Promise<void> {
+    if (this.session.accessor.get(IAgentLifecycleService).get(this.agent.id) === undefined) return;
     await this.wire.flush();
   }
 
-  private installInteractionBridge(agent: AgentContext): void {
-    const interaction = this.session.accessor.get(IAgentLifecycleService).resolve(agent, AgentInteraction);
-    const request = interaction.request.bind(interaction);
-    interaction.request = (<TPayload, TResponse>(req: InteractionRequest<TPayload>) => {
-      if (req.kind !== 'user_tool') return request<TPayload, TResponse>(req);
-      const pending = request<TPayload, TResponse>(req);
-      const parked = interaction.listPending('user_tool').at(-1)!;
-      const payload = req.payload as UserToolInteractionPayload;
-      const response = this.createRpcPromise<ExecutableToolResult>();
-      void response.then(
-        (result) => { interaction.respond(parked.id, result); },
-        () => { interaction.respond(parked.id, { cancelled: true }); },
-      );
-      this.recordRpc(
-        'toolCall',
-        {
-          turnId: payload.turnId,
-          toolCallId: payload.toolCallId,
-          args: payload.args,
-        },
-        response,
-      );
-      return pending;
-    }) as InteractionRuntime['request'];
+  private installInteractionBridge(): void {
+    const sessionId = this.session.id;
+    const bridged = new Map<string, 'requestApproval' | 'requestQuestion' | 'toolCall'>();
+    this.disposables.push(
+      toDisposable(
+        interactions.onDidChangePending(() => {
+          for (const pending of interactions.findAll({
+            resolved: false,
+            tags: { [INTERACTION_TAG_SESSION_ID]: sessionId },
+          })) {
+            if (bridged.has(pending.id)) continue;
+            bridged.set(pending.id, interactionRpcMethod(pending.kind));
+            this.bridgeInteraction(pending);
+          }
+        }),
+      ),
+      toDisposable(
+        interactions.onDidResolve(({ id, response }) => {
+          const method = bridged.get(id);
+          if (method === undefined) return;
+          bridged.delete(id);
+          this.resolvePendingRpc(method, id, response);
+        }),
+      ),
+    );
+  }
+
+  private bridgeInteraction(interaction: Interaction): void {
+    switch (interaction.kind) {
+      case 'approval': {
+        const { sessionId: _sessionId, agentId: _agentId, ...payload } =
+          interaction.payload as ApprovalRequest;
+        const response = this.createRpcPromise<ApprovalResponse>();
+        void response.then((result) => {
+          interactions.respond(interaction.id, result);
+        });
+        this.recordRpc('requestApproval', payload, response);
+        return;
+      }
+      case 'question': {
+        const response = this.createRpcPromise<QuestionResult>();
+        void response.then((result) => {
+          interactions.respond(interaction.id, result);
+        });
+        this.recordRpc('requestQuestion', interaction.payload as QuestionRequest, response);
+        return;
+      }
+      case 'user_tool': {
+        const payload = interaction.payload as UserToolInteractionPayload;
+        const response = this.createRpcPromise<ExecutableToolResult>();
+        void response.then(
+          (result) => {
+            interactions.respond(interaction.id, result);
+          },
+          () => {
+            interactions.respond(interaction.id, { cancelled: true });
+          },
+        );
+        this.recordRpc(
+          'toolCall',
+          {
+            turnId: payload.turnId,
+            toolCallId: payload.toolCallId,
+            args: payload.args,
+          },
+          response,
+        );
+        return;
+      }
+    }
   }
 
   private initializeRestorableServices(): void {
@@ -1583,13 +1634,11 @@ export class AgentTestContext {
     const usage = this.usage;
     const permissionMode = this.get(IAgentPermissionModeService);
     const permissionRules = this.get(IAgentPermissionRulesService);
-    const cron = this.resolve(AgentCron);
+    const cron = this.get(IAgentCronService);
     const plan = this.get(IAgentPlanService);
     void this.get(IAgentToolActivationService).activate();
     this.get(IAgentToolDedupeService);
     this.get(IAgentExternalHooksService);
-    this.get(IAgentStepRetryService);
-    this.get(IAgentLoopContinuationService);
     const tasks = this.get(IAgentTaskService);
     const permission = this.get(IAgentPermissionGate);
     const swarm = this.get(IAgentSwarmService);
@@ -1625,9 +1674,8 @@ export class AgentTestContext {
     tools = [],
     provider = MOCK_PROVIDER,
     modelCapabilities,
-    modelThinking,
   }: ConfigureOptions = {}): void {
-    this.configureRuntimeModel(provider, modelCapabilities, modelThinking);
+    this.configureRuntimeModel(provider, modelCapabilities);
     const profile = this.get(IAgentProfileService);
     profile.update({
       modelAlias: provider.model,
@@ -1646,14 +1694,8 @@ export class AgentTestContext {
   configureRuntimeModel(
     provider: TestProviderConfig,
     modelCapabilities?: ModelCapability | undefined,
-    modelThinking?: TestThinkingCapabilityInput | undefined,
   ): void {
-    this.kimiConfig = configWithProvider(
-      this.kimiConfig,
-      provider,
-      modelCapabilities,
-      modelThinking,
-    );
+    this.kimiConfig = configWithProvider(this.kimiConfig, provider, modelCapabilities);
     (this.get(IModelCatalog) as ModelCatalog).notifyConfigChanged();
     const profile = this.get(IAgentProfileService);
     profile.update({ modelAlias: provider.model });
@@ -1741,7 +1783,8 @@ export class AgentTestContext {
   }
 
   clearContext(): void {
-    this.get(IAgentPromptService).clear();
+    drainPrompts(this.get(IAgentLoopService));
+    this.get(IAgentContextMemoryService).clear();
   }
 
   async undoHistory(count: number): Promise<number> {
@@ -1963,7 +2006,7 @@ export class AgentTestContext {
       { autoConfigure: false, cwd: this.cwd },
       ...this.serviceOverrides,
       configServices(() => configSnapshot),
-      llmGenerateServices(failOnResumeGenerate),
+      llmGenerateServices(failOnResumeRequester),
       wireRecordPersistenceServices(
         new InMemoryWireRecordPersistence(withMetadata(wireHistory)),
       ),
@@ -2121,52 +2164,6 @@ export class AgentTestContext {
     };
   }
 
-  private createApprovalService(): ISessionApprovalService {
-    return {
-      _serviceBrand: undefined,
-      request: (request) => {
-        const { sessionId: _sessionId, agentId: _agentId, ...payload } = request;
-        const promise = this.createRpcPromise<ApprovalResponse>();
-        this.recordRpc('requestApproval', payload, promise);
-        return promise;
-      },
-      enqueue: (request) => {
-        const id = request.id ?? request.toolCallId ?? `${request.toolName}:test`;
-        const { sessionId: _sessionId, agentId: _agentId, ...payload } = { ...request, id };
-        this.recordRpc('requestApproval', payload);
-        return { ...request, id };
-      },
-      decide: (id, response) => {
-        this.resolvePendingRpc('requestApproval', id, response);
-      },
-      listPending: () => [],
-    };
-  }
-
-  private createQuestionService(): ISessionQuestionService {
-    return {
-      _serviceBrand: undefined,
-      request: (request) => {
-        const promise = this.createRpcPromise<QuestionResult>();
-        this.recordRpc('requestQuestion', request, promise);
-        return promise;
-      },
-      enqueue: (request) => {
-        const id = request.id ?? request.toolCallId ?? 'question:test';
-        const payload = { ...request, id };
-        this.recordRpc('requestQuestion', payload);
-        return payload;
-      },
-      answer: (id, response) => {
-        this.resolvePendingRpc('requestQuestion', id, response);
-      },
-      dismiss: (id) => {
-        this.resolvePendingRpc('requestQuestion', id, null);
-      },
-      listPending: () => [],
-    };
-  }
-
   private captureRecord(event: WireRecord): void {
     const cloned = cloneRecord(event);
     if (this.suppressWireSnapshot) return;
@@ -2193,15 +2190,18 @@ export class AgentTestContext {
 
   private createRpcPassthroughAdapters(): AgentRpcPassthroughAPI {
     return {
-      prompt: (payload) => this.get(IAgentPromptService).submit(payload),
-      promptWithSkills: (payload) => this.resolve(AgentSkill).promptWithSkills(payload),
-      steer: (payload) => this.get(IAgentPromptService).submitSteer(payload),
-      cancel: (payload) => this.get(IAgentLoopService).cancelFromUser(payload.turnId),
+      prompt: (payload) => submitPromptFacade(this, payload),
+      promptWithSkills: (payload) => this.get(IAgentSkillService).promptWithSkills(payload),
+      steer: (payload) => submitSteerPromptFacade(this, payload),
+      cancel: (payload) =>
+        this.get(IAgentLoopService).cancel(
+          payload.turnId === undefined ? undefined : { turnId: payload.turnId },
+        ),
       undoHistory: (payload) => this.get(IAgentConversationUndoService).undo(payload.count),
       setPermission: (payload) =>
         this.get(IAgentPermissionModeService).setModeAndBroadcast(payload.mode),
       cancelCompaction: () => this.get(IAgentFullCompactionService).cancel(),
-      activateSkill: (payload) => this.resolve(AgentSkill).activate(payload),
+      activateSkill: (payload) => this.get(IAgentSkillService).activate(payload),
       activatePluginCommand: (payload) =>
         this.get(IAgentPluginCommandService).activate(payload),
       listCommands: () => this.get(IAgentCommandService).list(),
@@ -2242,12 +2242,15 @@ export class AgentTestContext {
         void tasks.stop(payload.taskId, payload.reason);
       },
       detachTask: (payload) => this.get(IAgentTaskService).detach(payload.taskId),
-      clearContext: () => this.get(IAgentPromptService).clear(),
-      createGoal: (payload) => this.resolve(AgentGoal).createGoal(payload),
-      getGoal: () => this.resolve(AgentGoal).getGoal(),
-      pauseGoal: () => this.resolve(AgentGoal).pauseGoal(),
-      resumeGoal: () => this.resolve(AgentGoal).resumeGoal(),
-      cancelGoal: () => this.resolve(AgentGoal).cancelGoal(),
+      clearContext: () => {
+        drainPrompts(this.get(IAgentLoopService));
+        this.get(IAgentContextMemoryService).clear();
+      },
+      createGoal: (payload) => this.get(IAgentGoalService).createGoal(payload),
+      getGoal: () => this.get(IAgentGoalService).getGoal(),
+      pauseGoal: () => this.get(IAgentGoalService).pauseGoal(),
+      resumeGoal: () => this.get(IAgentGoalService).resumeGoal(),
+      cancelGoal: () => this.get(IAgentGoalService).cancelGoal(),
       getTaskOutput: (payload) =>
         this.get(IAgentTaskService).readOutput(payload.taskId, payload.tail),
       getConfig: () => this.get(IAgentProfileService).data(),
@@ -2347,7 +2350,7 @@ function createPermissionModeService(initialMode: PermissionMode): IAgentPermiss
       return mode;
     },
     getMode: () => mode,
-    runWithMode: (_mode, run) => run(),
+    runWithMode: async (_mode, run) => run(),
     setMode: (nextMode) => {
       mode = nextMode;
     },
@@ -2391,8 +2394,8 @@ function createHostTerminalService(): IHostTerminalService {
   };
 }
 
-const failOnResumeGenerate: GenerateFn = async () => {
-  throw new Error('Resume replay unexpectedly called the LLM');
+const failOnResumeRequester: LlmRequester = {
+  generate: () => Promise.reject(new Error('Resume replay unexpectedly called the LLM')),
 };
 
 function resumeStateSnapshot(ctx: AgentTestContext): ResumeStateSnapshot {
@@ -2410,7 +2413,7 @@ function resumeStateSnapshot(ctx: AgentTestContext): ResumeStateSnapshot {
         .filter((key) => key.replayable.undoable !== undefined)
         .map((key) => [key.name, ctx.get(IAgentStateService).get(key)]),
     ),
-    todos: ctx.resolve(AgentTodo).get(),
+    todos: ctx.get(IAgentTodoService).get(),
     permission: permissionData,
     usage: usageStatus,
   };
@@ -2557,13 +2560,17 @@ function configService(readConfig: () => KimiConfig): IConfigService {
     readonly value: unknown;
     readonly previousValue: unknown;
   }>();
-  const sectionDefault = (domain: string): unknown =>
-    getConfigSectionContributions().find((section) => section.domain === domain)?.options
-      .defaultValue;
-  const valueFor = (domain: string): unknown =>
-    memory.has(domain)
+  const contribution = (domain: string) =>
+    getConfigSectionContributions().find((section) => section.domain === domain);
+  const valueFor = (domain: string): unknown => {
+    const base = memory.has(domain)
       ? memory.get(domain)
-      : ((effectiveConfig() as Record<string, unknown>)[domain] ?? sectionDefault(domain));
+      : ((effectiveConfig() as Record<string, unknown>)[domain] ??
+        contribution(domain)?.options.defaultValue);
+    const env = contribution(domain)?.options.env;
+    if (env === undefined) return base;
+    return applySectionEnv(base, env, (name) => process.env[name]);
+  };
   const replace = (domain: string, value: unknown): Promise<void> => {
     const previousValue = valueFor(domain);
     memory.set(domain, value);
@@ -2706,7 +2713,6 @@ function configWithProvider(
   config: KimiConfig,
   provider: TestProviderConfig,
   modelCapabilities: ModelCapability | undefined,
-  modelThinking: TestThinkingCapabilityInput | undefined = undefined,
 ): KimiConfig {
   const providerName = 'test-provider';
   const maxContextSize = modelCapabilities?.max_context_tokens;
@@ -2724,7 +2730,6 @@ function configWithProvider(
         maxContextSize:
           maxContextSize === undefined || maxContextSize <= 0 ? 1_000_000 : maxContextSize,
         capabilities: capabilityNames(modelCapabilities),
-        thinking: modelThinking,
       },
     },
     defaultProvider: providerName,
@@ -2797,8 +2802,8 @@ function createLogService(logger: Logger | undefined, bindings: LogContext = {})
   };
 }
 
-function createGenerateBackedProtocolRegistry(generate: GenerateFn): IProtocolAdapterRegistry {
-  const real = new ProtocolAdapterRegistry();
+function createGenerateBackedGateway(requester: LlmRequester): IProtocolAdapterRegistry {
+  const real = new ProtocolAdapterRegistry({ current: undefined, onDidChange: Event.None as Event<void> });
   return {
     _serviceBrand: undefined,
     supportedProtocols: () => real.supportedProtocols(),
@@ -2808,188 +2813,7 @@ function createGenerateBackedProtocolRegistry(generate: GenerateFn): IProtocolAd
       real.resolveProviderBaseId(protocol, providerType),
     resolveCapability: (protocol, modelName, providerType) =>
       real.resolveCapability(protocol, modelName, providerType),
-    explainCapability: (protocol, modelName, providerType) =>
-      real.explainCapability(protocol, modelName, providerType),
-    createChatProvider: (input: ProtocolAdapterConfig) => {
-      if (input.providerType !== undefined && hasProviderDefinition(input.providerType)) {
-        return replaceProviderGenerate(real.createChatProvider(input), generate);
-      }
-      return new GenerateBackedChatProvider(input, generate);
-    },
-  } as IProtocolAdapterRegistry;
-}
-
-function replaceProviderGenerate(provider: ChatProvider, generate: GenerateFn): ChatProvider {
-  const replaced: ChatProvider = {
-    get name() {
-      return provider.name;
-    },
-    get modelName() {
-      return provider.modelName;
-    },
-    get thinkingEffort() {
-      return provider.thinkingEffort;
-    },
-    get maxCompletionTokens() {
-      return provider.maxCompletionTokens;
-    },
-    generate: (systemPrompt, tools, history, options) =>
-      generateBackedResponse(provider, generate, systemPrompt, tools, history, options),
-  };
-  if (provider.uploadVideo !== undefined) {
-    replaced.uploadVideo = (input, options) => provider.uploadVideo!(input, options);
-  }
-  return replaced;
-}
-
-class GenerateBackedChatProvider implements ChatProvider {
-  readonly name: string;
-  readonly modelName: string;
-  readonly thinkingEffort: ThinkingEffort | null = null;
-  readonly maxCompletionTokens: number | undefined;
-
-  constructor(
-    config: ProtocolAdapterConfig,
-    private readonly generateFn: GenerateFn,
-  ) {
-    this.name = config.providerType ?? config.protocol;
-    this.modelName = config.modelName;
-    this.maxCompletionTokens = config.providerOptions?.defaultMaxTokens;
-  }
-
-  async generate(
-    systemPrompt: string,
-    tools: KosongTool[],
-    history: KosongMessage[],
-    options?: GenerateOptions,
-  ): Promise<StreamedMessage> {
-    return generateBackedResponse(this, this.generateFn, systemPrompt, tools, history, options);
-  }
-}
-
-async function generateBackedResponse(
-  provider: ChatProvider,
-  generateFn: GenerateFn,
-  systemPrompt: string,
-  tools: KosongTool[],
-  history: KosongMessage[],
-  options?: GenerateOptions,
-): Promise<StreamedMessage> {
-  const parts: StreamedMessagePart[] = [];
-  let result: Awaited<ReturnType<GenerateFn>>;
-  try {
-    result = await generateFn(
-      provider,
-      systemPrompt,
-      tools,
-      history,
-      {
-        onMessagePart: (part) => {
-          parts.push(structuredClone(part));
-        },
-      },
-      {
-        signal: options?.signal,
-        auth: options?.auth,
-        cacheKey: options?.cacheKey,
-        sampling: options?.sampling,
-        thinking: options?.thinking,
-        maxCompletionTokens: options?.maxCompletionTokens,
-        usedContextTokens: options?.usedContextTokens,
-        maxContextTokens: options?.maxContextTokens,
-        responseFormat: options?.responseFormat,
-        onTraceId: options?.onTraceId,
-        onProtocolProgress: options?.onProtocolProgress,
-      },
-    );
-  } catch (error) {
-    if (parts.length === 0) throw error;
-    return createStreamedMessage(normalizeProviderStreamParts(parts), {
-      id: null,
-      usage: null,
-      finishReason: null,
-      rawFinishReason: null,
-      error: error instanceof Error ? error : new Error('generateBackedResponse failed'),
-    });
-  }
-  return createStreamedMessage(
-    parts.length > 0
-      ? normalizeProviderStreamParts(parts)
-      : partsFromGeneratedMessage(result.message),
-    {
-      id: result.id,
-      usage: result.usage,
-      finishReason: result.finishReason,
-      rawFinishReason: result.rawFinishReason,
-      traceId: result.traceId,
-    },
-  );
-}
-
-function partsFromGeneratedMessage(
-  message: Awaited<ReturnType<GenerateFn>>['message'],
-): StreamedMessagePart[] {
-  const parts: StreamedMessagePart[] = [
-    ...message.content.map((part) => structuredClone(part)),
-    ...message.toolCalls.map((part) => structuredClone(part)),
-  ];
-  return parts.length > 0 ? parts : [{ type: 'text', text: '' }];
-}
-
-function normalizeProviderStreamParts(
-  parts: readonly StreamedMessagePart[],
-): StreamedMessagePart[] {
-  const normalized: StreamedMessagePart[] = [];
-  const pendingIndexedDeltas = new Map<number | string, StreamedMessagePart[]>();
-  const seenIndexes = new Set<number | string>();
-
-  for (const part of parts) {
-    if (isToolCallPart(part) && part.index !== undefined && !seenIndexes.has(part.index)) {
-      const pending = pendingIndexedDeltas.get(part.index) ?? [];
-      pending.push(structuredClone(part));
-      pendingIndexedDeltas.set(part.index, pending);
-      continue;
-    }
-
-    normalized.push(structuredClone(part));
-
-    if (isToolCall(part) && part._streamIndex !== undefined) {
-      seenIndexes.add(part._streamIndex);
-      const pending = pendingIndexedDeltas.get(part._streamIndex);
-      if (pending !== undefined) {
-        pendingIndexedDeltas.delete(part._streamIndex);
-        normalized.push(...pending);
-      }
-    }
-  }
-
-  for (const pending of pendingIndexedDeltas.values()) {
-    normalized.push(...pending);
-  }
-
-  return normalized;
-}
-
-function createStreamedMessage(
-  parts: readonly StreamedMessagePart[],
-  meta: Pick<
-    Awaited<ReturnType<GenerateFn>>,
-    'id' | 'usage' | 'finishReason' | 'rawFinishReason'
-  > &
-    Partial<Pick<Awaited<ReturnType<GenerateFn>>, 'traceId'>> & { error?: Error },
-): StreamedMessage {
-  return {
-    id: meta.id,
-    usage: meta.usage,
-    finishReason: meta.finishReason ?? null,
-    rawFinishReason: meta.rawFinishReason ?? null,
-    traceId: meta.traceId,
-    async *[Symbol.asyncIterator]() {
-      for (const part of parts) {
-        yield structuredClone(part);
-      }
-      if (meta.error !== undefined) throw meta.error;
-    },
+    resolve: (model) => ({ ...real.resolve(model), requester }),
   };
 }
 
@@ -3024,4 +2848,71 @@ function withMetadata(events: readonly WireRecord[]): readonly WireRecord[] {
     },
     ...events,
   ];
+}
+
+async function submitPromptFacade(
+  ctx: TestAgentContext,
+  payload: PromptPayload,
+): Promise<PromptLaunchResult | undefined> {
+  const loop = ctx.get(IAgentLoopService);
+  if (ctx.get(IAgentScopeContext).agentId === MAIN_AGENT_ID) {
+    await applyPromptMetadataUpdate(
+      {
+        metadata: ctx.get(ISessionMetadata),
+        eventService: ctx.get(IEventService),
+        sessionId: ctx.get(ISessionContext).sessionId,
+      },
+      promptMetadataTextFromContentParts(payload.input),
+    );
+  }
+  const status = loop.snapshot();
+  const { id } = loop.submit({
+    message: { role: 'user', content: [...payload.input] },
+    meta: { promptId: payload.promptId, origin: { kind: 'user' }, tracked: true },
+  });
+  if (status.state === 'running' || status.paused || status.queue.length > 0) return undefined;
+  const turn = await loop.promptHandle(id)?.launched;
+  if (turn === undefined) return undefined;
+  await turn.ready.catch(() => undefined);
+  return turn.id === undefined ? undefined : { turn_id: turn.id };
+}
+
+async function submitSteerPromptFacade(
+  ctx: TestAgentContext,
+  payload: SteerPayload,
+): Promise<PromptLaunchResult | undefined> {
+  const loop = ctx.get(IAgentLoopService);
+  if (ctx.get(IAgentScopeContext).agentId === MAIN_AGENT_ID) {
+    await applyPromptMetadataUpdate(
+      {
+        metadata: ctx.get(ISessionMetadata),
+        eventService: ctx.get(IEventService),
+        sessionId: ctx.get(ISessionContext).sessionId,
+      },
+      promptMetadataTextFromContentParts(payload.input),
+    );
+  }
+  const status = loop.snapshot();
+  const { id } = loop.submit(
+    {
+      message: { role: 'user', content: [...payload.input] },
+      meta: { origin: { kind: 'user' }, tracked: true },
+    },
+    { steerIfActive: true },
+  );
+  if (status.state === 'running' && status.activePromptId === undefined) return undefined;
+  const turn = await loop.promptHandle(id)?.launched;
+  if (turn === undefined) return undefined;
+  await turn.ready.catch(() => undefined);
+  return turn.id === undefined ? undefined : { turn_id: turn.id };
+}
+
+function drainPrompts(loop: IAgentLoopService): void {
+  const snapshot = loop.snapshot();
+  for (const item of snapshot.queue) {
+    if (item.meta?.promptId !== undefined) loop.cancel({ promptId: item.meta.promptId });
+  }
+  if (snapshot.activePromptId !== undefined) {
+    loop.cancel({ promptId: snapshot.activePromptId });
+  }
 }

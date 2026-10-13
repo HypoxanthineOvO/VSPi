@@ -3,13 +3,10 @@ import { registerConfigOverlay } from "@moonshot-ai/agent-core-v2/app/config/con
 
 export const VSP_EXPERIMENTAL_DEFAULTS = {
 	wait_for: true,
-	persistence_minidb_readmodel: true,
-	"secondary-model": true,
+	notify_user: true,
 	subagent_fork: true,
 	"tool-select": true,
 	tower: true,
-	"remote-control": true,
-	auto_session_title: true,
 	goal_restart_recovery: true,
 } as const;
 

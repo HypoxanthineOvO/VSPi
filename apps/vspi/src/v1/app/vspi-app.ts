@@ -5,6 +5,7 @@ import { requireExperimental } from '../../experimental.js';
 import { collectFeedback } from '../feedback/collect.js';
 import { redactFeedbackText, saveFeedbackBundle } from '../feedback/bundle.js';
 import { feedbackDigest, submitFeedback } from '../feedback/client.js';
+import { SideQuestionDialog } from "../ui/side-question.js";
 import { FeedbackPreview } from '../feedback/preview.js';
 import {
 	type Component,
@@ -243,6 +244,7 @@ interface ProviderConfigUi {
 type NoticeTone = "info" | "success" | "warning" | "error";
 
 const BUSY_SAFE_ACTIONS = new Set<ActionHandler>([
+	"sideQuestion",
 	"models",
 	"subagentModels",
 	"effort",
@@ -423,6 +425,7 @@ export class VspiApp implements Component, Focusable {
 	private modelOptions: RuntimeModelOption[] = [];
 	private providerOptions: ProviderOption[] = [];
 	private authDialog: AuthDialog | undefined;
+	private sideQuestion: SideQuestionDialog | undefined;
 	private readonly executionPolicy: ExecutionPolicyUi;
 	private backendPolicySnapshot: PolicySnapshot | undefined;
 	private backendPolicyRevision = 0;
@@ -506,7 +509,7 @@ export class VspiApp implements Component, Focusable {
 				primary: true,
 				overscroll: "chain",
 				scrollbar: options.settings.fullscreenScrollbar,
-				scrollbarStyle: (text) => this.theme.selected(text),
+				scrollbarThumbStyle: (text) => this.theme.selected(text),
 			},
 		);
 		this.fullscreenLayout = new VStack([
@@ -958,6 +961,7 @@ export class VspiApp implements Component, Focusable {
 		if (this.disposing) return;
 		this.disposing = true;
 		this.renderReady = false;
+		await this.sideQuestion?.close().catch(() => {});
 		this.authDialog?.cancel();
 		this.authDialog = undefined;
 		this.yoloAcknowledgementBroker.cancel();
@@ -1107,6 +1111,7 @@ export class VspiApp implements Component, Focusable {
 			this.showNotice("Session 正在移交；请在新终端继续", "info");
 			return;
 		}
+		if (this.sideQuestion) { this.sideQuestion.handleInput(data); return; }
 		if (this.authDialog) {
 			this.authDialog.handleInput(data);
 			return;
@@ -1461,7 +1466,7 @@ export class VspiApp implements Component, Focusable {
 		const runtimeLine = this.renderRuntimeStatus(width);
 		const runtime = [runtimeLine];
 		this.composer.focused = this._focused && !questionActive;
-		if (this.authDialog) {
+		if (this.authDialog || this.sideQuestion) {
 			return {
 				lines: appendRuntimeStatus([], runtimeLine),
 				activityActive: false,
@@ -1565,6 +1570,7 @@ export class VspiApp implements Component, Focusable {
 	}
 
 	private buildRenderBody(width: number, dock: AppRenderDock): string[] {
+		if (this.sideQuestion) return this.sideQuestion.render(width, this.theme, this.tui.terminal.rows - 2);
 		if (this.authDialog)
 			return this.withStartupSurface(this.authDialog.render(width, this.theme));
 		if (this.panels.kind === "sessions") {
@@ -2280,7 +2286,7 @@ export class VspiApp implements Component, Focusable {
 						? "完成"
 						: "通知";
 		// 通知栏是单行表面：夹带 \n 的文本会占据多个物理行并错位后续 diff，渲染前压平。
-		const text = notice.text.replace(/\s+/g, " ").trim();
+		const text = notice.text.replaceAll(/\s+/g, " ").trim();
 		return padLine(
 			`${style(`${icon} ${label}`)} ${this.theme.muted("·")} ${text}`,
 			width,
@@ -2693,6 +2699,21 @@ export class VspiApp implements Component, Focusable {
 		raw: string,
 	): Promise<void> {
 		if (action.handler !== "plan") this.planPanelExplicit = false;
+		if (action.handler === "sideQuestion") {
+      if (!this.backend.startSideQuestion) { this.showNotice("当前后端不支持旁路问答", "warning"); return; }
+      this.panels.close();
+      const dialog = new SideQuestionDialog(() => this.requestRender(), () => {
+        if (this.sideQuestion === dialog) this.sideQuestion = undefined;
+        this.requestRender();
+      });
+      this.sideQuestion = dialog;
+      this.requestRender();
+      try {
+        const side = await this.backend.startSideQuestion(event => dialog.receive(event));
+        await dialog.connect(side, raw.replace(/^\/\S+\s*/u, ''));
+      } catch (error) { dialog.receive({ kind: 'error', message: error instanceof Error ? error.message : String(error) }); }
+      return;
+    }
 		if (action.handler === 'feedback') {
 			try { await this.openFeedback(raw.replace(/^\/feedback\s*/u, '')); }
 			catch (error) {
@@ -2711,8 +2732,8 @@ export class VspiApp implements Component, Focusable {
 		}
 		if (action.handler === "copy") {
 			const latest = [...this.messages]
-				.reverse()
-				.find((message) => message.kind === "text" && message.role === "assistant" && !message.streaming && message.text.trim());
+				.toReversed()
+				.find((message) => message.kind === "text" && message.role === "assistant" && message.presentation !== "intermediate" && !message.streaming && message.text.trim());
 			this.panels.close();
 			if (!latest || latest.kind !== "text") {
 				this.showNotice("当前没有可复制的正式回复", "warning");
@@ -3570,7 +3591,7 @@ export class VspiApp implements Component, Focusable {
 			try {
 				if (!this.options.promptProfiles)
 					throw new Error("Prompt Profile service 未配置");
-				const id = `fork-${event.profileId.replace(/[^A-Za-z0-9._-]/g, "-")}-${Date.now().toString(36)}`;
+				const id = `fork-${event.profileId.replaceAll(/[^A-Za-z0-9._-]/g, "-")}-${Date.now().toString(36)}`;
 				await this.options.promptProfiles.fork(event.profileId, {
 					id,
 					name: `${event.profileId} Fork`,
@@ -5917,10 +5938,10 @@ function parseGoalCommand(raw: string): GoalCommand {
 }
 
 function parseNewSessionOptions(raw: string): NewSessionOptions {
-	const arguments_ = raw.trim().split(/\s+/).slice(1);
+	const arguments_ = new Set(raw.trim().split(/\s+/).slice(1));
 	return {
-		defaults: arguments_.includes("--default"),
-		continuePlan: arguments_.includes("--continue"),
+		defaults: arguments_.has("--default"),
+		continuePlan: arguments_.has("--continue"),
 	};
 }
 

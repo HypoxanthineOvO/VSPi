@@ -83,6 +83,10 @@ export const agentHistoryPageSchema = z.object({
   activity: agentActivityStateSchema, model: z.string().optional(), effort: z.string(),
   live: z.object({ turnId: z.number(), segment: z.number(), text: z.string(), thinking: z.string() }).optional(),
 });
+export const agentActivityContract = {
+  state: { input: z.tuple([]), output: agentActivityStateSchema },
+} satisfies ServiceContract;
+
 export const agentHistoryContract = {
   page: { input: z.tuple([z.object({ before: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(100).optional() }).optional()]), output: agentHistoryPageSchema },
 } satisfies ServiceContract;

@@ -83,7 +83,10 @@ export class VspiTuiAltScreen extends TuiAltScreen {
     options: TuiAltScreenOptions = {},
   ) {
     super(terminal, showHardwareCursor, logDirectory, { wheelScrollLines: 3,
-      copyToClipboard: text => writeClipboardText(text, { writeTerminal: sequence => { terminal.write(sequence); } }), ...options });
+      copySelection: async text => {
+        try { await writeClipboardText(text, { writeTerminal: sequence => { terminal.write(sequence); } }); return true; }
+        catch { return false; }
+      }, ...options });
     this.defaultFrameIntervalMs = resolveTuiFrameInterval();
     this.scrollFrameIntervalMs = resolveTuiScrollFrameInterval();
     this.framePacer = new TuiFramePacer(this.defaultFrameIntervalMs);

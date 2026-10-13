@@ -1,3 +1,4 @@
+import { isolateTestWorkspace } from './helpers/workspace';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,13 +9,12 @@ import {
   IAgentLifecycleService,
   getLiveSessionById,
 } from '@moonshot-ai/agent-core-v2';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 
 import { type RunningServer, startServer } from '../src/start';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
 import { authHeaders } from './helpers/auth';
-import { isolateTestWorkspace } from './helpers/workspace';
 
 interface Frame {
   type: string;
@@ -106,14 +106,14 @@ describe('server-v2 /api/v1/ws resync', () => {
   let base: string;
   let wsUrl: string;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     home = await isolateTestWorkspace(await mkdtemp(join(tmpdir(), 'kimi-wsv1-test-')));
     server = await startServer({ hostIdentity: TEST_HOST_IDENTITY, host: '127.0.0.1', port: 0, homeDir: home, logLevel: 'silent' });
     base = `http://127.0.0.1:${server.port}`;
     wsUrl = `ws://127.0.0.1:${server.port}/api/v1/ws`;
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     if (server !== undefined) {
       await server.close();
       server = undefined;

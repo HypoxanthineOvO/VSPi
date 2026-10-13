@@ -49,14 +49,17 @@ export class AgentsDock {
 	}
 
 	render(width: number, theme: VspiTheme, now = Date.now()): string[] {
-		const runs = [...this.visible.values()].sort(compareDockRuns);
+		const runs = [...this.visible.values()].toSorted(compareDockRuns);
 		if (runs.length === 0) return [];
 		const shown = runs.slice(0, MAX_VISIBLE_AGENTS);
 		const overflow = runs.length - shown.length;
 		const active = runs.filter((run) => !agentRunTerminal(run.status)).length;
 		const done = runs.length - active;
 		const bodyWidth = Math.max(1, width - 2);
-		const body = shown.map((run) => renderAgentRow(run, bodyWidth, theme, now));
+		const body = shown.flatMap((run) => [
+      renderAgentRow(run, bodyWidth, theme, now),
+      ...(run.progress ? [theme.muted(truncateToWidth(`  进度 · ${run.progress.replaceAll(/\s+/gu, " ")}`, bodyWidth, "…"))] : []),
+    ]);
 		if (overflow > 0)
 			body.push(theme.muted(`+${String(overflow)} active · /agents 查看全部`));
 		return frame(body, width, theme, {

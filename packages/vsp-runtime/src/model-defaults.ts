@@ -3,11 +3,11 @@ import catalog from '../../../ops/vsplab/model-catalog.json' with { type: 'json'
 import { registerConfigOverlay } from '@moonshot-ai/agent-core-v2/app/config/configOverlayContributions';
 import { modelsFromToml, modelsToToml, providersFromToml } from '@moonshot-ai/agent-core-v2/app/kosongConfig/configSection';
 import { mergeRelayCatalog } from '@moonshot-ai/agent-core-v2/app/kosongConfig/relayCatalog';
-import { listPiModelRecords, listPiProviders } from '@moonshot-ai/agent-core-v2/kosong/provider/pi/catalog';
-import { applyModelEffortProfile } from '@moonshot-ai/agent-core-v2/kosong/model/effortProfiles';
-import { modelEffortProfile } from '@moonshot-ai/agent-core-v2/kosong/provider/effortProfiles';
-import type { ModelsSection } from '@moonshot-ai/agent-core-v2/kosong/model/model';
-import type { ProvidersSection } from '@moonshot-ai/agent-core-v2/kosong/provider/provider';
+import { listPiModelRecords, listPiProviders } from '@moonshot-ai/agent-core-v2/llm-adapter/provider/pi/catalog';
+import { applyModelEffortProfile } from '@moonshot-ai/agent-core-v2/llm-adapter/model/effortProfiles';
+import { modelEffortProfile } from '@moonshot-ai/agent-core-v2/llm-adapter/provider/effortProfiles';
+import type { ModelsSection } from '@moonshot-ai/agent-core-v2/llm-adapter/model/model';
+import type { ProvidersSection } from '@moonshot-ai/agent-core-v2/llm-adapter/provider/provider';
 
 const nativeProviders = new Set(listPiProviders().map((provider) => provider.id));
 const nativeDefaults = new Map([...nativeProviders].map((id) => [id, Object.fromEntries(
@@ -65,9 +65,9 @@ export function compactModelSnapshots(config: Record<string, unknown>): void {
     if (!defaults[alias]) continue;
     if (model.model === 'deepseek-flash' && model.displayName === 'DeepSeek V4 Flash') delete model.displayName;
     models[alias] = difference(model, defaults[alias]);
-    if (!Object.keys(models[alias]!).length) delete models[alias];
+    if (Object.keys(models[alias]!).length === 0) delete models[alias];
   }
-  if (Object.keys(models).length) config['models'] = modelsToToml(models, {});
+  if (Object.keys(models).length > 0) config['models'] = modelsToToml(models, {});
   else delete config['models'];
 }
 
@@ -92,7 +92,7 @@ registerConfigOverlay({
       for (const key of Object.keys(previous[alias] ?? {})) {
         if (Object.hasOwn(model, key)) delta[key] = model[key];
       }
-      if (Object.keys(delta).length) result[alias] = delta;
+      if (Object.keys(delta).length > 0) result[alias] = delta;
     }
     return result;
   },

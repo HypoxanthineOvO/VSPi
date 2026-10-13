@@ -1,4 +1,4 @@
-import { currentModelId } from '@moonshot-ai/agent-core-v2/kosong/model/retiredModelIds';
+import { currentModelId } from '@moonshot-ai/agent-core-v2/llm-adapter/model/retiredModelIds';
 
 function object(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;

@@ -1,16 +1,24 @@
+import { isolateTestWorkspace } from './helpers/workspace';
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { WebSocket, type RawData } from 'ws';
+import {
+  IAgentLifecycleService,
+  IConfigService,
+  closeSessionById,
+  MAIN_AGENT_ID,
+  getLiveSessionById,
+  resumeSessionById,
+} from '@moonshot-ai/agent-core-v2';
 
 import { type RunningServer, startServer } from '../src/start';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
 import { authHeaders, bearerToken } from './helpers/auth';
-import { isolateTestWorkspace } from './helpers/workspace';
 
 
 function sseLines(...events: readonly string[]): string {
@@ -157,10 +165,10 @@ const getTranscript = (server: RunningServer, base: string, sid: string): Promis
 const getSessionFacts = (server: RunningServer, base: string, sid: string): Promise<{ busy: boolean; pendingInteraction: string }> =>
   rest(server, base, `/api/v1/sessions/${encodeURIComponent(sid)}`);
 
-async function createSession(server: RunningServer, base: string, cwd: string): Promise<string> {
+async function createSession(server: RunningServer, base: string): Promise<string> {
   const data = await rest<{ id: string }>(server, base, '/api/v1/sessions', {
     method: 'POST',
-    body: { metadata: { cwd } },
+    body: { metadata: { cwd: '/tmp' } },
   });
   return data.id;
 }
@@ -237,23 +245,28 @@ describe('transcript contract e2e', () => {
   let llm: MockLlm | undefined;
   let base: string;
 
+  beforeAll(async () => {
+    home = await isolateTestWorkspace(await mkdtemp(join(tmpdir(), 'kimi-transcript-contract-')));
+    server = await startServer({ hostIdentity: TEST_HOST_IDENTITY, host: '127.0.0.1', port: 0, homeDir: home, logLevel: 'silent' });
+    base = `http://127.0.0.1:${server.port}`;
+  });
+
   afterEach(async () => {
     await llm?.close();
+    llm = undefined;
+  });
+
+  afterAll(async () => {
     await server?.close();
+    server = undefined;
     if (home !== undefined) await rm(home, { recursive: true, force: true });
     home = undefined;
-    server = undefined;
-    llm = undefined;
   });
 
   async function boot(routes: readonly LlmRoute[]): Promise<void> {
     llm = await startMockLlm(routes);
-    home = await isolateTestWorkspace(
-      await mkdtemp(join(tmpdir(), 'kimi-transcript-contract-')),
-    );
-    await writeFile(join(home, 'config.toml'), configToml(llm.port), 'utf-8');
-    server = await startServer({ hostIdentity: TEST_HOST_IDENTITY, host: '127.0.0.1', port: 0, homeDir: home, logLevel: 'silent' });
-    base = `http://127.0.0.1:${server.port}`;
+    await writeFile(join(home!, 'config.toml'), configToml(llm.port), 'utf-8');
+    await server!.core.accessor.get(IConfigService).reload();
   }
 
   const idle = (server: RunningServer, base: string, sid: string) =>
@@ -289,7 +302,7 @@ describe('transcript contract e2e', () => {
 
   it('S1: turn lifecycle produces activity, prompts and turn frames on both channels', async () => {
     await boot([{ match: () => true, respond: () => sseText('hello world'), delayMs: 3000 }]);
-    const sid = await createSession(server!, base, home!);
+    const sid = await createSession(server!, base);
     await submitPrompt(server!, base, sid, 'say hello');
     const channel = await subscribeTranscript(server!, sid);
 
@@ -335,7 +348,7 @@ describe('transcript contract e2e', () => {
       { match: (body) => body.includes('first prompt'), respond: () => sseText('first done'), delayMs: 2500 },
       { match: () => true, respond: () => sseText('second done') },
     ]);
-    const sid = await createSession(server!, base, home!);
+    const sid = await createSession(server!, base);
     await submitPrompt(server!, base, sid, 'first prompt');
     await until('first prompt running', async () =>
       (await getTranscript(server!, base, sid)).prompts.some((p) => p.status === 'running'),
@@ -347,7 +360,7 @@ describe('transcript contract e2e', () => {
       return tx.prompts.some((p) => p.status === 'queued') && tx.prompts.some((p) => p.status === 'running');
     });
     const mid = await getTranscript(server!, base, sid);
-    expect(mid.prompts.map((p) => p.status).sort()).toEqual(['queued', 'running']);
+    expect(mid.prompts.map((p) => p.status).toSorted()).toEqual(['queued', 'running']);
 
     await until('both settled', async () => {
       const tx = await getTranscript(server!, base, sid);
@@ -355,12 +368,63 @@ describe('transcript contract e2e', () => {
     }, 45000);
   });
 
+  it('undo rebuilds a steered turn consistently over REST and WebSocket', async () => {
+    await boot([
+      { match: (body) => body.includes('steered request'), respond: () => sseText('answer after steer') },
+      { match: (body) => body.includes('original request'), respond: () => sseText('answer before steer'), delayMs: 1500 },
+    ]);
+    const sid = await createSession(server!, base);
+    await submitPrompt(server!, base, sid, 'original request');
+    await until('original request reaches model', () => llm!.hits.length > 0);
+    const channel = await subscribeTranscript(server!, sid);
+    try {
+      const steer = await submitPrompt(server!, base, sid, 'steered request');
+      await rest(server!, base, `/api/v1/sessions/${sid}/prompts/${steer.prompt_id}:steer`, { method: 'POST', body: {} });
+      await idle(server!, base, sid);
+      const before = await getTranscript(server!, base, sid);
+      expect(JSON.stringify(before.items)).toContain('answer after steer');
+      expect(before.items.filter((item) => item.kind === 'turn')).toHaveLength(1);
+      expect(before.prompts.some((prompt) => prompt.promptId === steer.prompt_id)).toBe(true);
+      await rest(server!, base, `/api/v1/sessions/${sid}:undo`, { method: 'POST', body: { count: 1 } });
+      const after = await getTranscript(server!, base, sid);
+      expect(after.items.filter((item) => item.kind === 'turn')).toEqual([]);
+      expect(JSON.stringify(after.items)).not.toContain('original request');
+      expect(JSON.stringify(after.items)).not.toContain('answer before steer');
+      expect(JSON.stringify(after.items)).not.toContain('steered request');
+      expect(JSON.stringify(after.items)).not.toContain('answer after steer');
+      expect(after.prompts).toEqual([]);
+      await until('undo reset reaches subscriber', () => channel.ops.some((op) => op.op === 'reset'));
+      expect(channel.ops.find((op) => op.op === 'reset').snapshot.items).toEqual(after.items);
+      const reconnected = await subscribeTranscript(server!, sid);
+      try {
+        expect((await getTranscript(server!, base, sid)).items).toEqual(after.items);
+        expect(reconnected.reset().snapshot.prompts).toEqual([]);
+      } finally {
+        reconnected.close();
+      }
+      await submitPrompt(server!, base, sid, 'steered request');
+      await idle(server!, base, sid);
+      const resent = await getTranscript(server!, base, sid);
+      expect(resent.items.filter((item) => item.kind === 'turn').map((turn) => turn.prompt)).toEqual(['steered request']);
+      expect(resent.prompts.some((prompt) => prompt.promptId === steer.prompt_id)).toBe(false);
+      await closeSessionById(server!.core.accessor, sid);
+      const reopened = await getTranscript(server!, base, sid);
+      expect(reopened.items.filter((item) => item.kind === 'turn').map((turn) => turn.prompt)).toEqual(['steered request']);
+      await rest(server!, base, `/api/v1/sessions/${sid}:undo`, { method: 'POST', body: { count: 1 } });
+      const empty = await getTranscript(server!, base, sid);
+      expect(empty.items.filter((item) => item.kind === 'turn')).toEqual([]);
+      expect(empty.prompts).toEqual([]);
+    } finally {
+      channel.close();
+    }
+  }, 30000);
+
   it('S3: a pending approval appears as an interaction with tool linkage, then resolves', async () => {
     await boot([
       { match: (body) => !body.includes('echo contract-hi'), respond: () => sseToolCall('call_1', 'Bash', '{"command":"echo contract-hi"}') },
       { match: () => true, respond: () => sseText('tool done') },
     ]);
-    const sid = await createSession(server!, base, home!);
+    const sid = await createSession(server!, base);
     await submitPrompt(server!, base, sid, 'run the echo', 'manual');
 
     await until('approval pending', async () => {
@@ -401,7 +465,7 @@ describe('transcript contract e2e', () => {
       { match: (body) => body.includes('bg-answer-42'), respond: () => sseText('42'), delayMs: 2500 },
       { match: () => true, respond: () => sseText('noted') },
     ]);
-    const sid = await createSession(server!, base, home!);
+    const sid = await createSession(server!, base);
     await submitPrompt(server!, base, sid, 'spawn-bg one background agent');
 
     await until('background task running', async () => {
@@ -445,7 +509,7 @@ describe('transcript contract e2e', () => {
 
   it('S5: late attach backfills liveness and the prompt queue from the live loop', async () => {
     await boot([{ match: () => true, respond: () => sseText('slow answer'), delayMs: 4000 }]);
-    const sid = await createSession(server!, base, home!);
+    const sid = await createSession(server!, base);
     await submitPrompt(server!, base, sid, 'take your time');
 
     const tx = await getTranscript(server!, base, sid);
@@ -465,7 +529,7 @@ describe('transcript contract e2e', () => {
       { match: (body) => !body.includes('echo s6'), respond: () => sseToolCall('call_s6', 'Bash', '{"command":"echo s6"}') },
       { match: () => true, respond: () => sseText('s6 done') },
     ]);
-    const sid = await createSession(server!, base, home!);
+    const sid = await createSession(server!, base);
     await submitPrompt(server!, base, sid, 'run echo for s6');
     await idle(server!, base, sid);
 
@@ -476,18 +540,97 @@ describe('transcript contract e2e', () => {
     expect(reset.meta).toEqual(snapshot.meta);
     const byId = (xs: any[], key: string): Record<string, unknown> =>
       Object.fromEntries(xs.map((x) => [x[key], x]));
-    expect(Object.keys(byId(reset.tasks ?? [], 'taskId')).sort()).toEqual(
-      Object.keys(byId(snapshot.tasks, 'taskId')).sort(),
+    expect(Object.keys(byId(reset.tasks ?? [], 'taskId')).toSorted()).toEqual(
+      Object.keys(byId(snapshot.tasks, 'taskId')).toSorted(),
     );
-    expect(Object.keys(byId(reset.interactions ?? [], 'interactionId')).sort()).toEqual(
-      Object.keys(byId(snapshot.interactions, 'interactionId')).sort(),
+    expect(Object.keys(byId(reset.interactions ?? [], 'interactionId')).toSorted()).toEqual(
+      Object.keys(byId(snapshot.interactions, 'interactionId')).toSorted(),
     );
-    expect(Object.keys(byId(reset.prompts ?? [], 'promptId')).sort()).toEqual(
-      Object.keys(byId(snapshot.prompts, 'promptId')).sort(),
+    expect(Object.keys(byId(reset.prompts ?? [], 'promptId')).toSorted()).toEqual(
+      Object.keys(byId(snapshot.prompts, 'promptId')).toSorted(),
     );
-    expect(Object.keys(byId(reset.todos ?? [], 'todoId')).sort()).toEqual(
-      Object.keys(byId(snapshot.todos, 'todoId')).sort(),
+    expect(Object.keys(byId(reset.todos ?? [], 'todoId')).toSorted()).toEqual(
+      Object.keys(byId(snapshot.todos, 'todoId')).toSorted(),
     );
     channel.close();
   });
+
+  it('S7: a foreground subagent resumes with its prior context after a server restart', async () => {
+    let childAgentId: string | undefined;
+    let resumedChildRequest: string | undefined;
+    await boot([
+      {
+        match: (body) => body.includes('spawn-child') && !body.includes('"role":"tool"'),
+        respond: () =>
+          sseToolCall(
+            'call_spawn',
+            'Agent',
+            JSON.stringify({ prompt: 'remember the token quartz-7731 and reply with ok', description: 'child', run_in_background: false }),
+          ),
+      },
+      {
+        match: (body) =>
+          body.includes('remember the token') && !body.includes('spawn-child') && !body.includes('recall the token'),
+        respond: () => sseText('ok, remembered'),
+      },
+      {
+        match: (body) => body.includes('resume-child') && !body.includes('recall the token'),
+        respond: () =>
+          sseToolCall(
+            'call_resume',
+            'Agent',
+            JSON.stringify({ prompt: 'recall the token', description: 'child again', resume: childAgentId, run_in_background: false }),
+          ),
+      },
+      {
+        match: (body) => {
+          const hit = body.includes('recall the token') && !body.includes('resume-child');
+          if (hit) resumedChildRequest = body;
+          return hit;
+        },
+        respond: () => sseText('the token is quartz-7731'),
+      },
+      { match: () => true, respond: () => sseText('noted') },
+    ]);
+    const sid = await createSession(server!, base);
+    await submitPrompt(server!, base, sid, 'spawn-child now');
+    await idle(server!, base, sid);
+
+    const liveBefore = getLiveSessionById(server!.core.accessor, sid);
+    expect(liveBefore).toBeDefined();
+    const childIds = liveBefore!.accessor
+      .get(IAgentLifecycleService)
+      .list()
+      .map((agent) => agent.agentId)
+      .filter((id) => id !== MAIN_AGENT_ID);
+    expect(childIds).toHaveLength(1);
+    childAgentId = childIds[0];
+
+    await server!.close();
+    server = await startServer({ hostIdentity: TEST_HOST_IDENTITY, host: '127.0.0.1', port: 0, homeDir: home!, logLevel: 'silent' });
+    base = `http://127.0.0.1:${server.port}`;
+
+    const resumed = await resumeSessionById(server.core.accessor, sid);
+    expect(resumed).toBeDefined();
+    const agents = resumed!.accessor.get(IAgentLifecycleService);
+    expect(agents.handleOf(childAgentId!)).toBeUndefined();
+
+    await submitPrompt(server, base, sid, 'resume-child now');
+    await idle(server, base, sid);
+
+    expect(resumedChildRequest).toBeDefined();
+    expect(resumedChildRequest).toContain('quartz-7731');
+    expect(resumedChildRequest).toContain('ok, remembered');
+    expect(agents.handleOf(childAgentId!)).toBeDefined();
+
+    const end = await getTranscript(server, base, sid);
+    const agentFrames = end.items
+      .filter((i) => i.kind === 'turn')
+      .flatMap((t: any) => t.steps)
+      .flatMap((s: any) => s.frames)
+      .filter((f: any) => f.kind === 'tool' && f.name === 'Agent');
+    expect(agentFrames).toHaveLength(2);
+    expect(String(agentFrames[1].output)).toContain(`agent_id: ${childAgentId}`);
+    expect(String(agentFrames[1].output)).toContain('the token is quartz-7731');
+  }, 60000);
 }, 90000);

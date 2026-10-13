@@ -54,9 +54,9 @@ export const TOOL_CAPABILITIES: readonly ToolCapability[] = [
   {
     id: "mcp",
     label: "MCP",
-    status: "not-connected",
-    route: "No server registry connected",
-    boundary: "future server-scoped adapter",
+    status: "available",
+    route: "Core MCP 配置",
+    boundary: "按服务器设置 deferred=true，按需披露工具",
   },
   {
     id: "pty",

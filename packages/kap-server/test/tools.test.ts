@@ -1,3 +1,4 @@
+import { isolateTestWorkspace } from './helpers/workspace';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,12 +15,11 @@ import {
   listMcpServersResponseSchema,
   listToolsResponseSchema,
 } from '../src/protocol/rest-tool';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { type RunningServer, startServer } from '../src/start';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
 import { authHeaders } from './helpers/auth';
-import { isolateTestWorkspace } from './helpers/workspace';
 
 interface Envelope<T> {
   code: number;
@@ -42,11 +42,9 @@ describe('server-v2 /api/v1 tools + mcp', () => {
   let home: string | undefined;
   let base: string;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     home = await isolateTestWorkspace(await mkdtemp(join(tmpdir(), 'kimi-server-v2-tools-')));
     const modelCatalog: IModelCatalog = {
-      listBuiltinProviders: async () => [],
-      configureBuiltinProvider: async () => { throw new Error('unused'); },
       _serviceBrand: undefined,
       get: () => {
         throw new Error('modelCatalog.get not exercised in this test');
@@ -54,14 +52,16 @@ describe('server-v2 /api/v1 tools + mcp', () => {
       getRequester: () => {
         throw new Error('modelCatalog.getRequester not exercised in this test');
       },
-      inspect: () => {
-        throw new Error('modelCatalog.inspect not exercised in this test');
+      generate: () => {
+        throw new Error('modelCatalog.generate not exercised in this test');
       },
       ping: () => {
         throw new Error('modelCatalog.ping not exercised in this test');
       },
       findByName: () => [],
-      listModels: async () => [],
+      listBuiltinProviders: async () => [],
+    configureBuiltinProvider: async () => { throw new Error('unused'); },
+    listModels: async () => [],
       listProviders: async () => [],
       getProvider: async () => {
         throw new Error('modelCatalog.getProvider not exercised in this test');
@@ -81,7 +81,7 @@ describe('server-v2 /api/v1 tools + mcp', () => {
     base = `http://127.0.0.1:${server.port}`;
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     if (server !== undefined) {
       await server.close();
       server = undefined;

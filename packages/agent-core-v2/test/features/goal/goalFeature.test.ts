@@ -5,8 +5,7 @@ import {
   _clearScopedRegistryForTests,
   registerScopedService,
 } from '#/_base/di/scope';
-import { createScopedTestHost, stubPair } from '#/_base/di/test';
-import { IAgentScopeContext, makeAgentScopeContext } from '#/agent/scopeContext/scopeContext';
+import { createScopedTestHost, TestInstantiationService } from '#/_base/di/test';
 import { IFeatureManager } from '#/app/feature/featureManager';
 import { FeatureManagerService } from '#/app/feature/featureManagerService';
 import { LifecycleScope } from '#/app/scopes';
@@ -17,9 +16,9 @@ import {
   registerFeature,
 } from '#/features/featureRegistry';
 import { GoalFeature } from '#/features/goal/goalFeature';
-import { IAgentGoalViewService } from '#/features/goal/goalView';
+import { IAgentGoalService } from '#/features/goal/goalService';
+import { AgentGoalViewService } from '#/features/goal/goalViewService';
 import type { GoalSnapshot, GoalToolResult } from '#/features/goal/types';
-import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
 
 describe('GoalFeature', () => {
   beforeEach(() => {
@@ -65,8 +64,7 @@ describe('GoalFeature', () => {
   });
 
   it('returns the current Goal snapshot through the Agent goal view', () => {
-    const host = createScopedTestHost();
-    const agentScope = makeAgentScopeContext({ agentId: 'main', agentScope: 'agents/main' });
+    const host = new TestInstantiationService();
     const result: GoalToolResult = {
       goal: {
         goalId: 'goal-1',
@@ -89,35 +87,19 @@ describe('GoalFeature', () => {
         },
       },
     };
-    const session = host.child(LifecycleScope.Session, 'session-1', [
-      stubPair(IAgentLifecycleService, {
-        resolve: () => ({ getGoal: () => result }),
-      } as unknown as IAgentLifecycleService),
-    ]);
-    const agent = host.childOf(session, LifecycleScope.Agent, 'main', [
-      stubPair(IAgentScopeContext, agentScope),
-    ]);
-
-    expect(agent.accessor.get(IAgentGoalViewService).getGoal()).toEqual(result);
+    host.stub(IAgentGoalService, { getGoal: () => result } as IAgentGoalService);
+    expect(host.createInstance(AgentGoalViewService).getGoal()).toEqual(result);
     host.dispose();
   });
 
   it('drives pause, resume, and cancel through the Agent goal view as the user actor', async () => {
-    const host = createScopedTestHost();
-    const agentScope = makeAgentScopeContext({ agentId: 'main', agentScope: 'agents/main' });
+    const host = new TestInstantiationService();
     const snapshot = { goalId: 'goal-1' } as unknown as GoalSnapshot;
     const pauseGoal = vi.fn().mockResolvedValue(snapshot);
     const resumeGoal = vi.fn().mockResolvedValue(snapshot);
     const cancelGoal = vi.fn().mockResolvedValue(snapshot);
-    const session = host.child(LifecycleScope.Session, 'session-1', [
-      stubPair(IAgentLifecycleService, {
-        resolve: () => ({ pauseGoal, resumeGoal, cancelGoal }),
-      } as unknown as IAgentLifecycleService),
-    ]);
-    const agent = host.childOf(session, LifecycleScope.Agent, 'main', [
-      stubPair(IAgentScopeContext, agentScope),
-    ]);
-    const view = agent.accessor.get(IAgentGoalViewService);
+    host.stub(IAgentGoalService, { pauseGoal, resumeGoal, cancelGoal } as unknown as IAgentGoalService);
+    const view = host.createInstance(AgentGoalViewService);
 
     await expect(view.pauseGoal({ reason: 'hold' })).resolves.toBe(snapshot);
     await expect(view.resumeGoal()).resolves.toBe(snapshot);

@@ -99,6 +99,7 @@ export interface AgentRunSnapshot {
 	task: string;
 	tools: string[];
 	outputPreview?: string;
+	progress?: string;
 	summary?: string;
 	error?: string;
 	usage: AgentUsageSnapshot;

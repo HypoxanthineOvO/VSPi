@@ -36,12 +36,12 @@ import type { Event2 } from '#/app/event/event2';
 import { ILogService } from '#/_base/log/log';
 import { IAgentIdentity } from '#/app/agentIdentity/agentIdentity';
 import { IBootstrapService } from '#/app/bootstrap/bootstrap';
-import { IModelService, type ModelRecord } from '#/kosong/model/model';
+import { IModelService, type ModelRecord } from '#/llm-adapter/model/model';
 import { MODELS_SECTION } from '#/app/kosongConfig/configSection';
-import { IProviderService, type ProviderConfig, type ProvidersChangedEvent } from '#/kosong/provider/provider';
+import { ITelemetryService } from '#/app/telemetry/telemetry';
+import { IProviderService, type ProviderConfig, type ProvidersChangedEvent } from '#/llm-adapter/provider/provider';
 import { IAtomicDocumentStore } from '#/persistence/interface/atomicDocumentStore';
 
-import '#/kosong/provider/providers/kimi/kimi.contrib';
 
 import { registerBootstrapServices } from '../bootstrap/stubs';
 import { registerTelemetryServices } from '../telemetry/stubs';
@@ -226,6 +226,7 @@ describe('OAuthService', () => {
           subscribe: () => ({ dispose: () => {} }),
         });
         reg.defineInstance(IOAuthToolkit, toolkit as unknown as IOAuthToolkit);
+        reg.definePartialInstance(ITelemetryService, { track2: vi.fn() });
         reg.define(IOAuthService, OAuthService);
       },
     });
@@ -324,6 +325,7 @@ describe('OAuthService', () => {
   });
 
   it('bridges browser and prompt login without exposing credentials in flow or config', async () => {
+    providers['anthropic'] = { type: 'anthropic', apiKeyEnv: 'EXAMPLE_API_KEY' };
     registerPi(async (callbacks) => {
       callbacks.notify({ type: 'auth_url', url: 'https://example.com/authorize', instructions: 'Authorize the application.' });
       expect(await callbacks.prompt({ type: 'manual_code', message: 'Paste the code.' })).toBe('example-code');
@@ -337,6 +339,7 @@ describe('OAuthService', () => {
     await vi.waitFor(() => expect(service.getFlow('anthropic')?.status).toBe('authenticated'));
     expect(providers['anthropic']).toMatchObject({ type: 'anthropic', oauth: { key: 'pi-ai/anthropic/anthropic' } });
     expect(providers['anthropic']?.apiKey).toBeUndefined();
+    expect(providers['anthropic']?.apiKeyEnv).toBeUndefined();
     expect(documents.get('pi-ai/anthropic/anthropic')).toEqual(piCredentials);
     expect(JSON.stringify(service.getFlow('anthropic'))).not.toContain('private-');
     expect(Object.keys(models).some((key) => key.startsWith('anthropic/'))).toBe(true);
@@ -411,6 +414,7 @@ describe('OAuthService', () => {
       removeHeaders: ['X-API-Key'], baseUrl: 'https://example.com/account-api',
     });
     expect(providers['anthropic']?.apiKey).toBeUndefined();
+    expect(providers['anthropic']?.apiKeyEnv).toBeUndefined();
   });
 
   it('withdraws only the cancelled native prompt while keeping the browser flow active', async () => {
@@ -1177,11 +1181,14 @@ describe('OAuthService', () => {
   });
 
   it('getManagedUsage resolves the managed runtime auth and delegates to the toolkit', async () => {
-    const usage = { kind: 'ok' as const, summary: null, limits: [], extraUsage: null };
-    toolkit.getManagedUsage.mockResolvedValue(usage);
+    const quota = {
+      kind: 'ok' as const,
+      quota: { usages: {}, extraUsage: null },
+    };
+    toolkit.getManagedUsage.mockResolvedValue(quota);
     const svc = createService();
 
-    await expect(svc.getManagedUsage(OAUTH_PROVIDER)).resolves.toBe(usage);
+    await expect(svc.getManagedUsage(OAUTH_PROVIDER)).resolves.toBe(quota);
     expect(toolkit.getManagedUsage).toHaveBeenCalledWith(OAUTH_PROVIDER, {
       oauthRef: EXAMPLE_COM_SCOPED_REF,
       baseUrl: 'https://api.example.com',
@@ -1909,6 +1916,7 @@ describe('AuthSummaryService', () => {
           debug: vi.fn(),
           error: vi.fn(),
         });
+        reg.definePartialInstance(ITelemetryService, { track2: vi.fn() });
         reg.define(IAuthSummaryService, AuthSummaryService);
       },
     });
@@ -1991,6 +1999,17 @@ describe('AuthSummaryService', () => {
     expect(getCachedAccessToken).toHaveBeenCalledWith(OAUTH_PROVIDER, {
       storage: 'file',
       key: 'oauth/kimi-code',
+    });
+  });
+
+  it('ensureReady emits auth_ensure_ready_failed with reason unexpected for non-auth-classified failures', async () => {
+    getCachedAccessToken.mockRejectedValue(new Error('token store unreadable'));
+    const track2 = ix.get(ITelemetryService).track2 as unknown as Mock;
+
+    await expect(createSummary().ensureReady()).rejects.toThrow('token store unreadable');
+    expect(track2).toHaveBeenCalledWith('auth_ensure_ready_failed', {
+      reason: 'unexpected',
+      has_model_override: false,
     });
   });
 

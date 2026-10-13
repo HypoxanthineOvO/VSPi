@@ -17,6 +17,7 @@ import {
   ICapabilityService,
   IPluginService,
   IWorkspaceService,
+  NOTIFY_USER_UI_CAPABILITY,
   PluginChanged,
   logSeed,
   resolveConfigPath,
@@ -28,6 +29,7 @@ import {
 } from '@moonshot-ai/agent-core-v2';
 import {
   createKimiDefaultHeaders,
+  KIMI_CODE_PROVIDER_NAME,
   kimiRegionProfile,
   type KimiHostIdentity,
 } from '@moonshot-ai/kimi-code-oauth';
@@ -59,8 +61,8 @@ import {
 import { extractWsBearerToken } from './transport/ws/bearerProtocol';
 import { SessionEventBroadcaster } from './transport/ws/v1/sessionEventBroadcaster';
 import type { ConfigWarningItem } from './transport/ws/v1/events';
-import { FsWatchBridge } from './transport/ws/v1/fsWatchBridge';
 import { registerWsV1, WS_PATH as WS_PATH_V1 } from './transport/ws/v1/registerWsV1';
+import { registerWsDebug, WS_DEBUG_PATH } from './transport/ws/debug/registerWsDebug';
 import { getServerVersion } from './version';
 import { classify } from './security/bindClassify';
 import {
@@ -81,10 +83,9 @@ import { TranscriptService } from './services/transcript/transcriptService';
 import { ModelCatalogRefreshScheduler } from './services/modelCatalog/modelCatalogRefreshScheduler';
 import { startConfigChangedPublisher } from './services/config/configChangedPublisher';
 import { createAuthFailureLimiter } from './middleware/rateLimit';
-import {
-  createAuthTokenService,
-  type IAuthTokenService,
-} from './services/auth/authTokenService';
+import { createRemoteControlManager } from '@moonshot-ai/remote-control';
+
+import { createAuthTokenService, type IAuthTokenService } from './services/auth/authTokenService';
 import { createCredentialValidator } from './services/auth/credentials';
 import { resolvePasswordHash } from './services/auth/password';
 import { createTokenStore } from './services/auth/tokenStore';
@@ -171,11 +172,10 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
     );
   };
   const onUncaughtException = (err: unknown): void => {
-    logger.fatal(
+    logger.error(
       { err: err instanceof Error ? err : new Error(String(err)) },
       'uncaughtException',
     );
-    process.exit(1);
   };
   const authFailureLimiter =
     exposureClass === 'loopback' ? undefined : createAuthFailureLimiter({ logger });
@@ -194,6 +194,8 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
   }
   const validateCredential = createCredentialValidator(authTokenService, opts.rpcToken);
   const logging = resolveLoggingConfig({ homeDir, env: process.env });
+  let boundPort = port;
+  const localOriginHost = host.includes(':') ? `[${host}]` : host;
   const { app: core } = bootstrap(
     {
       homeDir,
@@ -205,10 +207,31 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
         skillDirs: opts.skillDirs,
         displayName: opts.hostIdentity.displayName,
         replyStyleGuide: opts.hostIdentity.replyStyleGuide,
+        uiCapabilities: [NOTIFY_USER_UI_CAPABILITY],
       },
     },
     [...logSeed(logging), ...(opts.seeds ?? [])],
   );
+
+  const readManagedOAuth = (): { key?: string; oauthHost?: string } | undefined =>
+    core.accessor
+      .get(IConfigService)
+      .inspect<Record<string, { oauth?: { key: string; oauthHost?: string } }>>('providers')
+      .userValue?.[KIMI_CODE_PROVIDER_NAME]?.oauth;
+  const remoteControlManager = createRemoteControlManager({
+    homeDir,
+    localOrigin: () => `http://${localOriginHost}:${boundPort}`,
+    localServerToken: () => authTokenService.getToken(),
+    clientVersion: `kimi-code/${serverVersion}`,
+    configuredOAuthKey: () => readManagedOAuth()?.key,
+    configuredOAuthHost: () => readManagedOAuth()?.oauthHost,
+    stderr: {
+      write: (text) => {
+        logger.warn(String(text).trimEnd());
+        return true;
+      },
+    },
+  });
 
   let telemetry: ServerTelemetry = {};
   if (opts.telemetry === true) {
@@ -292,7 +315,11 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
   }
 
   const close = async (): Promise<void> => {
+    if (wssDebug !== undefined) {
+      for (const client of wssDebug.clients) client.terminate();
+    }
     configChangedPublisher.close();
+    await remoteControlManager.close();
     await app.close();
     configWarningSubscription.dispose();
     pluginChangeSubscription.dispose();
@@ -311,7 +338,6 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
       await drainSessionMetadataWrites();
       await core.accessor.get(ISessionIndexMirror).drain();
       await core.accessor.get(IMcpOAuthService).shutdown();
-      fsWatchBridge.dispose();
       const appendLogStore = core.accessor.get(IAppendLogStore);
       core.dispose();
       await appendLogStore.drainRetirements();
@@ -339,7 +365,6 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
     logger,
     transcriptService,
   });
-  const fsWatchBridge = new FsWatchBridge({ core, logger });
 
   const configService = core.accessor.get(IConfigService);
   const publishConfigWarnings = (diagnostics: readonly ConfigDiagnostic[]): void => {
@@ -405,6 +430,7 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
           { name: 'terminals', description: 'PTY terminal sessions' },
           { name: 'fs', description: 'Filesystem operations' },
           { name: 'files', description: 'File upload & download' },
+          { name: 'remote-control', description: 'Remote Control tunnel' },
         ],
       },
       transformObject: (documentObject) => {
@@ -435,8 +461,17 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
       opts.pluginMarketplaceUrl === undefined &&
       (process.env['KIMI_CODE_PLUGIN_MARKETPLACE_URL'] === undefined ||
         process.env['KIMI_CODE_PLUGIN_MARKETPLACE_FROM_DEV_SERVER'] === '1'),
+    remoteControl: {
+      service: remoteControlManager,
+      staticEnableError:
+        exposureClass !== 'loopback'
+          ? 'Remote Control requires a loopback host.'
+          : opts.disableAuth === true
+            ? 'Remote Control cannot be combined with --dangerous-bypass-auth.'
+            : undefined,
+    },
     onShutdown: () => {
-      void close().catch((err: unknown) => logger.error({ err }, 'server close failed'));
+      void close().catch((error: unknown) => logger.error({ err: error }, 'server close failed'));
     },
     connectionRegistry,
     broadcaster,
@@ -451,9 +486,9 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
     validateCredential,
     registry: connectionRegistry,
     broadcaster,
-    fsWatchBridge,
     logger,
   });
+  const wssDebug = debugEndpoints ? registerWsDebug() : undefined;
 
   const handleUpgrade = async (
     req: IncomingMessage,
@@ -462,7 +497,9 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
   ): Promise<void> => {
     const url = req.url ?? '';
     const isV1 = url === WS_PATH_V1 || url.startsWith(`${WS_PATH_V1}?`);
-    if (!isV1) {
+    const isDebug = url === WS_DEBUG_PATH || url.startsWith(`${WS_DEBUG_PATH}?`);
+    const wss = isV1 ? wssV1 : isDebug ? wssDebug : undefined;
+    if (wss === undefined) {
       socket.destroy();
       return;
     }
@@ -524,7 +561,7 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
     }
 
     (socket as Socket).setNoDelay(true);
-    wssV1.handleUpgrade(req, socket, head, (ws) => wssV1.emit('connection', ws, req));
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   };
   app.server.on('upgrade', (req, socket, head) => {
     void handleUpgrade(req, socket, head).catch((error: unknown) =>
@@ -535,6 +572,7 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
   app.addHook('onClose', async () => {
     connectionRegistry.closeAll('server shutting down');
     wssV1.close();
+    wssDebug?.close();
     await broadcaster.close();
   });
 
@@ -569,7 +607,7 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
   }
 
   const address = app.server.address();
-  const boundPort = typeof address === 'object' && address !== null ? address.port : port;
+  boundPort = typeof address === 'object' && address !== null ? address.port : port;
   await registration.update({ port: boundPort });
 
   void modelCatalogRefreshScheduler.start().catch((error) => {

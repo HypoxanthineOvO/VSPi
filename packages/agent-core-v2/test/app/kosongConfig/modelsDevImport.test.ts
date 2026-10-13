@@ -1,15 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createScopedTestHost } from '#/_base/di/test';
 import { Error2, isError2 } from '#/_base/errors/errors';
-import { ILogService } from '#/_base/log/log';
 import { DEFAULT_IDENTITY_SLUG, IAgentIdentity } from '#/app/agentIdentity/agentIdentity';
 import { IBootstrapService } from '#/app/bootstrap/bootstrap';
 import { IConfigService } from '#/app/config/config';
-import {
-  modelsDevModelToCapability,
-  modelsDevProviderModels,
-} from '#/app/kosongConfig/modelsDev';
 import {
   resetModelsDevUpstreamForTest,
   setModelsDevUpstreamForTest,
@@ -17,28 +12,13 @@ import {
 import { MODELS_SECTION, PROVIDERS_SECTION } from '#/app/kosongConfig/configSection';
 import { ModelsDevImportErrors } from '#/app/kosongConfig/errors';
 import { IKosongConfigService } from '#/app/kosongConfig/kosongConfig';
-import '#/app/kosongConfig/kosongConfigService';
 import { IModelsDevImportService } from '#/app/kosongConfig/modelsDevImport';
 import '#/app/kosongConfig/modelsDevImportService';
-import { IModelCatalog, type ProviderCatalogItem } from '#/kosong/model/catalog';
-import '#/kosong/model/catalogService';
-import { IHostRequestHeaders } from '#/kosong/model/hostRequestHeaders';
-import { IModelService, type ModelsSection } from '#/kosong/model/model';
-import '#/kosong/model/modelService';
-import { IModelOAuthTokens } from '#/kosong/model/modelOAuth';
-import { IProviderService, type ProvidersSection } from '#/kosong/provider/provider';
-import '#/kosong/provider/providerService';
-import '#/kosong/provider/bases/anthropic/index';
-import '#/kosong/provider/bases/google-genai/index';
-import '#/kosong/provider/bases/openai/index';
-import '#/kosong/provider/protocolAdapterRegistry';
-import '#/kosong/provider/providers/kimi/kimi.contrib';
-import '#/kosong/provider/providers/standard.contrib';
+import { IModelCatalog, type ProviderCatalogItem } from '#/llm-adapter/model/catalog';
+import type { ModelsSection } from '#/llm-adapter/model/model';
+import type { ProvidersSection } from '#/llm-adapter/provider/provider';
 
-import {
-  StubConfigService,
-  stubModelOAuthTokens,
-} from '../../kosong/stubs';
+import { StubConfigService } from '../../stubs';
 import { stubBootstrap } from '../bootstrap/stubs';
 import { stubAgentIdentity } from '../agentIdentity/stubs';
 
@@ -58,12 +38,6 @@ const CATALOG = {
         id: 'gpt-4.1',
         name: 'GPT-4.1',
         limit: { context: 1047576, output: 32768 },
-        cost: {
-          input: 2,
-          output: 8,
-          cache_read: 0.2,
-          tiers: [{ input: 4, output: 12, tier: { type: 'context', size: 272_000 } }],
-        },
         tool_call: true,
         modalities: { input: ['text', 'image'], output: ['text'] },
       },
@@ -143,20 +117,6 @@ function stubKosongConfig(): IKosongConfigService {
   return { _serviceBrand: undefined, ready: Promise.resolve() } as IKosongConfigService;
 }
 
-function stubLogService(): ILogService {
-  return {
-    _serviceBrand: undefined,
-    level: 'off',
-    setLevel: () => {},
-    flush: async () => {},
-    error: () => {},
-    warn: () => {},
-    info: () => {},
-    debug: () => {},
-    child: () => stubLogService(),
-  };
-}
-
 function stubModelCatalog(): IModelCatalog {
   return {
     _serviceBrand: undefined,
@@ -189,104 +149,17 @@ function createHost(
   return { config, imports: host.app.accessor.get(IModelsDevImportService) };
 }
 
-function createIntegratedHost(): {
-  host: ReturnType<typeof createScopedTestHost>;
-  imports: IModelsDevImportService;
-  catalog: IModelCatalog;
-} {
-  const config = new StubConfigService({ providers: {}, models: {} });
-  const host = createScopedTestHost([
-    [IConfigService, config],
-    [IBootstrapService, stubBootstrap('/home', {}, { requestHeaders: HOST_HEADERS })],
-    [IAgentIdentity, stubAgentIdentity({ hostRequestHeaders: HOST_HEADERS })],
-    [ILogService, stubLogService()],
-    [IModelOAuthTokens, stubModelOAuthTokens()],
-    [IHostRequestHeaders, { _serviceBrand: undefined, headers: HOST_HEADERS, thirdPartyHeaders: HOST_HEADERS }],
-  ]);
-  host.app.accessor.get(IProviderService);
-  host.app.accessor.get(IModelService);
-  host.app.accessor.get(IKosongConfigService);
-  const catalog = host.app.accessor.get(IModelCatalog);
-  return { host, imports: host.app.accessor.get(IModelsDevImportService), catalog };
-}
-
 async function expectError2(promise: Promise<unknown>, code: string): Promise<Error2> {
   const err = await promise.then(
     () => {
       throw new Error(`expected the call to throw ${code}`);
     },
-    (cause: unknown) => cause,
+    (error: unknown) => error,
   );
   expect(isError2(err)).toBe(true);
   expect((err as Error2).code).toBe(code);
   return err as Error2;
 }
-
-describe('models.dev thinking capability', () => {
-  it('parses toggle, effort, budget, and off encodings together', () => {
-    const model = modelsDevModelToCapability({
-      id: 'reasoner',
-      reasoning: true,
-      reasoning_options: [
-        { type: 'toggle' },
-        { type: 'effort', values: [null, 'off', 'low', 'high'] },
-        { type: 'budget_tokens', min: 1024, max: 32768 },
-      ],
-      limit: { context: 1000 },
-    });
-
-    expect(model?.thinking).toEqual({
-      availability: 'dynamic',
-      canDisable: true,
-      controls: ['toggle', 'effort', 'budget'],
-      efforts: ['low', 'high'],
-      providerEfforts: undefined,
-      defaultEffort: undefined,
-    });
-    expect(model?.offEffort).toBe('none');
-  });
-
-  it('preserves explicit always-thinking model facts on wires that can encode off', () => {
-    for (const type of ['anthropic', 'kimi'] as const) {
-      const [model] = modelsDevProviderModels({
-        id: type,
-        type,
-        models: {
-          reasoner: {
-            id: 'reasoner',
-            reasoning: true,
-            reasoning_options: [{ type: 'effort', values: ['low', 'high'] }],
-            limit: { context: 1000 },
-          },
-        },
-      });
-      expect(model?.thinking).toMatchObject({
-        availability: 'always',
-        canDisable: false,
-        controls: ['effort'],
-      });
-      expect(model?.alwaysThinking).toBe(true);
-    }
-  });
-
-  it('uses conservative fallback for malformed and unknown options', () => {
-    const model = modelsDevModelToCapability({
-      id: 'future-reasoner',
-      reasoning: true,
-      reasoning_options: [
-        { type: 'effort', values: ['low', 42] },
-        { type: 'future_control', values: ['opaque'] },
-      ],
-      limit: { context: 1000 },
-    });
-
-    expect(model?.thinking.availability).toBe('dynamic');
-    expect(model?.thinking.canDisable).toBe(false);
-    expect(model?.thinking.controls).toEqual(['effort']);
-    expect(model?.thinking.efforts).toEqual(['low']);
-    expect(model?.alwaysThinking).toBeUndefined();
-  });
-});
 
 describe('IModelsDevImportService', () => {
   afterEach(() => {
@@ -302,6 +175,7 @@ describe('IModelsDevImportService', () => {
     const openai = byId.get('openai');
     expect(openai).toMatchObject({
       wire_type: 'openai',
+      base_url: 'https://api.openai.com/v1',
       guessed: false,
       needs_base_url: false,
       rejected: false,
@@ -310,10 +184,11 @@ describe('IModelsDevImportService', () => {
     expect(openai?.models).toEqual([
       expect.objectContaining({ id: 'gpt-4.1', max_context_size: 1047576 }),
     ]);
-    expect(byId.get('gateway')).toMatchObject({ needs_base_url: true, wire_type: 'openai' });
+    expect(byId.get('gateway')).toMatchObject({ needs_base_url: true, wire_type: 'openai', base_url: null });
     expect(byId.get('bedrock')).toMatchObject({
       rejected: true,
       wire_type: null,
+      base_url: null,
       reject_reason: 'proprietary-sdk',
     });
   });
@@ -329,42 +204,6 @@ describe('IModelsDevImportService', () => {
     const { imports } = createHost();
     const err = await expectError2(imports.listModelsDevProviders(), codes.CATALOG_UNAVAILABLE);
     expect(err.message).toContain('models.dev catalog unavailable');
-  });
-
-  it('surfaces imported thinking capability through IModelCatalog', async () => {
-    setModelsDevUpstreamForTest({
-      fetchImpl: fetchJson({
-        openai: {
-          id: 'openai',
-          npm: '@ai-sdk/openai',
-          models: {
-            reasoner: {
-              id: 'reasoner',
-              reasoning: true,
-              reasoning_options: [{ type: 'effort', values: ['low', 'high'] }],
-              limit: { context: 1000 },
-            },
-          },
-        },
-      }),
-    });
-    const { host, imports, catalog } = createIntegratedHost();
-    try {
-      await imports.importModelsDevProvider({ catalogId: 'openai', apiKey: 'test-key' });
-      const model = catalog.get('openai/reasoner');
-      expect(model.thinking).toEqual({
-        availability: 'always',
-        canDisable: false,
-        controls: ['effort'],
-        efforts: ['low', 'high'],
-        providerEfforts: undefined,
-        defaultEffort: undefined,
-      });
-      expect(model.supportEfforts).toEqual(['low', 'high']);
-      expect(model.alwaysThinking).toBe(true);
-    } finally {
-      host.dispose();
-    }
   });
 
   it('imports a catalog entry as provider + aliases without touching the default pointers', async () => {
@@ -394,16 +233,6 @@ describe('IModelsDevImportService', () => {
       provider: 'openai',
       model: 'gpt-4.1',
       maxContextSize: 1047576,
-      pricing: {
-        inputUsdPerMillion: 2,
-        outputUsdPerMillion: 8,
-        cacheReadUsdPerMillion: 0.2,
-        contextTiers: [{
-          contextTokensAbove: 272_000,
-          inputUsdPerMillion: 4,
-          outputUsdPerMillion: 12,
-        }],
-      },
     });
     expect(config.get('defaultProvider')).toBe('kimi');
     expect(config.get('defaultModel')).toBe('k2');
@@ -488,6 +317,22 @@ describe('IModelsDevImportService', () => {
     await imports.importModelsDevProvider({ catalogId: 'openai', apiKey: 'sk-new' });
     providers = config.inspect<ProvidersSection>(PROVIDERS_SECTION).userValue ?? {};
     expect(providers['openai']?.apiKey).toBe('sk-new');
+  });
+
+  it('keeps a hand-edited api_key_env on a re-import without a key, drops it when a new key is given', async () => {
+    setModelsDevUpstreamForTest({ fetchImpl: fetchJson(CATALOG) });
+    const { config, imports } = createHost({
+      providers: { openai: { type: 'openai', apiKeyEnv: 'OPENAI_OWN_KEY' } },
+    });
+
+    await imports.importModelsDevProvider({ catalogId: 'openai' });
+    let providers = config.inspect<ProvidersSection>(PROVIDERS_SECTION).userValue ?? {};
+    expect(providers['openai']?.apiKeyEnv).toBe('OPENAI_OWN_KEY');
+
+    await imports.importModelsDevProvider({ catalogId: 'openai', apiKey: 'sk-new' });
+    providers = config.inspect<ProvidersSection>(PROVIDERS_SECTION).userValue ?? {};
+    expect(providers['openai']?.apiKey).toBe('sk-new');
+    expect(providers['openai']?.apiKeyEnv).toBeUndefined();
   });
 
   it('rejects importing over an OAuth-managed provider', async () => {
@@ -579,8 +424,17 @@ describe('IModelsDevImportService', () => {
         'acme-old/gpt-y': { provider: 'acme-old', model: 'gpt-y', maxContextSize: 128000 },
       },
     });
+    const replaceSections = vi.spyOn(config, 'replaceSections');
+    const replace = vi.spyOn(config, 'replace');
 
     const result = await imports.importCustomRegistry({ url: REGISTRY_URL, apiKey: 'tok-2' });
+    expect(replaceSections).toHaveBeenCalledTimes(1);
+    expect(replaceSections).toHaveBeenCalledWith(
+      expect.any(Object),
+      undefined,
+      expect.objectContaining({ expectedValues: { defaultModel: undefined } }),
+    );
+    expect(replace).not.toHaveBeenCalled();
     expect(result.modelsImported).toBe(1);
     expect(result.providers.map((provider) => provider.id)).toEqual(['acme-gpt']);
 
@@ -597,6 +451,20 @@ describe('IModelsDevImportService', () => {
     expect(models['acme-gpt/gpt-x']).toMatchObject({ provider: 'acme-gpt', model: 'gpt-x' });
   });
 
+  it('returns declared credential env names as hints without persisting them', async () => {
+    const docWithEnv = {
+      'acme-gpt': { ...REGISTRY_DOC['acme-gpt'], env: ['ACME_API_KEY'] },
+    };
+    setModelsDevUpstreamForTest({ fetchImpl: fetchJson(docWithEnv) });
+    const { config, imports } = createHost();
+
+    const result = await imports.importCustomRegistry({ url: REGISTRY_URL });
+
+    expect(result.credentialEnv).toEqual({ 'acme-gpt': 'ACME_API_KEY' });
+    const providers = config.inspect<ProvidersSection>(PROVIDERS_SECTION).userValue ?? {};
+    expect(providers['acme-gpt']).not.toHaveProperty('apiKeyEnv');
+  });
+
   it('rejects a registry import that would rewrite an OAuth-managed provider', async () => {
     setModelsDevUpstreamForTest({ fetchImpl: fetchJson(REGISTRY_DOC) });
     const { imports } = createHost({
@@ -606,6 +474,50 @@ describe('IModelsDevImportService', () => {
       imports.importCustomRegistry({ url: REGISTRY_URL }),
       codes.PROVIDER_OAUTH_MANAGED,
     );
+  });
+
+  it('maps reserved provider ids to provider.registry_import_invalid without changing config', async () => {
+    setModelsDevUpstreamForTest({
+      fetchImpl: fetchJson({
+        shadow: {
+          id: 'moonshot-cn',
+          name: 'Shadow Moonshot',
+          api: 'https://shadow.example/v1',
+          type: 'openai',
+          models: { m1: { id: 'm1' } },
+        },
+      }),
+    });
+    const initial = { providers: { acme: { type: 'openai', apiKey: 'sk-acme' } }, models: {} };
+    const { config, imports } = createHost(initial);
+
+    await expectError2(
+      imports.importCustomRegistry({ url: REGISTRY_URL }),
+      codes.REGISTRY_IMPORT_INVALID,
+    );
+    expect(config.getAll()).toEqual(initial);
+  });
+
+  it('maps registry endpoint changes to provider.registry_import_invalid without changing config', async () => {
+    setModelsDevUpstreamForTest({ fetchImpl: fetchJson(REGISTRY_DOC) });
+    const initial = {
+      providers: {
+        'acme-gpt': {
+          type: 'openai',
+          baseUrl: 'https://old.example/v1',
+          apiKeyEnv: 'ACME_API_KEY',
+          source: { kind: 'apiJson', url: REGISTRY_URL, apiKey: '' },
+        },
+      },
+      models: {},
+    };
+    const { config, imports } = createHost(initial);
+
+    await expectError2(
+      imports.importCustomRegistry({ url: REGISTRY_URL }),
+      codes.REGISTRY_IMPORT_INVALID,
+    );
+    expect(config.getAll()).toEqual(initial);
   });
 
   it('maps an unreachable registry to provider.registry_import_invalid', async () => {

@@ -17,7 +17,7 @@ import { createServer as createHttpServer } from 'node:http';
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseSkillText } from "@moonshot-ai/agent-core-v2/features/skill/catalog/parser";
 import { InMemorySkillCatalog } from "@moonshot-ai/agent-core-v2/features/skill/catalog/registry";
-import { IAgentLifecycleService, ISessionManager, AgentGoal } from '@moonshot-ai/agent-core-v2';
+import { IAgentLifecycleService, ISessionManager, IAgentGoalService } from '@moonshot-ai/agent-core-v2';
 import { startServer } from '@moonshot-ai/kap-server';
 
 import {
@@ -483,10 +483,8 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 			const flags = await connection.klient.global.flags.list();
 			expect(flags).toEqual(
 				expect.arrayContaining([
-					expect.objectContaining({ id: "secondary-model", enabled: true }),
 					expect.objectContaining({ id: "tower", enabled: true }),
-					expect.objectContaining({ id: "remote-control", enabled: true }),
-					expect.objectContaining({ id: "auto_session_title", enabled: true }),
+					expect.objectContaining({ id: "notify_user", enabled: true }),
 				]),
 			);
 		} finally {
@@ -501,14 +499,12 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 		try {
 			await connection.klient.global.config.set({
 				domain: "experimental",
-				patch: { tower: false, auto_session_title: false },
+				patch: { tower: false, notify_user: false },
 			});
 			const flags = await connection.klient.global.flags.list();
+			expect(flags).toContainEqual(expect.objectContaining({ id: "notify_user", enabled: false }));
 			expect(flags).toContainEqual(
 				expect.objectContaining({ id: "tower", enabled: false }),
-			);
-			expect(flags).toContainEqual(
-				expect.objectContaining({ id: "auto_session_title", enabled: false }),
 			);
 		} finally {
 			await connection.close();
@@ -743,7 +739,8 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 				const server = await startServer(options);
 				const session = await server.core.accessor.get(ISessionManager).create({ workDir: homeDir! });
 				const agents = session.accessor.get(IAgentLifecycleService);
-				await agents.resolve(await agents.create({ agentId: 'main' }), AgentGoal).createGoal({ objective: 'Finish pending work' });
+				await agents.create({ agentId: 'main' });
+				await agents.handleOf('main')!.accessor.get(IAgentGoalService).createGoal({ objective: 'Finish pending work' });
 				return server;
 			},
 		});
@@ -781,7 +778,7 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 				await connection.klient.session(sessionId).agent('main').getGoal();
 				await connection.klient.session(sessionId).agent('main').setModel('example/code');
 				const agents = core!.accessor.get(ISessionManager).get(sessionId)!.accessor.get(IAgentLifecycleService);
-				await agents.resolve(agents.get('main')!, AgentGoal).createGoal({ objective: 'Complete after runtime restart' });
+				await agents.handleOf('main')!.accessor.get(IAgentGoalService).createGoal({ objective: 'Complete after runtime restart' });
 				await vi.waitFor(async () => { expect(JSON.parse(await readFile(recoveryPath, 'utf8'))).toContainEqual({ sessionId, goalId: expect.any(String) }); });
 			} finally { await connection.close(); }
 			await stopRuntime(homeDir);
@@ -811,7 +808,7 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 			const agent = connection.klient.session(sessionId).agent('main');
 			await agent.getGoal();
 			const agents = core!.accessor.get(ISessionManager).get(sessionId)!.accessor.get(IAgentLifecycleService);
-			await agents.resolve(agents.get('main')!, AgentGoal).createGoal({ objective: 'Do not resume this goal' });
+			await agents.handleOf('main')!.accessor.get(IAgentGoalService).createGoal({ objective: 'Do not resume this goal' });
 			if (action === 'pause') await agent.pauseGoal({ reason: 'Explicit user pause' });
 			else await agent.cancelGoal();
 		} finally { await connection.close(); }

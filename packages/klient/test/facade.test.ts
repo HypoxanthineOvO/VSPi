@@ -66,6 +66,18 @@ const SUMMARY = {
 };
 
 describe('facade routing', () => {
+  it('starts a side question in the requested session and returns its agent id', async () => {
+    const channel = new FakeChannel();
+    channel.result = 'side-agent';
+    const klient = createKlientFromChannel(channel);
+    try {
+      await expect(klient.session('session-side').startSideQuestion()).resolves.toBe('side-agent');
+      expect(channel.calls).toEqual([{ scope: { sessionId: 'session-side' }, service: 'sessionBtwService', method: 'start', args: [] }]);
+    } finally {
+      await klient.close();
+    }
+  });
+
   it('routes provider availability queries through provider discovery', async () => {
     const channel = new FakeChannel();
     const klient = createKlientFromChannel(channel);
@@ -415,6 +427,44 @@ describe('agent skill routing', () => {
       ],
     });
   });
+
+  it.each([{ steerIfActive: true }, { steerIfActive: false }, { steerIfActive: undefined }])(
+    'promptWithSkills keeps steerIfActive $steerIfActive and the skill args on the wire',
+    async ({ steerIfActive }) => {
+      const channel = new FakeChannel();
+      const klient = createKlientFromChannel(channel);
+      const agent = klient.session('s1').agent('main');
+
+      channel.result = {
+        prompt_id: 'p1',
+        created_at: '2026-01-01T00:00:00.000Z',
+        state: 'queued',
+      };
+      await expect(
+        agent.promptWithSkills({
+          input: [{ type: 'text', text: 'Review this change.' }],
+          skills: [{ name: 'review', args: 'src/app.ts' }],
+          steerIfActive,
+        }),
+      ).resolves.toEqual({
+        prompt_id: 'p1',
+        created_at: '2026-01-01T00:00:00.000Z',
+        state: 'queued',
+      });
+      expect(channel.calls[0]).toEqual({
+        scope: { sessionId: 's1', agentId: 'main' },
+        service: 'agentSkillService',
+        method: 'promptWithSkills',
+        args: [
+          {
+            input: [{ type: 'text', text: 'Review this change.' }],
+            skills: [{ name: 'review', args: 'src/app.ts' }],
+            steerIfActive,
+          },
+        ],
+      });
+    },
+  );
 });
 
 describe('session skills routing', () => {

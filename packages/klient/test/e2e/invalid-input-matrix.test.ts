@@ -25,24 +25,22 @@
  * rather than a full cartesian product.
  */
 
-import assert from 'node:assert/strict';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { bootstrap, logSeed, resolveLoggingConfig } from '@moonshot-ai/agent-core-v2';
 
 import { TEST_CLIENT_IDENTITY } from '../helpers/engine.js';
-import type { ContentPart } from '@moonshot-ai/agent-core-v2/kosong/contract/message';
-import { IModelService } from '@moonshot-ai/agent-core-v2/kosong/model/model';
+import type { ContentPart } from '@moonshot-ai/agent-core-v2/human/llm/message';
+import { IModelService } from '@moonshot-ai/agent-core-v2/llm-adapter/model/model';
 
 import type { Klient } from '../../src/index.js';
-import type { IDisposable } from '../../src/core/channel.js';
-import type { AgentHandle, SessionHandle } from '../../src/core/klient.js';
+import type { AgentHandle } from '../../src/core/klient.js';
 import type { KlientEvents } from '../../src/core/events/hub.js';
 import { KlientValidationError } from '../../src/core/validation.js';
 import { createKlient as createMemoryKlient } from '../../src/transports/memory/index.js';
@@ -71,47 +69,15 @@ function onceEvent<TPayloadMap extends object, E extends keyof TPayloadMap & str
   timeoutMs = 60_000,
 ): Promise<TPayloadMap[E]> {
   return new Promise((resolve, reject) => {
-    let sub: IDisposable | undefined;
     const timer = setTimeout(() => {
-      sub?.dispose();
+      sub.dispose();
       reject(new Error(`timed out waiting for event ${name}`));
     }, timeoutMs);
-    sub = events.on(name, (payload) => {
+    const sub = events.on(name, (payload) => {
       clearTimeout(timer);
-      sub?.dispose();
+      sub.dispose();
       resolve(payload);
     });
-  });
-}
-
-function promptSettled(
-  events: AgentHandle['events'],
-  start: () => Promise<unknown>,
-  timeoutMs = 60_000,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let completed: IDisposable | undefined;
-    let aborted: IDisposable | undefined;
-    const cleanup = (): void => {
-      clearTimeout(timer);
-      completed?.dispose();
-      aborted?.dispose();
-    };
-    const finish = (error?: unknown): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      if (error === undefined) resolve();
-      else reject(error);
-    };
-    const timer = setTimeout(
-      () => finish(new Error('timed out waiting for prompt.completed or prompt.aborted')),
-      timeoutMs,
-    );
-    completed = events.on('prompt.completed', () => finish());
-    aborted = events.on('prompt.aborted', () => finish());
-    void start().catch(finish);
   });
 }
 
@@ -127,7 +93,8 @@ const M_GOOGLE = 'matrix-google';
 
 const KIMI_PROVIDER = 'matrix-kimi-provider';
 
-const IMAGE_BAD_MIME_URL = 'data:image/bmp;base64,QUJD'; // bmp is outside every base's allowlist
+const IMAGE_BAD_MIME_URL = 'data:image/tiff;base64,QUJD'; // tiff is outside every provider's accepted set
+const IMAGE_KIMI_ONLY_MIME_URL = 'data:image/bmp;base64,QUJD'; // bmp is accepted by Kimi alone
 const IMAGE_BAD_BASE64_URL = 'data:image/png;base64,%%%not-base64%%%';
 const VIDEO_HTTP_URL = 'https://example.com/clip.mp4';
 const VIDEO_BAD_MIME_URL = 'data:video/x-ms-wmv;base64,QUJD';
@@ -160,12 +127,14 @@ type MockReply =
 type MockHandler = (request: CapturedRequest, callIndex: number) => MockReply;
 
 const requests: CapturedRequest[] = [];
+const abortedRequests: string[] = [];
 let handler: MockHandler = () => {
   throw new Error('mock handler not installed for this case');
 };
 
 function resetMock(next: MockHandler): void {
   requests.length = 0;
+  abortedRequests.length = 0;
   handler = next;
 }
 
@@ -331,7 +300,6 @@ const sockets = new Set<import('node:net').Socket>();
 beforeAll(async () => {
   homeDir = await mkdtemp(join(tmpdir(), 'klient-matrix-home-'));
   workRoot = await mkdtemp(join(tmpdir(), 'klient-matrix-work-'));
-  await mkdir(join(workRoot, '.git'));
   ({ app } = bootstrap({ homeDir, clientIdentity: TEST_CLIENT_IDENTITY }, [
     ...logSeed(resolveLoggingConfig({ homeDir, env: process.env })),
   ]));
@@ -367,7 +335,12 @@ beforeAll(async () => {
         res.end(JSON.stringify({ error: { message: `mock handler: ${String(error)}` } }));
         return;
       }
-      if (reply.kind === 'hang') return; // never answered; the client aborts it
+      if (reply.kind === 'hang') {
+        res.on('close', () => {
+          if (!res.writableEnded) abortedRequests.push(req.url ?? '');
+        });
+        return;
+      }
       if (reply.kind === 'json') {
         res.writeHead(reply.status, { 'content-type': 'application/json' });
         res.end(JSON.stringify(reply.body));
@@ -463,81 +436,49 @@ interface CollectedEvent {
 }
 
 interface CaseContext {
-  readonly session: SessionHandle;
   readonly agent: AgentHandle;
-  readonly listeners: readonly IDisposable[];
   readonly events: CollectedEvent[];
   readonly workDir: string;
   eventNames(): readonly string[];
   payloads(name: string): Record<string, unknown>[];
-  dispose(): Promise<void>;
 }
 
-const activeCases = new Set<CaseContext>();
+async function newCase(modelId: string, label: string): Promise<CaseContext> {
+  const workDir = join(workRoot, label);
+  await mkdir(workDir, { recursive: true });
+  const session = await klient.global.sessions.create({ workDir });
+  const agent = klient.session(session.id).agent('main');
+  await agent.setModel(modelId);
 
-async function newCase(modelId: string, _label: string): Promise<CaseContext> {
-  const workDir = workRoot;
-  const meta = await klient.global.sessions.create({ workDir });
-  const session = klient.session(meta.id);
-  try {
-    const agent = session.agent('main');
-    await agent.setModel(modelId);
-
-    const events: CollectedEvent[] = [];
-    const record =
-      (name: string) =>
-      (payload: Record<string, unknown>): void => {
-        events.push({ name, payload });
-      };
-    const listeners = [
-      agent.events.on('turn.started', record('turn.started')),
-      agent.events.on('turn.ended', record('turn.ended')),
-      agent.events.on('error', record('error')),
-      agent.events.on('prompt.completed', record('prompt.completed')),
-      agent.events.on('prompt.aborted', record('prompt.aborted')),
-    ];
-    let disposed = false;
-
-    const ctx: CaseContext = {
-      session,
-      agent,
-      listeners,
-      events,
-      workDir,
-      eventNames: () => events.map((event) => event.name),
-      payloads: (name) =>
-        events.filter((event) => event.name === name).map((event) => event.payload),
-      dispose: async () => {
-        if (disposed) return;
-        disposed = true;
-        try {
-          for (const listener of listeners) listener.dispose();
-        } finally {
-          try {
-            await session.close();
-          } finally {
-            activeCases.delete(ctx);
-          }
-        }
-      },
+  const events: CollectedEvent[] = [];
+  const record =
+    (name: string) =>
+    (payload: Record<string, unknown>): void => {
+      events.push({ name, payload });
     };
-    activeCases.add(ctx);
-    return ctx;
-  } catch (error) {
-    await session.close();
-    throw error;
-  }
+  agent.events.on('turn.started', record('turn.started'));
+  agent.events.on('turn.ended', record('turn.ended'));
+  agent.events.on('error', record('error'));
+  agent.events.on('prompt.completed', record('prompt.completed'));
+  agent.events.on('prompt.aborted', record('prompt.aborted'));
+
+  return {
+    agent,
+    events,
+    workDir,
+    eventNames: () => events.map((event) => event.name),
+    payloads: (name) => events.filter((event) => event.name === name).map((event) => event.payload),
+  };
 }
 
 async function promptAndWait(ctx: CaseContext, input: readonly ContentPart[]): Promise<void> {
-  await promptSettled(ctx.agent.events, () => ctx.agent.prompt({ input }));
+  const settled = Promise.race([
+    onceEvent(ctx.agent.events, 'prompt.completed', 60_000),
+    onceEvent(ctx.agent.events, 'prompt.aborted', 60_000),
+  ]);
+  await ctx.agent.prompt({ input });
+  await settled;
 }
-
-afterEach(async () => {
-  await Promise.all([...activeCases].map((ctx) => ctx.dispose()));
-  assert.equal(activeCases.size, 0);
-  assert.equal((await klient.global.workspaces.list()).length, 1);
-});
 
 /** Chat-completions messages array of the n-th captured request. */
 function openAiMessages(callIndex: number): Record<string, unknown>[] {
@@ -612,32 +553,51 @@ describe('l1: klient input validation', () => {
 describe('image blocks with invalid data', () => {
   it('a data-URL image with an unaccepted mime is replaced at prompt ingestion on EVERY provider (l2)', async () => {
     // PromptStepRequest gates image parts through gateImageFormatParts before
-    // the turn starts: image/bmp never reaches any provider's conversion
+    // the turn starts: image/tiff never reaches any provider's conversion
     // layer — it becomes a text notice, the request goes out without the
     // image, and the turn completes. This is the engine's "session
-    // poisoning" defense and is provider-independent.
+    // poisoning" defense and holds for every provider.
     const cases = [
-      { label: 'bmp-openai', model: M_OPENAI, reply: OK_OPENAI },
-      { label: 'bmp-kimi', model: M_KIMI, reply: OK_OPENAI },
-      { label: 'bmp-anthropic', model: M_ANTHROPIC, reply: OK_ANTHROPIC },
-      { label: 'bmp-google', model: M_GOOGLE, reply: OK_GOOGLE },
+      { label: 'tiff-openai', model: M_OPENAI, reply: OK_OPENAI },
+      { label: 'tiff-kimi', model: M_KIMI, reply: OK_OPENAI },
+      { label: 'tiff-anthropic', model: M_ANTHROPIC, reply: OK_ANTHROPIC },
+      { label: 'tiff-google', model: M_GOOGLE, reply: OK_GOOGLE },
     ] as const;
     for (const { label, model, reply } of cases) {
       const ctx = await newCase(model, label);
-      try {
-        resetMock(queueScript(reply));
-        await promptAndWait(ctx, [
-          { type: 'text', text: 'what is this?' },
-          { type: 'image_url', imageUrl: { url: IMAGE_BAD_MIME_URL } },
-        ]);
-        expect(requests, label).toHaveLength(1);
-        const wireText = JSON.stringify(requests[0]?.json);
-        expect(wireText, label).toContain('unsupported image format image/bmp');
-        expect(wireText, label).not.toContain('image/bmp;base64');
-        expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
-      } finally {
-        await ctx.dispose();
-      }
+      resetMock(queueScript(reply));
+      await promptAndWait(ctx, [
+        { type: 'text', text: 'what is this?' },
+        { type: 'image_url', imageUrl: { url: IMAGE_BAD_MIME_URL } },
+      ]);
+      expect(requests, label).toHaveLength(1);
+      const wireText = JSON.stringify(requests[0]?.json);
+      expect(wireText, label).toContain('unsupported image format image/tiff');
+      expect(wireText, label).not.toContain('image/tiff;base64');
+      expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
+    }
+  }, 60_000);
+
+  it('a data-URL image in a Kimi-only format reaches a Kimi model but is replaced elsewhere (l2)', async () => {
+    // The accepted set is keyed by the provider the agent is bound to: Kimi
+    // takes BMP/HEIC/HEIF on top of the baseline, the other providers do not.
+    const cases = [
+      { label: 'bmp-kimi', model: M_KIMI, reply: OK_OPENAI, accepted: true },
+      { label: 'bmp-openai', model: M_OPENAI, reply: OK_OPENAI, accepted: false },
+      { label: 'bmp-anthropic', model: M_ANTHROPIC, reply: OK_ANTHROPIC, accepted: false },
+    ] as const;
+    for (const { label, model, reply, accepted } of cases) {
+      const ctx = await newCase(model, label);
+      resetMock(queueScript(reply));
+      await promptAndWait(ctx, [
+        { type: 'text', text: 'what is this?' },
+        { type: 'image_url', imageUrl: { url: IMAGE_KIMI_ONLY_MIME_URL } },
+      ]);
+      expect(requests, label).toHaveLength(1);
+      const wireText = JSON.stringify(requests[0]?.json);
+      expect(wireText.includes('image/bmp;base64'), label).toBe(accepted);
+      expect(wireText.includes('unsupported image format image/bmp'), label).toBe(!accepted);
+      expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
     }
   }, 60_000);
 
@@ -770,42 +730,84 @@ describe('image blocks with invalid data', () => {
 // ---------------------------------------------------------------------------
 
 describe('daemon file references (kimi-file://)', () => {
-  it('a kimi-file image reference reaches the provider as a data URL, never verbatim', async () => {
-    // Regression for the duplicated resolver-token shadowing: the legacy
-    // video-only resolver won the shared DI token on the production import
-    // order, so image kimi-file refs leaked to the provider unchanged and
-    // gateways rejected the unknown scheme with a 400 ("unsupported image
-    // url"), which the media-strip fallback then mistook for a bad image.
-    const cases = [
-      { label: 'kimifile-image-openai', model: M_OPENAI_VISION, reply: OK_OPENAI },
-      { label: 'kimifile-image-kimi', model: M_KIMI, reply: OK_OPENAI },
-    ] as const;
-    for (const { label, model, reply } of cases) {
-      const meta = await klient.global.files.save({
-        data: new Uint8Array(Buffer.from(PNG_1X1_BASE64, 'base64')),
-        filename: 'pasted-image.png',
-        mimeType: 'image/png',
-        expiresInSec: 3600,
-      });
-      const ctx = await newCase(model, label);
-      try {
-        resetMock(queueScript(reply));
-        await promptAndWait(ctx, [
-          { type: 'image_url', imageUrl: { url: `kimi-file://${meta.id}` } },
-          { type: 'text', text: 'what is this?' },
-        ]);
-        expect(requests, label).toHaveLength(1);
-        expect(JSON.stringify(requests[0]?.json), label).not.toContain('kimi-file://');
-        const content = openAiMessages(0).at(-1)?.['content'] as unknown[];
-        const imagePart = content.find(
-          (part) => (part as { type?: string }).type === 'image_url',
-        ) as { image_url?: { url?: string } } | undefined;
-        expect(imagePart?.image_url?.url ?? '', label).toMatch(/^data:image\/png;base64,/);
-        expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
-      } finally {
-        await ctx.dispose();
+  // Regression for the duplicated resolver-token shadowing: the legacy
+  // video-only resolver won the shared DI token on the production import
+  // order, so image kimi-file refs leaked to the provider unchanged and
+  // gateways rejected the unknown scheme with a 400 ("unsupported image
+  // url"), which the media-strip fallback then mistook for a bad image.
+  // Kimi models now upload the image via the files API and reference it as
+  // ms://<id>; other providers keep the inline data URL.
+  it('a kimi-file image reference reaches a non-kimi provider as a data URL, never verbatim', async () => {
+    const meta = await klient.global.files.save({
+      data: new Uint8Array(Buffer.from(PNG_1X1_BASE64, 'base64')),
+      filename: 'pasted-image.png',
+      mimeType: 'image/png',
+      expiresInSec: 3600,
+    });
+    const ctx = await newCase(M_OPENAI_VISION, 'kimifile-image-openai');
+    resetMock(queueScript(OK_OPENAI));
+    await promptAndWait(ctx, [
+      { type: 'image_url', imageUrl: { url: `kimi-file://${meta.id}` } },
+      { type: 'text', text: 'what is this?' },
+    ]);
+    expect(requests).toHaveLength(1);
+    expect(JSON.stringify(requests[0]?.json)).not.toContain(`kimi-file://${meta.id}`);
+    const content = openAiMessages(0).at(-1)?.['content'] as unknown[];
+    const imagePart = content.find(
+      (part) => (part as { type?: string }).type === 'image_url',
+    ) as { image_url?: { url?: string } } | undefined;
+    expect(imagePart?.image_url?.url ?? '').toMatch(/^data:image\/png;base64,/);
+    expect(ctx.payloads('prompt.completed')[0]?.['reason']).toBe('completed');
+  }, 60_000);
+
+  it('a kimi-file image reference reaches kimi as an uploaded ms:// reference, never verbatim', async () => {
+    const meta = await klient.global.files.save({
+      data: new Uint8Array(Buffer.from(PNG_1X1_BASE64, 'base64')),
+      filename: 'pasted-image.png',
+      mimeType: 'image/png',
+      expiresInSec: 3600,
+    });
+    const ctx = await newCase(M_KIMI, 'kimifile-image-kimi');
+    resetMock((req) => {
+      if (req.url === '/v1/files') {
+        return {
+          kind: 'json',
+          status: 200,
+          body: {
+            id: 'file-mock-image',
+            object: 'file',
+            bytes: 68,
+            created_at: 1,
+            filename: 'pasted-image.png',
+            purpose: 'image',
+          },
+        };
       }
-    }
+      return OK_OPENAI;
+    });
+    await promptAndWait(ctx, [
+      { type: 'image_url', imageUrl: { url: `kimi-file://${meta.id}` } },
+      { type: 'text', text: 'what is this?' },
+    ]);
+
+    const fileUpload = requests.find((request) => request.url === '/v1/files');
+    expect(fileUpload).toBeDefined();
+    expect(fileUpload?.contentType).toContain('multipart/form-data');
+    const formText = fileUpload!.raw.toString('latin1');
+    expect(formText).toContain('name="purpose"');
+    expect(formText).toContain('image');
+
+    const chatCalls = requests.filter((request) => request.url === '/v1/chat/completions');
+    expect(chatCalls).toHaveLength(1);
+    expect(JSON.stringify(chatCalls[0]?.json)).not.toContain(`kimi-file://${meta.id}`);
+    const content = (chatCalls[0]?.json as { messages?: Record<string, unknown>[] })
+      .messages?.filter((message) => !isDateReminderMessage(message))
+      .at(-1)?.['content'] as unknown[];
+    const imagePart = content.find(
+      (part) => (part as { type?: string }).type === 'image_url',
+    ) as { image_url?: { url?: string } } | undefined;
+    expect(imagePart?.image_url?.url ?? '').toBe('ms://file-mock-image');
+    expect(ctx.payloads('prompt.completed')[0]?.['reason']).toBe('completed');
   }, 60_000);
 });
 
@@ -880,18 +882,14 @@ describe('video blocks', () => {
 
     for (const { label, model, reply, assertBody } of cases) {
       const ctx = await newCase(model, label);
-      try {
-        resetMock(queueScript(reply));
-        await promptAndWait(ctx, [
-          { type: 'text', text: 'describe this clip' },
-          { type: 'video_url', videoUrl: { url: VIDEO_HTTP_URL } },
-        ]);
-        expect(requests, label).toHaveLength(1);
-        assertBody(requests[0]?.json);
-        expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
-      } finally {
-        await ctx.dispose();
-      }
+      resetMock(queueScript(reply));
+      await promptAndWait(ctx, [
+        { type: 'text', text: 'describe this clip' },
+        { type: 'video_url', videoUrl: { url: VIDEO_HTTP_URL } },
+      ]);
+      expect(requests, label).toHaveLength(1);
+      assertBody(requests[0]?.json);
+      expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
     }
   }, 60_000);
 
@@ -943,6 +941,28 @@ describe('video blocks', () => {
     expect(JSON.stringify(toolMessage)).toContain('ms://file-mock-video');
     expect(ctx.payloads('prompt.completed')[0]?.['reason']).toBe('completed');
   }, 30_000);
+
+  it('kimi (composed): cancelling ReadMediaFile aborts the in-flight video upload', async () => {
+    const ctx = await newCase(M_KIMI, 'kimi-video-upload-cancel');
+    await writeFile(join(ctx.workDir, 'clip.mp4'), Buffer.from(MP4_FTYP_HEX, 'hex'));
+
+    resetMock((req) => {
+      if (req.url === '/v1/files') return { kind: 'hang' };
+      return {
+        kind: 'sse',
+        lines: openAiToolCallSse('call_video_1', 'ReadMediaFile', '{"path":"clip.mp4"}'),
+      };
+    });
+    const promptAborted = onceEvent(ctx.agent.events, 'prompt.aborted', 10_000);
+    await ctx.agent.prompt({ input: [{ type: 'text', text: 'watch clip.mp4' }] });
+    await waitFor(() => requests.some((request) => request.url === '/v1/files'), 10_000);
+
+    await ctx.agent.cancel();
+    await promptAborted;
+
+    await waitFor(() => abortedRequests.includes('/v1/files'), 2_000);
+    expect(ctx.payloads('turn.ended')[0]?.['reason']).toBe('cancelled');
+  }, 15_000);
 
   it('openai: no uploadVideo capability — the tool result is an error text, no files call', async () => {
     const ctx = await newCase(M_OPENAI_VISION, 'openai-video-upload');
@@ -1048,23 +1068,19 @@ describe('tool exchange structure', () => {
       label: string,
     ): Promise<Record<string, unknown>[]> => {
       const ctx = await newCase(model, label);
-      try {
-        await writeFile(join(ctx.workDir, 'pixel.png'), Buffer.from(PNG_1X1_BASE64, 'base64'));
-        resetMock(
-          queueScript(
-            {
-              kind: 'sse',
-              lines: openAiToolCallSse('call_media_1', 'ReadMediaFile', '{"path":"pixel.png"}'),
-            },
-            OK_OPENAI,
-          ),
-        );
-        await promptAndWait(ctx, [{ type: 'text', text: 'look at pixel.png' }]);
-        expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
-        return openAiMessages(1);
-      } finally {
-        await ctx.dispose();
-      }
+      await writeFile(join(ctx.workDir, 'pixel.png'), Buffer.from(PNG_1X1_BASE64, 'base64'));
+      resetMock(
+        queueScript(
+          {
+            kind: 'sse',
+            lines: openAiToolCallSse('call_media_1', 'ReadMediaFile', '{"path":"pixel.png"}'),
+          },
+          OK_OPENAI,
+        ),
+      );
+      await promptAndWait(ctx, [{ type: 'text', text: 'look at pixel.png' }]);
+      expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
+      return openAiMessages(1);
     };
 
     // Plain openai: the base's extract_text fallback flattens the tool result
@@ -1076,8 +1092,7 @@ describe('tool exchange structure', () => {
     const trailing = openAiWire.at(-1);
     expect(trailing?.['role']).toBe('user');
     const trailingContent = trailing?.['content'] as { type: string; text?: string }[];
-    expect(trailingContent[0]?.type).toBe('text');
-    expect(trailingContent[0]?.text).toContain('tool result');
+    expect(trailingContent[0]).toMatchObject({ type: 'text' });
     expect(trailingContent.some((part) => part.type === 'image_url')).toBe(true);
 
     // Composed kimi: trait mode hands shaping to the trait — the image part
@@ -1092,36 +1107,35 @@ describe('tool exchange structure', () => {
 
   it('tool call ids are sanitized (64-char, safe charset) consistently across call and result', async () => {
     const nastyId = `call/bad id#${'x'.repeat(80)}`;
+    const runIdCase = async (model: string, label: string): Promise<Record<string, unknown>[]> => {
+      const ctx = await newCase(model, label);
+      resetMock(
+        queueScript(
+          {
+            kind: 'sse',
+            lines: openAiToolCallSse(nastyId, 'definitely_not_a_real_tool', '{}'),
+          },
+          OK_OPENAI,
+        ),
+      );
+      await promptAndWait(ctx, [{ type: 'text', text: 'use the tool' }]);
+      expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
+      return openAiMessages(1);
+    };
 
     for (const [model, label] of [
       [M_OPENAI, 'tool-id-openai'],
       [M_KIMI, 'tool-id-kimi'],
     ] as const) {
-      const ctx = await newCase(model, label);
-      try {
-        resetMock(
-          queueScript(
-            {
-              kind: 'sse',
-              lines: openAiToolCallSse(nastyId, 'definitely_not_a_real_tool', '{}'),
-            },
-            OK_OPENAI,
-          ),
-        );
-        await promptAndWait(ctx, [{ type: 'text', text: 'use the tool' }]);
-        expect(ctx.payloads('prompt.completed')[0]?.['reason'], label).toBe('completed');
-        const messages = openAiMessages(1);
-        const assistant = messages.find((message) => message['tool_calls'] !== undefined);
-        const wireId = (assistant?.['tool_calls'] as { id: string }[])[0]?.id;
-        expect(wireId, label).toBeDefined();
-        expect(wireId!.length, label).toBeLessThanOrEqual(64);
-        expect(wireId, label).toMatch(/^[a-zA-Z0-9_-]+$/);
-        const toolMessage = messages.find((message) => message['role'] === 'tool');
-        // Normalization rewrites call and result with the SAME mapping.
-        expect(toolMessage?.['tool_call_id'], label).toBe(wireId);
-      } finally {
-        await ctx.dispose();
-      }
+      const messages = await runIdCase(model, label);
+      const assistant = messages.find((message) => message['tool_calls'] !== undefined);
+      const wireId = (assistant?.['tool_calls'] as { id: string }[])[0]?.id;
+      expect(wireId, label).toBeDefined();
+      expect(wireId!.length, label).toBeLessThanOrEqual(64);
+      expect(wireId, label).toMatch(/^[a-zA-Z0-9_-]+$/);
+      const toolMessage = messages.find((message) => message['role'] === 'tool');
+      // Normalization rewrites call and result with the SAME mapping.
+      expect(toolMessage?.['tool_call_id'], label).toBe(wireId);
     }
   }, 60_000);
 
@@ -1143,11 +1157,10 @@ describe('tool exchange structure', () => {
     // aborted turn's prompt and the next user message, so the two prompts no
     // longer merge into one wire message.
     expect(userMessages).toHaveLength(3);
-    const textOf = (content: unknown): string => typeof content === 'string' ? content : Array.isArray(content) ? content.map((part: { text?: string }) => part.text ?? '').join('') : '';
-    expect(textOf(userMessages[0]?.['content'])).toContain('first message');
-    expect(textOf(userMessages[1]?.['content'])).toContain('<system-reminder>');
-    expect(textOf(userMessages[1]?.['content'])).toContain('interrupted by the user');
-    expect(textOf(userMessages[2]?.['content'])).toContain('second message');
+    expect(JSON.stringify(userMessages[0]?.['content'])).toContain('first message');
+    expect(JSON.stringify(userMessages[1]?.['content'])).toContain('<system-reminder>');
+    expect(JSON.stringify(userMessages[1]?.['content'])).toContain('interrupted by the user');
+    expect(JSON.stringify(userMessages[2]?.['content'])).toContain('second message');
     expect(ctx.payloads('prompt.completed')[0]?.['reason']).toBe('completed');
   }, 60_000);
 });

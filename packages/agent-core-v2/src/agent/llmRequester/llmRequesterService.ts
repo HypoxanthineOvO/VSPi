@@ -1,3 +1,4 @@
+import { LOOP_CONTROL_SECTION, type LoopControl } from '#/agent/loop/configSection';
 import { createHash } from 'node:crypto';
 import { LifecycleScope } from '#/app/scopes';
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
@@ -11,18 +12,11 @@ import {
 import { ISessionTokenCountingService } from '#/session/tokenCounting/sessionTokenCounting';
 import { IAgentProfileService, type ProfileModelContext } from '#/agent/profile/profile';
 import { IAgentStateService } from '#/agent/state/agentState';
-import { stepRetryRecoveryDeadlineKey } from '#/agent/stepRetry/stepRetry';
-import { LoopError } from '#/agent/loop/loop';
-import { LoopErrors } from '#/agent/loop/errors';
 import { IAgentToolRegistryService } from '#/agent/toolRegistry/toolRegistry';
 import { IAgentToolSelectService } from '#/agent/toolSelect/toolSelect';
 import { IAgentMediaResolverService } from '#/agent/media/mediaResolver';
 import { ISessionUsageService } from '#/session/usage/sessionUsage';
 import { IConfigService } from '#/app/config/config';
-import {
-  normalizeThinkingCapability,
-  thinkingEffortsForProvider,
-} from '#/kosong/contract/capability';
 import {
   APIContextOverflowError,
   APIRequestTooLargeError,
@@ -31,27 +25,31 @@ import {
   isImageFormatError,
   isRecoverableRequestStructureError,
   isRetryableGenerateError,
-} from '#/kosong/contract/errors';
-import { isToolCall, type Message, type StreamedMessagePart } from '#/kosong/contract/message';
-import { type ThinkingEffort } from '#/kosong/contract/provider';
-import { type Tool } from '#/kosong/contract/tool';
-import { emptyUsage, inputTotal, type TokenUsage } from '#/kosong/contract/usage';
+} from '#/llm-adapter/contract/errors';
+import type { Message } from '#/llm-adapter/contract/message';
+import { type ThinkingEffort } from '#human/llm/thinking';
+import type { LlmCredentialProvider } from '#human/llm/requester/requester';
+import { isToolCall, type StreamedMessagePart, type ToolDescription as Tool } from '#human/llm/message';
+import { emptyUsage, inputTotal, type TokenUsage } from '#human/llm/usage';
 import { ILogService, type LogContext } from '#/_base/log/log';
-import { IModelCatalog, type Model } from '#/kosong/model/catalog';
+import { IModelCatalog, type Model } from '#/llm-adapter/model/catalog';
 import {
   effectiveMaxCompletionTokens,
   type ModelRequestEvent,
   type ModelRequestParams,
   type ModelRequester,
   type ModelRequestTiming,
-} from '#/kosong/model/modelRequester';
-import type { ModelOverrides } from '#/kosong/model/model.types';
-import { IModelService } from '#/kosong/model/model';
-import { completionBudgetParams, resolveCompletionBudget } from '#/kosong/model/completionBudget';
-import { resolveThinkingKeep, type ThinkingConfig } from '#/kosong/model/thinking';
+} from '#/llm-adapter/model/model-requester';
+import type { ModelOverrides } from '#/llm-adapter/model/model.types';
+import { IModelService } from '#/llm-adapter/model/model';
+import { completionBudgetParams, resolveCompletionBudget } from '#/llm-adapter/model/completion-budget';
+import { resolveThinkingKeep, type ThinkingConfig } from '#/llm-adapter/model/thinking';
 import { THINKING_SECTION } from '#/app/kosongConfig/configSection';
-import type { Protocol } from '#/kosong/protocol/protocol';
-import type { ApiErrorEvent } from '#/app/telemetry/events';
+import type { Protocol } from '#/llm-adapter/protocol/protocol';
+import type {
+  ApiErrorEvent,
+  LlmRequestProjectionFallbackEvent,
+} from '#/app/telemetry/events';
 import { ITelemetryService } from '#/app/telemetry/telemetry';
 import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 import { IEventDispatcher } from '#/state/eventDispatcher';
@@ -65,13 +63,14 @@ import {
   type AgentLLMRequestPartHandler,
   type AgentLLMRequestSource,
   type AgentLLMRequestTask,
+  type AgentLLMTurnRequestSnapshot,
   type PreparedTurnRequestConfig,
 } from './llmRequester';
-import type { LLMRequestTrace } from '#/kosong/contract/requestTrace';
+import type { LLMRequestTrace } from '#/llm-adapter/contract/request-trace';
 import {
   ToolCallIdNormalizer,
   type ToolCallIdResponseNormalizer,
-} from './toolCallIdNormalizer';
+} from '#human/llm/toolCallIdNormalizer';
 import {
   LlmRequest,
   llmRequestTraceKey,
@@ -79,7 +78,7 @@ import {
   type LlmRequestPayload,
   type LlmRequestToolSchema,
 } from './llmRequestOps';
-import { abortable, isAbortError, linkAbortSignal } from '#/_base/utils/abort';
+import { isAbortError } from '#/_base/utils/abort';
 import { parseBooleanEnv } from '#/_base/utils/env';
 import { ErrorCodes, Error2, unwrapErrorCause } from '#/errors';
 import {
@@ -87,9 +86,7 @@ import {
   retryBackoffDelay,
   retryErrorFields,
   sleepForRetry,
-  type RetryBackoffOptions,
 } from '#/_base/utils/retry';
-import { LOOP_CONTROL_SECTION, type LoopControl } from '#/agent/loop/configSection';
 import { IBootstrapService } from '#/app/bootstrap/bootstrap';
 
 const EMPTY_TOOL_PARAMETERS: Record<string, unknown> = {
@@ -110,6 +107,7 @@ interface ResolvedLLMRequest {
   readonly systemPrompt: string;
   readonly tools: readonly Tool[];
   readonly messages: Message[];
+  readonly contextRevision: number;
   readonly source: AgentLLMRequestSource | undefined;
   readonly logFields: AgentLLMRequestLogFields;
 }
@@ -153,6 +151,10 @@ export const llmRequesterEmittedThinkingEffortWarningsKey = defineState<Set<stri
   'llmRequester.emittedThinkingEffortWarnings',
   () => new Set(),
 );
+export const llmRequesterLastTurnRequestKey = defineState<AgentLLMTurnRequestSnapshot | undefined>(
+  'llmRequester.lastTurnRequest',
+  () => undefined as AgentLLMTurnRequestSnapshot | undefined,
+);
 
 export class AgentLLMRequesterService implements IAgentLLMRequesterService {
   declare readonly _serviceBrand: undefined;
@@ -184,6 +186,7 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
     this.states.contributeState(llmRequesterMediaDegradedTurnsKey);
     this.states.contributeState(llmRequesterMediaStrippedTurnsKey);
     this.states.contributeState(llmRequesterEmittedThinkingEffortWarningsKey);
+    this.states.contributeState(llmRequesterLastTurnRequestKey);
   }
 
   private get lastConfigLogSignature(): string | undefined {
@@ -216,6 +219,21 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
     return { thinkingEffort: config.resolved.thinkingLevel };
   }
 
+  currentCredentialProvider(): LlmCredentialProvider | undefined {
+    if (!this.profile.hasProvider()) return undefined;
+    return this.modelCatalog.get(this.profile.resolveModelContext().modelAlias).credentialProvider;
+  }
+
+  credentialProviderForTurn(turnId: number): LlmCredentialProvider | undefined {
+    if (!this.profile.hasProvider()) return undefined;
+    const resolved = this.turnConfigs.get(turnId)?.resolved ?? this.profile.resolveModelContext();
+    return this.modelCatalog.get(resolved.modelAlias).credentialProvider;
+  }
+
+  lastTurnRequest(): AgentLLMTurnRequestSnapshot | undefined {
+    return this.states.get(llmRequesterLastTurnRequestKey);
+  }
+
   async request(
     overrides: AgentLLMRequestOverrides = {},
     onPart: AgentLLMRequestPartHandler = noopOnPart,
@@ -244,38 +262,25 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
   ): Promise<AgentLLMRequestFinish> {
     signal?.throwIfAborted();
     const startedAt = Date.now();
-    trace.set(undefined);
-    const deadline = overrides.recoveryDeadlineAt ?? (overrides.source?.type === 'turn' && this.states.has(stepRetryRecoveryDeadlineKey)
-      ? this.states.get(stepRetryRecoveryDeadlineKey) : undefined);
-    const budget = deadline === undefined ? undefined : new AbortController();
-    const unlink = signal && budget ? linkAbortSignal(signal, budget) : () => {};
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      if (budget && deadline !== undefined) {
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) throw new LoopError(LoopErrors.codes.LOOP_RETRY_BUDGET_EXCEEDED, 'Provider retry recovery budget exhausted; this turn has stopped.');
-        timer = setTimeout(() => {
-          budget.abort(new LoopError(LoopErrors.codes.LOOP_RETRY_BUDGET_EXCEEDED, 'Provider retry recovery budget exhausted; this turn has stopped.'));
-        }, remaining);
-        timer.unref();
+    const setTrace = (traceId: string | undefined): void => {
+      trace.set(traceId);
+      if (overrides.source?.type === 'turn') {
+        this.telemetry.setContext({ trace_id: traceId });
       }
-      const request = this.runRequest(
+    };
+    setTrace(undefined);
+    try {
+      return await this.runRequest(
         this.resolveRequest(overrides),
         onPart,
-        budget?.signal ?? signal,
-        (traceId) => {
-          trace.set(traceId);
-        },
-        budget ? () => { if (timer !== undefined) clearTimeout(timer); timer = undefined; } : undefined,
+        signal,
+        setTrace,
+        overrides.onAttemptRetry,
       );
-      return await (budget ? abortable(request, budget.signal) : request);
     } catch (error) {
       this.logRequestFailure(error, overrides, signal);
-      trace.set(this.trackApiError(error, startedAt, signal, overrides.source, trace.traceId));
+      setTrace(this.trackApiError(error, startedAt, signal, overrides.source, trace.traceId));
       throw error;
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
-      unlink();
     }
   }
 
@@ -343,7 +348,7 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
     onPart: AgentLLMRequestPartHandler,
     signal: AbortSignal | undefined,
     onRequestTrace: (traceId: string | undefined) => void,
-    onProtocolBody?: () => void,
+    onAttemptRetry: (() => void) | undefined,
   ): Promise<AgentLLMRequestFinish> {
     this.toolCallIdNormalizer.seedFrom(this.context.get());
     const shaped = this.toolSelect.shapeHistory(request.messages);
@@ -359,6 +364,9 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
       this.markMediaStrippedRecoveryTurn(snapshot, request.source);
       return { strip: snapshot };
     };
+    let previousMediaCount: number | undefined;
+    let previousMediaPolicy: ProjectionPolicy['media'];
+    let mediaPaths: ReadonlyMap<string, string> | undefined;
     const run = async (
       policy: ProjectionPolicy | undefined,
     ): Promise<AgentLLMRequestFinish> => {
@@ -366,15 +374,43 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
       const projection = projectionNameOf(policy);
       const fields =
         projection === undefined ? request.logFields : { ...request.logFields, projection };
+      if (policy?.media !== undefined) {
+        mediaPaths ??= await this.mediaResolver.displayPaths(shaped);
+      }
+      const projected = this.projector.project(shaped, policy, mediaPaths);
+      const currentMediaCount = mediaPartCount(projected);
+      const mediaPolicyChanged =
+        previousMediaCount !== undefined && previousMediaPolicy !== policy?.media;
+      const droppedMediaCount =
+        previousMediaCount === undefined ? 0 : previousMediaCount - currentMediaCount;
+      previousMediaCount = currentMediaCount;
+      previousMediaPolicy = policy?.media;
       const input = {
         systemPrompt: request.systemPrompt,
         tools: request.tools,
-        messages: await this.mediaResolver.resolve(
-          this.projector.project(shaped, policy),
-          request.requester,
-          signal,
-        ),
+        messages: await this.mediaResolver.resolve(projected, request.requester, signal),
       };
+      const mediaProjection =
+        projection === 'media-degraded' || projection === 'strict-media-degraded'
+          ? 'media-degraded'
+          : projection === 'media-stripped' || projection === 'strict-media-stripped'
+            ? 'media-stripped'
+            : undefined;
+      if (mediaPolicyChanged && droppedMediaCount > 0 && mediaProjection !== undefined) {
+        try {
+          void this.dispatcher.dispatch(
+            new WarningIssued({
+              agentId: this.scopeContext.agentId,
+              code: mediaProjection,
+              message:
+                mediaProjection === 'media-degraded'
+                  ? 'Provider rejected the request as too large; older media were dropped and the request was retried.'
+                  : 'Provider rejected the media in the request; all media were omitted and the request was retried.',
+            }),
+          );
+        } catch {
+        }
+      }
       this.warnAboutAnthropicThinkingEffort(request);
       const logInput: LLMRequestLogInput = {
         protocol: request.model.protocol,
@@ -389,7 +425,8 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
         fields,
       };
       this.logRequest(logInput);
-      this.recordRequest(logInput);
+      const recorded = this.recordRequest(logInput);
+      const startedAt = Date.now();
 
       let message: Message | undefined;
       let usage: TokenUsage | undefined;
@@ -403,19 +440,13 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
       };
 
       try {
-        const deadlineAt = request.params.deadlineAt ?? (request.source?.type === 'turn' && this.states.has(stepRetryRecoveryDeadlineKey)
-          ? this.states.get(stepRetryRecoveryDeadlineKey) : undefined);
-        if (deadlineAt !== undefined && Date.now() >= deadlineAt) throw new LoopError(LoopErrors.codes.LOOP_RETRY_BUDGET_EXCEEDED, 'Provider retry recovery budget exhausted; this turn has stopped.');
         for await (const event of request.requester.request(input, signal, {
           ...request.params,
           onTraceId: setTraceId,
-          onProtocolProgress: onProtocolBody === undefined ? undefined : stage => { if (stage === 'body') onProtocolBody(); },
           idleTimeoutMs: this.config.get<LoopControl>(LOOP_CONTROL_SECTION)?.requestIdleTimeoutMs,
-          deadlineAt,
         })) {
           switch (event.type) {
             case 'part':
-              onProtocolBody?.();
               await onPart(this.normalizeStreamPart(toolCallIds, event.part));
               break;
             case 'usage':
@@ -457,6 +488,17 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
         throw error;
       }
 
+      if (request.source?.type === 'turn') {
+        this.states.set(llmRequesterLastTurnRequestKey, {
+          modelAlias: request.modelAlias,
+          contextRevision: request.contextRevision,
+          toolsHash: recorded.toolsHash,
+          systemPromptHash: recorded.systemPromptHash,
+          inputTokens: usage === undefined ? undefined : inputTotal(usage),
+          startedAt,
+          finishedAt: Date.now(),
+        });
+      }
       void this.usage.record(
         this.scopeContext.agentContext,
         request.modelAlias,
@@ -493,6 +535,7 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
           captureMediaStripPolicy,
         );
         if (nextPolicy !== undefined) {
+          onAttemptRetry?.();
           policy = nextPolicy;
           continue;
         }
@@ -508,7 +551,7 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
         infiniteRetryAttempt += 1;
         const delayMs =
           readRetryAfterMs(raw) ??
-          retryBackoffDelay(infiniteRetryAttempt - 1, this.retryBackoffOptions());
+          retryBackoffDelay(infiniteRetryAttempt - 1);
         this.log.warn('llm request failed; retrying indefinitely (KIMI_CODE_INFINITE_RETRY)', {
           model: request.model.name,
           ...request.logFields,
@@ -516,22 +559,14 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
           delayMs,
           ...retryErrorFields(error),
         });
+        onAttemptRetry?.();
         await sleepForRetry(delayMs, signal);
       }
     }
   }
 
   private get infiniteRetryEnabled(): boolean {
-    if (this.config.get<LoopControl>(LOOP_CONTROL_SECTION)?.retryBudgetMs !== undefined) return false;
     return parseBooleanEnv(this.bootstrap.getEnv(KIMI_CODE_INFINITE_RETRY_ENV)) === true;
-  }
-
-  private retryBackoffOptions(): RetryBackoffOptions {
-    const loopControl = this.config.get<LoopControl>(LOOP_CONTROL_SECTION);
-    return {
-      initialDelayMs: loopControl?.retryInitialDelayMs,
-      maxDelayMs: loopControl?.retryMaxDelayMs,
-    };
   }
 
   private nextProjectionPolicyForError(
@@ -544,6 +579,8 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
     if (signal?.aborted === true) return undefined;
     const raw = unwrapErrorCause(error);
     const media = policy?.media;
+    let projection: LlmRequestProjectionFallbackEvent['projection'];
+    let nextPolicy: ProjectionPolicy;
     if (
       raw instanceof APIRequestTooLargeError &&
       (media === undefined || media === 'degraded')
@@ -555,18 +592,20 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
           ...request.logFields,
         });
         this.markRecoveryTurn(this.mediaDegradedTurns, request.source);
-        return { ...policy, media: 'degraded' };
+        projection = 'media-degraded';
+        nextPolicy = { ...policy, media: 'degraded' };
+      } else {
+        this.log.warn(
+          'provider rejected degraded-media request as too large; resending with rejected media stripped',
+          {
+            model: request.model.name,
+            ...request.logFields,
+          },
+        );
+        projection = 'media-stripped';
+        nextPolicy = { ...policy, media: captureMediaStripPolicy() };
       }
-      this.log.warn(
-        'provider rejected degraded-media request as too large; resending with rejected media stripped',
-        {
-          model: request.model.name,
-          ...request.logFields,
-        },
-      );
-      return { ...policy, media: captureMediaStripPolicy() };
-    }
-    if (typeof media !== 'object' && isImageFormatError(raw)) {
+    } else if (typeof media !== 'object' && isImageFormatError(raw)) {
       signal?.throwIfAborted();
       this.log.warn(
         'provider rejected an image in the request; resending with rejected media stripped',
@@ -575,17 +614,27 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
           ...request.logFields,
         },
       );
-      return { ...policy, media: captureMediaStripPolicy() };
-    }
-    if (policy?.structure === undefined && isRecoverableRequestStructureError(raw)) {
+      projection = 'media-stripped';
+      nextPolicy = { ...policy, media: captureMediaStripPolicy() };
+    } else if (policy?.structure === undefined && isRecoverableRequestStructureError(raw)) {
       signal?.throwIfAborted();
       this.log.warn('provider rejected request structure; resending with strict projection', {
         model: request.model.name,
         ...request.logFields,
       });
-      return { ...policy, structure: 'strict' };
+      projection = 'strict';
+      nextPolicy = { ...policy, structure: 'strict' };
+    } else {
+      return undefined;
     }
-    return undefined;
+    const properties: LlmRequestProjectionFallbackEvent = {
+      projection,
+      error_type: classifyApiError(raw).kind,
+      model: request.model.id,
+      turn_id: request.source?.turnId,
+    };
+    this.telemetry.track2('llm_request_projection_fallback', properties);
+    return nextPolicy;
   }
 
   private normalizeStreamPart(
@@ -594,7 +643,7 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
   ): StreamedMessagePart {
     if (!isToolCall(part)) return part;
     const assigned = toolCallIds.remapStreamedId(part.id, part._streamIndex);
-    return assigned === part.id ? part : { ...part, id: assigned };
+    return assigned === part.id ? part : { ...part, id: assigned, rawId: part.rawId ?? part.id };
   }
 
   private warnAboutAnthropicThinkingEffort(request: ResolvedLLMRequest): void {
@@ -605,16 +654,8 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
     let code: string;
     let message: string;
     let knownEfforts: string | undefined;
-    const supportEfforts = thinkingEffortsForProvider(
-      normalizeThinkingCapability(request.model.thinking, {
-        thinking: request.model.capabilities.thinking,
-        alwaysThinking: request.model.alwaysThinking,
-        supportEfforts: request.model.supportEfforts,
-        defaultEffort: request.model.defaultEffort,
-      }),
-      request.model.providerType,
-    );
-    if (supportEfforts.length === 0) return;
+    const supportEfforts = request.model.supportEfforts?.filter((value) => value.length > 0);
+    if (supportEfforts === undefined || supportEfforts.length === 0) return;
     if (supportEfforts.includes(effort)) return;
     code = 'anthropic-thinking-effort-not-listed';
     knownEfforts = supportEfforts.join(',');
@@ -675,31 +716,41 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
     const turnConfig = this.resolveTurnConfig(overrides.source);
     const resolved = turnConfig?.resolved ?? this.profile.resolveModelContext();
     const baseParams = turnConfig?.params ?? this.profile.resolveRequestParams();
+    const requester = this.modelCatalog.getRequester(resolved.modelAlias);
+    const maxCompletionTokensCap =
+      this.config.get<ModelOverrides>('modelOverrides')?.maxCompletionTokens;
+    const usedContextTokens =
+      overrides.messages === undefined
+        ? this.tokenCounting.get(this.scopeContext.agentContext).size
+        : undefined;
     const budgetParams = completionBudgetParams({
       budget: resolveCompletionBudget({
         maxOutputSize: overrides.maxOutputSize ?? resolved.maxOutputSize,
-        reservedContextSize: resolved.reservedContextSize,
-        maxCompletionTokensCap:
-          this.config.get<ModelOverrides>('modelOverrides')?.maxCompletionTokens,
+        maxCompletionTokensCap,
       }),
       capability: resolved.modelCapabilities,
-      usedContextTokens:
-        overrides.messages === undefined
-          ? this.tokenCounting.get(this.scopeContext.agentContext).measured
-          : undefined,
+      usedContextTokens,
     });
-    const requester = this.modelCatalog.getRequester(resolved.modelAlias);
+    const optedOut = maxCompletionTokensCap !== undefined && maxCompletionTokensCap <= 0;
 
     const messages = overrides.messages ?? this.context.get();
     return {
       requester,
       model: requester.model,
-      params: { ...baseParams, ...budgetParams, deadlineAt: overrides.recoveryDeadlineAt },
+      params: {
+        ...baseParams,
+        ...budgetParams,
+        deadlineAt: overrides.recoveryDeadlineAt ?? baseParams.deadlineAt,
+        onProtocolProgress: overrides.onProtocolProgress ?? baseParams.onProtocolProgress,
+        ...(usedContextTokens === undefined ? {} : { usedContextTokens }),
+        ...(optedOut ? { maxCompletionTokens: maxCompletionTokensCap } : {}),
+      },
       modelAlias: resolved.modelAlias,
       thinkingEffort: resolved.thinkingLevel,
       systemPrompt: overrides.systemPrompt ?? turnConfig?.systemPrompt ?? this.profile.getSystemPrompt(),
       tools: [...(overrides.tools ?? this.defaultTools())],
       messages: [...messages],
+      contextRevision: this.context.prefixRevision(),
       source: overrides.source,
       logFields: logFieldsForSource(overrides.source),
     };
@@ -753,7 +804,7 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
     this.log.info('llm request', requestFields);
   }
 
-  private recordRequest(input: LLMRequestLogInput): void {
+  private recordRequest(input: LLMRequestLogInput): LlmRequestPayload {
     const fields = input.fields ?? {};
     const wireTools = providerVisibleTools(input.tools);
     const tools = toolSignature(wireTools);
@@ -799,6 +850,7 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
       droppedCount: numberField(fields, 'droppedCount'),
     };
     void this.dispatcher.dispatch(new LlmRequest(payload));
+    return payload;
   }
 
   private logResponse(
@@ -819,6 +871,7 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
     }
     if (timing.serverDecodeMs !== undefined) payload['serverDecodeMs'] = timing.serverDecodeMs;
     if (timing.clientConsumeMs !== undefined) payload['clientConsumeMs'] = timing.clientConsumeMs;
+    if (timing.clientBlockedMs !== undefined) payload['clientBlockedMs'] = timing.clientBlockedMs;
     this.log.info('llm response', payload);
   }
 
@@ -890,6 +943,18 @@ function stringField(fields: AgentLLMRequestLogFields, key: string): string | un
 function numberField(fields: AgentLLMRequestLogFields, key: string): number | undefined {
   const value = fields[key];
   return typeof value === 'number' ? value : undefined;
+}
+
+function mediaPartCount(messages: readonly Message[]): number {
+  return messages.reduce(
+    (count, message) =>
+      count +
+      message.content.filter(
+        (part) =>
+          part.type === 'image_url' || part.type === 'audio_url' || part.type === 'video_url',
+      ).length,
+    0,
+  );
 }
 
 type LlmRequestProjection = NonNullable<LlmRequestPayload['projection']>;

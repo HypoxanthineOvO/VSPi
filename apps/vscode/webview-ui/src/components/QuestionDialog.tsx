@@ -134,10 +134,11 @@ export function QuestionDialog() {
                 value={customInput}
                 onChange={(e) => setCustomInput(e.target.value)}
                 onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing) return;
                   if (e.key === "Enter") void handleCustomSubmit();
                   if (e.key === "Escape") setShowCustom(false);
                 }}
-                placeholder="Enter your response..."
+                placeholder="Enter your response…"
                 className="flex-1 px-2 py-1 rounded-md text-xs border border-border bg-background outline-none focus:border-blue-500"
               />
               <button
@@ -161,7 +162,7 @@ export function QuestionDialog() {
               )}
             >
               <span className={cn("mr-2", selectedIndex === customIndex ? "text-blue-200" : "text-muted-foreground")}>{customIndex}</span>
-              <span className="font-medium">Custom response...</span>
+              <span className="font-medium">Custom response…</span>
             </button>
           )}
           {isMultiSelect && (

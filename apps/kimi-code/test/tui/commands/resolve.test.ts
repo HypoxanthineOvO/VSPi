@@ -7,6 +7,8 @@ import {
 } from '#/tui/commands/index';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { resolveUserInput } from '#/tui/commands/resolve';
+
 function resolve(
   input: string,
   overrides: Partial<Parameters<typeof resolveSlashCommandInput>[0]> = {},
@@ -17,10 +19,50 @@ function resolve(
     pluginCommandMap: new Map<string, string>(),
     isStreaming: false,
     isCompacting: false,
-    engineV2: true,
     ...overrides,
   });
 }
+
+describe('resolveUserInput', () => {
+  const options = {
+    isStreaming: false,
+    isCompacting: false,
+    skillCommandMap: new Map([
+      ['skill:review', 'review'],
+      ['quick', 'review'],
+      ['skill:security', 'security'],
+      ['skill:team/review', 'team/review'],
+    ]),
+    pluginCommandMap: new Map([['example:deploy', 'example']]),
+  };
+
+  it.each([
+    { input: '/skill:review src/app.ts', skills: [{ skillName: 'review', args: 'src/app.ts' }] },
+    { input: '/review', skills: [{ skillName: 'review', args: '' }] },
+    { input: '/skill:team/review src/app.ts', skills: [{ skillName: 'team/review', args: 'src/app.ts' }] },
+    { input: '/team/review src/app.ts', skills: [] },
+    { input: 'check /skill:team/review src/app.ts', skills: [] },
+    { input: '/quick\ncheck src/app.ts', skills: [] },
+    { input: '/skill:review\nexplain this', skills: [] },
+    { input: '/skill:review\n\nexplain this', skills: [] },
+    { input: '/skill:review\texplain this', skills: [] },
+    { input: '/quick \ncheck src/app.ts', skills: [{ skillName: 'review', args: 'check src/app.ts' }] },
+    { input: '/quick\n', skills: [{ skillName: 'review', args: '' }] },
+    { input: 'please /skill:review src/app.ts', skills: [{ skillName: 'review' }] },
+    { input: '/skill:review /review src/app.ts', skills: [{ skillName: 'review' }] },
+    { input: '/quick /skill:review src/app.ts', skills: [{ skillName: 'review' }] },
+    {
+      input: '/skill:security\n/quick /skill:security',
+      skills: [{ skillName: 'security' }, { skillName: 'review' }],
+    },
+    { input: '/unknown /skill:review src/app.ts', skills: [{ skillName: 'review' }] },
+    { input: '/help /skill:review', skills: [] },
+    { input: '/example:deploy /skill:review', skills: [] },
+    { input: 'check src/app.ts https://example.com/review and 1/2', skills: [] },
+  ])('resolves $input without changing argument or command precedence', ({ input, skills }) => {
+    expect(resolveUserInput({ ...options, input }).activations).toEqual(skills);
+  });
+});
 
 describe('resolveSlashCommandInput', () => {
   afterEach(() => {
@@ -64,9 +106,7 @@ describe('resolveSlashCommandInput', () => {
     });
   });
 
-  it('gates /remote-control behind the remote-control experimental flag', () => {
-    expect(resolve('/rc')).toEqual({ kind: 'message', input: '/rc' });
-    setExperimentalFeatures([{ id: 'remote-control', enabled: true }]);
+  it('resolves /remote-control and /rc as built-ins', () => {
     expect(resolve('/rc')).toMatchObject({ kind: 'builtin', name: 'remote-control' });
     expect(resolve('/remote-control')).toMatchObject({ kind: 'builtin', name: 'remote-control' });
   });
@@ -277,15 +317,6 @@ describe('resolveSlashCommandInput', () => {
     expect(resolve('/tower Ship feature X')).toEqual({
       kind: 'message',
       input: '/tower Ship feature X',
-    });
-  });
-
-  it('does not resolve /tower as a builtin on the legacy engine', () => {
-    setExperimentalFeatures([{ id: 'tower', enabled: true }]);
-
-    expect(resolve('/tower on', { engineV2: false })).toEqual({
-      kind: 'message',
-      input: '/tower on',
     });
   });
 });

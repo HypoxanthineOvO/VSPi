@@ -574,8 +574,8 @@ async function driveTurn(
 	const respondToInteractions = async (interactions: readonly Interaction[]): Promise<void> => {
 		for (const interaction of interactions) {
 			if (settled || handledInteractions.has(interaction.id)) continue;
-			if (interaction.origin.agentId !== undefined && interaction.origin.agentId !== "main") continue;
-			if (targetTurn === undefined || interaction.origin.turnId !== targetTurn) continue;
+			if (interaction.tags["agentId"] !== undefined && interaction.tags["agentId"] !== "main") continue;
+			if (targetTurn === undefined || interaction.tags["turnId"] !== targetTurn) continue;
 			handledInteractions.add(interaction.id);
 			if (interaction.kind === "approval") {
 				interactionFailure = 'Tool approval is required in non-interactive exec; the requested operation was not approved. Use an interactive client or explicitly choose an authorized --permission mode.';

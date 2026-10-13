@@ -5,8 +5,8 @@ import type { AuthPrompt, OAuthAuth, OAuthCredential } from '@earendil-works/pi-
 import type { BearerTokenProvider } from '@moonshot-ai/kimi-code-oauth';
 import { Error2 } from '#/_base/errors/errors';
 import type { IAtomicDocumentStore } from '#/persistence/interface/atomicDocumentStore';
-import type { IProviderService, OAuthRef, ProvidersChangedEvent } from '#/kosong/provider/provider';
-import type { ProviderRequestAuth } from '#/kosong/contract/provider';
+import type { IProviderService, OAuthRef, ProvidersChangedEvent } from '#/llm-adapter/provider/provider';
+import type { ProviderRequestAuth } from '#/llm-adapter/contract/provider';
 import { AuthErrors } from './errors';
 import { withScopedProxy } from '#/_base/utils/scopedProxy';
 import type {
@@ -178,6 +178,7 @@ export class PiOAuthAdapter {
   private definition(provider: string, ref?: OAuthRef): PiOAuthProvider | undefined {
     const config = this.providers.get(provider);
     const key = (ref ?? config?.oauth)?.key;
+    if (key !== undefined && !key.startsWith('pi-ai/')) return undefined;
     const id = key?.startsWith('pi-ai/') ? key.split('/')[1] : undefined;
     const definition = builtinProviders().find((candidate) => candidate.id === (id ?? config?.type ?? provider));
     const oauth = definition?.auth.oauth;
@@ -236,6 +237,7 @@ export class PiOAuthAdapter {
           ...configured,
           type: configured?.type ?? definition.id,
           apiKey: undefined,
+          apiKeyEnv: undefined,
           oauth: { storage: 'file', key },
         });
         if (flow.snapshot.status === 'pending') await this.provisionModels(provider, definition.id);

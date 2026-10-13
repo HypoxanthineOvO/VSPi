@@ -1,3 +1,4 @@
+import { isolateTestWorkspaceSync } from './helpers/workspace';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,20 +9,26 @@ import {
   ISessionManager,
   ISessionMediaStore,
 } from '@moonshot-ai/agent-core-v2';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { type RunningServer, startServer } from '../src/start';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
-import { isolateTestWorkspaceSync } from './helpers/workspace';
 
 let home: string;
 let server: RunningServer | undefined;
 
-beforeEach(() => {
+beforeAll(async () => {
   home = isolateTestWorkspaceSync(mkdtempSync(join(tmpdir(), 'kimi-server-v2-files-')));
+  server = await startServer({
+    hostIdentity: TEST_HOST_IDENTITY,
+    host: '127.0.0.1',
+    port: 0,
+    homeDir: home,
+    logLevel: 'silent',
+  });
 });
 
-afterEach(async () => {
+afterAll(async () => {
   try {
     await server?.close();
   } catch {
@@ -31,13 +38,15 @@ afterEach(async () => {
 });
 
 async function boot(): Promise<RunningServer> {
-  server = await startServer({
-    hostIdentity: TEST_HOST_IDENTITY,
-    host: '127.0.0.1',
-    port: 0,
-    homeDir: home,
-    logLevel: 'silent',
-  });
+  if (server === undefined) {
+    server = await startServer({
+      hostIdentity: TEST_HOST_IDENTITY,
+      host: '127.0.0.1',
+      port: 0,
+      homeDir: home,
+      logLevel: 'silent',
+    });
+  }
   return server;
 }
 

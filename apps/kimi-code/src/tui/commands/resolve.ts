@@ -7,6 +7,8 @@ import {
 import { isExperimentalFlagEnabled } from './experimental-flags';
 import { parseSlashInput } from './parse';
 import type { TUIState } from '../tui-state';
+import type { InlineSkillActivation } from '../types';
+import { extractInlineSkillActivations, findInlineSkillTokens } from '../utils/inline-skill-tokens';
 import type {
   KimiSlashCommand,
   SlashCommandBusyReason,
@@ -51,7 +53,6 @@ export interface ResolveSlashCommandInput {
   readonly pluginCommandMap: ReadonlyMap<string, string>;
   readonly isStreaming: boolean;
   readonly isCompacting: boolean;
-  readonly engineV2: boolean;
 }
 
 export function resolveSlashCommandInput(options: ResolveSlashCommandInput): SlashCommandIntent {
@@ -62,8 +63,7 @@ export function resolveSlashCommandInput(options: ResolveSlashCommandInput): Sla
   // `command` is a literal union where only some members carry `experimentalFlag`; widen to read it.
   if (
     command !== undefined &&
-    isExperimentalFlagEnabled((command as KimiSlashCommand).experimentalFlag) &&
-    (!(command as KimiSlashCommand).requiresEngineV2 || options.engineV2)
+    isExperimentalFlagEnabled((command as KimiSlashCommand).experimentalFlag)
   ) {
     const busyReason = slashCommandBusyReason(options);
     if (
@@ -86,10 +86,6 @@ export function resolveSlashCommandInput(options: ResolveSlashCommandInput): Sla
 
   const skillName = resolveSkillCommand(options.skillCommandMap, parsed.name);
   if (skillName !== undefined) {
-    // Skill activations are never blocked by a busy session: the TUI queues
-    // them behind the running turn exactly like normal messages (see
-    // sendSkillActivation), and Ctrl-S steers them as real activations, so
-    // skill commands can be issued any time.
     return {
       kind: 'skill',
       commandName: parsed.name,
@@ -122,6 +118,34 @@ export function resolveSlashCommandInput(options: ResolveSlashCommandInput): Sla
     kind: 'message',
     input: options.input,
   };
+}
+
+export function resolveUserInput(options: ResolveSlashCommandInput): {
+  readonly intent: SlashCommandIntent;
+  readonly activations: readonly InlineSkillActivation[];
+} {
+  const intent = resolveSlashCommandInput(options);
+  if (intent.kind !== 'skill' && intent.kind !== 'message' && intent.kind !== 'not-command') {
+    return { intent, activations: [] };
+  }
+  const text = options.input.trim();
+  const activations = extractInlineSkillActivations(text, options.skillCommandMap, {
+    includeLeading: true,
+  });
+  if (activations.length === 1) {
+    const tokens = findInlineSkillTokens(text, {
+      isKnownSkill: (name) => resolveSkillCommand(options.skillCommandMap, name) !== undefined,
+      includeLeading: true,
+    });
+    if (tokens.length === 1 && tokens[0]?.start === 0) {
+      if (intent.kind !== 'skill') return { intent, activations: [] };
+      return {
+        intent,
+        activations: [{ skillName: activations[0]!.skillName, args: text.slice(tokens[0].end).trim() }],
+      };
+    }
+  }
+  return { intent, activations };
 }
 
 export function resolveSkillCommand(

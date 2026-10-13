@@ -5,10 +5,10 @@ import { Error2 } from '#/_base/errors/errors';
 
 import { IOAuthService } from '#/app/auth/auth';
 import { AuthErrors } from '#/app/auth/errors';
-import { nonEmpty } from '#/kosong/model/modelAuth';
-import { IModelOAuthTokens } from '#/kosong/model/modelOAuth';
-import type { OAuthRef } from '#/kosong/provider/provider';
-import type { ProviderRequestAuth } from '#/kosong/contract/provider';
+import { nonEmpty } from '#/llm-adapter/model/model-auth';
+import { IModelOAuthTokens } from '#/llm-adapter/model/model-oauth';
+import type { OAuthRef } from '#/llm-adapter/provider/provider';
+import type { ProviderRequestAuth } from '#/llm-adapter/contract/provider';
 
 export class ModelOAuthTokenAdapter implements IModelOAuthTokens {
   declare readonly _serviceBrand: undefined;

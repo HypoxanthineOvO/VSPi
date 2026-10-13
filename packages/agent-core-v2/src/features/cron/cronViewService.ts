@@ -1,16 +1,11 @@
-import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
-import { AgentCron, type CronRuntime } from '#/features/cron/cronAgentRuntime';
+import { IAgentCronService } from '#/features/cron/cronService';
 import type { CronTask, CronTaskInit } from '#/features/cron/cronTask';
-import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
 import type { IAgentCronViewService } from './cronView';
 
 export class AgentCronViewService implements IAgentCronViewService {
   declare readonly _serviceBrand: undefined;
 
-  constructor(
-    @IAgentLifecycleService private readonly manager: IAgentLifecycleService,
-    @IAgentScopeContext private readonly scope: IAgentScopeContext,
-  ) {}
+  constructor(@IAgentCronService private readonly cron: IAgentCronService) {}
 
   list(): readonly CronTask[] {
     return this.cron.list();
@@ -24,7 +19,4 @@ export class AgentCronViewService implements IAgentCronViewService {
     return this.cron.removeTasks([id]).length > 0;
   }
 
-  private get cron(): CronRuntime {
-    return this.manager.resolve(this.scope.agentContext, AgentCron);
-  }
 }

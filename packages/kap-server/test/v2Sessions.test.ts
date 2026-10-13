@@ -1,3 +1,4 @@
+import { isolateTestWorkspace } from './helpers/workspace';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,13 +21,12 @@ import {
   type FsPullRequest,
   IGitService,
 } from '@moonshot-ai/agent-core-v2/app/git/git';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type RunningServer, startServer } from '../src/start';
 import { mapActivityStatus } from '../src/routes/v2/sessions';
 import { authHeaders, authedFetch } from './helpers/auth';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
-import { isolateTestWorkspace } from './helpers/workspace';
 
 interface SessionWireV2 {
   id: string;
@@ -162,12 +162,17 @@ describe('server /api/v2/sessions', () => {
   let home: string | undefined;
   let base: string;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
+    home = await isolateTestWorkspace(await mkdtemp(join(tmpdir(), 'kimi-server-v2-sessions-list-')));
+    await bootSeeded();
+  });
+
+  beforeEach(() => {
     gitState.calls = [];
     gitState.responses = new Map();
-    home = await isolateTestWorkspace(
-      await mkdtemp(join(tmpdir(), 'kimi-server-v2-sessions-list-')),
-    );
+  });
+
+  async function bootSeeded(): Promise<void> {
     server = await startServer({
       hostIdentity: TEST_HOST_IDENTITY,
       host: '127.0.0.1',
@@ -180,9 +185,9 @@ describe('server /api/v2/sessions', () => {
       ],
     });
     base = `http://127.0.0.1:${server.port}`;
-  });
+  }
 
-  afterEach(async () => {
+  afterAll(async () => {
     if (server !== undefined) {
       await server.close();
       server = undefined;
@@ -288,6 +293,10 @@ describe('server /api/v2/sessions', () => {
     const page = await getData();
     const item = page.items.find((entry) => entry.id === id);
     expect(item?.activity).toEqual({ status: 'idle', model: 'stub' });
+
+    await rm(join(home as string, 'config.toml'), { force: true });
+    await (server as RunningServer).close();
+    await bootSeeded();
   });
 
   it('filters by workspace.id (single, repeated OR, unknown)', async () => {
@@ -556,6 +565,8 @@ describe('server /api/v2/sessions', () => {
   });
 
   it('degrades non-git cwds to null fields without failing the request', async () => {
+    await (server as RunningServer).close();
+    await bootSeeded();
     const page = await getData('?include=git&meta.archived=all');
     for (const item of page.items) {
       expect(item.git).toEqual({ branch: null, pull_request: null });
@@ -693,6 +704,8 @@ describe('server /api/v2/sessions', () => {
   });
 
   it('supports the ids projection and include=git inside groups', async () => {
+    await (server as RunningServer).close();
+    await bootSeeded();
     const projected = await getGroupData('?view=by_workspace&fields=id,archived');
     expect(projected.groups[0]?.sessions).toEqual([
       { id: 's1', archived: false },
@@ -789,10 +802,8 @@ describe('server /api/v2/sessions batch archive/restore', () => {
   let home: string | undefined;
   let base: string;
 
-  beforeEach(async () => {
-    home = await isolateTestWorkspace(
-      await mkdtemp(join(tmpdir(), 'kimi-server-v2-sessions-batch-')),
-    );
+  beforeAll(async () => {
+    home = await isolateTestWorkspace(await mkdtemp(join(tmpdir(), 'kimi-server-v2-sessions-batch-')));
     server = await startServer({
       hostIdentity: TEST_HOST_IDENTITY,
       host: '127.0.0.1',
@@ -803,8 +814,11 @@ describe('server /api/v2/sessions batch archive/restore', () => {
     base = `http://127.0.0.1:${server.port}`;
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  afterAll(async () => {
     if (server !== undefined) {
       await server.close();
       server = undefined;

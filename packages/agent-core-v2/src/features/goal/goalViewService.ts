@@ -1,32 +1,27 @@
-import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
-import { AgentGoal } from '#/features/goal/goalAgentRuntime';
+import { IAgentGoalService } from '#/features/goal/goalService';
 import type { GoalReasonInput, ResumeGoalInput } from '#/features/goal/goal';
 import type { GoalSnapshot, GoalToolResult } from '#/features/goal/types';
-import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
 
 import type { IAgentGoalViewService } from './goalView';
 
 export class AgentGoalViewService implements IAgentGoalViewService {
   declare readonly _serviceBrand: undefined;
 
-  constructor(
-    @IAgentLifecycleService private readonly manager: IAgentLifecycleService,
-    @IAgentScopeContext private readonly scope: IAgentScopeContext,
-  ) {}
+  constructor(@IAgentGoalService private readonly goal: IAgentGoalService) {}
 
   getGoal(): GoalToolResult {
-    return this.manager.resolve(this.scope.agentContext, AgentGoal).getGoal();
+    return this.goal.getGoal();
   }
 
   pauseGoal(input: GoalReasonInput = {}): Promise<GoalSnapshot> {
-    return this.manager.resolve(this.scope.agentContext, AgentGoal).pauseGoal(input, 'user');
+    return this.goal.pauseGoal(input, 'user');
   }
 
   resumeGoal(input: ResumeGoalInput = {}): Promise<GoalSnapshot> {
-    return this.manager.resolve(this.scope.agentContext, AgentGoal).resumeGoal(input, 'user');
+    return this.goal.resumeGoal(input, 'user');
   }
 
   cancelGoal(input: GoalReasonInput = {}): Promise<GoalSnapshot> {
-    return this.manager.resolve(this.scope.agentContext, AgentGoal).cancelGoal(input, 'user');
+    return this.goal.cancelGoal(input, 'user');
   }
 }

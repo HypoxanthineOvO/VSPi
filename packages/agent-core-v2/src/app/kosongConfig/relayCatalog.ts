@@ -1,12 +1,12 @@
 import { z } from 'zod';
-import { findPiModel, piThinking } from '#/kosong/provider/pi/catalog';
-import type { ModelRecord } from '#/kosong/model/model';
-import type { ProviderConfig } from '#/kosong/provider/provider';
-import { ProtocolSchema } from '#/kosong/protocol/protocol';
-import { applyModelEffortProfile } from '#/kosong/model/effortProfiles';
-import { EFFORT_PROFILE_REVISION, modelEffortProfile } from '#/kosong/provider/effortProfiles';
-import { currentModelId } from '#/kosong/model/retiredModelIds';
-import { providerFetch } from '#/kosong/provider/transport';
+import { findPiModel, piThinking } from '#/llm-adapter/provider/pi/catalog';
+import type { ModelRecord } from '#/llm-adapter/model/model';
+import type { ProviderConfig } from '#/llm-adapter/provider/provider';
+import { ProtocolSchema } from '#/llm-adapter/protocol/protocol';
+import { applyModelEffortProfile } from '#/llm-adapter/model/effortProfiles';
+import { EFFORT_PROFILE_REVISION, modelEffortProfile } from '#/llm-adapter/provider/effortProfiles';
+import { currentModelId } from '#/llm-adapter/model/retiredModelIds';
+import { providerFetch } from '#/llm-adapter/provider/transport';
 
 const costRate = z.number().finite().nonnegative();
 const costSchema = z.object({

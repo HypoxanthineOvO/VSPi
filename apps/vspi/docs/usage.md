@@ -11,8 +11,13 @@
 | `/sessions` | 浏览、切换会话与分支 |
 | `/agents` | 浏览 Subagent 状态和按时间排列的子对话，不展示 thinking |
 | `/tasks` | 查看 Agent jobs、进程与问题，不展开子对话 |
+| `/btw 问题`、`/side 问题` | 打开旁路问答，主任务继续执行 |
 
 运行中的 Subagent 状态显示在停靠区和 `/agents` 中，不向主对话重复插入活动卡片。子任务可配置独立模型；模型和思考档位的可用性取决于当前 Provider 目录与账号权限。
+
+2.6.0 起，可以在主 Agent 工作时输入 `/btw 这里为什么这样设计？`（`/side` 为别名）。旁路问答继承打开时的上下文，能够通过 Read、Grep、Glob 查阅文件；在面板里按 Enter 继续追问，PgUp/PgDn 翻阅回答。Ctrl+C 取消正在生成的旁路回复，Esc 关闭并释放本次旁路会话，两者都不会中断主任务。关闭后再次打开会创建一条新的旁路会话。
+
+新建会话默认启用 NotifyUser 进度汇报。主 Agent 的进度以文字显示在主时间线原位置，子 Agent 的进度显示在 Agents 停靠区和 `/agents` 中；`/copy` 会跳过进度汇报，复制最近的正式回复。旧会话保留创建时的工具和提示词设置，因此升级后继续旧会话不一定启用 NotifyUser；使用 `/new` 开始新会话即可启用。在 `config.toml` 的 `[experimental]` 下设置 `notify_user = false`，重载配置后可关闭进度汇报。
 
 `Ctrl+B` 可将当前支持的前台任务转到后台。`/quit` 默认只断开前端，不取消工作；`/cancel-and-exit` 取消当前运行并退出。
 
@@ -233,6 +238,8 @@ vspi config inspect defaultModel
 vspi config diagnostics
 vspi config reload
 ```
+
+MCP 服务器配置位于 `$VSPI_HOME/mcp.json`（默认 `~/.vspi/mcp.json`），使用 `mcpServers` 对象。在某个服务器条目中加入 `"deferred": true`，可让模型按需选择并加载该服务器的工具定义，减少初始上下文占用；未设置时保留完整工具披露。配置依然需要提供该服务器的 `command` 或 `url` 等连接信息。`/tools` 显示这项能力的配置入口，不提供服务器编辑表单。
 
 `config inspect` 和 `config diagnostics` 只读连接已有 daemon；`config reload` 才会重新读取磁盘配置。命令行 section 使用 `defaultModel` 等 Core 名称，TOML 使用 `default_model` 等磁盘字段名。
 

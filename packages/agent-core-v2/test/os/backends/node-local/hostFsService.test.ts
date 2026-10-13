@@ -53,22 +53,23 @@ describe('HostFileSystem stat / lstat', () => {
   });
 });
 
-describe('HostFileSystem bounded directory reads', () => {
-  it('returns a truncated prefix when the entry limit is exceeded', async () => {
-    await Promise.all(['one', 'two', 'three'].map((name) => writeFile(join(dir, name), '')));
-
-    const result = await fs.readdirCapped(dir, 2);
-
-    expect(result.entries).toHaveLength(2);
-    expect(result.truncated).toBe(true);
+describe('HostFileSystem streamed UTF-8 lines', () => {
+  it('preserves Unicode across chunks, CRLF, and a BOM after the first line', async () => {
+    const path = join(dir, 'unicode.txt');
+    const first = 'a'.repeat(65_531) + '🙂é\r\n';
+    const second = '\uFEFFsecond\n';
+    await writeFile(path, '\uFEFF' + first + second + 'last');
+    const lines: string[] = [];
+    for await (const line of fs.readLines(path)) lines.push(line);
+    expect(lines).toEqual([first, second, 'last']);
   });
 
-  it('does not mark a directory truncated when its size equals the limit', async () => {
-    await Promise.all(['one', 'two'].map((name) => writeFile(join(dir, name), '')));
-
-    const result = await fs.readdirCapped(dir, 2);
-
-    expect(result.entries.map((entry) => entry.name).sort()).toEqual(['one', 'two']);
-    expect(result.truncated).toBe(false);
+  it('rejects malformed UTF-8 rather than replacing bytes in strict mode', async () => {
+    const path = join(dir, 'invalid.txt');
+    await writeFile(path, Buffer.from([0x61, 0x0a, 0xc3]));
+    const read = async () => {
+      for await (const _line of fs.readLines(path, { errors: 'strict' })) {}
+    };
+    await expect(read()).rejects.toThrow();
   });
 });

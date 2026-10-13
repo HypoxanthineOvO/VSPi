@@ -11,7 +11,7 @@ import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
 import { Error2 } from '#/_base/errors/errors';
 import { LifecycleScope } from '#/app/scopes';
 import { IOAuthService } from '#/app/auth/auth';
-import { providerFetch } from '#/kosong/provider/transport';
+import { providerFetch } from '#/llm-adapter/provider/transport';
 import { withScopedProxy } from '#/_base/utils/scopedProxy';
 import { accountProxyForUrl, accountProxyPreference } from '#/app/auth/proxy';
 import { OAUTH_NETWORK_SECTION, PROXY_SECTION, type OAuthNetworkConfig, type ProxyConfig } from '#/app/auth/configSection';
@@ -19,16 +19,16 @@ import { AuthErrors } from '#/app/auth/errors';
 import { IAgentIdentity } from '#/app/agentIdentity/agentIdentity';
 import { IConfigService } from '#/app/config/config';
 import { IEventService } from '#/app/event/event';
-import { ModelCatalogErrors } from '#/kosong/model/errors';
-import { IModelService, type ModelRecord } from '#/kosong/model/model';
-import { effectiveModelConfig } from '#/kosong/model/modelAuth';
+import { ModelCatalogErrors } from '#/llm-adapter/model/errors';
+import { IModelService, type ModelRecord } from '#/llm-adapter/model/model';
+import { effectiveModelConfig } from '#/llm-adapter/model/model-auth';
 import {
   IProviderService,
   type ModelSource,
   type OAuthRef,
   type ProviderConfig,
-} from '#/kosong/provider/provider';
-import { getProviderDefinition } from '#/kosong/provider/providerDefinition';
+} from '#/llm-adapter/provider/provider';
+import { getProviderDefinition } from '#/llm-adapter/provider/provider-definition';
 
 import {
   DEFAULT_MODEL_SECTION,
@@ -172,7 +172,7 @@ export class ProviderDiscoveryService implements IProviderDiscoveryService {
       .map(([id]) => id);
     if (options.providerId !== undefined && relayIds.includes(options.providerId)) {
       const response = await this.refreshRelayProviders(relayIds);
-      if (response.changed.length) this.events.publish(new ModelCatalogChanged({ payload: response }));
+      if (response.changed.length > 0) this.events.publish(new ModelCatalogChanged({ payload: response }));
       return response;
     }
     if (options.providerId !== undefined) {
@@ -195,7 +195,7 @@ export class ProviderDiscoveryService implements IProviderDiscoveryService {
       providerId: options.providerId,
     });
     const response = mapRefreshResult(result);
-    if (relayIds.length) {
+    if (relayIds.length > 0) {
       const relay = await this.refreshRelayProviders(relayIds);
       response.changed.push(...relay.changed);
       response.unchanged.push(...relay.unchanged);

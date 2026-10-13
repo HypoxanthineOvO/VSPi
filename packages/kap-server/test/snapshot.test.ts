@@ -1,3 +1,4 @@
+import { isolateTestWorkspace } from './helpers/workspace';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,8 +11,8 @@ import {
   IAppendLogStore,
   IEventBus,
   IAgentLifecycleService,
+  IAgentLoopService,
   IAgentProfileService,
-  IAgentPromptService,
   ISessionContext,
   ISessionIndex,
   ISessionMetadata,
@@ -28,13 +29,12 @@ import {
 } from '@moonshot-ai/agent-core-v2';
 import { sessionSnapshotResponseSchema } from '../src/protocol/rest-snapshot';
 import { emptySessionUsage } from '../src/protocol/session';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { registerSnapshotRoutes } from '../src/routes/snapshot';
 import { type RunningServer, startServer } from '../src/start';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
 import { authHeaders } from './helpers/auth';
-import { isolateTestWorkspace } from './helpers/workspace';
 
 function fakeAccessor(entries: ReadonlyArray<readonly [unknown, unknown]>) {
   const services = new Map<unknown, unknown>(entries);
@@ -58,8 +58,8 @@ describe('server-v2 snapshot route enrichment', () => {
       accessor: fakeAccessor([
         [IAgentContextMemoryService, { get: () => [] }],
         [
-          IAgentPromptService,
-          { list: () => ({ active: { id: promptId }, pending: [] }) },
+          IAgentLoopService,
+          { snapshot: () => ({ activePromptId: promptId }) },
         ],
         [IWireService, { flush: async () => {} }],
         [IAgentScopeContext, { scope: () => 'scope/sess_snapshot' }],
@@ -363,13 +363,13 @@ describe('server-v2 GET /api/v1/sessions/:id/snapshot', () => {
   let home: string | undefined;
   let base: string;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     home = await isolateTestWorkspace(await mkdtemp(join(tmpdir(), 'kimi-snapshot-test-')));
     server = await startServer({ hostIdentity: TEST_HOST_IDENTITY, host: '127.0.0.1', port: 0, homeDir: home, logLevel: 'silent' });
     base = `http://127.0.0.1:${server.port}`;
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     if (server !== undefined) {
       await server.close();
       server = undefined;
