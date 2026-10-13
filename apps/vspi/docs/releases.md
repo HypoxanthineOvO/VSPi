@@ -11,7 +11,7 @@
 - 新增执行中进度汇报：主 Agent 的 NotifyUser 显示在原时间线位置；子 Agent 的进度显示在 Agents 区域和 `/agents`，与主对话分开。新建会话默认启用，旧会话沿用原设置，可用 `/new` 启用；可在 `config.toml` 的 `[experimental]` 中设置 `notify_user = false` 关闭。
 - 同步 MCP 按服务器延迟披露工具与 Tower 调度、恢复能力，适配新版 Goal/Cron 服务以及重启后的 Goal 恢复。
 - VSPi 回归 523 项通过、2 项跳过；runtime 85 项通过，覆盖活动 Goal 重启恢复与暂停/取消后不自动恢复。VSPi 与 runtime 类型检查通过。
-- 最低运行版本保持 Node.js 22.19.0。本版本尚未发布；平台与打包验收记录将在完成后补充。
+- Linux 本地安装包已通过 Node.js 24.15.0 与最低支持版本 22.19.0 的隔离安装、启动、命令入口和依赖完整性验证。Core 完整测试与失败项复测、Klient 与服务器回归、类型检查及 lint 已完成；GPT/Claude OAuth 使用本地 HTTP 契约测试验证，尚未以真实账号重新登录。本版本尚未发布。
 
 ## 2.5.5 — 模型切换与 Steer 生效位置（Linux 先行）
 
