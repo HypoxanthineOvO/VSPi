@@ -4,14 +4,16 @@
 
 发行包本地构建并直接发布，发版流程见[开发指南](development.md#发布)。各版本的平台验收范围分别记录；2.4.0 按 Linux 先行发布，Windows 验收后置，不沿用旧版本的结论。
 
-## 2.6.0 — Core 与模型接口升级（未发布）
+## 2.6.0 — Core 与模型接口升级（Linux 先行）
 
 - 同步 Kimi Agent Core 至 2026-10-13 上游，pi-ai 升至 1.2.0；继续使用 VSPi 的模型目录、GPT/Claude OAuth 登录和按模型保存的思考强度。
 - 新增 `/btw`（别名 `/side`）旁路问答：继承当前上下文，可使用 Read、Grep、Glob 查阅文件；主任务继续运行。支持连续追问，Ctrl+C 取消旁路回复，Esc 关闭。
 - 新增执行中进度汇报：主 Agent 的 NotifyUser 显示在原时间线位置；子 Agent 的进度显示在 Agents 区域和 `/agents`，与主对话分开。新建会话默认启用，旧会话沿用原设置，可用 `/new` 启用；可在 `config.toml` 的 `[experimental]` 中设置 `notify_user = false` 关闭。
 - 同步 MCP 按服务器延迟披露工具与 Tower 调度、恢复能力，适配新版 Goal/Cron 服务以及重启后的 Goal 恢复。
 - VSPi 回归 523 项通过、2 项跳过；runtime 85 项通过，覆盖活动 Goal 重启恢复与暂停/取消后不自动恢复。VSPi 与 runtime 类型检查通过。
-- Linux 本地安装包已通过 Node.js 24.15.0 与最低支持版本 22.19.0 的隔离安装、启动、命令入口和依赖完整性验证。Core 完整测试与失败项复测、Klient 与服务器回归、类型检查及 lint 已完成；GPT/Claude OAuth 使用本地 HTTP 契约测试验证，尚未以真实账号重新登录。本版本尚未发布。
+- Linux 本地安装包已通过 Node.js 24.15.0 与最低支持版本 22.19.0 的隔离安装、启动、命令入口和依赖完整性验证。Core 完整测试与失败项复测、Klient 与服务器回归、类型检查及 lint 已完成；GPT/Claude OAuth 使用本地 HTTP 契约测试验证，尚未以真实账号重新登录。同一 tarball 在两种 Node 版本下的打包 daemon 各 7 项检查通过；Windows/macOS 本轮未实机验收。
+
+- 已发布到 [GitHub Release v2.6.0](https://github.com/HypoxanthineOvO/VSPi/releases/tag/v2.6.0) 并更新共享 `latest`；版本包、兼容包及 `SHA256SUMS` 均已通过公开下载地址回读，字节与本地验收文件一致。
 
 ## 2.5.5 — 模型切换与 Steer 生效位置（Linux 先行）
 
