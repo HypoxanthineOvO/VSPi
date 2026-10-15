@@ -4,6 +4,18 @@
 
 发行包本地构建并直接发布，发版流程见[开发指南](development.md#发布)。各版本的平台验收范围分别记录；2.4.0 按 Linux 先行发布，Windows 验收后置，不沿用旧版本的结论。
 
+## 2.7.0 — TUI 重做与 Desktop 运行时接口
+
+- `/model` 分为置顶、最近使用、官方推荐三组，常驻搜索框覆盖全部模型；`Ctrl+P` 置顶、`Ctrl+O` 查看全部，打开时焦点落在当前模型。置顶与最近使用保存在 `~/.config/vspi/model-picks.json`。
+- 对话渲染：Steer 只在进行中显示「待插入 / 已送达模型」，完成后不留标记，后端回显不再重复；工具行显示耗时与输出首行；Agent 行显示名字、任务、Profile、模型、耗时和结论首句；块间距统一为一行。
+- 状态栏使用中文标签，累计 token 与当前上下文分开，未知值不显示，高度固定；`vspi config`、默认模型选择、代理、`/providers`、`/settings` 增加分组、搜索和对齐。
+- 修复 DeepSeek、小米及 OpenAI 协议自建中转被误判为需要共享代理的问题；只对海外官方 Provider 与指向官方海外地址的 Provider 询问。
+- 新增 `vspi daemon desktop`，供 VSPi Desktop 发现本机或 SSH 远端运行时；配套终端会话与 Desktop 设置接口。Desktop 应用本身仍需 `KIMI_CODE_EXPERIMENTAL_DESKTOP=1`，不包含在 npm 发行包中。
+- 常用模型推荐加入 GPT 6.1 Sol、Claude Sonnet 5.5、Gemini 4 Argon；内置 VSPLab 目录加入前两者的官方元数据（2026-10-15 核对）。
+- 修复上下文截断在代理对边界拆开 emoji 等补充平面字符的问题。
+- Linux 全量 `check:vspi` 通过（VSPi 505 项、Core 7,432 项通过），发布器 2 项测试、Desktop 21 项测试通过；同一 tarball 在 Node 24.16.0 与最低支持的 22.19.0 下完成隔离安装与 `daemon desktop` 发现检查，打包 daemon 7 项测试通过。
+- Windows（Node 24.20.0）已验证同一 tarball 的包校验、隔离安装、daemon 启停与 `daemon desktop` 命名管道发现；Windows 源码构建与 macOS 本轮未验收，Desktop 应用只在 Linux 验证。
+
 ## 2.6.0 — Core 与模型接口升级（Linux 先行）
 
 - 同步 Kimi Agent Core 至 2026-10-13 上游，pi-ai 升至 1.2.0；继续使用 VSPi 的模型目录、GPT/Claude OAuth 登录和按模型保存的思考强度。
