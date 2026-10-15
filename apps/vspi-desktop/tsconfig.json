@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node", "vite/client"],
+    "noEmit": true
+  },
+  "include": ["src", "test", "../../packages/agent-core-v2/src"],
+  "exclude": ["../../packages/agent-core-v2/src/human"]
+}

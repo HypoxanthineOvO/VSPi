@@ -8,6 +8,7 @@ export default defineConfig({
       '!packages/minidb',
       'apps/kimi-code',
       'apps/vspi',
+      'apps/vspi-desktop',
       'apps/vis/server',
       'apps/vis/web',
       ...vscodeProjects,

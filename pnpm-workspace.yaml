@@ -1,6 +1,7 @@
 packages:
   - packages/*
   - apps/*
+  # Includes the independently built @vsp/vspi-desktop Electron application.
   - apps/vis/server
   - apps/vis/web
   - docs

@@ -1,0 +1,29 @@
+THIRD-PARTY NOTICES
+
+VSPi Desktop includes code adapted from ZCode
+(https://github.com/zai-org/ZCode), licensed under the Apache License,
+Version 2.0.
+
+Adapted sources:
+
+- src/renderer/style.css
+  Adapted from packages/ui/src/styles.css — the @theme design-token block,
+  the .theme-zai-light / .theme-zai-dark palettes, the global scrollbar
+  rules, and the shadcn registry data-* custom-variant wiring
+  (shadcn/tailwind.css).
+- src/renderer/ui.tsx
+  Adapted from packages/ui/src/components/ui/{button,input,textarea,tabs,
+  dialog,dropdown-menu}.tsx — class-variant component definitions using the
+  same Tailwind token names and Radix primitives.
+- src/renderer/lib/cn.ts
+  Adapted from packages/ui/src/components/lib/utils.ts — the clsx +
+  tailwind-merge class-name helper.
+
+The UI layout and visual language additionally follows ZCode's DESIGN.md
+(dense, calm, operational workspace; semantic color tokens; text-ui-*
+typography scale), as required by the VSPi Desktop brief.
+
+Apache License, Version 2.0
+---------------------------
+A copy of the license is available at
+https://www.apache.org/licenses/LICENSE-2.0.txt

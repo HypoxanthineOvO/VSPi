@@ -79,6 +79,7 @@
         ./packages/vsp-runtime
         ./apps/kimi-code
         ./apps/vspi
+        ./apps/vspi-desktop
         ./apps/vscode
         ./apps/kimi-inspect
         ./apps/vis
@@ -105,6 +106,7 @@
         "@vsp/vsp-runtime"
         "@moonshot-ai/kimi-code"
         "vspi"
+        "@vsp/vspi-desktop"
         "kimi-code"
         "@moonshot-ai/kimi-inspect"
         "@moonshot-ai/vis"
