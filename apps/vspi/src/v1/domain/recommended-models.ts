@@ -6,6 +6,7 @@ interface RecommendedModel {
 
 export const RECOMMENDED_MODELS: readonly RecommendedModel[] = [
 	{ label: "GPT 6 Astra", ids: ["gpt-6", "gpt-6-astra"] },
+	{ label: "GPT 6.1 Sol", ids: ["gpt-6.1-sol"] },
 	{ label: "GPT 6 Sol", ids: ["gpt-6-sol"] },
 	{ label: "GPT 6 Luna", ids: ["gpt-6-luna"] },
 	{ label: "GPT 5.6 Sol", ids: ["gpt-5.6-sol"] },
@@ -13,6 +14,7 @@ export const RECOMMENDED_MODELS: readonly RecommendedModel[] = [
 	{ label: "Claude Fable 5.1", ids: ["claude-fable-5-1"] },
 	{ label: "Claude Fable 5", ids: ["claude-fable-5"] },
 	{ label: "Claude Opus 5.5", ids: ["claude-opus-5-5"] },
+	{ label: "Claude Sonnet 5.5", ids: ["claude-sonnet-5-5"] },
 	{ label: "Claude Opus 5", ids: ["claude-opus-5"] },
 	{ label: "Kimi K3", ids: ["kimi-k3", "k3"] },
 	{ label: "Kimi K2.8 Preview", ids: [], names: ["Kimi K2.8", "Kimi K2.8 Preview"] },
@@ -28,6 +30,7 @@ export const RECOMMENDED_MODELS: readonly RecommendedModel[] = [
 	{ label: "MiMo V2.5 Pro", ids: ["mimo-v2.5-pro"] },
 	{ label: "Qwen 3.8 Max", ids: ["qwen3.8-max"] },
 	{ label: "Qwen 3.8 Flash", ids: ["qwen3.8-flash"] },
+	{ label: "Gemini 4 Argon", ids: ["gemini-4-argon"] },
 	{ label: "Gemini 3.8 Flash", ids: ["gemini-3.8-flash"] },
 	{ label: "Gemini 3.1 Pro", ids: ["gemini-3.1-pro", "gemini-3.1-pro-preview"] },
 	{ label: "Hy4 Preview", ids: ["hy4-preview"] },

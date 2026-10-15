@@ -1002,6 +1002,77 @@
       }
     },
     {
+      "id": "gpt-6.1-sol",
+      "name": "GPT-6.1 Sol",
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "contextWindow": 1050000,
+      "maxTokens": 128000,
+      "cost": {
+        "input": 2,
+        "output": 10,
+        "cacheRead": 0.1,
+        "cacheWrite": 2.5,
+        "tiers": [
+          {
+            "input": 4,
+            "output": 15,
+            "cacheRead": 0.2,
+            "cacheWrite": 5,
+            "tier": {
+              "type": "context",
+              "size": 272000
+            }
+          }
+        ]
+      },
+      "effortLevels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "medium",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "releasedAt": "2026-09-29",
+      "metadataSources": {
+        "input": {
+          "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+          "checkedAt": "2026-10-15",
+          "verification": "official-docs"
+        },
+        "cost": {
+          "source": "https://developers.openai.com/api/docs/pricing",
+          "checkedAt": "2026-10-15",
+          "verification": "official-docs"
+        },
+        "releasedAt": {
+          "source": "https://developers.openai.com/api/docs/changelog",
+          "checkedAt": "2026-10-15",
+          "verification": "official-docs"
+        },
+        "effort": {
+          "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+          "checkedAt": "2026-10-15",
+          "verification": "official-docs"
+        }
+      },
+      "curated": true,
+      "protocol": "openai_responses"
+    },
+    {
       "id": "gpt-6-sol",
       "name": "GPT-6 Sol",
       "reasoning": true,
@@ -1500,6 +1571,65 @@
         "effort": {
           "source": "https://platform.claude.com/docs/en/build-with-claude/effort",
           "checkedAt": "2026-09-23",
+          "verification": "official-docs"
+        }
+      },
+      "curated": true,
+      "protocol": "anthropic"
+    },
+    {
+      "id": "claude-sonnet-5-5",
+      "name": "Claude Sonnet 5.5",
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "contextWindow": 1000000,
+      "maxTokens": 128000,
+      "cost": {
+        "input": 2,
+        "output": 10,
+        "cacheRead": 0.1,
+        "cacheWrite": 2.5
+      },
+      "effortLevels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultEffort": "high",
+      "effortMode": "effort",
+      "effortRevision": 2,
+      "thinkingLevelMap": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+      },
+      "releasedAt": "2026-09-28",
+      "metadataSources": {
+        "input": {
+          "source": "https://platform.claude.com/docs/en/about-claude/models/overview",
+          "checkedAt": "2026-10-15",
+          "verification": "official-docs"
+        },
+        "cost": {
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "checkedAt": "2026-10-15",
+          "verification": "official-docs"
+        },
+        "releasedAt": {
+          "source": "https://www.anthropic.com/news",
+          "checkedAt": "2026-10-15",
+          "verification": "official-docs"
+        },
+        "effort": {
+          "source": "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "checkedAt": "2026-10-15",
           "verification": "official-docs"
         }
       },
@@ -3268,7 +3398,7 @@
     "relayCharges": false
   },
   "releaseDateMeaning": "Model public release date (YYYY-MM-DD), not catalog registration or snapshot identifier date; see per-model provenance",
-  "updatedAt": "2026-09-23",
+  "updatedAt": "2026-10-15",
   "metadataSourceSnapshot": {
     "url": "https://models.dev/api.json",
     "sha256": "5ebd3e69924168e7b7c44495eb43d5447bf0e8b308fe4d6401ee4eb14ef34e4c",
