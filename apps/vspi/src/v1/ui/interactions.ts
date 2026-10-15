@@ -163,7 +163,7 @@ const QUESTION_KEYS: readonly KeyId[] = [
 const matchesAnyKey = (value: string, keys: readonly KeyId[]): boolean => keys.some((key) => matchesKey(value, key));
 
 const editingInput = (value: string): boolean =>
-  printable(value) || value.startsWith("\u001b[200~") || matchesAnyKey(value, EDITING_KEYS);
+  printable(value) || value.startsWith("\u001B[200~") || matchesAnyKey(value, EDITING_KEYS);
 
 const actions: InteractionDefinition[] = [
   keyAction({
@@ -525,7 +525,17 @@ const actions: InteractionDefinition[] = [
     keyValues: [Key.ctrl("o")],
     handler: "expandModelList",
     enabled: (state) => state.modelChoiceTab === true,
-    hint: (state) => state.modelExpanded ? "Ctrl+O 星标" : "Ctrl+O 全部",
+    hint: (state) => state.modelExpanded ? "Ctrl+O 常用" : "Ctrl+O 全部",
+  }),
+  keyAction({
+    id: "panel.models.pin",
+    surface: "panel",
+    context: "models",
+    keys: ["Ctrl+P"],
+    keyValues: [Key.ctrl("p")],
+    handler: "toggleModelPin",
+    enabled: (state) => state.modelChoiceTab === true,
+    hint: "Ctrl+P 置顶",
   }),
   keyAction({
     id: "panel.subagentModels.select",

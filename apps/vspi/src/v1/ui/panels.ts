@@ -120,6 +120,7 @@ export type PanelEvent =
 	| { type: "close" }
 	| { type: "command"; command: CommandDefinition }
 	| { type: "model"; model: ModelOption }
+	| { type: "modelPin"; pinned: string[] }
 	| { type: "subagentModel"; edit: SubagentModelEdit }
 	| { type: "modelGroup"; group: ModelGroup }
 	| { type: "provider"; provider: ProviderOption }
@@ -229,7 +230,30 @@ type ModelListEntry =
 			model: ModelOption;
 			modelIndex: number;
 			providerKey: string;
+			providerGrouped: boolean;
 	  };
+
+interface ModelSection {
+	key: string;
+	label: string;
+	providerGrouped: boolean;
+	models: ModelOption[];
+}
+
+function normalizeModelProtocol(protocol: string): string {
+	switch (protocol) {
+		case "openai":
+			return "Chat Completions";
+		case "openai_responses":
+			return "Responses";
+		case "anthropic":
+			return "Anthropic Messages";
+		case "google-genai":
+			return "Gemini";
+		default:
+			return protocol;
+	}
+}
 
 const WORKFLOW_STATUS_LABELS: Record<string, string> = {
 	ready: "就绪",
@@ -338,7 +362,7 @@ function taskDashboardElapsed(item: TaskDashboardItem): string {
 }
 
 function compactAgentProcessText(text: string, limit = 160): string {
-	const compact = text.replace(/\s+/gu, " ").trim();
+	const compact = text.replaceAll(/\s+/gu, " ").trim();
 	return compact.length <= limit
 		? compact
 		: `${compact.slice(0, limit - 1).trimEnd()}…`;
@@ -514,7 +538,7 @@ function truncateStart(text: string, width: number): string {
 	if (visibleWidth(text) <= width) return text;
 	if (width <= 1) return "…".slice(0, width);
 	let suffix = "";
-	for (const character of Array.from(text).reverse()) {
+	for (const character of Array.from(text).toReversed()) {
 		if (visibleWidth(`…${character}${suffix}`) > width) break;
 		suffix = `${character}${suffix}`;
 	}
@@ -524,7 +548,7 @@ function truncateStart(text: string, width: number): string {
 // 会话标题来自首条用户消息，可能夹带 \n/\t；pi-tui 把控制字符按 0 宽保留，
 // 行内换行会让一个面板行占多个物理行，破坏框架、滚动与 diff 对齐。渲染前必须压平为单行。
 function singleLine(text: string): string {
-	return text.replace(/\s+/g, " ").trim();
+	return text.replaceAll(/\s+/g, " ").trim();
 }
 
 function centerText(text: string, width: number): string {
@@ -582,7 +606,7 @@ function commandMatches(query: string): CommandMatch[] {
 		prefixMatches.length > 0
 			? prefixMatches
 			: filterCommands(query).map(canonicalMatch);
-	const ordered = [...candidates].sort((left, right) => {
+	const ordered = [...candidates].toSorted((left, right) => {
 		const leftExact = left.matchedToken.toLowerCase() === normalized ? 1 : 0;
 		const rightExact = right.matchedToken.toLowerCase() === normalized ? 1 : 0;
 		return rightExact - leftExact;
@@ -619,14 +643,14 @@ function compareModelGeneration(left: ModelOption, right: ModelOption): number {
 function modelGeneration(model: ModelOption): number[] {
 	const identity = `${model.id} ${model.label}`
 		.toLowerCase()
-		.replace(
+		.replaceAll(
 			/\b(?:19|20)\d{2}(?:[-_/]?(?:0[1-9]|1[0-2])(?:[-_/]?(?:0[1-9]|[12]\d|3[01]))?)?\b/gu,
 			" ",
 		);
 	const candidates = [...identity.matchAll(/\d+(?:[._-]\d+)*/gu)].map((match) =>
 		(match[0] ?? "").split(/[._-]/u).map(Number).filter(Number.isFinite),
 	);
-	return candidates.sort((left, right) => right.length - left.length)[0] ?? [];
+	return candidates.toSorted((left, right) => right.length - left.length)[0] ?? [];
 }
 
 function modelCombinedPrice(model: ModelOption): number | undefined {
@@ -649,9 +673,14 @@ export class PanelController {
 	private selectedGroupId = "";
 	private models: ModelOption[] = [];
 	private readonly subagentModelsPanel = new SubagentModelsPanel();
-	private modelExpandCollapsed = false;
+	private modelShowAll = false;
+	private modelPinned = new Set<string>();
+	private modelRecent: string[] = [];
+	private sortedModelCache:
+		| { source: readonly ModelOption[]; selected: string; models: ModelOption[] }
+		| undefined;
 	private filteredModelCache:
-		| { query: string; expanded: boolean; models: ModelOption[] }
+		| { key: string; models: ModelOption[] }
 		| undefined;
 	private modelGroups: ModelGroup[] = [];
 	private providers: ProviderOption[] = [];
@@ -842,9 +871,15 @@ export class PanelController {
 		if (kind === "models") {
 			this.modelNarrowDetail = false;
 			this.modelSearch = "";
-			this.modelExpandCollapsed = false;
+			this.modelShowAll = false;
 			this.filteredModelCache = undefined;
 			this.modelTab = 0;
+			const current = this.selectedModelKey
+				? this.filteredModels().findIndex((model) =>
+						modelHasIdentity(model, this.selectedModelKey),
+					)
+				: -1;
+			this.state.selected = Math.max(0, current);
 		}
 		if (kind === "subagentModels") this.subagentModelsPanel.open();
 		if (kind === "agents" || kind === "tasks") {
@@ -973,6 +1008,7 @@ export class PanelController {
 		const focused = this.kind === "models" ? modelKey(this.filteredModels()[this.state.selected]) : undefined;
 		this.models = structuredClone(models);
 		this.subagentModelsPanel.setModels(this.models);
+		this.sortedModelCache = undefined;
 		this.filteredModelCache = undefined;
 		this.modelGroups = structuredClone(groups);
 		if (this.modelGroups.length === 0) this.modelTab = 0;
@@ -1021,8 +1057,51 @@ export class PanelController {
 			this.selectedGroupId = groupId;
 	}
 
+	setModelPicks(picks: { pinned: string[]; recent: string[] }): void {
+		const focused =
+			this.kind === "models"
+				? modelKey(this.filteredModels()[this.state.selected])
+				: undefined;
+		this.modelPinned = new Set(picks.pinned);
+		this.modelRecent = [...picks.recent];
+		this.filteredModelCache = undefined;
+		if (this.kind === "models") {
+			if (focused !== undefined) {
+				const index = this.filteredModels().findIndex((model) =>
+					modelHasIdentity(model, focused),
+				);
+				if (index >= 0) this.state.selected = index;
+			}
+			clampSelection(this.state, this.filteredModels().length);
+		}
+	}
+
+	private isModelPinned(model: ModelOption): boolean {
+		return [...this.modelPinned].some((key) => modelHasIdentity(model, key));
+	}
+
+	private toggleModelPin(): PanelEvent | undefined {
+		if (this.modelTab !== 0) return undefined;
+		const model = this.filteredModels()[this.state.selected];
+		if (!model) return undefined;
+		if (this.isModelPinned(model)) {
+			this.modelPinned = new Set(
+				[...this.modelPinned].filter((key) => !modelHasIdentity(model, key)),
+			);
+		} else {
+			this.modelPinned.add(modelKey(model));
+		}
+		this.filteredModelCache = undefined;
+		const identity = modelKey(model);
+		const index = this.filteredModels().findIndex((candidate) =>
+			modelHasIdentity(candidate, identity),
+		);
+		if (index >= 0) this.state.selected = index;
+		return { type: "modelPin", pinned: [...this.modelPinned] };
+	}
+
 	setProviders(providers: ProviderOption[]): void {
-		this.providers = structuredClone(providers).sort(
+		this.providers = structuredClone(providers).toSorted(
 			(left, right) =>
 				providerPriorityIndex(left.id) - providerPriorityIndex(right.id) ||
 				left.label.localeCompare(right.label),
@@ -1134,7 +1213,7 @@ export class PanelController {
 			this.agentSelectedRunId = runs[this.state.selected]?.id;
 		} else {
 			this.agentSelectedRunId =
-				runs[selectedIndex >= 0 ? selectedIndex : 0]?.id;
+				runs[Math.max(selectedIndex, 0)]?.id;
 		}
 	}
 
@@ -1215,7 +1294,7 @@ export class PanelController {
 				: this.cronSelectedId;
 		this.cronTasks = tasks
 			.map((task) => ({ ...task }))
-			.sort((left, right) => {
+			.toSorted((left, right) => {
 				const leftNext = nextCronTaskRun(left) ?? Number.POSITIVE_INFINITY;
 				const rightNext = nextCronTaskRun(right) ?? Number.POSITIVE_INFINITY;
 				return leftNext - rightNext || right.createdAt - left.createdAt;
@@ -1234,7 +1313,7 @@ export class PanelController {
 			this.cronSelectedId = this.cronTasks[this.state.selected]?.id;
 		} else {
 			this.cronSelectedId =
-				this.cronTasks[selectedIndex >= 0 ? selectedIndex : 0]?.id;
+				this.cronTasks[Math.max(selectedIndex, 0)]?.id;
 		}
 	}
 
@@ -1585,6 +1664,20 @@ export class PanelController {
 				footer = `${this.state.scroll + 1}-${this.state.scroll + body.length} / ${total}`;
 			}
 		}
+		if (this.kind === "models") {
+			const total =
+				this.modelTab === 0
+					? this.filteredModels().length
+					: this.modelGroups.length;
+			if (total > 0)
+				footer = `${Math.min(this.state.selected + 1, total)} / ${total}`;
+		} else if (this.kind === "providers" && !this.providerEditing) {
+			const total = this.providerActionMenu
+				? this.providerActions.length
+				: this.providers.length;
+			if (total > 0)
+				footer = `${Math.min(this.state.selected + 1, total)} / ${total}`;
+		}
 		if (questionFooterGap) body.push("");
 		return frame(body, width, theme, {
 			title,
@@ -1670,8 +1763,10 @@ export class PanelController {
 						? "输入 IP:端口、域名或完整 URL  Enter 确认  Esc 取消"
 						: this.kind === "question"
 							? this.questionHint(hint)
-							: this.kind === "models" && this.modelGroups.length === 0
-								? hint.replace("Tab 切换视图  ", "")
+							: this.kind === "models"
+								? this.modelTab === 0
+									? `↑↓ 选择 · 输入筛选 · Enter 切换 · Ctrl+P 置顶 · ${this.modelShowAll ? "Ctrl+O 常用" : "Ctrl+O 全部模型"}${this.modelGroups.length > 0 ? " · Tab 模型组" : ""} · Esc 关闭`
+									: "↑↓ 选择 · Enter 切换 · Tab 模型 · Esc 关闭"
 								: hint;
 		return theme.muted(padLine(contextualHint, width));
 	}
@@ -1755,7 +1850,7 @@ export class PanelController {
 			narrowModel: !usesWideModelLayout(this.lastBodyWidth),
 			modelChoiceTab: this.modelTab === 0,
 			modelHasCollapsed: this.models.some((model) => model.curated !== true),
-			modelExpanded: this.modelExpandCollapsed,
+			modelExpanded: this.modelShowAll,
 		};
 		if (this.kind === "plan")
 			state.hasItems = this.visiblePlanItems().length > 0;
@@ -1849,10 +1944,13 @@ export class PanelController {
 	private handleModels(data: string): PanelEvent | undefined {
 		if (this.modelTab === 0 && matchesKey(data, Key.ctrl("o"))) {
 			const selected = this.filteredModels()[this.state.selected];
-			this.modelExpandCollapsed = !this.modelExpandCollapsed;
+			this.modelShowAll = !this.modelShowAll;
 			this.filteredModelCache = undefined;
 			this.state.selected = Math.max(0, this.filteredModels().findIndex((model) => modelKey(model) === modelKey(selected)));
 			return;
+		}
+		if (this.modelTab === 0 && matchesKey(data, Key.ctrl("p"))) {
+			return this.toggleModelPin();
 		}
 		if (matchesKey(data, Key.tab) && this.modelGroups.length > 0) {
 			this.modelTab = this.modelTab === 0 ? 1 : 0;
@@ -2728,24 +2826,18 @@ export class PanelController {
 		return [selectedLine(row, selected, width, theme)];
 	}
 
-	private filteredModels(): ModelOption[] {
-		const query = this.modelSearch.toLowerCase();
-		if (this.filteredModelCache?.query === query && this.filteredModelCache.expanded === this.modelExpandCollapsed)
-			return this.filteredModelCache.models;
+	private sortedModels(): ModelOption[] {
+		if (
+			this.sortedModelCache?.source === this.models &&
+			this.sortedModelCache.selected === this.selectedModelKey
+		)
+			return this.sortedModelCache.models;
 		const brandIndex = (brand: string) => {
 			const index = BRAND_PRIORITY.indexOf(brand);
 			return index === -1 ? BRAND_PRIORITY.length : index;
 		};
 		const models = groupModelAliases(this.models, this.selectedModelKey)
-			.filter((model) => this.modelExpandCollapsed || model.curated === true)
-			.filter(
-				(model) =>
-					!query ||
-					`${model.brand} ${model.label} ${(model.displayIds ?? [model.id]).join(' ')}`
-						.toLowerCase()
-						.includes(query),
-			)
-			.sort((left, right) => {
+			.toSorted((left, right) => {
 				const priority = brandIndex(left.brand) - brandIndex(right.brand);
 				if (priority !== 0) return priority;
 				const brand = left.brand.localeCompare(right.brand);
@@ -2765,7 +2857,70 @@ export class PanelController {
 					left.id.localeCompare(right.id)
 				);
 			});
-		this.filteredModelCache = { query, expanded: this.modelExpandCollapsed, models };
+		this.sortedModelCache = { source: this.models, selected: this.selectedModelKey, models };
+		return models;
+	}
+
+	private providerSections(models: ModelOption[]): ModelSection[] {
+		const sections: ModelSection[] = [];
+		for (const model of models) {
+			const last = sections.at(-1);
+			if (last?.providerGrouped && last.label === model.brand) {
+				last.models.push(model);
+			} else {
+				sections.push({
+					key: `provider:${model.brand}`,
+					label: model.brand,
+					providerGrouped: true,
+					models: [model],
+				});
+			}
+		}
+		return sections;
+	}
+
+	private modelSections(): ModelSection[] {
+		const all = this.sortedModels();
+		const query = this.modelSearch.trim().toLowerCase();
+		if (query) {
+			return this.providerSections(
+				all.filter((model) =>
+					`${model.brand} ${model.label} ${model.provider ?? ""} ${(model.displayIds ?? [model.id]).join(" ")}`
+						.toLowerCase()
+						.includes(query),
+				),
+			);
+		}
+		if (this.modelShowAll) return this.providerSections(all);
+		const seen = new Set<string>();
+		const section = (label: string, models: ModelOption[]): ModelSection => ({
+			key: `common:${label}`,
+			label,
+			providerGrouped: false,
+			models: models.filter((model) => {
+				const key = modelKey(model);
+				if (seen.has(key)) return false;
+				seen.add(key);
+				return true;
+			}),
+		});
+		const byKeys = (keys: Iterable<string>): ModelOption[] =>
+			[...keys]
+				.map((key) => all.find((model) => modelHasIdentity(model, key)))
+				.filter((model): model is ModelOption => model !== undefined);
+		return [
+			section("置顶", byKeys(this.modelPinned)),
+			section("最近使用", byKeys(this.modelRecent)),
+			section("官方推荐", all.filter((model) => model.curated === true)),
+		].filter((entry) => entry.models.length > 0);
+	}
+
+	private filteredModels(): ModelOption[] {
+		const key = `${this.modelSearch.trim().toLowerCase()}${this.modelShowAll ? "|all" : ""}`;
+		if (this.filteredModelCache?.key === key)
+			return this.filteredModelCache.models;
+		const models = this.modelSections().flatMap((section) => section.models);
+		this.filteredModelCache = { key, models };
 		return models;
 	}
 
@@ -2774,21 +2929,20 @@ export class PanelController {
 		bodyRows: number,
 		theme: VspiTheme,
 	): string[] {
-		const modelView = this.modelExpandCollapsed ? "全部模型" : "★ 官方推荐";
-		const modelTab = this.modelSearch
-			? `${modelView} · ${this.modelSearch}`
-			: modelView;
-		const tabs = tabLine(
-			this.modelGroups.length > 0 ? [modelTab, "模型组"] : [modelTab],
-			this.modelTab,
-			width,
-			theme,
-		);
-		const listRows = Math.max(2, bodyRows - 1);
+		const head: string[] = [];
+		if (this.modelGroups.length > 0)
+			head.push(tabLine(["模型", "模型组"], this.modelTab, width, theme));
+		if (this.modelTab === 0) {
+			const query = this.modelSearch === ""
+				? theme.muted("输入名称、ID 或 Provider 筛选")
+				: this.modelSearch;
+			head.push(`  ${theme.muted("搜索")} ${query}${theme.inverse(" ")}`);
+		}
+		const listRows = Math.max(2, bodyRows - head.length);
 		const body = usesWideModelLayout(width)
 			? this.renderWideModels(width, listRows, theme)
 			: this.renderNarrowModels(width, listRows, theme);
-		return [tabs, ...body];
+		return [...head, ...body];
 	}
 
 	private renderWideModels(
@@ -2854,6 +3008,12 @@ export class PanelController {
 		}
 
 		const entries = this.modelListEntries();
+		if (entries.length === 0) {
+			return [
+				padLine(theme.muted("  没有匹配的模型"), width),
+				...Array.from({ length: rowCount - 1 }, () => padLine("", width)),
+			];
+		}
 		const selectedRow = Math.max(
 			0,
 			entries.findIndex(
@@ -2885,26 +3045,42 @@ export class PanelController {
 				];
 		}
 
+		const labelCounts = new Map<string, number>();
+		for (const entry of entries) {
+			if (entry.type !== "model") continue;
+			const key = `${entry.providerKey}${entry.model.label}`;
+			labelCounts.set(key, (labelCounts.get(key) ?? 0) + 1);
+		}
+
 		return Array.from({ length: rowCount }, (_, row) => {
 			const entry = visible[row];
 			if (!entry) return padLine("", width);
 			if (entry.type === "provider") {
-				return alignRight(
-					theme.bold(theme.muted(`  ${entry.label}`)),
-					theme.muted(String(entry.count)),
+				return padLine(
+					`${theme.bold(theme.muted(`  ${entry.label}`))} ${theme.muted(String(entry.count))}`,
 					width,
 				);
 			}
+			const model = entry.model;
 			const selected = entry.modelIndex === this.state.selected;
 			const marker = selected ? theme.focus("› ") : "  ";
 			const check =
-				modelKey(entry.model) === this.selectedModelKey
+				this.selectedModelKey && modelHasIdentity(model, this.selectedModelKey)
 					? theme.success("✓ ")
 					: "  ";
-			const vision = entry.model.vision ? theme.blue(" ◉") : "";
-			const star = entry.model.curated === true ? theme.warning("★ ") : "  ";
-			const line = padLine(
-				`${marker}${check}${star}${entry.model.label}${vision}`,
+			const duplicate =
+				(labelCounts.get(`${entry.providerKey}${model.label}`) ?? 0) > 1;
+			const label = duplicate
+				? `${model.label} ${theme.muted(model.id)}`
+				: model.label;
+			const tags = [
+				...(!entry.providerGrouped && model.brand ? [model.brand] : []),
+				...(this.isModelPinned(model) ? ["置顶"] : []),
+				...(model.curated === true ? ["官方"] : []),
+			].join(" ");
+			const line = alignRight(
+				`${marker}${check}${label}`,
+				tags ? theme.muted(tags) : "",
 				width,
 			);
 			return selected ? theme.selected(line) : line;
@@ -2912,25 +3088,26 @@ export class PanelController {
 	}
 
 	private modelListEntries(): ModelListEntry[] {
-		const models = this.filteredModels();
-		const counts = new Map<string, number>();
-		for (const model of models)
-			counts.set(model.brand, (counts.get(model.brand) ?? 0) + 1);
-
 		const entries: ModelListEntry[] = [];
-		let providerKey: string | undefined;
-		models.forEach((model, modelIndex) => {
-			if (model.brand !== providerKey) {
-				providerKey = model.brand;
+		let modelIndex = 0;
+		for (const section of this.modelSections()) {
+			entries.push({
+				type: "provider",
+				key: section.key,
+				label: section.label,
+				count: section.models.length,
+			});
+			for (const model of section.models) {
 				entries.push({
-					type: "provider",
-					key: providerKey,
-					label: providerKey,
-					count: counts.get(providerKey) ?? 0,
+					type: "model",
+					model,
+					modelIndex: modelIndex,
+					providerKey: section.key,
+					providerGrouped: section.providerGrouped,
 				});
+				modelIndex += 1;
 			}
-			entries.push({ type: "model", model, modelIndex, providerKey });
-		});
+		}
 		return entries;
 	}
 
@@ -2940,65 +3117,69 @@ export class PanelController {
 		theme: VspiTheme,
 	): string[] {
 		const model = this.filteredModels()[this.state.selected];
-		if (!model) return wrapTextWithAnsi(theme.muted("没有匹配的模型；Ctrl+O 切换全部模型"), width).slice(0, rowCount);
-		const input =
-			model.price.inputUsdPerMillion === undefined
-				? undefined
-				: model.price.inputUsdPerMillion * FX.fxRate;
-		const output =
-			model.price.outputUsdPerMillion === undefined
-				? undefined
-				: model.price.outputUsdPerMillion * FX.fxRate;
-		const cacheRead =
-			model.price.cacheReadUsdPerMillion === undefined
-				? undefined
-				: model.price.cacheReadUsdPerMillion * FX.fxRate;
-		const cacheWrite =
-			model.price.cacheWriteUsdPerMillion === undefined
-				? undefined
-				: model.price.cacheWriteUsdPerMillion * FX.fxRate;
-		const provider = `${theme.muted("Provider  ")}${model.brand}`;
-		const modelId = `${theme.muted("Model ID: ")}${(model.displayIds ?? [model.id]).join(', ')}`;
-		const protocol = model.protocol ? `${theme.muted("协议  ")}${model.protocol === "openai" ? "Chat Completions" : model.protocol === "openai_responses" ? "Responses" : model.protocol}` : undefined;
-		const capability = `${theme.muted("能力      ")}${model.vision ? "文本 · 图片 · Tools" : "文本 · Tools"}`;
-		const effort = `${theme.muted("Effort  ")}${visibleEffortLevels(model.efforts).map(effortLabel).join(" / ") || "不可调"}`;
-		const release = model.releasedAt
-			? `${theme.muted("发布  ")}${model.releasedAt}`
-			: "";
-		const basePrice =
-			input === undefined && output === undefined
-				? theme.muted("价格      未提供")
-				: `${theme.muted(model.price.source === "official" ? "官方参考  " : "渠道价    ")}${model.price.contextTiers?.length ? theme.muted("基础  ") : ""}${theme.warning("输入 ¥")}${input?.toFixed(2) ?? "—"} / 百万  ${theme.warning("输出 ¥")}${output?.toFixed(2) ?? "—"} / 百万`;
-		const tierPrices = (model.price.contextTiers ?? []).map(
-			(tier) =>
-				`${theme.muted(`>${formatAgentTokens(tier.contextTokensAbove)}  `)}${theme.warning("输入 ¥")}${(tier.inputUsdPerMillion * FX.fxRate).toFixed(2)}  ${theme.warning("输出 ¥")}${(tier.outputUsdPerMillion * FX.fxRate).toFixed(2)} / 百万`,
-		);
-		const cachePrice =
-			cacheRead === undefined && cacheWrite === undefined
-				? undefined
-				: `${theme.muted("缓存      ")}${theme.warning("读取 ¥")}${cacheRead?.toFixed(2) ?? "—"} / 百万  ${theme.warning("写入 ¥")}${cacheWrite?.toFixed(2) ?? "—"} / 百万`;
-		const combinedIdentity = `${provider}  ${modelId}`;
-		const capabilityRelease = [capability, release].filter(Boolean).join("  ");
-		const effortRows = wrapTextWithAnsi(effort, width);
-		const prices = [
-			basePrice,
-			...(cachePrice ? [cachePrice] : []),
-			...tierPrices,
+		if (!model) return [theme.muted("  没有匹配的模型")];
+		const cny = (value: number | undefined) =>
+			value === undefined ? undefined : value * FX.fxRate;
+		const rows: Array<[string, string]> = [
+			["Provider", model.brand],
+			["模型 ID", (model.displayIds ?? [model.id]).join(", ")],
 		];
+		if (model.protocol)
+			rows.push(["协议", normalizeModelProtocol(model.protocol)]);
+		rows.push([
+			"能力",
+			model.vision ? "文本 · 图像 · 工具" : "文本 · 工具",
+		]);
+		if (model.releasedAt) rows.push(["发布", model.releasedAt]);
+		const efforts = visibleEffortLevels(model.efforts)
+			.map(effortLabel)
+			.join(" / ");
+		if (efforts) rows.push(["Effort", efforts]);
+		const input = cny(model.price.inputUsdPerMillion);
+		const output = cny(model.price.outputUsdPerMillion);
+		if (input !== undefined || output !== undefined) {
+			const source =
+				model.price.source === "official"
+					? " · 官方参考"
+					: model.price.source === "provider"
+						? " · 渠道价"
+						: "";
+			const base = model.price.contextTiers?.length ? "基础 " : "";
+			rows.push([
+				"价格",
+				`${base}输入 ¥${input?.toFixed(2) ?? "—"} / 百万  输出 ¥${output?.toFixed(2) ?? "—"} / 百万${source}`,
+			]);
+		}
+		const cacheRead = cny(model.price.cacheReadUsdPerMillion);
+		const cacheWrite = cny(model.price.cacheWriteUsdPerMillion);
+		if (cacheRead !== undefined || cacheWrite !== undefined) {
+			rows.push([
+				"缓存",
+				`读取 ¥${cacheRead?.toFixed(2) ?? "—"} / 百万  写入 ¥${cacheWrite?.toFixed(2) ?? "—"} / 百万`,
+			]);
+		}
+		for (const [index, tier] of (model.price.contextTiers ?? []).entries()) {
+			rows.push([
+				index === 0 ? "长上下文" : "",
+				`>${formatAgentTokens(tier.contextTokensAbove)}  输入 ¥${(tier.inputUsdPerMillion * FX.fxRate).toFixed(2)}  输出 ¥${(tier.outputUsdPerMillion * FX.fxRate).toFixed(2)} / 百万`,
+			]);
+		}
+		const labelWidth = Math.max(
+			...rows.map(([label]) => visibleWidth(label)),
+		);
 		const details = [
 			theme.bold(theme.focus(model.label)),
-			...(visibleWidth(combinedIdentity) <= width ? [combinedIdentity] : [provider, ...wrapTextWithAnsi(modelId, width)]),
-			...(protocol ? [protocol] : []),
-			capabilityRelease,
-			...effortRows,
-			...prices,
+			...rows.map(([label, value]) => {
+				const cell =
+					label === ""
+						? " ".repeat(labelWidth + 2)
+						: theme.muted(
+								`${label}${" ".repeat(labelWidth + 2 - visibleWidth(label))}`,
+							);
+				return truncateToWidth(`${cell}${value}`, width);
+			}),
 		];
-		return details.length <= rowCount
-			? details
-			: [...details.slice(0, rowCount - prices.length), ...prices].slice(
-					0,
-					rowCount,
-				);
+		return details.slice(0, Math.max(1, rowCount));
 	}
 
 	private modelGroupDetailRows(rowCount: number, theme: VspiTheme): string[] {
@@ -3035,6 +3216,9 @@ export class PanelController {
 			);
 		}
 		if (this.providerActionMenu) {
+			const provider =
+				this.providers.find((item) => item.id === this.activeProviderId) ??
+				this.providers[this.state.selected];
 			const labels: Record<string, string> = {
 				"login:oauth": "登录订阅账号",
 				"login:api_key": "配置 API Key",
@@ -3044,16 +3228,22 @@ export class PanelController {
 				"test-connection": "测试连接（网络）",
 				"minimal-generation": "最小生成（需费用确认）",
 			};
-			return this.providerActions.map((action, index) =>
-				selectedLine(
-					action === "minimal-generation" && this.providerCostConfirmation
-						? "再次 Enter 确认最小生成费用"
-						: (labels[action] ?? action),
-					index === this.state.selected,
-					width,
-					theme,
+			return [
+				provider
+					? `  ${theme.bold(provider.label)}  ${theme.muted(provider.protocol)}`
+					: "",
+				"",
+				...this.providerActions.map((action, index) =>
+					selectedLine(
+						action === "minimal-generation" && this.providerCostConfirmation
+							? "再次 Enter 确认最小生成费用"
+							: (labels[action] ?? action),
+						index === this.state.selected,
+						width,
+						theme,
+					),
 				),
-			);
+			];
 		}
 		if (this.providers.length === 0)
 			return [theme.muted(padLine("没有可用 Provider", width))];
@@ -3490,6 +3680,7 @@ export class PanelController {
 
 	private settingRows(): Array<{
 		label: string;
+		value: string;
 		key:
 			| "theme"
 			| "tuiMode"
@@ -3506,60 +3697,71 @@ export class PanelController {
 		group: string;
 	}> {
 		return [
-			{ group: "外观", label: `主题  ${this.settings.theme}`, key: "theme" },
+			{ group: "外观", label: "主题", value: this.settings.theme, key: "theme" },
 			{
 				group: "外观",
-				label: `减少动效  ${this.settings.reducedMotion ? "开" : "关"}`,
+				label: "减少动效",
+				value: this.settings.reducedMotion ? "开" : "关",
 				key: "reducedMotion",
 			},
 			{
 				group: "外观",
-				label: `Working 样式  ${workingStyleLabel(this.settings.workingStyle)}`,
+				label: "Working 样式",
+				value: workingStyleLabel(this.settings.workingStyle),
 				key: "workingStyle",
 			},
 			{
 				group: "Transcript",
-				label: `thinking 显示模式  ${thinkingDisplayLabel(this.settings.thinkingDisplay)}`,
+				label: "thinking 显示模式",
+				value: thinkingDisplayLabel(this.settings.thinkingDisplay),
 				key: "thinkingDisplay",
 			},
 			{
 				group: "Transcript",
-				label: `思考翻译服务${this.settings.scope === "project" ? "（仅全局可设置）" : "（发送 Thinking 内容）"}  ${this.settings.thinkingTranslationEndpoint || "关"}`,
+				label: `思考翻译服务${this.settings.scope === "project" ? "（仅全局可设置）" : "（发送 Thinking 内容）"}`,
+				value: this.settings.thinkingTranslationEndpoint || "关",
 				key: "thinkingTranslationEndpoint",
 			},
 			{
 				group: "Transcript",
-				label: `代码自动换行  ${this.settings.wrapCode ? "开" : "关"}`,
+				label: "代码自动换行",
+				value: this.settings.wrapCode ? "开" : "关",
 				key: "wrapCode",
 			},
 			{
 				group: "Transcript",
-				label: `完成后收起工具  ${this.settings.collapseTools ? "开" : "关"}`,
+				label: "完成后收起工具",
+				value: this.settings.collapseTools ? "开" : "关",
 				key: "collapseTools",
 			},
 			{
 				group: "会话",
-				label: `退出时 AI 总结标题  ${this.settings.summarizeSessionTitleOnExit ? "开" : "关"}`,
+				label: "退出时 AI 总结标题",
+				value: this.settings.summarizeSessionTitleOnExit ? "开" : "关",
 				key: "summarizeSessionTitleOnExit",
 			},
 			{
 				group: "终端",
-				label: `TUI 模式  ${this.settings.tuiMode === "fullscreen" ? "Fullscreen" : "Regular"}`,
+				label: "TUI 模式",
+				value: this.settings.tuiMode === "fullscreen" ? "Fullscreen" : "Regular",
 				key: "tuiMode",
 			},
 			{
 				group: "终端",
-				label: `Fullscreen 滚动条  ${fullscreenScrollbarLabel(this.settings.fullscreenScrollbar)}`,
+				label: "Fullscreen 滚动条",
+				value: fullscreenScrollbarLabel(this.settings.fullscreenScrollbar),
 				key: "fullscreenScrollbar",
 			},
 			{
 				group: "Markdown",
-				label: `Mermaid 图表  ${mermaidRenderingLabel(this.settings.mermaidRendering)}`,
+				label: "Mermaid 图表",
+				value: mermaidRenderingLabel(this.settings.mermaidRendering),
 				key: "mermaidRendering",
 			},
 			{
 				group: '网络',
-				label: `VSPLab 线路${this.settings.scope === 'project' ? '（仅全局）' : ''}  ${this.vsplabEndpoint === 'cn' ? 'cn · 无 SNI 直连' : 'tech · 常规连接'}`,
+				label: `VSPLab 线路${this.settings.scope === 'project' ? '（仅全局）' : ''}`,
+				value: this.vsplabEndpoint === 'cn' ? 'cn · 无 SNI 直连' : 'tech · 常规连接',
 				key: 'vsplabEndpoint',
 			},
 		];
@@ -3578,19 +3780,31 @@ export class PanelController {
 			tabLine(["全局", projectLabel], this.settingsTab, width, theme),
 			alignRight("", dirty, width),
 		];
+		const rows = this.settingRows();
+		const labelWidths = new Map<string, number>();
+		for (const row of rows) {
+			labelWidths.set(
+				row.group,
+				Math.max(labelWidths.get(row.group) ?? 0, visibleWidth(row.label)),
+			);
+		}
 		let group: string | undefined;
-		this.settingRows().forEach((row, index) => {
+		rows.forEach((row, index) => {
 			if (row.group !== group) {
 				group = row.group;
-				lines.push(theme.muted(padLine(`  ${group}`, width)));
+				lines.push(theme.bold(theme.muted(padLine(`  ${group}`, width))));
 			}
-			const label =
+			const editing =
 				row.key === "thinkingTranslationEndpoint" &&
-				this.settingsEndpointEditing
-					? `思考翻译服务  ${this.settingsEndpointInput}${theme.inverse(" ")}`
-					: row.label;
+				this.settingsEndpointEditing;
+			const label = editing ? "思考翻译服务" : row.label;
+			const value = editing
+				? `${this.settingsEndpointInput}${theme.inverse(" ")}`
+				: row.value;
+			const labelWidth = labelWidths.get(row.group) ?? visibleWidth(label);
+			const text = `${label}${" ".repeat(Math.max(1, labelWidth + 2 - visibleWidth(label)))}${value}`;
 			lines.push(
-				selectedLine(label, index === this.state.selected, width, theme),
+				selectedLine(text, index === this.state.selected, width, theme),
 			);
 		});
 		lines.push(theme.muted(padLine("  键位方案  VSPi 默认", width)));
@@ -3753,7 +3967,7 @@ export class PanelController {
 			.filter(
 				(run) => this.agentFilter === "all" || !agentRunTerminal(run.status),
 			)
-			.sort((left, right) => {
+			.toSorted((left, right) => {
 				const leftTerminal = agentRunTerminal(left.status);
 				const rightTerminal = agentRunTerminal(right.status);
 				if (leftTerminal !== rightTerminal) return leftTerminal ? 1 : -1;
@@ -3842,7 +4056,7 @@ export class PanelController {
 			const selectedIndex = selectedId
 				? filtered.findIndex((run) => run.id === selectedId)
 				: -1;
-			this.state.selected = selectedIndex >= 0 ? selectedIndex : 0;
+			this.state.selected = Math.max(selectedIndex, 0);
 			this.agentSelectedRunId = filtered[this.state.selected]?.id;
 			this.agentListScroll = 0;
 			this.agentNotice = undefined;
@@ -4051,7 +4265,7 @@ export class PanelController {
 			const selected = index === this.state.selected;
 			const current = selected ? theme.focus("▶ ") : "  ";
 			const summary = stripAnsi(run.error ?? run.summary ?? run.outputPreview ?? run.task)
-				.replace(/\s+/gu, " ")
+				.replaceAll(/\s+/gu, " ")
 				.trim();
 			const identity = `${run.codename ?? run.agentId} · ${run.taskTitle ?? run.task}`;
 			const row = `${current}${symbol} ${identity}  ${formatSubagentProfile(run.profile)}  ${run.status}  ${agentElapsed(run)}  ${formatSubagentModel(run.model)}  ${summary}`;
@@ -4075,7 +4289,7 @@ export class PanelController {
 			width - visibleWidth(prefix) - visibleWidth(suffix) - 1,
 		);
 		const command = truncateToWidth(
-			item.command.replace(/\s+/gu, " ").trim(),
+			item.command.replaceAll(/\s+/gu, " ").trim(),
 			commandWidth,
 		);
 		return `${prefix}${command}${suffix}`;
@@ -4089,7 +4303,7 @@ export class PanelController {
 		for (const item of this.taskSnapshot.agents) {
 			const index = items.indexOf(item);
 			const pointer = index === this.state.selected ? "›" : " ";
-			const row = `${pointer} ${taskDashboardSymbol(item, theme)} ${item.description.replace(/\s+/gu, " ").trim()} · ${item.status} · ${taskDashboardElapsed(item)}`;
+			const row = `${pointer} ${taskDashboardSymbol(item, theme)} ${item.description.replaceAll(/\s+/gu, " ").trim()} · ${item.status} · ${taskDashboardElapsed(item)}`;
 			lines.push(truncateToWidth(row, width));
 		}
 		lines.push("", theme.bold("Processes"));
@@ -4278,7 +4492,7 @@ export class PanelController {
 				: task.runAt
 					? formatCronLocalTime(task.runAt)
 					: "—";
-			const prompt = task.prompt.replace(/\s+/gu, " ").trim();
+			const prompt = task.prompt.replaceAll(/\s+/gu, " ").trim();
 			const detail = task.lastError ? `${prompt} · ${task.lastError}` : prompt;
 			return selectedLine(
 				`${task.id}  ${status}  ${schedule}  ${task.recurring ? "recurring" : "once"}  ${detail}`,
@@ -4851,7 +5065,7 @@ function questionAnswerText(question: Question): string {
 }
 
 export function humanizePlanId(id: string): string {
-	const normalized = id.replace(/\bv(\d+)-(\d+)-(\d+)\b/gi, "v$1.$2.$3");
+	const normalized = id.replaceAll(/\bv(\d+)-(\d+)-(\d+)\b/gi, "v$1.$2.$3");
 	return normalized
 		.split(/[-_]+/)
 		.filter(Boolean)

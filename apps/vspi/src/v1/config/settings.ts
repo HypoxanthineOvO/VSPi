@@ -138,6 +138,46 @@ export function settingsPaths(cwd: string, home = homedir()) {
 	} as const;
 }
 
+export interface ModelPicks {
+	pinned: string[];
+	recent: string[];
+}
+
+export function modelPicksPath(home = homedir()): string {
+	return join(home, ".config", "vspi", "model-picks.json");
+}
+
+function normalizeModelPicks(input: unknown): ModelPicks {
+	const keys = (value: unknown): string[] =>
+		Array.isArray(value)
+			? value.filter((key): key is string => typeof key === "string" && key.length > 0)
+			: [];
+	const value = input && typeof input === "object" ? (input as Partial<ModelPicks>) : {};
+	return { pinned: keys(value.pinned), recent: keys(value.recent) };
+}
+
+export async function loadModelPicks(home = homedir()): Promise<ModelPicks> {
+	return normalizeModelPicks(await readOptional(modelPicksPath(home)));
+}
+
+export async function saveModelPicks(picks: ModelPicks, home = homedir()): Promise<string> {
+	const target = modelPicksPath(home);
+	await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+	const temporary = `${target}.${process.pid}-${randomUUID()}.tmp`;
+	await writeFile(temporary, `${JSON.stringify(normalizeModelPicks(picks), null, 2)}\n`, {
+		mode: 0o600,
+		flag: "wx",
+	});
+	await chmod(temporary, 0o600);
+	try {
+		await rename(temporary, target);
+	} catch (error) {
+		await unlink(temporary).catch(() => undefined);
+		throw error;
+	}
+	return target;
+}
+
 export async function loadSettings(
 	cwd: string,
 	home = homedir(),

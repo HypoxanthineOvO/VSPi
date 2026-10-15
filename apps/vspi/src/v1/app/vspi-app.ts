@@ -42,7 +42,14 @@ import type {
 	SessionHandoffResponse,
 	SessionOwnerRecoveryAction,
 } from "../backend/types.js";
-import { loadSettingsLayers, saveSettings } from "../config/settings.js";
+import {
+	loadModelPicks,
+	loadSettingsLayers,
+	type ModelPicks,
+	saveModelPicks,
+	saveSettings,
+} from "../config/settings.js";
+import { modelIdentityKey } from "../domain/model-presentation.js";
 import {
 	COMPACTION_PROFILES,
 	type CompactOptions,
@@ -158,6 +165,8 @@ export interface VspiAppOptions {
 	attachments: AttachmentService;
 	renderOnce?: boolean;
 	providerConfigFactory?: (trustedProject: boolean) => ProviderConfigUi;
+	/** 用户 home 目录（~/.config/vspi 所在），仅供测试隔离；默认取系统 homedir。 */
+	home?: string;
 	runtimeDefaultsFactory?: (trustedProject: boolean) => RuntimeDefaultsUi;
 	executionPolicy?: ExecutionPolicyUi;
 	approvalBroker?: InteractiveApprovalBroker;
@@ -352,6 +361,8 @@ export class VspiApp implements Component, Focusable {
 	private pendingModelSwitch: { from: string; to: string } | undefined;
 	private pendingModelSelection: { model: ModelOption; epoch: number } | undefined;
 	private modelSelectionCommitting = false;
+	private modelPicks: ModelPicks = { pinned: [], recent: [] };
+	private modelPicksSave: Promise<void> = Promise.resolve();
 	private busy = false;
 	private runActive = false;
 	private compaction: CompactionPresentationState | undefined;
@@ -882,15 +893,18 @@ export class VspiApp implements Component, Focusable {
 		if (this.runtimeSurfacePromise) return this.runtimeSurfacePromise;
 		this.runtimeSurfacePromise = (async () => {
 			this.modelLabel = this.backend.modelLabel;
-			const [models, groups, runtimeProviders] = await Promise.all([
+			const [models, groups, runtimeProviders, picks] = await Promise.all([
 				this.backend.getModelOptions?.() ?? [],
 				this.backend.getModelGroups?.() ?? [],
 				this.backend.getProviderOptions?.() ?? [],
+				loadModelPicks(this.options.home),
 			]);
 			const backendModelIdentity = this.backend.modelProvider
 				? { provider: this.backend.modelProvider, id: this.backend.modelId }
 				: undefined;
 			this.panels.setModels(models, groups, backendModelIdentity);
+			this.modelPicks = picks;
+			this.panels.setModelPicks(picks);
 			this.modelOptions = structuredClone(models);
 			this.providerConfig = this.options.providerConfigFactory?.(
 				this.backend.isProjectTrusted?.() ?? false,
@@ -993,6 +1007,7 @@ export class VspiApp implements Component, Focusable {
 				);
 			}
 			await this.options.attachments.dispose();
+			await this.modelPicksSave;
 		} finally {
 			this.compaction = undefined;
 			this.workingTimer = undefined;
@@ -1481,14 +1496,14 @@ export class VspiApp implements Component, Focusable {
 		if (this.panels.kind === "sessions") {
 			const status = this.renderStatus(width);
 			return {
-				lines: appendRuntimeStatus(status, runtimeLine),
+				lines: status,
 				activityActive: false,
 				agents: [],
 				composer: [],
 				activity: [],
 				queuedMessages: [],
 				status,
-				runtime,
+				runtime: [],
 			};
 		}
 		const activityActive = this.activityActive();
@@ -1549,23 +1564,20 @@ export class VspiApp implements Component, Focusable {
 			? []
 			: this.agentsDock.render(width, this.theme);
 		return {
-			lines: appendRuntimeStatus(
-				[
-					...activity,
-					...queuedMessages,
-					...agents,
-					...composer,
-					...status,
-				],
-				runtimeLine,
-			),
+			lines: [
+				...activity,
+				...queuedMessages,
+				...agents,
+				...composer,
+				...status,
+			],
 			activityActive,
 			agents,
 			composer,
 			activity,
 			queuedMessages,
 			status,
-			runtime,
+			runtime: [],
 		};
 	}
 
@@ -2067,9 +2079,7 @@ export class VspiApp implements Component, Focusable {
 					const queuedMessage = this.queuedMessages.get(messageId);
 					if (queuedMessage && mode) queuedMessage.delivery = mode;
 					this.showNotice(
-						mode === "followUp"
-							? "已加入 Follow-up，将在当前任务完成后继续"
-							: "已排队，等待插入",
+						mode === "followUp" ? "已加入后续队列" : "已加入插入队列",
 						"success",
 					);
 				}
@@ -2134,8 +2144,8 @@ export class VspiApp implements Component, Focusable {
 				this.composer.editor.addToHistory(text);
 				this.showNotice(
 					(result.delivery ?? "steer") === "followUp"
-						? "已加入 Follow-up，将在当前任务完成后继续"
-						: "已插入，将在下一次模型调用前送达",
+						? "已加入后续队列"
+						: "已加入插入队列",
 					"success",
 				);
 				return;
@@ -2184,7 +2194,6 @@ export class VspiApp implements Component, Focusable {
 
 	private renderStatus(width: number): string[] {
 		let lines: string[];
-		let noticeContext: string | undefined;
 		if (this.renameAttachmentId) {
 			lines = [
 				this.theme.focus(
@@ -2235,15 +2244,16 @@ export class VspiApp implements Component, Focusable {
 					width,
 					this.theme,
 				);
-				noticeContext = `${statusModel} · Effort ${effortLabel(this.effort)} · ${this.options.cwd} · Policy ${runtime.policy}`;
 			}
 		}
-		if ((this.notice || this.retryNotice) && lines.length > 0) {
-			lines[0] = this.renderNotice(width);
-			if (noticeContext && lines.length > 1)
-				lines[1] = this.theme.muted(padLine(noticeContext, width));
-		}
-		return lines;
+		// 状态区行数恒定：前两行是身份/遥测（特殊输入态补空行），第三行是通知槽位，
+		// 没有通知时回落到 Runtime 行（Working 状态由活动横幅表达，不会再重复）。
+		while (lines.length < 2) lines.push(padLine("", width));
+		const slot =
+			this.notice || this.retryNotice
+				? this.renderNotice(width)
+				: this.renderRuntimeStatus(width);
+		return [...lines, slot];
 	}
 
 	private renderNotice(width: number): string {
@@ -2287,10 +2297,12 @@ export class VspiApp implements Component, Focusable {
 						: "通知";
 		// 通知栏是单行表面：夹带 \n 的文本会占据多个物理行并错位后续 diff，渲染前压平。
 		const text = notice.text.replaceAll(/\s+/g, " ").trim();
-		return padLine(
-			`${style(`${icon} ${label}`)} ${this.theme.muted("·")} ${text}`,
-			width,
-		);
+		// 成功通知的语气已由 ✓ 图标表达，省掉冗余的 "完成 ·" 前缀。
+		const line =
+			!notice.progress && notice.tone === "success"
+				? `${style(icon)} ${text}`
+				: `${style(`${icon} ${label}`)} ${this.theme.muted("·")} ${text}`;
+		return padLine(line, width);
 	}
 
 	private showNotice(text: string, tone: NoticeTone): void {
@@ -2429,7 +2441,10 @@ export class VspiApp implements Component, Focusable {
 		const queued = this.queuedMessages.get(messageId);
 		if (!queued) return;
 		this.queuedMessages.delete(messageId);
-		this.messages.push(queued);
+		// 后端可能已把同一 clientMessageId 回显进时间线；此时原位替换，不追加第二份。
+		const existing = this.messages.findIndex((message) => message.id === messageId);
+		if (existing >= 0) this.messages[existing] = queued;
+		else this.messages.push(queued);
 	}
 
 	private updateQueuedMessageLifecycle(
@@ -2455,11 +2470,13 @@ export class VspiApp implements Component, Focusable {
 		const message = queued ?? existing;
 		if (!message || message.kind !== "text") return;
 		message.deliveryState = phase;
-		if (queued !== undefined && (phase === "cancelled" || phase === "failed" || phase === "completed")) {
+		if (queued !== undefined && (phase === "cancelled" || phase === "failed")) {
 			this.queuedPresentations.delete(messageId);
 			this.requestRender();
 			return;
 		}
+		// completed（以及 consuming/started/responding）一律晋升回时间线：
+		// deliveryState 到达终态后渲染为空，送达徽标随之消失。
 		if (queued !== undefined) this.promoteQueuedMessage(messageId);
 		this.queuedPresentations.delete(messageId);
 		this.syncActivityPresentation();
@@ -3228,6 +3245,7 @@ export class VspiApp implements Component, Focusable {
 				this.effort = selected.effort;
 				this.refreshModelPresentation();
 				this.panels.confirmModelSelection(this.currentModelIdentity);
+				this.recordRecentModel(this.currentModelIdentity);
 				this.panels.confirmModelGroupSelection(event.group.id);
 				const defaultsSaved = await this.persistRuntimeDefaults();
 				this.completeOneShotPanel();
@@ -3636,6 +3654,9 @@ export class VspiApp implements Component, Focusable {
 					"error",
 				);
 			}
+		} else if (event.type === "modelPin") {
+			this.modelPicks = { ...this.modelPicks, pinned: event.pinned };
+			this.persistModelPicks();
 		} else {
 			this.showNotice(event.text, event.tone);
 		}
@@ -4773,6 +4794,7 @@ export class VspiApp implements Component, Focusable {
 			this.effort = selected.effort;
 			this.refreshModelPresentation();
 			this.panels.confirmModelSelection(this.currentModelIdentity);
+			this.recordRecentModel(this.currentModelIdentity);
 			const saved = await this.persistRuntimeDefaults();
 			if (selection.epoch !== this.sessionEpoch) return;
 			this.completeOneShotPanel();
@@ -4788,6 +4810,28 @@ export class VspiApp implements Component, Focusable {
 			this.modelSelectionCommitting = false;
 			this.requestRender();
 		}
+	}
+
+	private persistModelPicks(): void {
+		const snapshot = this.modelPicks;
+		this.modelPicksSave = this.modelPicksSave.then(async () => {
+			try {
+				await saveModelPicks(snapshot, this.options.home);
+			} catch {
+				// 置顶/最近使用持久化失败不阻塞会话；下一次写入会重试。
+			}
+		});
+	}
+
+	private recordRecentModel(identity: { provider: string; id: string }): void {
+		const key = modelIdentityKey(identity);
+		if (!key) return;
+		this.modelPicks = {
+			...this.modelPicks,
+			recent: [key, ...this.modelPicks.recent.filter((item) => item !== key)].slice(0, 5),
+		};
+		this.panels.setModelPicks(this.modelPicks);
+		this.persistModelPicks();
 	}
 
 	private async persistRuntimeDefaults(): Promise<boolean> {

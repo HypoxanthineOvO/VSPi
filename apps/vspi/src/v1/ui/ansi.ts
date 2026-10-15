@@ -6,7 +6,7 @@ export { visibleWidth, wrapTextWithAnsi, truncateToWidth };
 export function stripAnsi(text: string): string {
   let result = "";
   for (let index = 0; index < text.length; index += 1) {
-    if (text.charCodeAt(index) !== 27) {
+    if (text.codePointAt(index) !== 27) {
       result += text[index];
       continue;
     }
@@ -19,8 +19,8 @@ export function stripAnsi(text: string): string {
     if (introducer === "]" || introducer === "_") {
       index += 2;
       while (index < text.length) {
-        if (text.charCodeAt(index) === 7) break;
-        if (text.charCodeAt(index) === 27 && text[index + 1] === "\\") {
+        if (text.codePointAt(index) === 7) break;
+        if (text.codePointAt(index) === 27 && text[index + 1] === "\\") {
           index += 1;
           break;
         }
@@ -36,7 +36,7 @@ export function stripAnsi(text: string): string {
 export function padLine(text: string, width: number): string {
   if (width <= 0) return "";
   const raw = truncateToWidth(text, width, "");
-  const truncated = text.includes("\u001b") ? raw : stripAnsi(raw);
+  const truncated = text.includes("\u001B") ? raw : stripAnsi(raw);
   return `${truncated}${" ".repeat(Math.max(0, width - visibleWidth(truncated)))}`;
 }
 
@@ -48,7 +48,7 @@ export function alignRight(left: string, right: string, width: number): string {
     if (rightWidth + 1 >= width) return padLine(right, width);
     const available = width - rightWidth - 1;
     const raw = truncateToWidth(left, available, "…");
-    const truncated = left.includes("\u001b") ? raw : stripAnsi(raw);
+    const truncated = left.includes("\u001B") ? raw : stripAnsi(raw);
     return `${truncated}${" ".repeat(Math.max(0, width - visibleWidth(truncated) - rightWidth))}${right}`;
   }
   return `${left}${" ".repeat(width - leftWidth - rightWidth)}${right}`;
@@ -63,7 +63,7 @@ export function emphasizePrefix(text: string, prefix: string, theme: VspiTheme):
   if (!matched) return theme.blue(text);
   // 关闭序列用 \x1b[0m 全量复位：仅关属性不关颜色的重置会把 focus 颜色
   // 泄漏到后续内容（包括编辑器反白光标格）上。
-  const modifiers = `\u001b[1;4;7m${theme.focus(matched)}\u001b[0m`;
+  const modifiers = `\u001B[1;4;7m${theme.focus(matched)}\u001B[0m`;
   return `${theme.blue(leading)}${modifiers}${theme.blue(remainder)}`;
 }
 
@@ -78,7 +78,7 @@ export function emphasizeVisibleRange(text: string, target: string, theme: VspiT
   let output = "";
 
   for (let index = 0; index < text.length; ) {
-    if (text.charCodeAt(index) === 27) {
+    if (text.codePointAt(index) === 27) {
       const introducer = text[index + 1];
       let sequenceEnd = index + 2;
       if (introducer === "[") {
@@ -86,11 +86,11 @@ export function emphasizeVisibleRange(text: string, target: string, theme: VspiT
         sequenceEnd = Math.min(text.length, sequenceEnd + 1);
       } else if (introducer === "]" || introducer === "_") {
         while (sequenceEnd < text.length) {
-          if (text.charCodeAt(sequenceEnd) === 7) {
+          if (text.codePointAt(sequenceEnd) === 7) {
             sequenceEnd += 1;
             break;
           }
-          if (text.charCodeAt(sequenceEnd) === 27 && text[sequenceEnd + 1] === "\\") {
+          if (text.codePointAt(sequenceEnd) === 27 && text[sequenceEnd + 1] === "\\") {
             sequenceEnd += 2;
             break;
           }
@@ -109,7 +109,7 @@ export function emphasizeVisibleRange(text: string, target: string, theme: VspiT
       // 按连续明文段整体包裹并在段尾用 \x1b[0m 全量复位：逐字符发
       // \x1b[27;24;22m 只关属性不关颜色，会把 focus 颜色泄漏到编辑器
       // 的反白光标格上，且高频 SGR 抖动放大重绘成本。
-      output += `\u001b[1;4;7m${theme.focus(character)}\u001b[0m`;
+      output += `\u001B[1;4;7m${theme.focus(character)}\u001B[0m`;
     } else {
       output += character;
     }
@@ -127,6 +127,8 @@ export interface FrameOptions {
   focused?: boolean;
   background?: (text: string) => string;
   maxBodyLines?: number;
+  /** 框内正文两侧留白列数（默认 0，内容贴边框）。 */
+  paddingX?: number;
 }
 
 export function frame(lines: string[], width: number, theme: VspiTheme, options: FrameOptions = {}): string[] {
@@ -151,8 +153,10 @@ export function frame(lines: string[], width: number, theme: VspiTheme, options:
       ? `${chars.bl}${footer}${chars.h.repeat(Math.max(0, innerWidth - visibleWidth(footer)))}${chars.br}`
       : `${chars.bl}${chars.h.repeat(Math.max(0, innerWidth - visibleWidth(footer)))}${footer}${chars.br}`;
   const rendered = [borderStyle(padLine(top, safeWidth))];
+  const paddingX = Math.max(0, Math.min(options.paddingX ?? 0, Math.floor(innerWidth / 2)));
+  const gutter = " ".repeat(paddingX);
   for (const line of body.length > 0 ? body : [""]) {
-    const content = padLine(line, innerWidth);
+    const content = `${gutter}${padLine(line, innerWidth - paddingX * 2)}${gutter}`;
     rendered.push(
       `${borderStyle(chars.v)}${options.background ? options.background(content) : content}${borderStyle(chars.v)}`,
     );

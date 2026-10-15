@@ -1,5 +1,5 @@
 import type { Klient } from '@moonshot-ai/klient';
-import { accountProxyPreference, normalizeProxyAddress, usesAccountProxy, type OAuthNetworkConfig, type ProxyConfig } from '@vsp/vsp-runtime';
+import { accountProxyForUrl, accountProxyPreference, normalizeProxyAddress, usesAccountProxy, type OAuthNetworkConfig, type ProxyConfig } from '@vsp/vsp-runtime';
 import type { ProviderAuthInteraction } from '../backend/types.js';
 
 export async function configuredProxy(klient: Klient): Promise<string | undefined> {
@@ -11,15 +11,19 @@ export async function configuredProxy(klient: Klient): Promise<string | undefine
 }
 
 export async function ensureProviderProxy(klient: Klient, providerId: string, interaction: ProviderAuthInteraction): Promise<void> {
-  const type = usesAccountProxy(providerId) ? providerId
-    : (await klient.global.kosong.listProviders()).find(provider => provider.id === providerId)?.type;
-  if (!usesAccountProxy(type ?? '') || await configuredProxy(klient) !== undefined) return;
+  // 共用代理只针对国外厂商官方账号：按 provider id 命中内置厂商；
+  // 其他 provider（含自定义）仅在 base URL 指向官方域名时询问——同协议的国内厂商与自建中转站不问。
+  const baseUrl = usesAccountProxy(providerId) ? undefined
+    : (await klient.global.kosong.listProviders()).find(provider => provider.id === providerId)?.base_url;
+  if (!usesAccountProxy(providerId) && accountProxyForUrl(baseUrl, 'x') === undefined) return;
+  if (await configuredProxy(klient) !== undefined) return;
   await configureProxy(klient, interaction);
 }
 
 export async function configureProxy(klient: Klient, interaction: ProviderAuthInteraction): Promise<void> {
   const invalid = '请输入有效的代理地址（端口 1–65535）。仅支持 HTTP/HTTPS，不含账号密码或路径。';
-  const value = await interaction.prompt({
+  // 先同步挂出输入提示，再异步回读当前代理值；读取失败只影响提示行，不阻断输入。
+  const prompt = interaction.prompt({
     type: 'text', message: '请输入代理地址',
     description: '支持端口、主机或域名、HTTP/HTTPS 地址。仅填端口时使用后台所在机器；跳过则沿用已有环境网络。',
     placeholder: '7890 / proxy.example.com:7890 / https://proxy.example.com:8443',
@@ -27,6 +31,10 @@ export async function configureProxy(klient: Klient, interaction: ProviderAuthIn
     validate: input => normalizeProxyAddress(input) === undefined ? invalid : undefined,
     signal: interaction.signal,
   });
+  void configuredProxy(klient)
+    .then(current => interaction.notify({ type: 'info', message: `当前代理：${current ?? '未设置'}` }))
+    .catch(() => {});
+  const value = await prompt;
   const url = value === '' ? '' : normalizeProxyAddress(value);
   if (url === undefined) throw new Error(invalid);
   interaction.signal?.throwIfAborted();

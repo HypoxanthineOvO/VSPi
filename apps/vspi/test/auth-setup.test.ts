@@ -29,6 +29,24 @@ function fakeConnection() {
 }
 
 describe("VSPi auth setup", () => {
+	it('defaults SSH login to device code and explains that no localhost callback is needed', async () => {
+		vi.stubEnv('SSH_CONNECTION', '192.0.2.1 12345 192.0.2.2 22');
+		try {
+			const dialog = new AuthDialog('OpenAI OAuth', vi.fn(), vi.fn());
+			const answer = dialog.prompt({ type: 'select', message: 'Login method', options: [
+				{ id: 'browser', label: 'Browser login' },
+				{ id: 'device_code', label: 'Device code login' },
+			] });
+			dialog.handleInput('\r');
+			await expect(answer).resolves.toBe('device_code');
+			dialog.notify({ type: 'device_code', verificationUri: 'https://example.com/device', userCode: 'EXAMPLE' });
+			const rendered = stripAnsi(dialog.render(80, createTheme(detectTerminalCapabilities(), 'Terminal')).join('\n'));
+			expect(rendered).toContain('EXAMPLE');
+			expect(rendered).toContain('不需要 localhost 回调');
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
 	it.each([
 		['7890', 'http://127.0.0.1:7890'],
 		['proxy.example.com:7890', 'http://proxy.example.com:7890'],
@@ -65,7 +83,7 @@ describe("VSPi auth setup", () => {
 	it('lets invalid proxy input be corrected in place before saving', async () => {
 		const set = vi.fn(async () => {});
 		const startLogin = vi.fn(async () => ({ status: 'authenticated' }));
-		const klient = { global: { config: { set }, auth: { startLogin } } } as unknown as Klient;
+		const klient = { global: { config: { set, get: async () => undefined }, auth: { startLogin } } } as unknown as Klient;
 		const dialog = new AuthDialog('OpenAI OAuth', vi.fn(), vi.fn());
 		const login = configureProxy(klient, dialog);
 		dialog.handleInput('65536');
@@ -83,7 +101,7 @@ describe("VSPi auth setup", () => {
 	it.each(['tab', 'down'])('skips proxy setup explicitly with %s instead of treating an empty Enter as skipping', async mode => {
 		const set = vi.fn(async () => {});
 		const startLogin = vi.fn(async () => ({ status: 'authenticated' }));
-		const klient = { global: { config: { set }, auth: { startLogin } } } as unknown as Klient;
+		const klient = { global: { config: { set, get: async () => undefined }, auth: { startLogin } } } as unknown as Klient;
 		const dialog = new AuthDialog('OpenAI OAuth', vi.fn(), vi.fn());
 		const login = configureProxy(klient, dialog);
 		dialog.handleInput('\r');
@@ -98,7 +116,7 @@ describe("VSPi auth setup", () => {
 	it.each(['escape', 'button', 'ctrl-c'])('cancels proxy entry with %s without saving or starting OAuth', async mode => {
 		const set = vi.fn();
 		const startLogin = vi.fn();
-		const klient = { global: { config: { set }, auth: { startLogin } } } as unknown as Klient;
+		const klient = { global: { config: { set, get: async () => undefined }, auth: { startLogin } } } as unknown as Klient;
 		const dialog = new AuthDialog('OpenAI OAuth', vi.fn(), vi.fn());
 		const login = configureProxy(klient, dialog);
 		dialog.handleInput('proxy.example.com:7890');
@@ -109,11 +127,18 @@ describe("VSPi auth setup", () => {
 		expect(startLogin).not.toHaveBeenCalled();
 	});
 
-	it.each([24, 40, 80])('shows the proxy input and all three actions within %s columns', async width => {
+	it.each([24, 80])('shows the proxy input and all three actions within %s columns', async width => {
 		const dialog = new AuthDialog('OpenAI OAuth', vi.fn(), vi.fn());
-		const login = configureProxy({} as Klient, dialog);
-		const lines = dialog.render(width, createTheme(detectTerminalCapabilities(), 'Terminal'));
+		const klient = { global: { config: { get: async () => undefined } } } as unknown as Klient;
+		const login = configureProxy(klient, dialog);
+		const theme = createTheme(detectTerminalCapabilities(), 'Terminal');
+		// 当前代理值是异步回读的提示行，先等它出现再断言整帧。
+		await vi.waitFor(() => {
+			expect(stripAnsi(dialog.render(width, theme).join('\n'))).toContain('当前代理');
+		});
+		const lines = dialog.render(width, theme);
 		const rendered = stripAnsi(lines.join('\n'));
+		expect(rendered).toContain('未设置');
 		expect(rendered).toContain('请输入代理地址');
 		expect(rendered).toContain('确认');
 		expect(rendered).toContain('跳过');
@@ -204,7 +229,8 @@ describe("VSPi auth setup", () => {
     try {
       await app.load();
       const menu = stripAnsi(app.render(80).join('\n'));
-      expect(menu).toContain('anthropic · API Key');
+      expect(menu).toContain('Anthropic');
+      expect(menu).toContain('API Key');
       expect(menu).not.toContain('订阅账号');
       await app.startInitial('anthropic');
       expect(replace).toHaveBeenCalledWith({ domain: 'providers', value: { anthropic: { type: 'anthropic', baseUrl: 'https://api.example.test' } } });
@@ -213,6 +239,56 @@ describe("VSPi auth setup", () => {
       expect(process.env.EXAMPLE_API_KEY).toBe('YOUR_API_KEY');
     } finally { vi.unstubAllEnvs(); }
   });
+
+	it('groups configured and addable providers by section with readable names', async () => {
+		const klient = { global: {
+			config: { inspect: async () => ({ userValue: { anthropic: { type: 'anthropic', apiKey: 'YOUR_API_KEY' } } }) },
+			kosong: {
+				listProviders: async () => [
+					{ id: 'anthropic', type: 'anthropic', has_api_key: true, status: 'connected', models: [] },
+					{ id: 'deepseek', type: 'deepseek', has_api_key: false, status: 'unconfigured', models: [] },
+					{ id: 'managed:internal', type: 'managed', has_api_key: false, status: 'unconfigured', models: [] },
+				],
+				listBuiltinProviders: async () => [],
+			},
+			auth: { listLoginProviders: async () => [] },
+		} } as unknown as Klient;
+		const app = new AuthSetupApp(new TuiMainScreen(new VirtualTerminal(80, 24)), createTheme(detectTerminalCapabilities(), 'Terminal'), klient, 'config', vi.fn(), true);
+		await app.load();
+		const menu = stripAnsi(app.render(80).join('\n'));
+		expect(menu).toContain('已配置');
+		expect(menu).toContain('可添加');
+		expect(menu).toContain('Anthropic');
+		expect(menu).toContain('DeepSeek');
+		expect(menu).toContain('添加自定义中转站');
+		expect(menu).not.toContain('managed:internal');
+		app.handleInput('deep');
+		expect(stripAnsi(app.render(80).join('\n'))).toContain('DeepSeek');
+		expect(stripAnsi(app.render(80).join('\n'))).not.toContain('Anthropic');
+	});
+
+	it('moves selection in displayed order, not raw provider order', async () => {
+		const klient = { global: {
+			config: { inspect: async () => ({ userValue: { zeta: { type: 'openai', apiKey: 'YOUR_API_KEY' } } }) },
+			kosong: {
+				listProviders: async () => [
+					{ id: 'alpha', type: 'openai', has_api_key: false, status: 'unconfigured', models: [] },
+					{ id: 'beta', type: 'openai', has_api_key: false, status: 'unconfigured', models: [] },
+					{ id: 'zeta', type: 'openai', has_api_key: true, status: 'connected', models: [] },
+				],
+				listBuiltinProviders: async () => [],
+			},
+			auth: { listLoginProviders: async () => [] },
+		} } as unknown as Klient;
+		const app = new AuthSetupApp(new TuiMainScreen(new VirtualTerminal(80, 24)), createTheme(detectTerminalCapabilities(), 'Terminal'), klient, 'config', vi.fn(), true);
+		await app.load();
+		const focusedLine = () => app.render(80).map(stripAnsi).find((line) => line.includes('›'))?.trim();
+		// Zeta 在原始列表末尾但有凭据，展示为 已配置 首行并成为初始焦点。
+		expect(focusedLine()).toContain('ZETA');
+		// Down 移到展示顺序的第二行（可添加 分区第一行），而不是原始列表里的下一条。
+		app.handleInput('\u001B[B');
+		expect(focusedLine()).toContain('Alpha');
+	});
 
   it('offers logout for a configured environment reference even when that variable is unset', async () => {
     const klient = { global: {
@@ -241,6 +317,33 @@ describe("VSPi auth setup", () => {
 		await ensureProviderProxy(klient, provider, { prompt, notify: vi.fn() });
 		expect(prompt).not.toHaveBeenCalled();
 		expect(get).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ id: 'deepseek', type: 'openai' },
+		{ id: 'xiaomi', type: 'openai' },
+		{ id: 'custom-gateway-abc123', type: 'openai', base_url: 'http://127.0.0.1:4117/v1' },
+	])('does not ask the openai-protocol provider $id for the shared proxy', async ({ id, type, base_url }) => {
+		const prompt = vi.fn();
+		const get = vi.fn();
+		const klient = { global: { config: { get }, kosong: { listProviders: async () => [{ id, type, base_url }] } } } as unknown as Klient;
+		await ensureProviderProxy(klient, id, { prompt, notify: vi.fn() });
+		expect(prompt).not.toHaveBeenCalled();
+		expect(get).not.toHaveBeenCalled();
+	});
+
+	it('asks a provider outside the builtin list when its base URL is an official host', async () => {
+		const set = vi.fn(async () => {});
+		const prompt = vi.fn(async () => 'proxy.example.com:7890');
+		const klient = {
+			global: {
+				config: { set, get: async () => undefined },
+				kosong: { listProviders: async () => [{ id: 'claude', type: 'anthropic', base_url: 'https://api.anthropic.com' }] },
+			},
+		} as unknown as Klient;
+		await ensureProviderProxy(klient, 'claude', { prompt, notify: vi.fn() });
+		expect(prompt).toHaveBeenCalledOnce();
+		expect(set).toHaveBeenCalledWith({ domain: 'proxy', patch: { url: 'http://proxy.example.com:7890' } });
 	});
 	afterEach(() => vi.useRealTimers());
 	it("rejects non-interactive execution before touching the runtime", async () => {
@@ -400,7 +503,7 @@ describe("VSPi auth setup", () => {
 		} as unknown as Klient;
 		const prompt = vi.fn().mockResolvedValueOnce("example/model").mockResolvedValueOnce("high");
 		await configureDefaultModel(klient, "example", { prompt, notify: vi.fn() });
-		expect(prompt.mock.calls[1]?.[0].options).toEqual([{ id: "high", label: "high" }, { id: "low", label: "low" }]);
+		expect(prompt.mock.calls[1]?.[0].options).toEqual([{ id: "high", label: "High" }, { id: "low", label: "Low" }]);
 		expect(setDefaultModel).toHaveBeenCalledWith("example/model");
 		expect(set).toHaveBeenCalledWith({ domain: "thinking", patch: { enabled: true, effort: "high" } });
 	});

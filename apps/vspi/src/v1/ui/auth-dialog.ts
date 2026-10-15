@@ -15,7 +15,7 @@ type PendingPrompt = {
 };
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: CSI-u encodes pasted control bytes with ESC.
-const CSI_U_CONTROL = /\u001b\[(\d+);5u/g;
+const CSI_U_CONTROL = /\u001B\[(\d+);5u/g;
 
 export class AuthDialog implements ProviderAuthInteraction {
   readonly controller = new AbortController();
@@ -25,6 +25,8 @@ export class AuthDialog implements ProviderAuthInteraction {
   private input = "";
   private inputError: string | undefined;
   private readonly textInput = new Input();
+  private readonly selectInput = new Input();
+  private selectQuery = "";
   private pasteBuffer = "";
   private inBracketedPaste = false;
   private selected = 0;
@@ -76,6 +78,9 @@ export class AuthDialog implements ProviderAuthInteraction {
     prompt = preferDeviceCodeInRemoteSession(prompt);
     this.resetInput();
     this.selected = 0;
+    this.selectQuery = "";
+    this.selectInput.setValue("");
+    this.selectInput.focused = true;
     return new Promise((resolve, reject) => {
       const pending: PendingPrompt = { prompt, resolve, reject };
       if (prompt.signal) {
@@ -101,17 +106,37 @@ export class AuthDialog implements ProviderAuthInteraction {
   handleInput(data: string): void {
     const prompt = this.pending?.prompt;
     if (prompt && prompt.type !== "select" && this.handleBracketedPaste(data)) return;
-    if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) {
+    if (matchesKey(data, Key.escape)) {
+      if (this.selectQuery) {
+        this.selectQuery = "";
+        this.selectInput.setValue("");
+        this.selected = 0;
+        this.requestRender();
+        return;
+      }
+      this.cancel();
+      return;
+    }
+    if (matchesKey(data, Key.ctrl('c'))) {
       this.cancel();
       return;
     }
     if (!prompt) return;
     if (prompt.type === "select") {
+      const options = this.selectOptions();
       if (matchesKey(data, Key.up)) this.selected = Math.max(0, this.selected - 1);
-      else if (matchesKey(data, Key.down)) this.selected = Math.min(prompt.options.length - 1, this.selected + 1);
+      else if (matchesKey(data, Key.down)) this.selected = Math.min(options.length - 1, this.selected + 1);
       else if (matchesKey(data, Key.enter)) {
-        const option = prompt.options[this.selected];
+        const option = options[this.selected];
         if (option) this.resolvePending(option.id);
+      } else {
+        const before = this.selectInput.getValue();
+        this.selectInput.handleInput(data);
+        const next = this.selectInput.getValue();
+        if (next !== before) {
+          this.selectQuery = next;
+          this.selected = 0;
+        }
       }
       this.requestRender();
       return;
@@ -167,15 +192,26 @@ export class AuthDialog implements ProviderAuthInteraction {
       if (body.length > 0) body.push("");
       body.push(...wrapTextWithAnsi(theme.bold(prompt.message), bodyWidth));
       if (prompt.type === "select") {
-        const visibleCount = Math.max(3, (process.stdout.rows ?? 24) - body.length - 7);
-        const start = Math.max(0, Math.min(this.selected - Math.floor(visibleCount / 2), prompt.options.length - visibleCount));
-        prompt.options.slice(start, start + visibleCount).forEach((option, offset) => {
-          const index = start + offset;
-          const row = `${index === this.selected ? theme.focus("› ") : "  "}${option.label}`;
-          body.push(index === this.selected ? theme.selected(padLine(row, bodyWidth)) : row);
-          if (index === this.selected && option.description) body.push(theme.muted(`    ${option.description}`));
-        });
-        if (prompt.options.length > visibleCount) body.push(theme.muted(`${this.selected + 1} / ${prompt.options.length}`));
+        const options = this.selectOptions();
+        const searchable = prompt.options.length > 8;
+        if (searchable) {
+          const value = this.selectQuery === "" ? theme.muted("输入筛选") : this.selectQuery;
+          body.push(`  ${theme.muted("搜索 ")}${value}${theme.inverse(" ")}`);
+        }
+        if (options.length === 0) {
+          body.push(theme.muted("  没有匹配项"));
+        } else {
+          const visibleCount = Math.max(3, (process.stdout.rows ?? 24) - body.length - 7);
+          const start = Math.max(0, Math.min(this.selected - Math.floor(visibleCount / 2), options.length - visibleCount));
+          options.slice(start, start + visibleCount).forEach((option, offset) => {
+            const index = start + offset;
+            const row = `${index === this.selected ? theme.focus("› ") : "  "}${option.label}`;
+            body.push(index === this.selected ? theme.selected(padLine(row, bodyWidth)) : row);
+            if (index === this.selected && option.description) body.push(theme.muted(`    ${option.description}`));
+          });
+        }
+        const position = `${Math.min(this.selected + 1, Math.max(1, options.length))} / ${options.length}`;
+        body.push(theme.muted(this.selectQuery ? `${position} · 共 ${prompt.options.length} 项` : position));
       } else {
         if (this.textInput.getValue() !== this.input) this.textInput.setValue(this.input);
         const inputValue = this.input;
@@ -193,11 +229,21 @@ export class AuthDialog implements ProviderAuthInteraction {
     }
     if (prompt && prompt.type !== 'select' && prompt.skip) {
       const actions = ['确认', prompt.skip.label, '取消'].map((label, index) =>
-        index === this.selected ? theme.inverse(`【${label}】`) : theme.muted(`【${label}】`));
-      body.push('', ...wrapTextWithAnsi(actions.join(' '), bodyWidth),
-        ...wrapTextWithAnsi(theme.muted('Enter 确认 · Tab 切换 · Esc 取消'), bodyWidth));
+        index === this.selected ? theme.inverse(`[ ${label} ]`) : theme.muted(label));
+      body.push('', ...wrapTextWithAnsi(actions.join('  '), bodyWidth),
+        ...wrapTextWithAnsi(theme.muted('Enter 确认 · Tab/←→ 切换 · Esc 取消'), bodyWidth));
     } else body.push("", theme.muted(prompt ? "Enter 确认 · Esc 取消" : "Esc 取消"));
-    return frame(body, width, theme, { title: `${this.providerName} · ${this.purpose}`, focused: true });
+    return frame(body, width, theme, { title: `${this.providerName} · ${this.purpose}`, focused: true, paddingX: 1 });
+  }
+
+  private selectOptions(): readonly { id: string; label: string; description?: string }[] {
+    const prompt = this.pending?.prompt;
+    if (prompt?.type !== "select") return [];
+    const query = this.selectQuery.trim().toLowerCase();
+    if (!query) return prompt.options;
+    return prompt.options.filter((option) =>
+      `${option.label} ${option.id}`.toLowerCase().includes(query),
+    );
   }
 
   private resolvePending(value: string): void {
@@ -225,8 +271,8 @@ export class AuthDialog implements ProviderAuthInteraction {
   }
 
   private handleBracketedPaste(data: string): boolean {
-    const startMarker = "\u001b[200~";
-    const endMarker = "\u001b[201~";
+    const startMarker = "\u001B[200~";
+    const endMarker = "\u001B[201~";
     if (data.includes(startMarker)) {
       this.inBracketedPaste = true;
       this.pasteBuffer = "";
@@ -285,11 +331,11 @@ function preferDeviceCodeInRemoteSession(prompt: ProviderAuthPrompt): ProviderAu
 function sanitizeSingleLinePaste(value: string): string {
   const decoded = value.replace(CSI_U_CONTROL, (match, code: string) => {
     const codePoint = Number(code);
-    if (codePoint >= 97 && codePoint <= 122) return String.fromCharCode(codePoint - 96);
-    if (codePoint >= 65 && codePoint <= 90) return String.fromCharCode(codePoint - 64);
+    if (codePoint >= 97 && codePoint <= 122) return String.fromCodePoint(codePoint - 96);
+    if (codePoint >= 65 && codePoint <= 90) return String.fromCodePoint(codePoint - 64);
     return match;
   });
-  return Array.from(decoded.replace(/\r\n|\r|\n/g, "").replaceAll("\t", "    "))
+  return Array.from(decoded.replaceAll(/\r\n|\r|\n/g, "").replaceAll("\t", "    "))
     .filter((character) => {
       const codePoint = character.codePointAt(0) ?? 0;
       return codePoint >= 32 && codePoint !== 127;
@@ -301,7 +347,7 @@ function terminalHyperlink(value: string): string {
   try {
     const url = new URL(value);
     if (url.protocol !== "https:" && url.protocol !== "http:") return value;
-    return `\u001b]8;;${url.href}\u0007${value}\u001b]8;;\u0007`;
+    return `\u001B]8;;${url.href}\u0007${value}\u001B]8;;\u0007`;
   } catch {
     return value;
   }

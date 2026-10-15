@@ -1290,9 +1290,17 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 				}),
 			],
 		});
-		expect(onMessageUpdate).toHaveBeenCalledTimes(1);
+		expect(onMessageUpdate).toHaveBeenCalledTimes(2);
 		expect(onMessageUpdate).toHaveBeenCalledWith("tool-swarm", {
 			summary: "Agents · 0/1 completed · 1 running",
+		});
+		expect(onMessageUpdate).toHaveBeenCalledWith("tool-swarm", {
+			agentRuns: [
+				expect.objectContaining({
+					task: "Inspect repository",
+					status: "running",
+				}),
+			],
 		});
 	});
 

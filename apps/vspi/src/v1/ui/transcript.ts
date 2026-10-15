@@ -480,7 +480,7 @@ function selectTranscriptTail(
 		cursor = start - 1;
 	}
 
-	const nodes = reversedNodes.reverse();
+	const nodes = reversedNodes.toReversed();
 	const firstMessageIndex = nodes[0]?.messageIndexes[0] ?? messages.length;
 	return {
 		messages: messages.slice(firstMessageIndex),
@@ -608,16 +608,19 @@ function attachmentSummary(
 	);
 }
 
-function deliverySummary(
+function deliveryStatus(
 	message: Extract<TranscriptMessage, { kind: "text" }>,
-): string {
+): string | undefined {
 	if (message.delivery === "cancelled" || message.deliveryState === "cancelled")
-		return "〔队列已取消〕";
-	if (message.deliveryState === "consuming") return "";
-	if (message.deliveryState === "started") return "〔模型步骤已开始〕";
-	if (message.deliveryState === "responding") return "〔正在回复〕";
-	if (message.deliveryState === "failed") return "〔回复失败〕";
-	return "";
+		return "队列已取消";
+	if (message.deliveryState === "failed") return "回复失败";
+	if (message.deliveryState === "queued") return "等待插入";
+	if (
+		message.deliveryState === "consuming" ||
+		message.deliveryState === "started"
+	)
+		return "已送达模型";
+	return undefined;
 }
 
 function wrapUserContent(content: string, width: number): string[] {
@@ -642,16 +645,20 @@ export function renderTranscriptMessage(
 			.filter(Boolean)
 			.join(" ");
 		const contentLines = wrapUserContent(content, Math.max(1, width - 4));
-		const status = deliverySummary(message);
+		const status = deliveryStatus(message);
 		lines = [
 			theme.userSurface(padLine("", width)),
 			...contentLines.map((line) =>
 				theme.userSurface(
-					padLine(`${theme.focus("▌")}  ${line || " "}`, width),
+					padLine(`${theme.focus("▌")} ${line || " "}`, width),
 				),
 			),
 			...(status
-				? [theme.userSurface(padLine(`   ${theme.muted(status)}`, width))]
+				? [
+						theme.userSurface(
+							padLine(`  ${theme.muted(`↳ ${status}`)}`, width),
+						),
+					]
 				: []),
 			theme.userSurface(padLine("", width)),
 		];
@@ -692,11 +699,11 @@ export function renderTranscriptMessage(
 		}
 		if (message.streaming && lines.length > 0) {
 			// 满宽行先把内容截到 width-1，再追加光标，避免后续 padLine 把光标切掉。
-			const last = lines[lines.length - 1] ?? "";
+			const last = lines.at(-1) ?? "";
 			let clipped = last;
 			if (visibleWidth(last) >= width) {
 				const raw = truncateToWidth(last, Math.max(0, width - 1), "");
-				clipped = last.includes("\u001b") ? raw : stripAnsi(raw);
+				clipped = last.includes("\u001B") ? raw : stripAnsi(raw);
 			}
 			lines[lines.length - 1] = `${clipped}${theme.focus("▋")}`;
 		}
@@ -706,7 +713,7 @@ export function renderTranscriptMessage(
 			message.streaming &&
 			!selected
 		) {
-			return [theme.muted(`◇  思考中 · Effort ${effortLabel(message.effort)}`)];
+			return [theme.muted(`◇  思考中`)];
 		}
 		if (options.thinkingDisplay === "hidden" && !selected) {
 			return [theme.muted("◇  思考 · 已隐藏")];
@@ -732,9 +739,7 @@ export function renderTranscriptMessage(
 			? `   … 思考过长，仅显示末尾 ${MAX_THINKING_RENDER_CHARS.toLocaleString()} 字符（共 ${fullDisplayText.length.toLocaleString()}）`
 			: undefined;
 		lines = [
-			theme.muted(
-				`◇  思考 · Effort ${effortLabel(message.effort)}${duration}${translation} · ${message.collapsed ? "已折叠" : "已展开"}`,
-			),
+			theme.muted(`◇  思考${duration}${translation}`),
 		];
 		if (truncationNotice) lines.push(theme.warning(truncationNotice));
 		if (message.collapsed) {
@@ -891,8 +896,8 @@ export function renderTranscriptMessage(
 	);
 }
 
-const ESCAPE = String.fromCharCode(27);
-const BELL = String.fromCharCode(7);
+const ESCAPE = String.fromCodePoint(27);
+const BELL = String.fromCodePoint(7);
 const OSC133_ZONE = new RegExp(
 	`${ESCAPE}\\]133;[ABC](?:${BELL}|${ESCAPE}\\\\)`,
 	"gu",
@@ -1081,7 +1086,13 @@ export function renderTranscript(
 			);
 			index += 1;
 		}
-		if (index < visible.length && stripAnsi(output.at(-1) ?? "") !== "")
+		// userSurface 等带底色块用整行空白做内边距——视同为分隔空行，不再叠加第二个空行。
+		// 同理，若下一块（用户消息）以底色内边距行开头，它本身就是分隔行。
+		const nextStartsWithPad =
+			index < visible.length &&
+			visible[index]!.kind === "text" &&
+			visible[index]!.role === "user";
+		if (index < visible.length && stripAnsi(output.at(-1) ?? "").trim() !== "" && !nextStartsWithPad)
 			output.push("");
 	}
 	options.cache?.retain(retainedCacheKeys, visible);
@@ -1163,6 +1174,86 @@ function renderToolGroup(
 	return lines;
 }
 
+function toolStatusSymbol(
+	status: string,
+	theme: VspiTheme,
+): string {
+	return status === "success"
+		? theme.success("✓")
+		: status === "error" ||
+				status === "timed_out" ||
+				status === "lost"
+			? theme.error("×")
+			: status === "cancelled" ||
+					status === "killed" ||
+					status === "stopping"
+				? theme.warning("−")
+				: theme.focus("●");
+}
+
+function toolStatusText(status: string): string {
+	return status === "error" ||
+		status === "timed_out" ||
+		status === "lost"
+		? "失败"
+		: status === "cancelled" || status === "killed"
+			? "已取消"
+			: status === "queued"
+				? "等待中"
+				: status === "running" ||
+						status === "background" ||
+						status === "stopping" ||
+						status === "detached"
+					? "运行中"
+					: "";
+}
+
+function runElapsed(run: {
+	startedAt?: string;
+	finishedAt?: string;
+}): number | undefined {
+	if (run.startedAt === undefined) return undefined;
+	const start = Date.parse(run.startedAt);
+	if (!Number.isFinite(start)) return undefined;
+	const end =
+		run.finishedAt === undefined
+			? Date.now()
+			: Date.parse(run.finishedAt);
+	if (!Number.isFinite(end)) return undefined;
+	return Math.max(0, Math.floor((end - start) / 1000));
+}
+
+// Agent 工具输出的信封行（前台 [summary] 段与后台回执共用这些 key），不是结果内容。
+const AGENT_RECEIPT_LINE =
+	/^(?:task_id|agent_id|status|stop_reason|actual_subagent_type|automatic_notification|description|next_step|resume_hint|note):/i;
+
+function agentOutcomeLine(
+	message: Extract<TranscriptMessage, { kind: "tool" }>,
+): string | undefined {
+	if (message.output !== undefined) {
+		const lines = message.output.split("\n");
+		const marker = lines.findIndex((line) => line.trim() === "[summary]");
+		const candidates = marker >= 0 ? lines.slice(marker + 1) : lines;
+		const line = candidates
+			.map((text) => text.trim())
+			.find(
+				(text) =>
+					text.length > 0 &&
+					text !== "[summary]" &&
+					!AGENT_RECEIPT_LINE.test(text),
+			);
+		if (line !== undefined) return line;
+	}
+	for (const run of message.agentRuns ?? []) {
+		const line = run.result
+			?.split("\n")
+			.map((text) => text.trim())
+			.find((text) => text.length > 0);
+		if (line !== undefined) return line;
+	}
+	return undefined;
+}
+
 function renderToolEntry(
 	message: Extract<TranscriptMessage, { kind: "tool" }>,
 	last: boolean,
@@ -1171,40 +1262,82 @@ function renderToolEntry(
 	theme: VspiTheme,
 	options: TranscriptRenderOptions,
 ): string[] {
-	const symbol =
-		message.status === "success"
-			? theme.success("✓")
-			: message.status === "error"
-				? theme.error("×")
-				: message.status === "cancelled"
-					? theme.warning("−")
-					: theme.focus("●");
-	const state =
-		message.status === "error"
-			? "失败"
-			: message.status === "cancelled"
-				? "已取消"
-				: message.status === "queued"
-					? "等待中"
-					: message.status === "running"
-						? "运行中"
-						: "";
-	const summary = message.summary.replace(/\s+/g, " ").trim();
 	const label = padLine(
 		truncateToWidth(toolLabel(message.name), labelWidth, "…"),
 		labelWidth,
 	);
-	const backgroundHint =
-		message.status === "running" && message.name.toLowerCase() === "bash"
-			? " · ctrl+b 转后台"
-			: "";
-	const detail = `${state ? `${summary} · ${state}` : summary}${backgroundHint}`;
-	const lines = [
-		fitLine(
-			`${theme.muted(treeConnector(last, theme))} ${symbol} ${theme.bold(label)}  ${theme.muted(detail)}`,
-			width,
-		),
-	];
+	const continuation = last
+		? "   "
+		: theme.muted(theme.capabilities.unicode ? "│  " : "|  ");
+	const terminal = !["queued", "running"].includes(message.status);
+	const lines: string[] = [];
+	if (message.name === "Agent" && (message.agentRuns?.length ?? 0) > 0) {
+		const runs = message.agentRuns ?? [];
+		for (const [index, run] of runs.entries()) {
+			const elapsed = runElapsed(run);
+			const detail = [
+				run.name,
+				run.task,
+				run.profile ? formatSubagentProfile(run.profile) : undefined,
+				run.model ? formatSubagentModel(run.model) : undefined,
+				elapsed === undefined
+					? undefined
+					: formatSubagentDuration(elapsed),
+			]
+				.filter(Boolean)
+				.join(" · ");
+			lines.push(
+				fitLine(
+					`${theme.muted(treeConnector(last && index === runs.length - 1, theme))} ${toolStatusSymbol(run.status, theme)} ${theme.bold(label)}  ${theme.muted(detail)}`,
+					width,
+				),
+			);
+		}
+	} else {
+		const state = toolStatusText(message.status);
+		const summary = message.summary.replaceAll(/\s+/g, " ").trim();
+		// Bash 等工具的瞬时标题（"Running:"/"Starting background:"）只在进行中成立，终态去掉前缀。
+		const title =
+			terminal && state !== "运行中"
+				? summary.replace(/^(?:Running|Starting background):\s*/iu, "")
+				: summary;
+		const backgroundHint =
+			message.status === "running" && message.name.toLowerCase() === "bash"
+				? " · ctrl+b 转后台"
+				: "";
+		const duration =
+			terminal && message.durationMs !== undefined
+				? ` · ${(message.durationMs / 1000).toFixed(1)}s`
+				: "";
+		const detail = `${title}${duration}${state ? ` · ${state}` : ""}${backgroundHint}`;
+		lines.push(
+			fitLine(
+				`${theme.muted(treeConnector(last, theme))} ${toolStatusSymbol(message.status, theme)} ${theme.bold(label)}  ${theme.muted(detail)}`,
+				width,
+			),
+		);
+	}
+	if (terminal && !message.expanded) {
+		const outputLine =
+			message.name === "Agent"
+				? agentOutcomeLine(message)
+				: message.output
+						?.split("\n")
+						.map((line) => line.trim())
+						.find((line) => line.length > 0);
+		const outcome =
+			outputLine ??
+			(message.status === "success"
+				? undefined
+				: toolStatusText(message.status) || "失败");
+		if (outcome)
+			lines.push(
+				fitLine(
+					`${continuation}${theme.muted(`→ ${outcome}`)}`,
+					width,
+				),
+			);
+	}
 	const legacyRestricted =
 		options.inspectedId !== undefined && options.selectedToolId === undefined;
 	if (

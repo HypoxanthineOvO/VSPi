@@ -44,8 +44,14 @@ describe('VSPi runtime identity', () => {
     await writeFile(join(dist, 'search-worker.mjs'), 'export {};');
     await writeFile(join(dist, 'text-build-worker.mjs'), 'export {};');
     await writeFile(join(root, 'package', 'skills', 'vspi-self', 'SKILL.md'), 'Example skill');
+    const assets = join(dist, 'prebuilds', 'example-platform');
+    await mkdir(assets, { recursive: true });
+    await writeFile(join(assets, 'pty.node'), 'original native payload');
     const buildId = await runtimeBuildId(entry);
     const snapshot = await stageRuntimeBuild(entry, join(root, 'home'), buildId);
+    expect(await readFile(join(snapshot, '..', 'prebuilds', 'example-platform', 'pty.node'), 'utf8')).toBe('original native payload');
+    await writeFile(join(assets, 'pty.node'), 'changed native payload');
+    expect(await runtimeBuildId(entry)).not.toBe(buildId);
     await writeFile(entry, 'console.log("replacement build")');
     expect((await promisify(execFile)(process.execPath, [snapshot])).stdout.trim()).toBe('previous build');
     expect(await runtimeBuildId(snapshot)).toBe(buildId);

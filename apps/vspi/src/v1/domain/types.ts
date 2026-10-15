@@ -78,6 +78,29 @@ export interface ThinkingMessage {
 	translationStatus?: "pending" | "translated" | "error" | undefined;
 }
 
+export interface AgentToolRun {
+	name: string;
+	task?: string;
+	profile?: string;
+	model?: string;
+	status:
+		| "queued"
+		| "running"
+		| "success"
+		| "error"
+		| "cancelled"
+		| "timed_out"
+		| "killed"
+		| "lost"
+		| "background"
+		| "stopping"
+		| "detached";
+	startedAt?: string;
+	finishedAt?: string;
+	/** 子代理任务收尾后的最终结果文本；后台任务的工具回执只是 task_id 收据，结果以此为准。 */
+	result?: string;
+}
+
 export interface ToolMessage {
 	id: string;
 	role: "assistant";
@@ -96,6 +119,8 @@ export interface ToolMessage {
 		| "lost";
 	output?: string;
 	expanded: boolean;
+	durationMs?: number;
+	agentRuns?: AgentToolRun[];
 }
 
 export interface SubAgentMessage {

@@ -1,5 +1,5 @@
 import type { TranscriptMessage } from "../domain/types.js";
-import { alignRight, padLine, truncateToWidth } from "./ansi.js";
+import { padLine, truncateToWidth } from "./ansi.js";
 import type { VspiTheme } from "./theme.js";
 
 export interface ActivityRailInput {
@@ -23,8 +23,8 @@ export function renderActivityRail(
 ): string {
 	const indicator = theme.focus(theme.bold(input.indicator));
 	const queue = [
-		input.steering > 0 ? `Steer ${input.steering}` : "",
-		input.followUp > 0 ? `Follow-up ${input.followUp}` : "",
+		input.steering > 0 ? `待插入 ${input.steering}` : "",
+		input.followUp > 0 ? `待发送 ${input.followUp}` : "",
 	]
 		.filter(Boolean)
 		.join(" · ");
@@ -63,19 +63,18 @@ export function renderQueuedMessage(
 		.map((attachment) => attachment.alias)
 		.join(" · ");
 	const content = [
-		message.text.replace(/\s+/g, " ").trim(),
+		message.text.replaceAll(/\s+/g, " ").trim(),
 		attachmentText,
 	]
 		.filter(Boolean)
 		.join(" · ");
-	const label = message.delivery === "followUp" ? "Follow-up" : "Steer";
+	const label = message.delivery === "followUp" ? "待发送" : "待插入";
 	const status = message.deliveryState === "cancelled" ? "已取消 · 未送达"
-		: message.deliveryState === "failed" || message.deliveryState === "completed" ? "未送达"
+		: message.deliveryState === "failed" ? "发送失败"
+		: message.deliveryState === "completed" ? "已送达"
 		: message.delivery === "followUp" ? "等待当前任务结束" : "等待下一次模型调用";
 	const animated = !presentation.reducedMotion;
 	const marker = animated && presentation.frame % 2 === 0 ? "▐" : "▌";
-	const left = `${theme.focus(marker)} ${theme.bold(label)} · ${theme.muted(status)} · ${theme.muted(content)}`;
-	const arrow = "↪";
-	const right = theme.muted(theme.capabilities.unicode ? arrow : ">");
-	return theme.activitySurface(alignRight(left, right, width));
+	const left = `${theme.muted(`${marker} ${label} · ${status}`)}  ${content}`;
+	return theme.activitySurface(padLine(left, width));
 }

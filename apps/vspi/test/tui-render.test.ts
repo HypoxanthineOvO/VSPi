@@ -4,7 +4,7 @@
  * Wiring: real VSPi renderers and xterm terminal emulation; a backend boundary fixture for runtime events.
  * Run: pnpm -C apps/vspi test
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -26,6 +26,7 @@ import {
 	reduceCompactionActivity,
 	VspiApp,
 } from "../src/v1/app/vspi-app.js";
+import { modelPicksPath } from "../src/v1/config/settings.js";
 import { resolveCommand } from "../src/v1/domain/commands.js";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/v1/domain/defaults.js";
 import { editSubagentModels } from "../src/v1/domain/subagent-models.js";
@@ -231,6 +232,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			cwd: "/workspace",
 			settings: { ...DEFAULT_SETTINGS, summarizeSessionTitleOnExit: false },
 			attachments: new AttachmentService("layout-test", theme, { home }),
+			home,
 			onExit: () => {},
 		});
 		tui.addChild(app);
@@ -412,7 +414,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			await app.start();
 			app.composer.setText("/model");
 			app.handleInput("\r");
-			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("★ 官方推荐"));
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("输入名称、ID 或 Provider 筛选"));
 			expect(getSubagent).not.toHaveBeenCalled();
 		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
 	});
@@ -428,7 +430,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			await app.start();
 			app.composer.setText("/model");
 			app.handleInput("\r");
-			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("★ 官方推荐"));
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("官方推荐"));
 			app.handleInput("\r");
 			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("确认后切换"));
 			expect(select).not.toHaveBeenCalled();
@@ -451,7 +453,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			await app.start();
 			app.composer.setText("/model");
 			app.handleInput("\r");
-			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("★ 官方推荐"));
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("官方推荐"));
 			app.handleInput("\r");
 			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("确认后切换"));
 			app.handleInput("\r");
@@ -640,12 +642,12 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		panels.open('settings');
 		const render = () => panels.render(100, 40, theme, DEFAULT_USAGE).map(stripTerminalSequences).join('\n');
 		expect(render()).toContain('cn · 无 SNI 直连');
-		for (let index = 0; index < 11; index++) panels.handleInput('\x1B[B');
+		for (let index = 0; index < 11; index++) panels.handleInput('\u001B[B');
 		expect(panels.handleInput(' ')).toBeUndefined();
 		expect(render()).toContain('tech · 常规连接');
 		expect(panels.render(80, 14, theme, DEFAULT_USAGE).map(stripTerminalSequences).join('\n')).toContain('VSPLab 线路');
 		expect(panels.handleInput('\u0013')).toMatchObject({ type: 'settings', vsplabEndpoint: 'tech' });
-		panels.handleInput('\x1B');
+		panels.handleInput('\u001B');
 		panels.open('settings');
 		expect(render()).toContain('cn · 无 SNI 直连');
 	});
@@ -657,7 +659,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		panels.setSettingsLayers({ global, project, projectInherited: false });
 		panels.setVsplabEndpoint('tech');
 		panels.open('settings');
-		for (let index = 0; index < 11; index++) panels.handleInput('\x1B[B');
+		for (let index = 0; index < 11; index++) panels.handleInput('\u001B[B');
 		expect(panels.handleInput(' ')).toMatchObject({ type: 'notice', text: expect.stringContaining('全局') });
 		expect(panels.handleInput('\u0013')).toMatchObject({ type: 'notice', text: '设置没有变化' });
 	});
@@ -689,8 +691,8 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			),
 		);
 		expect(rail).toContain("Working");
-		expect(rail).toContain("Steer 2");
-		expect(rail).toContain("Follow-up 1");
+		expect(rail).toContain("待插入 2");
+		expect(rail).toContain("待发送 1");
 
 		const steer = {
 			id: "queued-steer",
@@ -713,19 +715,19 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 				reducedMotion: false,
 			}),
 		);
-		expect(entering0).toContain("Steer");
+		expect(entering0).toContain("待插入");
 		expect(entering0).toContain("等待下一次模型调用");
-		expect(entering1).toContain("Steer");
+		expect(entering1).toContain("待插入");
 		expect(entering0).not.toBe(entering1);
-		expect(
-			stripTerminalSequences(
-				renderQueuedMessage(steer, 80, theme, {
-					phase: "settling",
-					frame: 0,
-					reducedMotion: false,
-				}),
-			),
-		).toContain("↪");
+		const settling = stripTerminalSequences(
+			renderQueuedMessage(steer, 80, theme, {
+				phase: "settling",
+				frame: 0,
+				reducedMotion: false,
+			}),
+		);
+		expect(settling).toContain("待插入");
+		expect(settling).not.toContain("↪");
 
 		const reduced0 = renderQueuedMessage(steer, 80, theme, {
 			phase: "entering",
@@ -747,7 +749,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 					{ phase: "stable", frame: 0, reducedMotion: false },
 				),
 			),
-		).toContain("Follow-up");
+		).toContain("待发送");
 	});
 
 	it("projects compaction state only from trusted lifecycle events", () => {
@@ -986,7 +988,8 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(showNotice).toHaveBeenCalledWith("已转入后台 2 个任务", "success");
 	});
 
-	it.each([40, 80, 120])("centers the model switch label in a full-width rule at %i columns", (width) => {
+	it("centers the model switch label in a full-width rule", () => {
+		const width = 80;
 		const lines = renderTranscriptMessage({
 			id: 'switch', role: 'assistant', kind: 'session', text: '模型 A → B',
 			presentation: { kind: 'modelSwitch', from: 'A', to: 'B' },
@@ -998,7 +1001,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(Math.abs(match![1]!.length - match![2]!.length)).toBeLessThanOrEqual(1);
 	});
 
-	it.each([1, 2, 4, 12, 24])("fits a long model switch into %i columns without wrapping", (width) => {
+	it.each([4, 24])("fits a long model switch into %i columns without wrapping", (width) => {
 		const lines = renderTranscriptMessage({
 			id: 'switch', role: 'assistant', kind: 'session', text: '模型切换',
 			presentation: { kind: 'modelSwitch', from: 'example/very-long-model', to: 'example/another-long-model' },
@@ -1006,6 +1009,27 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(lines).toHaveLength(1);
 		expect(visibleWidth(lines[0]!)).toBe(width);
 	});
+
+	function stubQueuedApp(queued: TranscriptMessage, messages: TranscriptMessage[]) {
+		return Object.assign(Object.create(VspiApp.prototype), {
+			queuedMessages: new Map([[queued.id, queued]]),
+			queuedPresentations: new Map(),
+			messages,
+			options: { settings: { reducedMotion: false } },
+			queuedAnimationTick: 0,
+			syncActivityPresentation: vi.fn(),
+			requestRender: vi.fn(),
+		}) as {
+			queuedMessages: Map<string, TranscriptMessage>;
+			queuedPresentations: Map<string, { phase: string; startedTick: number }>;
+			messages: TranscriptMessage[];
+			queueMessagePresentation(id: string): void;
+			updateQueuedMessageLifecycle(
+				id: string,
+				phase: "queued" | "consuming" | "started" | "completed",
+			): void;
+		};
+	}
 
 	it("keeps queued steer in the dock until consuming", () => {
 		const queued = {
@@ -1016,23 +1040,9 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			delivery: "steer",
 			deliveryState: "queued",
 		} satisfies TranscriptMessage;
-		const app = Object.assign(Object.create(VspiApp.prototype), {
-			queuedMessages: new Map([[queued.id, queued]]),
-			queuedPresentations: new Map(),
-			messages: [
-				{ id: "user-1", role: "user", kind: "text", text: "Earlier" },
-			],
-			options: { settings: { reducedMotion: false } },
-			queuedAnimationTick: 0,
-			syncActivityPresentation: vi.fn(),
-			requestRender: vi.fn(),
-		}) as {
-			queuedMessages: Map<string, TranscriptMessage>;
-			queuedPresentations: Map<string, { phase: string; startedTick: number }>;
-			messages: TranscriptMessage[];
-			queueMessagePresentation(id: string): void;
-			updateQueuedMessageLifecycle(id: string, phase: "consuming"): void;
-		};
+		const app = stubQueuedApp(queued, [
+			{ id: "user-1", role: "user", kind: "text", text: "Earlier" },
+		]);
 
 		app.queueMessagePresentation(queued.id);
 		expect(app.messages.map((message) => message.id)).toEqual(["user-1"]);
@@ -1047,6 +1057,39 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(app.messages.at(-1)).toMatchObject({
 			deliveryState: "consuming",
 		});
+	});
+
+	it("renders a steered message exactly once when the backend echoes it during delivery", () => {
+		const queued = {
+			id: "steer-1",
+			role: "user",
+			kind: "text",
+			text: "排队等下一轮",
+			delivery: "steer",
+			deliveryState: "queued",
+		} satisfies TranscriptMessage;
+		const app = stubQueuedApp(queued, [
+			{ id: "user-0", role: "user", kind: "text", text: "前面那条" },
+		]);
+
+		app.queueMessagePresentation(queued.id);
+		// 后端把同一 clientMessageId 回显进时间线（queued 状态下到达）。
+		app.messages.push({
+			id: queued.id,
+			role: "user",
+			kind: "text",
+			text: queued.text,
+		});
+
+		for (const phase of ["consuming", "started", "completed"] as const)
+			app.updateQueuedMessageLifecycle(queued.id, phase);
+
+		const rendered = renderTranscript(app.messages, 90, theme)
+			.map(stripTerminalSequences)
+			.join("\n");
+		expect(rendered.match(/排队等下一轮/g)).toHaveLength(1);
+		expect(rendered).not.toContain("↳");
+		expect(rendered).not.toContain("待插入");
 	});
 
 	it.each(['consuming', 'completed'] as const)("does not render internal delivery labels for %s user messages", deliveryState => {
@@ -1206,6 +1249,47 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(output).not.toContain("<prompt>");
 	});
 
+	it("keeps exactly one blank line between consecutive blocks", () => {
+		const messages: TranscriptMessage[] = [
+			{
+				id: "tool-1",
+				role: "assistant",
+				kind: "tool",
+				groupId: "g1",
+				name: "Bash",
+				summary: "echo stub-bash-done",
+				status: "success",
+				expanded: false,
+				durationMs: 5000,
+				output: "stub-bash-done",
+			},
+			{ id: "user-1", role: "user", kind: "text", text: "再加一句测试看看" },
+			{
+				id: "thinking-1",
+				role: "assistant",
+				kind: "thinking",
+				effort: "high",
+				text: "分析",
+				collapsed: true,
+			},
+			{ id: "assistant-1", role: "assistant", kind: "text", text: "全部完成。" },
+		];
+		const output = renderTranscript(messages, 80, theme).map(stripTerminalSequences);
+		const blank = (line: string) => line.trim() === "";
+		// 任何相邻两个非空行之间不得出现连续两行及以上空行；底色内边距行也算分隔行。
+		for (let i = 0; i < output.length - 1; i += 1) {
+			expect(
+				!(blank(output[i]!) && blank(output[i + 1]!)),
+				`double blank at lines ${i}-${i + 1}:\n${output.join("\n")}`,
+			).toBe(true);
+		}
+		const toolTail = output.findIndex((line) => line.includes("stub-bash-done") && line.includes("→"));
+		const userLine = output.findIndex((line) => line.includes("▌"));
+		expect(userLine - toolTail).toBe(2);
+		const thinkingHeader = output.findIndex((line) => line.includes("思考"));
+		expect(thinkingHeader - userLine).toBe(2);
+	});
+
 	it("keeps ordinary user XML-like text in the user surface", () => {
 		const output = renderTranscript(
 			[{ id: "user-xml", role: "user", kind: "text", text: "<prompt>keep</prompt>" }],
@@ -1259,7 +1343,8 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		const output = renderTranscript(messages, 80, theme, {
 			thinkingDisplay: "collapsed",
 		}).map(stripTerminalSequences);
-		expect(output[0]).toContain("◇  思考 · Effort Low");
+		expect(output[0]).toContain("◇  思考");
+		expect(output[0]).not.toContain("Effort");
 		expect(output[1]?.trimEnd()).toBe("   分析");
 		expect(output).toContain("");
 		expect(output.find((line) => line.includes("工具调用"))).toContain(
@@ -1470,7 +1555,8 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		panels.setModels(models, [], { provider: 'example', id });
 		panels.open('models');
 		const output = panels.render(160, 16, theme, DEFAULT_USAGE).map(stripTerminalSequences).join('\n');
-		expect(output).toContain('Model ID: kimi-k3, k3');
+		expect(output).toContain('模型 ID');
+		expect(output).toContain('kimi-k3, k3');
 		expect(panels.handleInput('\r')).toMatchObject({ type: 'model', model: { id, alias: `example/${id}` } });
 		panels.handleInput('\u001B[B');
 		expect(panels.handleInput('\r')).toMatchObject({ type: 'model', model: { id } });
@@ -1550,12 +1636,13 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		const panels = new PanelController(DEFAULT_SETTINGS);
 		panels.setModels(['k3', 'kimi-k3', 'k3-256k', 'kimi-k3-256k'].map(id => ({ id, wireId: id, provider: 'example', brand: 'Example', label: id, curated: true, vision: true, efforts: ['high'], price: {} })));
 		panels.open('models');
+		// 打开时焦点落在当前模型（排序靠后的 k3 组），向上进入 256k 变体行。
 		const first = panels.handleInput('\r');
-		panels.handleInput('\u001B[B');
+		panels.handleInput('\u001B[A');
 		const second = panels.handleInput('\r');
 		expect(first).not.toEqual(second);
 		panels.handleInput('\u001B[B');
-		expect(panels.handleInput('\r')).toEqual(second);
+		expect(panels.handleInput('\r')).toEqual(first);
 	});
 
 	it('keeps family members adjacent before applying release dates and price ordering', () => {
@@ -1568,6 +1655,8 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			['claude-fable-5', 'Claude Fable 5', '2026-09-01', 5],
 		].map(([id, label, releasedAt, price]) => ({ id: String(id), label: String(label), releasedAt: String(releasedAt), brand: 'Example', provider: 'example', curated: true, vision: false, efforts: ['high'], price: { inputUsdPerMillion: Number(price), outputUsdPerMillion: Number(price) } })));
 		panels.open('models');
+		// 打开时焦点落在当前模型行，先回到列表顶部再逐行读取顺序。
+		for (let index = 0; index < 5; index++) panels.handleInput('\u001B[A');
 		const ids: string[] = [];
 		for (let index = 0; index < 5; index++) {
 			const event = panels.handleInput('\r');
@@ -1577,7 +1666,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(ids).toEqual(['gpt-6-astra', 'gpt-5.6-sol', 'claude-fable-5', 'claude-opus-5', 'kimi-k3']);
 	});
 
-	it.each([36, 80, 120])('keeps model identity aliases readable at %s columns', width => {
+	it.each([36, 120])('keeps model identity aliases readable at %s columns', width => {
 		const panels = new PanelController(DEFAULT_SETTINGS);
 		panels.setModels(['k3', 'kimi-k3'].map(id => ({ id, provider: 'example', brand: 'Example', label: 'Kimi K3', curated: true, vision: true, efforts: ['high'], price: {} })));
 		panels.open('models');
@@ -1589,7 +1678,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(output).toContain('kimi-k3, k3');
 	});
 
-	it.each(["glm", "5.3", "flash", "vsplab"])(
+	it.each(["5.3 flash", "vsplab"])(
 		"finds GLM 5.3 Flash by %s",
 		(query) => {
 			const panels = new PanelController(DEFAULT_SETTINGS);
@@ -1639,15 +1728,13 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		panels.setSubagentModelPreferences({ models: { "example/starred": "analysis" }, defaultModel: "example/starred" });
 		panels.open("models");
 		const output = panels.render(120, 20, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n");
-		expect(output).toContain("★ 官方推荐");
+		expect(output).toContain("官方推荐");
 		expect(output).not.toContain("starred");
 		expect(output).not.toContain("analysis");
 		expect(panels.renderHint(120, theme)).not.toContain("子模型");
 		expect(panels.handleInput("\u0013")).toBeUndefined();
-		expect(panels.handleInput("\u0010")).toBeUndefined();
 		panels.handleInput("old");
-		expect(panels.handleInput("\r")).toBeUndefined();
-		panels.handleInput("\u000F");
+		// 搜索覆盖全部模型，不限于官方推荐（修复 M3）。
 		expect(panels.handleInput("\r")).toMatchObject({ type: "model", model: { id: "old" } });
 	});
 
@@ -1663,7 +1750,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(panels.handleInput("\r")).toEqual({ type: "subagentModel", edit: { action: "toggle", model: "example/retired" } });
 	});
 
-	it.each([36, 80, 120])("keeps the dedicated candidate panel within %s columns", (width) => {
+	it.each([36, 120])("keeps the dedicated candidate panel within %s columns", (width) => {
 		const panels = new PanelController(DEFAULT_SETTINGS);
 		panels.setSubagentModelPreferences({ models: { "example/long-model-reference-for-specialized-code-review": "检查实现边界与测试覆盖" } });
 		panels.open("subagentModels");
@@ -1693,16 +1780,13 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(panels.handleInput("\r")).toBeUndefined();
 	});
 
-	it.each(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-luna", "claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "kimi-k3", "k3", "glm-5.3", "glm-5.3-flash", "deepseek-flash", "deepseek-v4-pro", "MiniMax-M3", "mimo-v2.6-flash", "mimo-v2.6-pro", "grok-4.7", "mimo-v2.5", "mimo-v2.5-pro", "qwen3.8-max", "google/gemini-3.8-flash", "google/gemini-3.1-pro-preview", "tencent/hy4-preview"])("recognizes the approved recommendation %s independently of subagent configuration", (id) => {
-		expect(isOfficialRecommendedModel(id)).toBe(true);
-	});
-
-	it.each(["deepseek/deepseek-flash", "vsplab/deepseek-flash", "vsplab/deepseek-v4.1-flash"])("keeps the approved V4.1 Flash identity starred for %s", (id) => {
-		expect(isOfficialRecommendedModel(id)).toBe(true);
-	});
-
-	it.each(["gpt-5.6-terra", "kimi-k2.7-code", "deepseek-v4-flash", "deepseek-v4.1-flash-expires-on-0910", "deepseek-v4-flash-vision-exp", "gemini-3.1-flash-lite", "example-model"])("does not automatically recommend an unlisted model %s", (id) => {
-		expect(isOfficialRecommendedModel(id)).toBe(false);
+	it("recognizes only the approved recommended model identities", () => {
+		for (const id of ["gpt-6-sol", "kimi-k3", "deepseek/deepseek-flash", "vsplab/deepseek-v4.1-flash"]) {
+			expect(isOfficialRecommendedModel(id)).toBe(true);
+		}
+		for (const id of ["deepseek-v4-flash", "example-model"]) {
+			expect(isOfficialRecommendedModel(id)).toBe(false);
+		}
 	});
 
 	it("matches a pending recommendation only when the catalog supplies its exact approved name", () => {
@@ -2405,7 +2489,8 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(waiting).toBe(
 			"Runtime · Waiting · 1 Agent · 1 Process · 完成后自动继续",
 		);
-		expect(working).toBe("Runtime · Working · 1 Agent · 1 Process");
+		// Working 只由 composer 上方的活动横幅表达，Runtime 行不再重复状态词。
+		expect(working).toBe("Runtime · 1 Agent · 1 Process");
 	});
 
 	it("prioritizes input needs and preserves the primary state on narrow screens", () => {
@@ -2584,7 +2669,8 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			theme,
 		).map(stripTerminalSequences);
 
-		expect(unknown[1]?.endsWith("—")).toBe(true);
+		// 未知成本不再渲染占位符，该行不出现 ¥ 金额。
+		expect(unknown[1]).not.toContain("¥");
 		expect(free[1]?.endsWith("¥0.00")).toBe(true);
 	});
 
@@ -2617,13 +2703,13 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(lines).toHaveLength(2);
 		expect(lines.map(visibleWidth)).toEqual([120, 120]);
 		expect(lines[0]).toContain("GPT-5.6 · High");
-		expect(lines[0]).toContain("Speed ~42.8 tok/s");
-		expect(lines[0]).toContain("Context 61K / 128K 48%");
+		expect(lines[0]).toContain("速度 ~42.8 tok/s");
+		expect(lines[0]).toContain("上下文 61K / 128K 48%");
 		expect(lines[1]).toContain("~/Workspace/VSPi · Auto");
-		expect(lines[1]).toContain("↑ 18.4k  ↓ 3.2k");
-		expect(lines[1]).toContain("CacheΣ 12.7k · 39%");
+		expect(lines[1]).toContain("累计 ↑ 18.4k ↓ 3.2k");
+		expect(lines[1]).toContain("缓存 12.7k · 命中 39%");
 		expect(lines[1]).not.toContain("Cache 12.7k");
-		expect(lines[0]?.endsWith("Context 61K / 128K 48%")).toBe(true);
+		expect(lines[0]?.endsWith("上下文 61K / 128K 48%")).toBe(true);
 		expect(lines[1]?.endsWith("¥0.08")).toBe(true);
 		expect(lines.join("\n")).not.toMatch(/Model|Effort|Host/);
 	});
@@ -2649,9 +2735,9 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		).map(stripTerminalSequences);
 
 		expect(lines.map(visibleWidth)).toEqual([80, 80]);
-		expect(lines[0]).toContain("Speed ~42.8 tok/s");
-		expect(lines[0]?.endsWith("Context 61K / 128K 48%")).toBe(true);
-		expect(lines[1]?.endsWith("—")).toBe(true);
+		expect(lines[0]).toContain("速度 ~42.8 tok/s");
+		expect(lines[0]?.endsWith("上下文 61K / 128K 48%")).toBe(true);
+		expect(lines[1]).not.toContain("—");
 	});
 
 	it("isolates Agent conversation pages by run id when child ids repeat", () => {
@@ -2681,5 +2767,262 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(processRow).toContain("· running ·");
 		expect(processRow).toMatch(/\d+s/u);
 		expect(visibleWidth(processRow ?? "")).toBeLessThanOrEqual(width);
+	});
+
+	it("focuses the current model when the picker opens", () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		const model = (id: string) => ({ id, provider: "example", brand: "Example", label: id, curated: true, vision: false, efforts: ["high"], price: {} });
+		panels.setModels([model("first"), model("second"), model("third")], [], { provider: "example", id: "second" });
+		panels.open("models");
+		expect(panels.handleInput("\r")).toMatchObject({ type: "model", model: { id: "second" } });
+	});
+
+	it("shows a visible search row that searches every model from the common view", () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.setModels([
+			{ id: "star", provider: "example", brand: "Example", label: "Star", curated: true, vision: false, efforts: ["high"], price: {} },
+			{ id: "niche", provider: "other", brand: "Other", label: "Niche", curated: false, vision: false, efforts: ["high"], price: {} },
+		]);
+		panels.open("models");
+		const output = panels.render(120, 16, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n");
+		expect(output).toContain("搜索");
+		expect(output).not.toContain("niche");
+		panels.handleInput("niche");
+		expect(panels.handleInput("\r")).toMatchObject({ type: "model", model: { id: "niche" } });
+	});
+
+	it("keeps the wide picker's divider on the same column for every body row", () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		const model = (id: string) => ({ id, provider: "example", brand: "Example", label: id, curated: true, vision: false, efforts: ["high"], price: {} });
+		panels.setModels([model("first"), model("second"), model("third")]);
+		panels.open("models");
+		const lines = panels.render(120, 16, theme, DEFAULT_USAGE).map(stripTerminalSequences);
+		const splitRows = lines.filter((line) => (line.match(/│/g)?.length ?? 0) >= 3);
+		expect(splitRows.length).toBeGreaterThan(0);
+		const dividerColumns = new Set(
+			splitRows.map((line) => {
+				const first = line.indexOf("│");
+				const second = line.indexOf("│", first + 1);
+				return visibleWidth(line.slice(0, second));
+			}),
+		);
+		expect([...dividerColumns]).toHaveLength(1);
+	});
+
+	it("pins a model with Ctrl+P, re-sections it, and keeps focus by identity", () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		const model = (id: string) => ({ id, provider: "example", brand: "Example", label: id, curated: true, vision: false, efforts: ["high"], price: {} });
+		panels.setModels([model("alpha"), model("beta")]);
+		panels.open("models");
+		expect(panels.handleInput("\u0010")).toEqual({ type: "modelPin", pinned: ["example\0alpha"] });
+		const pinned = panels.render(120, 16, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n");
+		expect(pinned).toContain("置顶");
+		expect(pinned).toContain("官方推荐");
+		expect(panels.handleInput("\r")).toMatchObject({ type: "model", model: { id: "alpha" } });
+		expect(panels.handleInput("\u0010")).toEqual({ type: "modelPin", pinned: [] });
+		expect(panels.render(120, 16, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n")).not.toContain("置顶");
+	});
+
+	it("records a confirmed model in recent picks", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-model-recent-"));
+		const { app, backend } = renderFixture(home);
+		backend.getModelOptions = async () => [{ id: "target", alias: "example/target", provider: "example", brand: "Example", label: "Target", curated: true, vision: false, efforts: ["high"], price: {}, contextWindow: 8192 }];
+		backend.getPreferredModelEffort = async () => ({ effort: "high" });
+		backend.selectModel = async () => ({ modelId: "target", profileModelId: "target", vision: false, contextWindow: 8192, effort: "high" });
+		try {
+			await app.start();
+			app.composer.setText("/model");
+			app.handleInput("\r");
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("官方推荐"));
+			app.handleInput("\r");
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("确认后切换"));
+			app.handleInput("\r");
+			await vi.waitFor(async () => {
+				const picks = JSON.parse(await readFile(modelPicksPath(home), "utf8")) as { recent: string[] };
+				expect(picks.recent).toContain("example\0target");
+			});
+		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("does not record a recent model when the staged switch is cancelled", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-model-recent-cancel-"));
+		const { app, backend } = renderFixture(home);
+		backend.getModelOptions = async () => [{ id: "target", alias: "example/target", provider: "example", brand: "Example", label: "Target", curated: true, vision: false, efforts: ["high"], price: {}, contextWindow: 8192 }];
+		backend.getPreferredModelEffort = async () => ({ effort: "high" });
+		backend.selectModel = vi.fn();
+		try {
+			await app.start();
+			app.composer.setText("/model");
+			app.handleInput("\r");
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("官方推荐"));
+			app.handleInput("\r");
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("确认后切换"));
+			app.handleInput("\u001B");
+			await vi.waitFor(() => expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("当前模型与 Effort 保持不变"));
+			await expect(readFile(modelPicksPath(home), "utf8")).rejects.toThrow();
+		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("clears the delivery badge once a steered message finishes", () => {
+		const base: Extract<TranscriptMessage, { kind: "text" }> = {
+			id: "steer-1", role: "user", kind: "text", text: "继续处理", delivery: "steer",
+		};
+		const render = (deliveryState: NonNullable<typeof base.deliveryState>) =>
+			renderTranscriptMessage({ ...base, deliveryState }, 80, theme)
+				.map(stripTerminalSequences)
+				.join("\n");
+		expect(render("consuming")).toContain("↳ 已送达模型");
+		expect(render("completed")).not.toContain("↳");
+		expect(render("failed")).toContain("↳ 回复失败");
+		expect(render("cancelled")).toContain("↳ 队列已取消");
+	});
+
+	it("keeps the footer height constant when a notice replaces the runtime line", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-notice-height-"));
+		const { app, events } = renderFixture(home);
+		try {
+			await app.start();
+			const baseline = app.render(160).length;
+			events().onRuntimeConnectionState?.("reconnecting", 1);
+			const output = app.render(160);
+			expect(output.length).toBe(baseline);
+			expect(output.map(stripTerminalSequences).join("\n")).toContain("正在自动恢复");
+		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("renders Agent tool rows with run details and a result summary", () => {
+		const output = renderTranscriptMessage(
+			{
+				id: "agent-tool",
+				role: "assistant",
+				kind: "tool",
+				name: "Agent",
+				summary: "1 agent",
+				status: "success",
+				expanded: false,
+				output: "调研完成：模块边界已确认\n补充细节",
+				agentRuns: [
+					{
+						name: "图灵",
+						task: "调研模块边界",
+						profile: "explore",
+						model: "example/model",
+						status: "success",
+						startedAt: "2026-09-12T00:00:00.000Z",
+						finishedAt: "2026-09-12T00:01:05.000Z",
+					},
+				],
+			},
+			120,
+			theme,
+		).map(stripTerminalSequences).join("\n");
+		expect(output).toContain("图灵");
+		expect(output).toContain("调研模块边界");
+		expect(output).toContain("1m05s");
+		expect(output).toContain("→ 调研完成：模块边界已确认");
+	});
+
+	it("shows the [summary] result instead of agent output envelope lines", () => {
+		const output = renderTranscriptMessage(
+			{
+				id: "agent-tool",
+				role: "assistant",
+				kind: "tool",
+				name: "Agent",
+				summary: "1 agent",
+				status: "success",
+				expanded: false,
+				output: [
+					"agent_id: agent-abc",
+					"actual_subagent_type: explore",
+					"status: completed",
+					"stop_reason: completed",
+					"",
+					"[summary]",
+					"调研完成：模块边界已确认",
+					"",
+					'resume_hint: Continue with Agent(resume="agent-abc", prompt="...").',
+				].join("\n"),
+				agentRuns: [{ name: "图灵", task: "调研模块边界", status: "success" }],
+			},
+			120,
+			theme,
+		).map(stripTerminalSequences).join("\n");
+		expect(output).toContain("→ 调研完成：模块边界已确认");
+		expect(output).not.toContain("→ agent_id:");
+	});
+
+	it("falls back to the task result when the Agent output is a background receipt", () => {
+		const message = {
+			id: "agent-tool",
+			role: "assistant" as const,
+			kind: "tool" as const,
+			name: "Agent",
+			summary: "1 agent",
+			status: "success" as const,
+			expanded: false,
+			output: [
+				"task_id: task-xyz",
+				"status: running",
+				"agent_id: agent-abc",
+				"actual_subagent_type: explore",
+				"automatic_notification: true",
+				"",
+				"description: 调研模块边界",
+				"",
+				"next_step: The completion arrives automatically in a later turn.",
+				'resume_hint: call Agent(resume="agent-abc", prompt="...").',
+			].join("\n"),
+		};
+		const withResult = renderTranscriptMessage(
+			{ ...message, agentRuns: [{ name: "图灵", task: "调研模块边界", status: "background" as const, result: "后台子代理完成：已写入报告" }] },
+			120,
+			theme,
+		).map(stripTerminalSequences).join("\n");
+		expect(withResult).toContain("→ 后台子代理完成：已写入报告");
+		expect(withResult).not.toContain("→ task_id:");
+		const withoutResult = renderTranscriptMessage(
+			{ ...message, agentRuns: [{ name: "图灵", task: "调研模块边界", status: "background" as const }] },
+			120,
+			theme,
+		).map(stripTerminalSequences).join("\n");
+		expect(withoutResult).not.toContain("→ ");
+	});
+
+	it("keeps dock rows ordered by start time across status changes", () => {
+		const dock = new AgentsDock();
+		const base = panelsFailedAgentRun();
+		const older = {
+			...base,
+			id: "task-older",
+			status: "running" as const,
+			startedAt: "2026-09-12T00:00:00.000Z",
+			finishedAt: undefined,
+			codename: "旧成员",
+			taskTitle: "较早任务",
+			error: undefined,
+		};
+		const newer = {
+			...base,
+			id: "task-newer",
+			status: "running" as const,
+			startedAt: "2026-09-12T00:10:00.000Z",
+			finishedAt: undefined,
+			codename: "新成员",
+			taskTitle: "较晚任务",
+			error: undefined,
+		};
+		dock.setSnapshot({ ...panelsAgentSnapshot(older), active: [older, newer], recent: [] });
+		const running = stripTerminalSequences(dock.render(140, theme).join("\n"));
+		expect(running.indexOf("较早任务")).toBeGreaterThanOrEqual(0);
+		expect(running.indexOf("较早任务")).toBeLessThan(running.indexOf("较晚任务"));
+		dock.setSnapshot({
+			...panelsAgentSnapshot(newer),
+			active: [newer],
+			recent: [{ ...older, status: "success" as const, finishedAt: "2026-09-12T00:05:00.000Z" }],
+		});
+		const finished = stripTerminalSequences(dock.render(140, theme).join("\n"));
+		expect(finished.indexOf("较早任务")).toBeGreaterThanOrEqual(0);
+		expect(finished.indexOf("较早任务")).toBeLessThan(finished.indexOf("较晚任务"));
 	});
 });

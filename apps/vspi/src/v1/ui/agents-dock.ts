@@ -49,42 +49,55 @@ export class AgentsDock {
 	}
 
 	render(width: number, theme: VspiTheme, now = Date.now()): string[] {
-		const runs = [...this.visible.values()].toSorted(compareDockRuns);
+		// 顺序只由启动时间决定：状态变化（running→success）不再重排行序。
+		const runs = [...this.visible.values()].toSorted(
+			(left, right) =>
+				(Date.parse(left.startedAt ?? "") || 0) -
+				(Date.parse(right.startedAt ?? "") || 0),
+		);
 		if (runs.length === 0) return [];
 		const shown = runs.slice(0, MAX_VISIBLE_AGENTS);
 		const overflow = runs.length - shown.length;
 		const active = runs.filter((run) => !agentRunTerminal(run.status)).length;
 		const done = runs.length - active;
-		const bodyWidth = Math.max(1, width - 2);
+		const bodyWidth = Math.max(1, width - 4);
+		const identityWidth = Math.min(
+			28,
+			Math.max(
+				...shown.map((run) =>
+					visibleWidth(`${run.codename ?? run.agentId} · ${run.taskTitle ?? run.task}`),
+				),
+			),
+		);
 		const body = shown.flatMap((run) => [
-      renderAgentRow(run, bodyWidth, theme, now),
-      ...(run.progress ? [theme.muted(truncateToWidth(`  进度 · ${run.progress.replaceAll(/\s+/gu, " ")}`, bodyWidth, "…"))] : []),
-    ]);
+			renderAgentRow(run, bodyWidth, identityWidth, theme, now),
+			...(run.progress
+				? [
+						theme.muted(
+							truncateToWidth(
+								`  进度 · ${run.progress.replaceAll(/\s+/gu, " ")}`,
+								bodyWidth,
+								"…",
+							),
+						),
+					]
+				: []),
+		]);
 		if (overflow > 0)
 			body.push(theme.muted(`+${String(overflow)} active · /agents 查看全部`));
 		return frame(body, width, theme, {
 			title: "Agents",
 			rightTitle: `${String(active)} active · ${String(done)} done`,
 			maxBodyLines: body.length,
+			paddingX: 1,
 		});
 	}
-}
-
-function compareDockRuns(
-	left: AgentRunSnapshot,
-	right: AgentRunSnapshot,
-): number {
-	const leftTerminal = agentRunTerminal(left.status);
-	const rightTerminal = agentRunTerminal(right.status);
-	if (leftTerminal !== rightTerminal) return leftTerminal ? 1 : -1;
-	const leftAt = Date.parse(left.finishedAt ?? left.startedAt ?? "") || 0;
-	const rightAt = Date.parse(right.finishedAt ?? right.startedAt ?? "") || 0;
-	return rightAt - leftAt;
 }
 
 function renderAgentRow(
 	run: AgentRunSnapshot,
 	width: number,
+	identityWidth: number,
 	theme: VspiTheme,
 	now: number,
 ): string {
@@ -100,12 +113,19 @@ function renderAgentRow(
 					: run.status === "queued"
 						? theme.muted("○")
 						: theme.focus("●");
-	const identity = `${run.codename ?? run.agentId} · ${run.taskTitle ?? run.task}`;
+	const identity = truncateToWidth(
+		`${run.codename ?? run.agentId} · ${run.taskTitle ?? run.task}`,
+		identityWidth,
+		"…",
+	);
+	const identityCell = `${identity}${" ".repeat(
+		Math.max(0, identityWidth - visibleWidth(identity)),
+	)}`;
 	const model = formatSubagentModel(run.model);
-			const elapsed = formatElapsed(run, now);
-	const full = `${symbol} ${identity}    ${formatSubagentProfile(run.profile)} · ${model} · ${elapsed}`;
+	const elapsed = formatElapsed(run, now);
+	const full = `${symbol} ${identityCell}  ${formatSubagentProfile(run.profile)} · ${model} · ${elapsed}`;
 	if (visibleWidth(full) <= width) return full;
-	const medium = `${symbol} ${identity}    ${formatSubagentProfile(run.profile)} · ${elapsed}`;
+	const medium = `${symbol} ${identityCell}  ${formatSubagentProfile(run.profile)} · ${elapsed}`;
 	if (visibleWidth(medium) <= width) return medium;
 	return truncateToWidth(`${symbol} ${identity} · ${elapsed}`, width, "…");
 }

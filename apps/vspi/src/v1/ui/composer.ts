@@ -40,7 +40,7 @@ export type AttachmentCursorState = "left" | "selected" | "right";
 function isTextInput(data: string): boolean {
   return (
     data.length > 0 &&
-    !data.includes("\u001b") &&
+    !data.includes("\u001B") &&
     !Array.from(data).some((character) => {
       if (character === "\n" || character === "\r" || character === "\t") return false;
       const code = character.codePointAt(0) ?? 0;
@@ -167,7 +167,7 @@ export class Composer implements Component, Focusable {
     if (!attachment) return undefined;
     const access = this.editor as unknown as MutableEditorStateAccess;
     access.state.lines = access.state.lines.map((line) =>
-      line.replace(this.marker(attachment), "").replace(/ {2,}/g, " "),
+      line.replace(this.marker(attachment), "").replaceAll(/ {2,}/g, " "),
     );
     access.state.cursorLine = Math.min(access.state.cursorLine, access.state.lines.length - 1);
     access.state.cursorCol = Math.min(access.state.cursorCol, access.state.lines[access.state.cursorLine]?.length ?? 0);
@@ -246,7 +246,7 @@ export class Composer implements Component, Focusable {
     if (goalHint) {
       const hint = this.theme.muted(goalHint);
       body = body.map((line) =>
-        line.includes("\x1b[7m \\x1b[0m") ? line.replace("\x1b[7m \\x1b[0m", `\x1b[7m \\x1b[0m${hint}`) : line,
+        line.includes("\x1B[7m \\x1b[0m") ? line.replace("\x1B[7m \\x1b[0m", `\x1B[7m \\x1b[0m${hint}`) : line,
       );
     }
 
@@ -295,11 +295,12 @@ export class Composer implements Component, Focusable {
 
   private workingLabel(activity: ComposerActivity): string {
     const unicode = this.theme.capabilities.unicode;
-    const ballValue = unicode
-      ? activity.reducedMotion
+    // 默认样式 3 只让 braille cluster 动画：球保持静态，避免同屏两个动效。
+    const ballValue = !unicode
+      ? "*"
+      : activity.reducedMotion || activity.style !== 2
         ? "⬤"
-        : (BALL_FRAMES[activity.frame % BALL_FRAMES.length] ?? BALL_FRAMES[0])
-      : "*";
+        : (BALL_FRAMES[activity.frame % BALL_FRAMES.length] ?? BALL_FRAMES[0]);
     const ball =
       ballValue === "○"
         ? this.theme.muted(ballValue)

@@ -27,6 +27,7 @@ import {
 	visibleEffortLevels,
 } from "../domain/effort.js";
 import type {
+	AgentToolRun,
 	CronSessionPresentation,
 	EffortLevel,
 	PlanItem,
@@ -198,6 +199,8 @@ export class KlientChatBackend implements ChatBackend {
 	private lastTodoItems: PlanItem[] = [];
 	private towerPlanActive = false;
 	private toolNames = new Map<string, string>();
+	private toolStartedAt = new Map<string, number>();
+	private parentAgentRuns = new Map<string, string>();
 	private pendingNotifications = new Map<string, string>();
 	private cronTasks: CronTask[] = [];
 	private runtimeGoalRevision = 0;
@@ -1564,6 +1567,7 @@ export class KlientChatBackend implements ChatBackend {
 			events.on("tool.call.started", (event) => {
 				this.advanceTurnSegment();
 				this.toolNames.set(event.toolCallId, event.name);
+				this.toolStartedAt.set(event.toolCallId, event.time ?? Date.now());
 				if (event.name === "NotifyUser") {
 					const text = notificationText(event.args);
 					if (text) this.pendingNotifications.set(event.toolCallId, text);
@@ -1586,6 +1590,12 @@ export class KlientChatBackend implements ChatBackend {
 			events.on("tool.result", (event) => {
 				const toolName = this.toolNames.get(event.toolCallId);
 				this.toolNames.delete(event.toolCallId);
+				const startedAt = this.toolStartedAt.get(event.toolCallId);
+				this.toolStartedAt.delete(event.toolCallId);
+				const durationMs =
+					startedAt === undefined
+						? undefined
+						: Math.max(0, (event.time ?? Date.now()) - startedAt);
 				const notification = this.pendingNotifications.get(event.toolCallId);
 				this.pendingNotifications.delete(event.toolCallId);
 				const todoItems = this.pendingTodoUpdates.get(event.toolCallId);
@@ -1597,6 +1607,7 @@ export class KlientChatBackend implements ChatBackend {
 				this.events?.onMessageUpdate(event.toolCallId, {
 					status: event.isError ? "error" : "success",
 					output: summarizeOutput(event.output),
+					durationMs,
 				});
 				if (notification && !event.isError && summarizeOutput(event.output) === "Update shown to the user.") {
 					this.events?.onMessageUpdate(event.toolCallId, { kind: "text", text: notification, streaming: false, presentation: "intermediate" });
@@ -2174,9 +2185,29 @@ export class KlientChatBackend implements ChatBackend {
 		}
 		for (const [toolCallId, group] of grouped) {
 			const summary = parentTaskSummary(group);
-			if (this.parentTaskSummaries.get(toolCallId) === summary) continue;
-			this.parentTaskSummaries.set(toolCallId, summary);
-			this.events?.onMessageUpdate(toolCallId, { summary });
+			if (this.parentTaskSummaries.get(toolCallId) !== summary) {
+				this.parentTaskSummaries.set(toolCallId, summary);
+				this.events?.onMessageUpdate(toolCallId, { summary });
+			}
+			const agentRuns = group.map((task): AgentToolRun => ({
+				name: task.codename ?? task.taskTitle ?? task.description,
+				task: task.taskTitle ?? task.description,
+				profile: task.subagentType,
+				model: task.model,
+				status: agentToolRunStatus(task.status),
+				startedAt: new Date(task.startedAt).toISOString(),
+				finishedAt:
+					task.endedAt !== null
+						? new Date(task.endedAt).toISOString()
+						: undefined,
+				result: this.taskOutputs.get(task.taskId),
+			}));
+			const signature = JSON.stringify(
+				agentRuns.map((run) => [run.name, run.status, run.finishedAt, run.result]),
+			);
+			if (this.parentAgentRuns.get(toolCallId) === signature) continue;
+			this.parentAgentRuns.set(toolCallId, signature);
+			this.events?.onMessageUpdate(toolCallId, { agentRuns });
 		}
 	}
 
@@ -2479,6 +2510,8 @@ export class KlientChatBackend implements ChatBackend {
 		this.lastTodoItems = [];
 		this.towerPlanActive = false;
 		this.toolNames.clear();
+		this.toolStartedAt.clear();
+		this.parentAgentRuns.clear();
 		this.pendingNotifications.clear();
 		this.cronTasks = [];
 		this.runtimeGoalRevision += 1;
@@ -3292,6 +3325,14 @@ function toTaskDashboardItem(
 		questionCount: task.questionCount,
 		toolCallId: task.toolCallId,
 	};
+}
+
+function agentToolRunStatus(
+	status: AgentTaskInfo["status"],
+): AgentToolRun["status"] {
+	if (status === "completed") return "success";
+	if (status === "failed") return "error";
+	return status;
 }
 
 function parentTaskSummary(
