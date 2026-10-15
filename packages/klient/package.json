@@ -17,6 +17,10 @@
       "types": "./src/transports/ipc/index.ts",
       "default": "./src/transports/ipc/index.ts"
     },
+    "./tcp": {
+      "types": "./src/transports/tcp/index.ts",
+      "default": "./src/transports/tcp/index.ts"
+    },
     "./memory": {
       "types": "./src/transports/memory/index.ts",
       "default": "./src/transports/memory/index.ts"

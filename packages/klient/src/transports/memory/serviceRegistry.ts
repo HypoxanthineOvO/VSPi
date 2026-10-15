@@ -10,6 +10,7 @@ import type { ServiceIdentifier } from '@moonshot-ai/agent-core-v2/_base/di/inst
 import { ISessionIndex } from '@moonshot-ai/agent-core-v2/app/sessionIndex/sessionIndex';
 import { IWorkspaceService } from '@moonshot-ai/agent-core-v2/app/workspace/workspace';
 import { IConfigService } from '@moonshot-ai/agent-core-v2/app/config/config';
+import { IDesktopSettingsService } from '@moonshot-ai/agent-core-v2/app/config/desktopSettings';
 import { IModelService } from '@moonshot-ai/agent-core-v2/llm-adapter/model/model';
 import { IModelCatalog } from '@moonshot-ai/agent-core-v2/llm-adapter/model/catalog';
 import { IProviderDiscoveryService } from '@moonshot-ai/agent-core-v2/app/kosongConfig/discovery';
@@ -31,6 +32,7 @@ import { ISessionManager } from '@moonshot-ai/agent-core-v2/app/sessionManager/s
 import { ISessionMetadata } from '@moonshot-ai/agent-core-v2/session/sessionMetadata/sessionMetadata';
 import { ISessionSkillCatalog } from '@moonshot-ai/agent-core-v2/features/skill/session/skillCatalog';
 import { ISessionTitleService } from '@moonshot-ai/agent-core-v2/session/sessionTitle/sessionTitle';
+import { ISessionTerminalService } from '@moonshot-ai/agent-core-v2/session/terminal/terminalService';
 import { IAgentLoopService } from '@moonshot-ai/agent-core-v2/agent/loop/loop';
 import { IAgentPromptChannel } from '@moonshot-ai/agent-core-v2/agent/loop/promptChannel';
 import { IAgentPermissionModeService } from '@moonshot-ai/agent-core-v2/agent/permissionMode/permissionMode';
@@ -58,6 +60,7 @@ export const serviceTokens: Readonly<Record<string, ServiceIdentifier<unknown>>>
   sessionIndex: ISessionIndex,
   workspaceService: IWorkspaceService,
   configService: IConfigService,
+  desktopSettingsService: IDesktopSettingsService,
   modelService: IModelService,
   modelResolver: IModelCatalog,
   providerDiscovery: IProviderDiscoveryService,
@@ -87,6 +90,7 @@ export const serviceTokens: Readonly<Record<string, ServiceIdentifier<unknown>>>
   agentHistoryService: IAgentHistoryService,
   agentTokenCountingService: ISessionTokenCountingService,
   sessionActivityView: ISessionActivityView,
+  sessionTerminalService: ISessionTerminalService,
   agentShellCommandService: IAgentShellCommandService,
   agentProfileService: IAgentProfileService,
   agentUsageService: ISessionUsageService,

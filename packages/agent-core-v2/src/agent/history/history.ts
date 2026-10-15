@@ -27,9 +27,24 @@ export interface AgentHistoryPage {
   readonly live?: LiveHistorySegment;
 }
 
+export interface HistoryCursor {
+  readonly epoch: string;
+  readonly revision: number;
+}
+
+export interface HistoryWatchQuery {
+  readonly after?: HistoryCursor;
+  readonly limit?: number;
+}
+
+export type AgentHistoryUpdate =
+  | { readonly kind: 'snapshot'; readonly cursor: HistoryCursor; readonly page: AgentHistoryPage }
+  | { readonly kind: 'event'; readonly cursor: HistoryCursor; readonly event: Record<string, unknown> };
+
 export interface IAgentHistoryService {
   readonly _serviceBrand: undefined;
   page(query?: HistoryQuery): Promise<AgentHistoryPage>;
+  watch(query?: HistoryWatchQuery): AsyncIterable<AgentHistoryUpdate>;
   sequenceFor(event: Event2<any>): number | undefined;
   liveSegment(): LiveHistorySegment | undefined;
 }

@@ -185,6 +185,7 @@ export * from '#/app/config/config';
 export * from '#/app/config/configEvents';
 export type { ConfigChangedEvent } from '#/app/config/configEvents';
 export * from '#/app/config/configService';
+export * from '#/app/config/desktopSettings';
 export * from '#/app/config/configSectionContributions';
 import '#/app/kosongConfig/configSection';
 export * from '#/llm-adapter/provider/provider';

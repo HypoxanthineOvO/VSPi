@@ -11,6 +11,7 @@ import {
   migrateRuntimeConfig,
   type MigrateRuntimeConfigOptions,
 } from './config-migration.js';
+import { getRuntimeId } from './identity.js';
 import { acquireRuntimeLease } from './lease.js';
 import { resolveRuntimePaths } from './paths.js';
 import { RuntimeGoalRecovery } from './goal-recovery.js';
@@ -96,6 +97,7 @@ export async function startRuntimeDaemon(options: StartRuntimeDaemonOptions): Pr
     return { busyAgents, scheduledAgents };
   };
   try {
+    const runtimeId = await getRuntimeId(paths.homeDir);
     const migration = await migrateRuntimeConfig({
       ...options.configMigration,
       homeDir: paths.homeDir,
@@ -123,6 +125,11 @@ export async function startRuntimeDaemon(options: StartRuntimeDaemonOptions): Pr
         homeDir: paths.homeDir,
         migrationWarning: migration.warning,
         controlProtocol: 1,
+        runtimeId,
+        protocolVersion: VSP_RUNTIME_PROTOCOL_VERSION,
+        desktopProtocol: 1,
+        version: options.hostIdentity.version,
+        capabilities: ['klient-tunnel-v1', 'history-snapshot-v1', 'prompt-id-v1'],
       },
       control: (method, args, peers, calls, streams) => {
         const request = args[0] as { ownerNonce?: unknown; requireIdle?: unknown } | undefined;
@@ -147,6 +154,7 @@ export async function startRuntimeDaemon(options: StartRuntimeDaemonOptions): Pr
       ipcPath: ipc.socketPath,
       startedAt: new Date().toISOString(),
       version: options.hostIdentity.version,
+      runtimeId,
       migrationWarning: migration.warning,
     };
     await writeRuntimeState(paths.statePath, state);

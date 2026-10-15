@@ -37,6 +37,9 @@ const expectedFiles = [
   'package/package.json',
   'package/skills/vspi-self/SKILL.md',
 ];
+for (const entry of await readdir(join(packageRoot, 'dist', 'prebuilds'), { recursive: true, withFileTypes: true })) {
+  if (entry.isFile()) expectedFiles.push(`package/dist/prebuilds/${join(entry.parentPath, entry.name).slice(join(packageRoot, 'dist', 'prebuilds').length + 1).replaceAll('\\', '/')}`);
+}
 const builtins = new Set([...builtinModules, ...builtinModules.map((name) => `node:${name}`)]);
 
 try {

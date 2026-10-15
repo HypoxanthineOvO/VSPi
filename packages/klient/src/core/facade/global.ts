@@ -21,6 +21,11 @@ import type {
   ConfigInspectValue,
   ConfigTarget,
 } from '@moonshot-ai/agent-core-v2/app/config/config';
+import type {
+  DesktopSettingsSave,
+  DesktopSettingsSnapshot,
+  ProviderSettingsEdit,
+} from '@moonshot-ai/agent-core-v2/app/config/desktopSettings';
 import type { ProviderConfig } from '@moonshot-ai/agent-core-v2/llm-adapter/provider/provider';
 import type {
   AuthStatus,
@@ -257,6 +262,12 @@ export interface GlobalHostFsFacade {
   home(): Promise<FsHomeResponse>;
 }
 
+export interface GlobalSettingsFacade {
+  read(): Promise<DesktopSettingsSnapshot>;
+  saveProvider(input: ProviderSettingsEdit): Promise<DesktopSettingsSave>;
+  removeProvider(input: { revision: string; id: string }): Promise<DesktopSettingsSave>;
+}
+
 /**
  * The unified MCP management plane (engine `IMcpManagementService`, App
  * scope): CRUD on the user-level `mcp.json`, a connection test probe, the
@@ -351,6 +362,7 @@ export interface GlobalFacade {
   readonly plugins: GlobalPluginsFacade;
   readonly capabilities: GlobalCapabilitiesFacade;
   readonly hostFs: GlobalHostFsFacade;
+  readonly settings: GlobalSettingsFacade;
   readonly files: GlobalFilesFacade;
   readonly mcp: GlobalMcpFacade;
   env(): Promise<KlientEnvInfo>;
@@ -590,6 +602,15 @@ export function createGlobalFacade(scoped: ScopedCaller, scopedStream: ScopedStr
       browse: (absPath) =>
         call('hostFolderBrowser', 'browse', [absPath]) as Promise<FsBrowseResponse>,
       home: () => call('hostFolderBrowser', 'home', []) as Promise<FsHomeResponse>,
+    },
+
+    settings: {
+      read: () =>
+        call('desktopSettingsService', 'read', []) as Promise<DesktopSettingsSnapshot>,
+      saveProvider: (input) =>
+        call('desktopSettingsService', 'saveProvider', [input]) as Promise<DesktopSettingsSave>,
+      removeProvider: (input) =>
+        call('desktopSettingsService', 'removeProvider', [input]) as Promise<DesktopSettingsSave>,
     },
 
     files: {

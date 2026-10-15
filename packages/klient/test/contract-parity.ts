@@ -227,10 +227,24 @@ import {
   approvalResponseSchema,
 } from '../src/contract/session/approval.js';
 import {
+  agentHistoryUpdateSchema,
   bindAgentProfileInputSchema,
   fullCompactionInputSchema,
+  historyCursorSchema,
+  historyWatchQuerySchema,
   mcpServerEntrySchema,
+  promptSubmissionInputSchema,
+  promptSubmissionReceiptSchema,
 } from '../src/contract/agent/services.js';
+import type {
+  AgentHistoryUpdate,
+  HistoryCursor,
+  HistoryWatchQuery,
+} from '@moonshot-ai/agent-core-v2/agent/history/history';
+import type {
+  PromptSubmissionInput,
+  PromptSubmissionReceipt,
+} from '@moonshot-ai/agent-core-v2/agent/loop/promptChannel';
 import {
   createChildSessionOptionsSchema,
   createSessionOptionsSchema,
@@ -258,6 +272,32 @@ import {
 } from '../src/contract/session/question.js';
 import { skillSummarySchema } from '../src/contract/session/skills.js';
 import { sessionTitleContract } from '../src/contract/session/title.js';
+import {
+  openTerminalRequestSchema,
+  streamedTerminalSchema,
+  terminalStreamFrameSchema,
+} from '../src/contract/session/terminal.js';
+import {
+  desktopProviderSchema,
+  desktopSettingsSaveSchema,
+  desktopSettingsSnapshotSchema,
+  providerSettingsEditSchema,
+  settingsChangedSchema,
+} from '../src/contract/global/settings.js';
+import type {
+  CredentialEdit,
+  DesktopProvider,
+  DesktopSettingsSave,
+  DesktopSettingsSnapshot,
+  ProviderSettingsEdit,
+} from '@moonshot-ai/agent-core-v2/app/config/desktopSettings';
+import type {
+  CreateTerminalRequest,
+  Terminal,
+  TerminalExitMessage,
+  TerminalOutputMessage,
+} from '@moonshot-ai/agent-core-v2/os/interface/terminal';
+import type { TerminalStreamFrame } from '@moonshot-ai/agent-core-v2/session/terminal/terminalService';
 
 import {
   authStatusSchema,
@@ -733,6 +773,21 @@ const _mcpServerEntry: AssertWire<typeof mcpServerEntrySchema, McpServerEntry> =
 const _fullCompactionInput: AssertWire<typeof fullCompactionInputSchema, FullCompactionInput> =
   true;
 
+const _promptSubmissionInput: AssertWireToEngine<
+  typeof promptSubmissionInputSchema,
+  PromptSubmissionInput
+> = true;
+const _promptSubmissionReceipt: AssertWire<
+  typeof promptSubmissionReceiptSchema,
+  PromptSubmissionReceipt
+> = true;
+const _historyCursor: AssertWire<typeof historyCursorSchema, HistoryCursor> = true;
+const _historyWatchQuery: AssertWire<typeof historyWatchQuerySchema, HistoryWatchQuery> = true;
+const _agentHistoryUpdate: AssertEngineToWire<
+  typeof agentHistoryUpdateSchema,
+  AgentHistoryUpdate
+> = true;
+
 // ── agent scope (events.ts) ─────────────────────────────────────────────────
 // Parity against the protocol event types (the stream carries flat
 // `{ type, ... }` events; schemas keep the `type` literal). One-directional
@@ -781,3 +836,40 @@ const _goalUpdatedPayload: AssertWire<
 // and `agentStatusUpdatedEventSchema`: they are deliberately `z.looseObject`s
 // (index signature breaks both-ways assignability) — `permission.approval.*`
 // is not part of the protocol event union at all.
+
+const _desktopProvider: AssertWire<typeof desktopProviderSchema, DesktopProvider> = true;
+const _desktopSettingsSnapshot: AssertWire<
+  typeof desktopSettingsSnapshotSchema,
+  DesktopSettingsSnapshot
+> = true;
+const _desktopSettingsSave: AssertWire<typeof desktopSettingsSaveSchema, DesktopSettingsSave> =
+  true;
+const _providerSettingsEdit: AssertWireToEngine<
+  typeof providerSettingsEditSchema,
+  ProviderSettingsEdit
+> = true;
+const _credentialEditCheck: AssertWireToEngine<
+  typeof providerSettingsEditSchema,
+  { revision: string; id: string; patch: ProviderSettingsEdit['patch']; credential: CredentialEdit }
+> = true;
+const _openTerminalRequest: AssertWireToEngine<
+  typeof openTerminalRequestSchema,
+  CreateTerminalRequest
+> = true;
+const _settingsChangedEvent: AssertWire<
+  typeof settingsChangedSchema,
+  { revision: string }
+> = true;
+const _streamedTerminal: AssertWire<typeof streamedTerminalSchema, Terminal> = true;
+const _terminalStreamFrame: AssertEngineToWire<
+  typeof terminalStreamFrameSchema,
+  TerminalStreamFrame
+> = true;
+const _terminalOutputFrameCheck: AssertEngineToWire<
+  typeof terminalStreamFrameSchema,
+  TerminalOutputMessage
+> = true;
+const _terminalExitFrameCheck: AssertEngineToWire<
+  typeof terminalStreamFrameSchema,
+  TerminalExitMessage
+> = true;

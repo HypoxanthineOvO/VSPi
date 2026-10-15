@@ -38,6 +38,7 @@ export type {
   GlobalMcpFacade,
   GlobalPluginsFacade,
   GlobalSessionsFacade,
+  GlobalSettingsFacade,
   GlobalWorkspacesFacade,
   ImportCustomRegistryOptions,
   ImportCustomRegistryResult,
@@ -70,6 +71,7 @@ export type {
   SessionRestoreOptions,
   SessionSkillsFacade,
   SessionStatus,
+  SessionTerminalsFacade,
 } from './core/facade/session.js';
 export type {
   AgentCommandInfo,
@@ -165,3 +167,20 @@ export type {
 } from '@moonshot-ai/agent-core-v2/app/mcpManagement/mcpManagement';
 export type { ContentPart } from '@moonshot-ai/agent-core-v2/human/llm/message';
 export type { PermissionMode } from '@moonshot-ai/agent-core-v2/agent/permissionPolicy/types';
+export type {
+  PromptSubmissionInput,
+  PromptSubmissionReceipt,
+} from '@moonshot-ai/agent-core-v2/agent/loop/promptChannel';
+export type {
+  AgentHistoryUpdate,
+  HistoryCursor,
+  HistoryWatchQuery,
+} from '@moonshot-ai/agent-core-v2/agent/history/history';
+export type {
+  CredentialEdit,
+  DesktopProvider,
+  DesktopSettingsSave,
+  DesktopSettingsSnapshot,
+  ProviderSettingsEdit,
+} from '@moonshot-ai/agent-core-v2/app/config/desktopSettings';
+export type { TerminalStreamFrame } from '@moonshot-ai/agent-core-v2/session/terminal/terminalService';

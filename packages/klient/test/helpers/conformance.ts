@@ -12,15 +12,130 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Service } from '@moonshot-ai/agent-core-v2/_base/di/service';
+import { overrideScopedService, ScopeActivation } from '@moonshot-ai/agent-core-v2/_base/di/scope';
+import { LifecycleScope } from '@moonshot-ai/agent-core-v2/app/scopes';
 import { CommandContribution } from '@moonshot-ai/agent-core-v2/agent/command/commandContribution';
 import { IFeatureManager } from '@moonshot-ai/agent-core-v2/app/feature/featureManager';
 import {
   resetModelsDevUpstreamForTest,
   setModelsDevUpstreamForTest,
 } from '@moonshot-ai/agent-core-v2/app/kosongConfig/modelsDevUpstream';
+import type {
+  CreateTerminalRequest,
+  Terminal,
+  TerminalAttachOptions,
+  TerminalAttachSink,
+} from '@moonshot-ai/agent-core-v2/os/interface/terminal';
+import {
+  ISessionTerminalService,
+  type TerminalStreamFrame,
+} from '@moonshot-ai/agent-core-v2/session/terminal/terminalService';
 
 import type { Klient } from '../../src/index.js';
+import type { ScopeRef } from '../../src/core/channel.js';
+import { KlientValidationError } from '../../src/core/validation.js';
 import type { TestEngine } from './engine.js';
+
+const CONFORMANCE_TERMINAL: Terminal = {
+  id: 'conf-term',
+  session_id: 'conf-session',
+  cwd: '/conf',
+  shell: '/bin/sh',
+  cols: 100,
+  rows: 30,
+  status: 'running',
+  created_at: new Date(0).toISOString(),
+};
+
+class ConformanceTerminalService implements ISessionTerminalService {
+  declare readonly _serviceBrand: undefined;
+  static readonly instances: ConformanceTerminalService[] = [];
+  readonly opened: CreateTerminalRequest[] = [];
+  readonly writes: Array<{ id: string; data: string }> = [];
+  readonly resizes: Array<{ id: string; cols: number; rows: number }> = [];
+  readonly closedIds: string[] = [];
+
+  constructor() {
+    ConformanceTerminalService.instances.push(this);
+  }
+
+  open(input: CreateTerminalRequest): AsyncIterable<TerminalStreamFrame> {
+    this.opened.push(input);
+    const frames: TerminalStreamFrame[] = [
+      { type: 'terminal_ready', terminal: CONFORMANCE_TERMINAL },
+      {
+        type: 'terminal_output',
+        seq: 1,
+        session_id: 'conf-session',
+        terminal_id: 'conf-term',
+        timestamp: new Date(0).toISOString(),
+        payload: { data: 'conf-ok' },
+      },
+    ];
+    return {
+      [Symbol.asyncIterator]() {
+        let index = 0;
+        return {
+          async next() {
+            const frame = frames[index];
+            index += 1;
+            return frame === undefined
+              ? { done: true as const, value: undefined }
+              : { done: false as const, value: frame };
+          },
+          async return() {
+            return { done: true as const, value: undefined };
+          },
+        };
+      },
+    };
+  }
+
+  async create(input: CreateTerminalRequest): Promise<Terminal> {
+    this.opened.push(input);
+    return CONFORMANCE_TERMINAL;
+  }
+
+  async list(): Promise<readonly Terminal[]> {
+    return [CONFORMANCE_TERMINAL];
+  }
+
+  async get(terminalId: string): Promise<Terminal> {
+    return { ...CONFORMANCE_TERMINAL, id: terminalId };
+  }
+
+  async attach(
+    _terminalId: string,
+    _sink: TerminalAttachSink,
+    _options?: TerminalAttachOptions,
+  ): Promise<{ replayed: number }> {
+    return { replayed: 0 };
+  }
+
+  detach(): void {}
+  detachAllForSink(): void {}
+
+  async write(terminalId: string, data: string): Promise<void> {
+    this.writes.push({ id: terminalId, data });
+  }
+
+  async resize(terminalId: string, cols: number, rows: number): Promise<void> {
+    this.resizes.push({ id: terminalId, cols, rows });
+  }
+
+  async close(terminalId: string): Promise<{ closed: true }> {
+    this.closedIds.push(terminalId);
+    return { closed: true };
+  }
+}
+
+overrideScopedService(
+  LifecycleScope.Session,
+  ISessionTerminalService,
+  ConformanceTerminalService,
+  ScopeActivation.OnDemand,
+  'conformance-terminal',
+);
 
 export interface KlientConformanceTarget {
   readonly klient: Klient;
@@ -30,7 +145,12 @@ export interface KlientConformanceTarget {
    * commands) through the production `IFeatureManager` path.
    */
   readonly app: TestEngine['app'];
-  rawCall(service: string, method: string, args: unknown[]): Promise<unknown>;
+  rawCall(
+    service: string,
+    method: string,
+    args: unknown[],
+    scope?: ScopeRef,
+  ): Promise<unknown>;
   cleanup(): Promise<void>;
 }
 
@@ -337,6 +457,170 @@ export function defineKlientConformance(
       const all = await target.klient.global.config.getAll();
       expect(typeof all).toBe('object');
       expect(Array.isArray(await target.klient.global.config.diagnostics())).toBe(true);
+    });
+
+    it('settings reads a sanitized snapshot and round-trips provider edits', async () => {
+      const { settings, config } = target.klient.global;
+      const before = await config.inspect<Record<string, unknown>>('providers');
+      try {
+        const snapshot = await settings.read();
+        expect(snapshot.scope).toBe('runtime');
+        expect(snapshot.revision).toMatch(/^[0-9a-f]{64}$/);
+        expect(snapshot.homeDir.length).toBeGreaterThan(0);
+
+        const saved = await settings.saveProvider({
+          revision: snapshot.revision,
+          id: 'conformance-provider',
+          patch: {
+            type: 'openai',
+            baseUrl: 'https://api.example.test/v1',
+            defaultModel: 'demo-m1',
+          },
+          credential: { action: 'replace', value: 'sk-conformance-secret' },
+        });
+        expect(saved.effective).toBe('next-request');
+        let provider = saved.settings.providers.find((p) => p.id === 'conformance-provider');
+        expect(provider?.credential).toMatchObject({ kind: 'api-key', configured: true });
+        expect(provider?.baseUrl).toBe('https://api.example.test/v1');
+        expect(JSON.stringify(saved.settings)).not.toContain('sk-conformance-secret');
+
+        await expect(
+          settings.saveProvider({
+            revision: snapshot.revision,
+            id: 'conformance-provider',
+            patch: {},
+            credential: { action: 'keep' },
+          }),
+        ).rejects.toMatchObject({ code: 40930 });
+
+        const kept = await settings.saveProvider({
+          revision: saved.settings.revision,
+          id: 'conformance-provider',
+          patch: { defaultModel: 'demo-m2' },
+          credential: { action: 'keep' },
+        });
+        provider = kept.settings.providers.find((p) => p.id === 'conformance-provider');
+        expect(provider?.credential.kind).toBe('api-key');
+        expect(provider?.defaultModel).toBe('demo-m2');
+        let stored = await config.inspect<
+          Record<string, { apiKey?: string; apiKeyEnv?: string }>
+        >('providers');
+        expect(stored.userValue?.['conformance-provider']?.apiKey).toBe(
+          'sk-conformance-secret',
+        );
+
+        const envBound = await settings.saveProvider({
+          revision: kept.settings.revision,
+          id: 'conformance-provider',
+          patch: {},
+          credential: { action: 'environment', name: 'KLIENT_CONFORMANCE_KEY' },
+        });
+        provider = envBound.settings.providers.find((p) => p.id === 'conformance-provider');
+        expect(provider?.credential).toMatchObject({
+          kind: 'environment',
+          environment: 'KLIENT_CONFORMANCE_KEY',
+          resolved: false,
+        });
+        stored = await config.inspect<
+          Record<string, { apiKey?: string; apiKeyEnv?: string }>
+        >('providers');
+        expect(stored.userValue?.['conformance-provider']?.apiKeyEnv).toBe(
+          'KLIENT_CONFORMANCE_KEY',
+        );
+        expect(stored.userValue?.['conformance-provider']?.apiKey).toBeUndefined();
+
+        const cleared = await settings.saveProvider({
+          revision: envBound.settings.revision,
+          id: 'conformance-provider',
+          patch: {},
+          credential: { action: 'clear' },
+        });
+        provider = cleared.settings.providers.find((p) => p.id === 'conformance-provider');
+        expect(provider?.credential).toMatchObject({ kind: 'none', configured: false });
+        stored = await config.inspect<
+          Record<string, { apiKey?: string; apiKeyEnv?: string }>
+        >('providers');
+        expect(stored.userValue?.['conformance-provider']?.apiKeyEnv).toBeUndefined();
+
+        const events: Array<{ revision: string }> = [];
+        const sub = target.klient.events.on('settings.changed', (event) => {
+          events.push(event);
+        });
+        try {
+          await settings.removeProvider({
+            revision: cleared.settings.revision,
+            id: 'conformance-provider',
+          });
+          await vi.waitFor(() => expect(events.length).toBeGreaterThan(0));
+          expect(events.at(-1)?.revision).toMatch(/^[0-9a-f]{64}$/);
+        } finally {
+          sub.dispose();
+        }
+        const after = await settings.read();
+        expect(after.providers.find((p) => p.id === 'conformance-provider')).toBeUndefined();
+      } finally {
+        await config.replaceSections({
+          sections: { providers: before.userValue ?? {} },
+        });
+      }
+    });
+
+    it('terminals open/write/resize/close route through the session facade', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'klient-terminal-'));
+      await mkdir(join(workDir, '.git'));
+      const created = await target.klient.global.sessions.create({
+        workDir,
+        title: 'terminal conformance',
+      });
+      try {
+        const session = target.klient.session(created.id);
+        const frames: TerminalStreamFrame[] = [];
+        for await (const frame of session.terminals.open({ cols: 100, rows: 30 })) {
+          frames.push(frame);
+        }
+        expect(frames).toHaveLength(2);
+        expect(frames[0]).toMatchObject({
+          type: 'terminal_ready',
+          terminal: { id: 'conf-term' },
+        });
+        expect(frames[1]).toMatchObject({
+          type: 'terminal_output',
+          payload: { data: 'conf-ok' },
+        });
+
+        const service = ConformanceTerminalService.instances.at(-1);
+        expect(service?.opened).toEqual([
+          { cols: 100, rows: 30, runtime_id: 'local' },
+        ]);
+
+        await session.terminals.write({ id: 'conf-term', data: 'echo hi\n' });
+        await session.terminals.resize({ id: 'conf-term', cols: 120, rows: 40 });
+        await expect(session.terminals.close('conf-term')).resolves.toEqual({
+          closed: true,
+        });
+        expect(service?.writes).toEqual([{ id: 'conf-term', data: 'echo hi\n' }]);
+        expect(service?.resizes).toEqual([{ id: 'conf-term', cols: 120, rows: 40 }]);
+        expect(service?.closedIds).toEqual(['conf-term']);
+
+        await expect(
+          session.terminals.resize({ id: 'conf-term', cols: 0, rows: 40 }),
+        ).rejects.toThrow(KlientValidationError);
+        const sessionScope = { sessionId: created.id };
+        await expect(
+          target.rawCall('sessionTerminalService', 'resize', ['conf-term', 0, 40], sessionScope),
+        ).rejects.toMatchObject({ code: 40001 });
+        await expect(
+          target.rawCall(
+            'sessionTerminalService',
+            'write',
+            ['conf-term', 'x'.repeat(70 * 1024)],
+            sessionScope,
+          ),
+        ).rejects.toMatchObject({ code: 40001 });
+      } finally {
+        await target.klient.session(created.id).close();
+        await rm(workDir, { recursive: true, force: true });
+      }
     });
 
     it('config replaceSections writes several domains and clears undefined ones', async () => {

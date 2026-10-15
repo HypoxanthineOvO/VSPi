@@ -34,6 +34,17 @@ import {
   towerMissionProjectionSchema,
 } from './schemas.js';
 
+export const promptSubmissionInputSchema = promptPayloadSchema.extend({
+  promptId: z.string().min(1).max(128),
+  mode: z.enum(['queue', 'steer']).optional(),
+});
+
+export const promptSubmissionReceiptSchema = z.object({
+  promptId: z.string(),
+  state: z.enum(['accepted', 'interrupted']),
+  submittedAt: z.string(),
+});
+
 export const agentPromptContract = {
   submit: {
     input: z.tuple([promptPayloadSchema]),
@@ -42,6 +53,14 @@ export const agentPromptContract = {
   submitSteer: {
     input: z.tuple([steerPayloadSchema]),
     output: maybe(promptLaunchResultSchema),
+  },
+  submitOnce: {
+    input: z.tuple([promptSubmissionInputSchema]),
+    output: promptSubmissionReceiptSchema,
+  },
+  getSubmission: {
+    input: z.tuple([z.string().min(1).max(128)]),
+    output: maybe(promptSubmissionReceiptSchema),
   },
 } satisfies ServiceContract;
 
@@ -87,8 +106,24 @@ export const agentActivityContract = {
   state: { input: z.tuple([]), output: agentActivityStateSchema },
 } satisfies ServiceContract;
 
+export const historyCursorSchema = z.object({
+  epoch: z.string().min(1),
+  revision: z.number().int().nonnegative(),
+});
+
+export const historyWatchQuerySchema = z.object({
+  after: historyCursorSchema.optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+});
+
+export const agentHistoryUpdateSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('snapshot'), cursor: historyCursorSchema, page: agentHistoryPageSchema }),
+  z.object({ kind: z.literal('event'), cursor: historyCursorSchema, event: z.record(z.string(), z.unknown()) }),
+]);
+
 export const agentHistoryContract = {
   page: { input: z.tuple([z.object({ before: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(100).optional() }).optional()]), output: agentHistoryPageSchema },
+  watch: { streaming: true, input: z.tuple([historyWatchQuerySchema.optional()]), chunk: agentHistoryUpdateSchema },
 } satisfies ServiceContract;
 
 export const agentTokenCountingContract = {

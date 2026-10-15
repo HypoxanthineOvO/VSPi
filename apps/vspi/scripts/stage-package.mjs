@@ -23,6 +23,7 @@ await Promise.all([
   cp(join(repositoryRoot, 'LICENSE'), join(stagingRoot, 'LICENSE')),
   cp(join(packageRoot, 'THIRD_PARTY_NOTICES'), join(stagingRoot, 'THIRD_PARTY_NOTICES')),
   cp(join(packageRoot, 'README.md'), join(stagingRoot, 'README.md')),
+  cp(join(packageRoot, 'dist', 'prebuilds'), join(stagingRoot, 'dist', 'prebuilds'), { recursive: true }),
   cp(join(packageRoot, 'skills'), join(stagingRoot, 'skills'), { recursive: true }),
   ...['main.mjs', 'search-worker.mjs', 'text-build-worker.mjs'].map((name) =>
     cp(join(packageRoot, 'dist', name), join(stagingRoot, 'dist', name)),

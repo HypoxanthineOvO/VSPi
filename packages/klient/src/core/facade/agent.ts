@@ -13,7 +13,16 @@ import type { IAgentContextMemoryService } from '@moonshot-ai/agent-core-v2/agen
 import type { IAgentMcpService } from '@moonshot-ai/agent-core-v2/agent/mcp/mcp';
 import type { IAgentRuntimeBindingService } from '@moonshot-ai/agent-core-v2/agent/runtimeBinding/runtimeBinding';
 import type { AgentActivityState } from '@moonshot-ai/agent-core-v2/agent/activityView/activityView';
-import type { AgentHistoryPage, HistoryQuery } from '@moonshot-ai/agent-core-v2/agent/history/history';
+import type {
+  AgentHistoryPage,
+  AgentHistoryUpdate,
+  HistoryQuery,
+  HistoryWatchQuery,
+} from '@moonshot-ai/agent-core-v2/agent/history/history';
+import type {
+  PromptSubmissionInput,
+  PromptSubmissionReceipt,
+} from '@moonshot-ai/agent-core-v2/agent/loop/promptChannel';
 import type { ISessionTokenCountingService } from '@moonshot-ai/agent-core-v2/session/tokenCounting/sessionTokenCounting';
 import type { IAgentPlanService } from '@moonshot-ai/agent-core-v2/features/plan/plan';
 import type { IAgentProfileService } from '@moonshot-ai/agent-core-v2/agent/profile/profile';
@@ -29,6 +38,7 @@ import type { PermissionMode } from '@moonshot-ai/agent-core-v2/agent/permission
 
 import type { ScopeRef } from '../channel.js';
 import type { ScopedCaller } from './session.js';
+import type { ScopedStreamCaller } from './global.js';
 
 // Wire-type aliases derived through the engine service interfaces (keeps
 // klient free of protocol-package imports).
@@ -73,6 +83,8 @@ export interface AgentFacade {
    */
   promptWithSkills(input: PromptWithSkillsInput): Promise<PromptWithSkillsResult>;
   steer(input: { input: readonly ContentPart[]; promptId?: string }): Promise<PromptLaunchResult>;
+  submitOnce(input: PromptSubmissionInput): Promise<PromptSubmissionReceipt>;
+  getSubmission(promptId: string): Promise<PromptSubmissionReceipt | undefined>;
   /**
    * Activate a skill as a user-slash activation: the engine renders the skill
    * prompt and drives it as a normal turn (same settlement/event flow as
@@ -99,6 +111,7 @@ export interface AgentFacade {
   getContextTokenCount(): Promise<number>;
   getActivity(): Promise<AgentActivityState>;
   getHistory(query?: HistoryQuery): Promise<AgentHistoryPage>;
+  watchHistory(query?: HistoryWatchQuery): AsyncIterable<AgentHistoryUpdate>;
   listCommands(): Promise<readonly AgentCommandInfo[]>;
   runCommand(input: { name: string; args?: string }): Promise<void>;
   getRuntime(): Promise<RuntimeBinding>;
@@ -132,7 +145,11 @@ export interface AgentFacade {
   cancelCompaction(): Promise<void>;
 }
 
-export function createAgentFacade(call: ScopedCaller, scope: ScopeRef): AgentFacade {
+export function createAgentFacade(
+  call: ScopedCaller,
+  scope: ScopeRef,
+  callStream: ScopedStreamCaller,
+): AgentFacade {
   return {
     prompt: (input) =>
       call(scope, 'agentPromptService', 'submit', [input]) as Promise<PromptLaunchResult>,
@@ -140,6 +157,10 @@ export function createAgentFacade(call: ScopedCaller, scope: ScopeRef): AgentFac
       call(scope, 'agentSkillService', 'promptWithSkills', [input]) as Promise<PromptWithSkillsResult>,
     steer: (input) =>
       call(scope, 'agentPromptService', 'submitSteer', [input]) as Promise<PromptLaunchResult>,
+    submitOnce: (input) =>
+      call(scope, 'agentPromptService', 'submitOnce', [input]) as Promise<PromptSubmissionReceipt>,
+    getSubmission: (promptId) =>
+      call(scope, 'agentPromptService', 'getSubmission', [promptId]) as Promise<PromptSubmissionReceipt | undefined>,
     activateSkill: (input) =>
       call(scope, 'agentSkillService', 'activate', [input]) as Promise<PromptLaunchResult>,
     cancel: (input) =>
@@ -199,6 +220,8 @@ export function createAgentFacade(call: ScopedCaller, scope: ScopeRef): AgentFac
     getContextTokenCount: () => call(scope, 'agentTokenCountingService', 'statusSize', []) as Promise<number>,
     getActivity: () => call(scope, 'agentActivityView', 'state', []) as Promise<AgentActivityState>,
     getHistory: (query) => call(scope, 'agentHistoryService', 'page', query === undefined ? [] : [query]) as Promise<AgentHistoryPage>,
+    watchHistory: (query) =>
+      callStream(scope, 'agentHistoryService', 'watch', query === undefined ? [] : [query]) as AsyncIterable<AgentHistoryUpdate>,
     listCommands: () =>
       call(scope, 'agentCommandService', 'list', []) as Promise<readonly AgentCommandInfo[]>,
     runCommand: (input) =>

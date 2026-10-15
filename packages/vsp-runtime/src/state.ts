@@ -123,7 +123,15 @@ function parseRuntimeState(value: unknown): RuntimeState {
   if (protocolVersion < 1 || pid < 1 || port < 1 || port > 65535) {
     throw new Error('runtime state has invalid numeric fields');
   }
-  return { protocolVersion, pid, ownerNonce, port, host, ipcPath, startedAt, version, migrationWarning };
+  const runtimeIdValue = state['runtimeId'];
+  let runtimeId: string | undefined;
+  if (runtimeIdValue !== undefined) {
+    if (typeof runtimeIdValue !== 'string' || !/^[0-9a-f]{64}$/.test(runtimeIdValue)) {
+      throw new Error('runtime state has invalid runtimeId');
+    }
+    runtimeId = runtimeIdValue;
+  }
+  return { protocolVersion, pid, ownerNonce, port, host, ipcPath, startedAt, version, runtimeId, migrationWarning };
 }
 
 function integer(value: unknown): number {

@@ -16,6 +16,7 @@ import {
 } from "@vsp/vsp-runtime";
 
 import { dispatchCliCommand } from "./cli-command.js";
+import { runDesktopDiscovery } from "./desktop-discovery.js";
 import {
 	daemonEnvironment,
 	prepareDaemonEnvironment,
@@ -107,6 +108,13 @@ async function daemonCommand(args: readonly string[]): Promise<void> {
 		case "serve":
 			if (process.env.VSPI_RUNTIME_CHILD === '1') throw new Error('Daemon 内派生的 CLI 不能启动运行时；请在用户终端主动运行 vspi daemon start。');
 			await serveDaemon(homeDir);
+			return;
+		case "desktop":
+			await runDesktopDiscovery({
+				connect: () => ensureConnection(homeDir),
+				input: process.stdin,
+				output: process.stdout,
+			});
 			return;
 		case "start": {
 			const connection = await ensureConnection(homeDir);

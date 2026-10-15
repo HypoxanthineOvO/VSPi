@@ -15,7 +15,7 @@ const main = defineConfig({
   hash: false,
   platform: 'node',
   target: 'node22.19',
-  banner: { js: '#!/usr/bin/env node' },
+  banner: { js: '#!/usr/bin/env node\nimport { fileURLToPath as __vspiFileURLToPath } from "node:url";\nconst __dirname = __vspiFileURLToPath(new URL(".", import.meta.url));' },
   plugins: [rawTextPlugin()],
   deps: {
     onlyBundle: false,

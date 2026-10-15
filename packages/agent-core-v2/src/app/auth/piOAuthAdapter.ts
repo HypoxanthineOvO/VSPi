@@ -8,6 +8,7 @@ import type { IAtomicDocumentStore } from '#/persistence/interface/atomicDocumen
 import type { IProviderService, OAuthRef, ProvidersChangedEvent } from '#/llm-adapter/provider/provider';
 import type { ProviderRequestAuth } from '#/llm-adapter/contract/provider';
 import { AuthErrors } from './errors';
+import { codexAuthPath, readCodexCredential } from './codexCredential';
 import { withScopedProxy } from '#/_base/utils/scopedProxy';
 import type {
   OAuthFlowSnapshot,
@@ -154,6 +155,10 @@ export class PiOAuthAdapter {
     const definition = this.definition(provider, ref);
     if (definition === undefined) return undefined;
     const credentials = await this.docs.get<OAuthCredential>(this.scope, this.credentialKey(provider, ref));
+    if (typeof credentials?.['codexAuthPath'] === 'string') {
+      const current = await readCodexCredential(credentials['codexAuthPath']);
+      return current?.accountId === credentials['accountId'] ? current?.access : undefined;
+    }
     return credentials?.access;
   }
 
@@ -198,7 +203,20 @@ export class PiOAuthAdapter {
 
   private async login(provider: string, definition: PiOAuthProvider, flow: PiFlow): Promise<void> {
     try {
-      const credentials = await withScopedProxy(this.proxyForProvider(definition.id), () => definition.oauth.login({
+      const deviceId = definition.id === 'openai' ? await this.transaction('openai-device-id', async () => {
+        const saved = await this.docs.get<string>(this.scope, 'openai-device-id');
+        if (saved) return saved;
+        const id = randomUUID();
+        await this.docs.set(this.scope, 'openai-device-id', id);
+        return id;
+      }) : undefined;
+      const path = codexAuthPath();
+      const previous = await this.docs.get<OAuthCredential>(this.scope, this.credentialKey(provider));
+      const codex = definition.id === 'openai-codex' && previous?.['codexAuthPath'] === undefined
+        ? await readCodexCredential(path) : undefined;
+      const credentials: OAuthCredential = codex
+        ? { type: 'oauth', access: '', refresh: '', expires: 0, codexAuthPath: path, accountId: codex.accountId }
+        : await withScopedProxy(this.proxyForProvider(definition.id), () => definition.oauth.login({
         signal: flow.controller.signal,
         notify: (event) => {
           if (flow.snapshot.status !== 'pending') return;
@@ -221,7 +239,7 @@ export class PiOAuthAdapter {
           this.publishReady(flow);
         },
         prompt: (prompt) => this.prompt(flow, prompt),
-      }));
+      }, { getDeviceId: deviceId === undefined ? undefined : () => deviceId }));
       if (flow.snapshot.status !== 'pending') return;
       const key = this.credentialKey(provider);
       await this.transaction(key, async () => {
@@ -316,7 +334,15 @@ export class PiOAuthAdapter {
       if (definition === undefined || credentials === undefined || this.disposed) {
         throw authError('OAuth credentials are missing; please log in.');
       }
-      if (force || credentials.expires <= Date.now() + 60_000) {
+      const usesCodexFile = typeof credentials['codexAuthPath'] === 'string';
+      if (typeof credentials['codexAuthPath'] === 'string') {
+        const current = await readCodexCredential(credentials['codexAuthPath']);
+        if (definition.id !== 'openai-codex' || !current || current.accountId !== credentials['accountId']) {
+          throw authError('Codex login is unavailable, expired or belongs to another account. Refresh Codex on the backend machine, or log in again using device code.');
+        }
+        if (force) throw authError('Codex authentication was rejected. Refresh Codex on the backend machine, then retry.');
+        credentials = current;
+      } else if (force || credentials.expires <= Date.now() + 60_000) {
         try {
           const previous = credentials;
           credentials = await withScopedProxy(this.proxyForProvider(definition.id), () => definition.oauth.refresh(previous, this.refreshController.signal));
@@ -341,7 +367,7 @@ export class PiOAuthAdapter {
         apiKey: auth.apiKey,
         headers: Object.fromEntries(headers.filter((entry): entry is [string, string] => entry[1] !== null)),
         removeHeaders: headers.filter(([, value]) => value === null).map(([name]) => name),
-        baseUrl: auth.baseUrl,
+        baseUrl: usesCodexFile ? 'https://chatgpt.com/backend-api' : auth.baseUrl,
         proxyUrl: this.proxyForProvider(definition.id),
       };
     });

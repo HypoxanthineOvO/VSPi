@@ -31,9 +31,22 @@ class FakeChannel implements KlientChannel {
     return Promise.resolve(this.results.has(key) ? this.results.get(key) : this.result);
   }
 
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async *stream(_scope: ScopeRef, _service: string, _method: string, _args: unknown[]): AsyncIterableIterator<unknown> {
-    // stub — streaming is not exercised in facade tests
+  readonly streamCalls: Array<{
+    scope: ScopeRef;
+    service: string;
+    method: string;
+    args: unknown[];
+  }> = [];
+  readonly streams = new Map<string, AsyncIterable<unknown>>();
+
+  stream(scope: ScopeRef, service: string, method: string, args: unknown[]): AsyncIterable<unknown> {
+    this.streamCalls.push({ scope, service, method, args });
+    const scripted = this.streams.get(`${service}.${method}`);
+    if (scripted !== undefined) return scripted;
+    // eslint-disable-next-line @typescript-eslint/require-await
+    return (async function* () {
+      // stub — streaming is not exercised in facade tests
+    })();
   }
 
   listen(scope: ScopeRef, source: EventSourceRef, handler: (data: unknown) => void): IDisposable {
@@ -979,5 +992,188 @@ describe('files routing', () => {
       klient.global.files.save({ data: new Uint8Array(0), filename: '' }),
     ).rejects.toBeInstanceOf(KlientValidationError);
     expect(channel.calls).toHaveLength(0);
+  });
+});
+
+describe('session terminals routing', () => {
+  const READY = {
+    type: 'terminal_ready',
+    terminal: {
+      id: 't1',
+      session_id: 's9',
+      cwd: '/w',
+      shell: '/bin/sh',
+      cols: 100,
+      rows: 30,
+      status: 'running',
+      created_at: '2024-01-01T00:00:00.000Z',
+    },
+  };
+
+  it('open injects runtime_id local and streams frames through the session scope', async () => {
+    const channel = new FakeChannel();
+    channel.streams.set(
+      'sessionTerminalService.open',
+      (async function* () {
+        yield READY;
+        yield {
+          type: 'terminal_output',
+          seq: 1,
+          session_id: 's9',
+          terminal_id: 't1',
+          timestamp: '2024-01-01T00:00:00.000Z',
+          payload: { data: 'out' },
+        };
+      })(),
+    );
+    const klient = createKlientFromChannel(channel);
+    try {
+      const frames = [];
+      for await (const frame of klient.session('s9').terminals.open({ cols: 100, rows: 30 })) {
+        frames.push(frame);
+      }
+      expect(frames.map((frame) => frame.type)).toEqual([
+        'terminal_ready',
+        'terminal_output',
+      ]);
+      expect(channel.streamCalls).toEqual([
+        {
+          scope: { sessionId: 's9' },
+          service: 'sessionTerminalService',
+          method: 'open',
+          args: [{ cols: 100, rows: 30, runtime_id: 'local' }],
+        },
+      ]);
+    } finally {
+      await klient.close();
+    }
+  });
+
+  it('write/resize/close route positionally and close returns the wire result', async () => {
+    const channel = new FakeChannel();
+    channel.results.set('sessionTerminalService.close', { closed: true });
+    const klient = createKlientFromChannel(channel);
+    try {
+      await klient.session('s9').terminals.write({ id: 't1', data: 'ls\n' });
+      await klient.session('s9').terminals.resize({ id: 't1', cols: 120, rows: 40 });
+      await expect(klient.session('s9').terminals.close('t1')).resolves.toEqual({
+        closed: true,
+      });
+      expect(channel.calls).toEqual([
+        {
+          scope: { sessionId: 's9' },
+          service: 'sessionTerminalService',
+          method: 'write',
+          args: ['t1', 'ls\n'],
+        },
+        {
+          scope: { sessionId: 's9' },
+          service: 'sessionTerminalService',
+          method: 'resize',
+          args: ['t1', 120, 40],
+        },
+        {
+          scope: { sessionId: 's9' },
+          service: 'sessionTerminalService',
+          method: 'close',
+          args: ['t1'],
+        },
+      ]);
+    } finally {
+      await klient.close();
+    }
+  });
+
+  it('rejects invalid terminal args before they hit the wire', async () => {
+    const channel = new FakeChannel();
+    const klient = createKlientFromChannel(channel);
+    try {
+      await expect(
+        klient.session('s9').terminals.resize({ id: 't1', cols: 0, rows: 40 }),
+      ).rejects.toBeInstanceOf(KlientValidationError);
+      await expect(
+        klient.session('s9').terminals.write({ id: '', data: 'x' }),
+      ).rejects.toBeInstanceOf(KlientValidationError);
+      expect(channel.calls).toHaveLength(0);
+    } finally {
+      await klient.close();
+    }
+  });
+});
+
+describe('global settings routing', () => {
+  it('read/saveProvider/removeProvider route to desktopSettingsService', async () => {
+    const channel = new FakeChannel();
+    const snapshot = {
+      revision: 'a'.repeat(64),
+      homeDir: '/home/test',
+      scope: 'runtime',
+      providers: [],
+      extraSkillDirs: [],
+      diagnostics: [],
+    };
+    channel.results.set('desktopSettingsService.read', snapshot);
+    channel.results.set('desktopSettingsService.saveProvider', {
+      settings: snapshot,
+      effective: 'next-request',
+    });
+    channel.results.set('desktopSettingsService.removeProvider', {
+      settings: snapshot,
+      effective: 'next-request',
+    });
+    const klient = createKlientFromChannel(channel);
+    try {
+      await expect(klient.global.settings.read()).resolves.toEqual(snapshot);
+      const edit = {
+        revision: 'a'.repeat(64),
+        id: 'demo',
+        patch: { defaultModel: 'm1' },
+        credential: { action: 'keep' as const },
+      };
+      await expect(klient.global.settings.saveProvider(edit)).resolves.toMatchObject({
+        effective: 'next-request',
+      });
+      await expect(
+        klient.global.settings.removeProvider({ revision: 'a'.repeat(64), id: 'demo' }),
+      ).resolves.toMatchObject({ effective: 'next-request' });
+      expect(channel.calls).toEqual([
+        { scope: {}, service: 'desktopSettingsService', method: 'read', args: [] },
+        { scope: {}, service: 'desktopSettingsService', method: 'saveProvider', args: [edit] },
+        {
+          scope: {},
+          service: 'desktopSettingsService',
+          method: 'removeProvider',
+          args: [{ revision: 'a'.repeat(64), id: 'demo' }],
+        },
+      ]);
+    } finally {
+      await klient.close();
+    }
+  });
+
+  it('rejects invalid settings input before it hits the wire', async () => {
+    const channel = new FakeChannel();
+    const klient = createKlientFromChannel(channel);
+    try {
+      await expect(
+        klient.global.settings.saveProvider({
+          revision: 'not-hex',
+          id: 'demo',
+          patch: {},
+          credential: { action: 'keep' },
+        }),
+      ).rejects.toBeInstanceOf(KlientValidationError);
+      await expect(
+        klient.global.settings.saveProvider({
+          revision: 'a'.repeat(64),
+          id: 'demo',
+          patch: {},
+          credential: { action: 'replace', value: '********' },
+        }),
+      ).rejects.toBeInstanceOf(KlientValidationError);
+      expect(channel.calls).toHaveLength(0);
+    } finally {
+      await klient.close();
+    }
   });
 });

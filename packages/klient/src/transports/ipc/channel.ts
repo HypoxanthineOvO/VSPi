@@ -75,12 +75,12 @@ export class IpcChannel implements KlientChannel {
   private seq = 0;
   private readonly idPrefix = `i${Date.now().toString(36)}`;
 
-  constructor(options: IpcChannelOptions) {
+  constructor(options: IpcChannelOptions, socket?: Socket) {
     this.callTimeoutMs = options.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
     const handshakeTimeoutMs = positiveLimit(options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS);
     this.maxFrameBytes = positiveLimit(options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES);
     this.decoder = new NdjsonDecoder(this.maxFrameBytes);
-    this.socket = createConnection(options.socketPath);
+    this.socket = socket ?? createConnection(options.socketPath);
     this.ready = new Promise<unknown>((resolve, reject) => {
       this.resolveReady = resolve;
       this.rejectReady = reject;
@@ -104,12 +104,13 @@ export class IpcChannel implements KlientChannel {
         this.terminate(error instanceof Error ? error : new Error('Invalid IPC response'));
       }
     });
+    let socketError: Error | undefined;
     this.socket.on('close', () => {
       const unexpected = !this.closed;
       this.closed = true;
       clearTimeout(this.handshakeTimer);
       this.decoder.clear();
-      const error = new Error('ipc closed');
+      const error = socketError ?? new Error('ipc closed');
       this.rejectReady(error);
       this.failAll(error);
       if (unexpected) {
@@ -121,8 +122,8 @@ export class IpcChannel implements KlientChannel {
       }
       this.listens.clear();
     });
-    this.socket.on('error', () => {
-      // 'close' always follows; teardown lives there.
+    this.socket.on('error', (error) => {
+      socketError = error;
     });
   }
 

@@ -12,7 +12,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "tsdown",
+    "build": "tsdown && node scripts/stage-terminal-assets.mjs",
     "dev": "tsx --import ../../build/register-raw-text-loader.mjs src/main.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",

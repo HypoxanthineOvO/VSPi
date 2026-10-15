@@ -798,6 +798,19 @@ describe('Agent context', () => {
       expect(truncated[0]?.content).toHaveLength(2);
     });
 
+    it('keeps a surrogate pair intact when tail clipping lands on it', () => {
+      const boundary = userMessage('AAAA\u{1F600}BBBB');
+      const selection = selectCompactionUserMessages(
+        [userMessage('earlier'), boundary],
+        2,
+        0,
+        () => 10,
+      );
+
+      expect(selection.tail).toHaveLength(1);
+      expect(textOf(selection.tail[0]!)).toBe('\u{1F600}BBBB');
+    });
+
     it('falls back to a zero tokensAfter', () => {
       const history = [userMessage('u1'), {
         role: 'assistant',

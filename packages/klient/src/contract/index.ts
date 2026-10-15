@@ -46,6 +46,7 @@ import { mcpManagementContract } from './global/mcpManagement.js';
 import { pluginsContract } from './global/plugins.js';
 import { providersContract } from './global/providers.js';
 import { sessionsContract } from './global/sessions.js';
+import { desktopSettingsContract } from './global/settings.js';
 import { workspacesContract } from './global/workspaces.js';
 import { sessionApprovalContract } from './session/approval.js';
 import { sessionActivityViewContract } from './session/activity.js';
@@ -54,6 +55,7 @@ import { sessionManagerContract } from './session/lifecycle.js';
 import { sessionMetadataContract } from './session/metadata.js';
 import { sessionQuestionContract } from './session/question.js';
 import { sessionSkillCatalogContract } from './session/skills.js';
+import { sessionTerminalContract } from './session/terminal.js';
 import { sessionTitleContract } from './session/title.js';
 
 export const globalContract: KlientContract = {
@@ -75,6 +77,7 @@ export const globalContract: KlientContract = {
   bootstrapService: envContract,
   fileService: filesContract,
   mcpManagementService: mcpManagementContract,
+  desktopSettingsService: desktopSettingsContract,
   sessionManager: sessionManagerContract,
   // session scope
   sessionMetadata: sessionMetadataContract,
@@ -85,6 +88,7 @@ export const globalContract: KlientContract = {
   sessionSkillCatalog: sessionSkillCatalogContract,
   sessionTitleService: sessionTitleContract,
   sessionActivityView: sessionActivityViewContract,
+  sessionTerminalService: sessionTerminalContract,
   // agent scope
   agentPromptService: agentPromptContract,
   agentSkillService: agentSkillContract,

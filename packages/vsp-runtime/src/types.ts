@@ -20,6 +20,7 @@ export interface RuntimeState {
   readonly ipcPath: string;
   readonly startedAt: string;
   readonly version: string;
+  readonly runtimeId?: string;
   readonly migrationWarning?: RuntimeMigrationWarning;
 }
 

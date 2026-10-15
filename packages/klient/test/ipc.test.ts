@@ -9,7 +9,7 @@ import { IMcpManagementService, IModelCatalog } from '@moonshot-ai/agent-core-v2
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { defineKlientConformance } from './helpers/conformance.js';
-import { createKlient, serveKlientIpc, type KlientIpcHost } from '../src/transports/ipc/index.js';
+import { connectKlientSocket, createKlient, serveKlientIpc, type KlientIpcHost } from '../src/transports/ipc/index.js';
 import { makeEngine, type TestEngine } from './helpers/engine.js';
 import { IpcChannel } from '../src/transports/ipc/channel.js';
 import { encodeFrame, NdjsonDecoder, type IpcFrame } from '../src/transports/ipc/codec.js';
@@ -23,7 +23,8 @@ defineKlientConformance('ipc', async () => {
   return {
     klient,
     app,
-    rawCall: (service, method, args) => rawChannel.call({}, service, method, args),
+    rawCall: (service, method, args, scope) =>
+      rawChannel.call(scope ?? {}, service, method, args),
     cleanup: async () => {
       await rawChannel.close();
       await klient.close();
@@ -173,7 +174,7 @@ describe('ipc transport specifics', () => {
   let app: TestEngine['app'];
   let host: KlientIpcHost | undefined;
 
-  async function setup(opts: { token?: string; handshakeTimeoutMs?: number; maxFrameBytes?: number } = {}): Promise<string> {
+  async function setup(opts: { token?: string; handshakeTimeoutMs?: number; maxFrameBytes?: number; handshakeData?: unknown } = {}): Promise<string> {
     ({ homeDir, app } = await makeEngine());
     const socketPath = join(homeDir, 'klient.sock');
     host = await serveKlientIpc({ scope: app, socketPath, ...opts });
@@ -260,6 +261,26 @@ describe('ipc transport specifics', () => {
       await cancellation;
       await expect(next).resolves.toEqual({ done: true, value: undefined });
     } finally { await channel.close(); spy.mockRestore(); await teardown(); }
+  });
+
+  it('connectKlientSocket returns a live klient and the host handshake', async () => {
+    const socketPath = await setup({ token: 'TEST_ONLY_TOKEN', handshakeData: { runtimeId: 'rt', capabilities: ['klient-tunnel-v1'] } });
+    const connection = await connectKlientSocket({ socketPath, token: 'TEST_ONLY_TOKEN' });
+    try {
+      expect(connection.handshake).toMatchObject({ runtimeId: 'rt', capabilities: ['klient-tunnel-v1'] });
+      await expect(connection.klient.global.env()).resolves.toMatchObject({ platform: process.platform });
+    } finally { await connection.klient.close(); await teardown(); }
+  });
+
+  it('connectKlientSocket closes the channel when the handshake fails', async () => {
+    const socketPath = await setup({ token: 'right' });
+    await expect(connectKlientSocket({ socketPath, token: 'wrong', handshakeTimeoutMs: 500 })).rejects.toThrow();
+    await teardown();
+  });
+
+  it('connectKlientSocket rejects before dialing on missing input', async () => {
+    await expect(connectKlientSocket({ socketPath: '' })).rejects.toThrow('socket path');
+    await expect(connectKlientSocket({ socketPath: '/tmp/x.sock', token: '  ' })).rejects.toThrow('token');
   });
 
   it('rejects calls when the socket path does not exist', async () => {

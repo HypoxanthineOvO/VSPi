@@ -15,6 +15,7 @@ import type { ReloadSummary } from '@moonshot-ai/agent-core-v2/app/plugin/types'
 import type { IOAuthService } from '@moonshot-ai/agent-core-v2/app/auth/auth';
 
 import { stringDeltaSchema } from '../helpers.js';
+import { settingsChangedSchema } from './settings.js';
 import type { EventRegistration } from '../types.js';
 
 /** Payload of `event.session.archived` on the global bus. */
@@ -43,6 +44,7 @@ export type CatalogChangedPayload = Awaited<
 export interface KlientEventPayloads {
   'config.changed': ConfigChangedEvent;
   'config.sectionChanged': ConfigChangedEvent;
+  'settings.changed': { readonly revision: string };
   'kosong.providers.changed': ProvidersChangedEvent;
   'kosong.models.changed': ModelsChangedEvent;
   'plugins.reloaded': ReloadSummary;
@@ -103,6 +105,12 @@ export const globalEvents = {
     service: 'configService',
     event: 'onDidSectionChange',
     schema: configChangedSchema,
+  },
+  'settings.changed': {
+    kind: 'emitter',
+    service: 'desktopSettingsService',
+    event: 'onDidChange',
+    schema: settingsChangedSchema,
   },
   'kosong.providers.changed': {
     kind: 'emitter',

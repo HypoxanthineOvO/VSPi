@@ -28,9 +28,10 @@ import type { SkillSummary } from '@moonshot-ai/agent-core-v2/features/skill/cat
 
 import type { ScopeRef } from '../channel.js';
 import type { McpServerConfig } from '../../contract/mcp.js';
-import type { ScopedCaller } from './global.js';
+import type { TerminalStreamFrame } from '@moonshot-ai/agent-core-v2/session/terminal/terminalService';
+import type { ScopedCaller, ScopedStreamCaller } from './global.js';
 
-export type { ScopedCaller } from './global.js';
+export type { ScopedCaller, ScopedStreamCaller } from './global.js';
 
 /** What `sessionLifecycleService.create` and `sessionManager.restore` leave on the wire. */
 interface HandleWire {
@@ -80,6 +81,17 @@ export interface SessionSkillsFacade {
  */
 export type SessionStatus = 'running' | 'idle' | 'awaiting_approval' | 'awaiting_question';
 
+export interface SessionTerminalsFacade {
+  open(input?: {
+    cols?: number;
+    rows?: number;
+    cwd?: string;
+  }): AsyncIterable<TerminalStreamFrame>;
+  write(input: { id: string; data: string }): Promise<void>;
+  resize(input: { id: string; cols: number; rows: number }): Promise<void>;
+  close(id: string): Promise<{ closed: true }>;
+}
+
 export interface SessionFacade {
   startSideQuestion(): Promise<string>;
   closeSideQuestion(agentId: string): Promise<void>;
@@ -115,9 +127,14 @@ export interface SessionFacade {
   readonly skills: SessionSkillsFacade;
   /** Agent id → metadata for every agent registered in this session. */
   agents(): Promise<Readonly<Record<string, AgentMeta>>>;
+  readonly terminals: SessionTerminalsFacade;
 }
 
-export function createSessionFacade(call: ScopedCaller, sessionId: string): SessionFacade {
+export function createSessionFacade(
+  call: ScopedCaller,
+  sessionId: string,
+  scopedStream: ScopedStreamCaller,
+): SessionFacade {
   const scope: ScopeRef = { sessionId };
   const read = (): Promise<SessionMeta> =>
     call(scope, 'sessionMetadata', 'read', []) as Promise<SessionMeta>;
@@ -192,6 +209,19 @@ export function createSessionFacade(call: ScopedCaller, sessionId: string): Sess
     skills: {
       list: () =>
         call(scope, 'sessionSkillCatalog', 'list', []) as Promise<readonly SkillSummary[]>,
+    },
+
+    terminals: {
+      open: (input) =>
+        scopedStream(scope, 'sessionTerminalService', 'open', [
+          { ...input, runtime_id: 'local' },
+        ]) as AsyncIterable<TerminalStreamFrame>,
+      write: ({ id, data }) =>
+        call(scope, 'sessionTerminalService', 'write', [id, data]) as Promise<void>,
+      resize: ({ id, cols, rows }) =>
+        call(scope, 'sessionTerminalService', 'resize', [id, cols, rows]) as Promise<void>,
+      close: (id) =>
+        call(scope, 'sessionTerminalService', 'close', [id]) as Promise<{ closed: true }>,
     },
 
     agents: async () => {

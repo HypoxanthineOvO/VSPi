@@ -18,6 +18,16 @@ export function createKlient(options: IpcKlientOptions): Klient {
   return createKlientFromChannel(new IpcChannel(options), options);
 }
 
+export async function connectKlientSocket(options: IpcKlientOptions): Promise<{ klient: Klient; handshake: unknown }> {
+  if (!options.socketPath) throw new Error('A socket path is required');
+  if (options.token !== undefined && !options.token.trim()) throw new Error('A runtime token is required');
+  const channel = new IpcChannel(options);
+  try {
+    const handshake = await channel.handshake();
+    return { klient: createKlientFromChannel(channel, options), handshake };
+  } catch (error) { await channel.close(); throw error; }
+}
+
 export async function probeKlientIpc(options: IpcChannelOptions): Promise<unknown> {
   const channel = new IpcChannel(options);
   try {

@@ -132,6 +132,12 @@ SSH 下收到 Ctrl+V/Alt+V 图片快捷键时，会提示改用服务器图片�
 
 VSPi 支持内置 Provider 和自定义兼容端点。首次使用运行 `vspi init`；之后用 `vspi config` 调整 Provider，用 `vspi login <provider>` 登录账号或配置 API Key。界面内也提供 `/providers`、`/login` 和 `/logout`。
 
+运行 `vspi login openai-codex` 时，会优先复用后台机器上 Codex 的有效 ChatGPT 登录态：读取 `CODEX_HOME/auth.json`，未设置 `CODEX_HOME` 时读取 `~/.codex/auth.json`。每次模型调用重新读取同一账号的令牌；VSPi 不复制刷新令牌、不修改 Codex 文件，退出 VSPi 登录也不会退出 Codex。令牌过期后需先在该机器上刷新 Codex 登录，或重新运行登录命令选择设备码授权。仅保存在系统钥匙串中的凭据、API Key 登录态，以及另一台电脑上的 Codex 登录态不会自动复用。
+
+没有可复用凭据时，OpenAI Codex 登录提供浏览器和设备码两种方式。SSH 下默认选中设备码：在自己的电脑或手机上打开授权链接，输入设备码，远程后台自动轮询结果，不需要后台打开浏览器或接收 localhost 回调。浏览器方式也支持手动粘贴最终跳转 URL。
+
+已关联 Codex 后，再次运行 `vspi login openai-codex` 会进入独立授权流程，可用来更换账号或处理仍未过期但已被服务端拒绝的令牌。
+
 `/model` 在同一 Provider 内按模型家族排列，再按版本与价格排序。同一协议和地址下，指向相同实际模型 ID 的配置名、目录明确声明的别名会合并为一行；详情的 `Model ID` 列出所有已知标识，搜索任一标识均可找到。例如 `kimi-k3` 与 `k3` 显示为 `Model ID: kimi-k3, k3`，256K 变体单独成组。显示名称相同本身不作为合并依据，跨 Provider、协议或地址也不合并。当前会话已选择的配置名及其参数保持不变；Subagent 候选按家族靠拢，但保留独立配置名供分别管理。
 
 运行 `vspi proxy` 可单独配置 OpenAI、Anthropic、Gemini 和 xAI 官方接口共用的代理。直接显示“请输入代理地址”，操作按钮统一为“确认／跳过／取消”：Enter 确认，Tab 切换，Esc 取消。格式错误会留在原输入框内提示；确认前取消不会保存或启动登录。

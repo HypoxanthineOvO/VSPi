@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
@@ -122,8 +122,11 @@ describe('OAuthService', () => {
   let events: Event2[];
   let providerChangedEmitter: Emitter<ProvidersChangedEvent>;
   let documents: Map<string, unknown>;
+  let codexHome: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    codexHome = await mkdtemp(join(tmpdir(), 'example-codex-auth-'));
+    vi.stubEnv('CODEX_HOME', codexHome);
     disposables = new DisposableStore();
     documents = new Map();
     providerChangedEmitter = new Emitter<ProvidersChangedEvent>();
@@ -231,8 +234,9 @@ describe('OAuthService', () => {
       },
     });
   });
-  afterEach(() => {
+  afterEach(async () => {
     disposables.dispose();
+    await rm(codexHome, { recursive: true, force: true });
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
@@ -255,6 +259,117 @@ describe('OAuthService', () => {
   const piCredentials: OAuthCredential = {
     type: 'oauth', access: 'private-access', refresh: 'private-refresh', expires: 1,
   };
+
+  function codexFile(accountId = 'example-account', exp = Math.floor(Date.now() / 1000) + 3600) {
+    const claims = { exp, 'https://api.openai.com/auth': { chatgpt_account_id: accountId } };
+    const access = `header.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.signature`;
+    return { auth_mode: 'chatgpt', tokens: { access_token: access, refresh_token: 'example-refresh', account_id: accountId } };
+  }
+
+  it('reuses Codex without a browser or copying tokens and follows same-account token updates', async () => {
+    const path = join(codexHome, 'auth.json');
+    const original = codexFile();
+    await writeFile(path, JSON.stringify(original));
+    piMocks.provider = 'openai-codex';
+    const login = vi.fn(async () => piCredentials);
+    const refresh = vi.fn();
+    registerPi(login, refresh);
+    const service = createService();
+    expect(await service.startLogin('openai-codex')).toMatchObject({ status: 'authenticated' });
+    expect(login).not.toHaveBeenCalled();
+    expect(JSON.stringify([...documents.values()])).not.toContain(original.tokens.access_token);
+    expect(JSON.stringify([...documents.values()])).not.toContain(original.tokens.refresh_token);
+    expect(await service.getCachedAccessToken('openai-codex')).toBe(original.tokens.access_token);
+    const updated = codexFile('example-account', Math.floor(Date.now() / 1000) + 7200);
+    await writeFile(path, JSON.stringify(updated));
+    expect(await service.resolveRequestAuth('openai-codex')).toMatchObject({ apiKey: `runtime:${updated.tokens.access_token}`, baseUrl: 'https://chatgpt.com/backend-api' });
+    await expect(service.resolveRequestAuth('openai-codex', undefined, { force: true })).rejects.toThrow('Codex authentication was rejected');
+    expect(refresh).not.toHaveBeenCalled();
+    await service.logout('openai-codex');
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(updated);
+    expect(await service.getCachedAccessToken('openai-codex')).toBeUndefined();
+  });
+
+  it.each(['expired', 'changed-account', 'removed'])('rejects %s Codex credentials without refreshing shared tokens', async state => {
+    const path = join(codexHome, 'auth.json');
+    await writeFile(path, JSON.stringify(codexFile()));
+    piMocks.provider = 'openai-codex';
+    const refresh = vi.fn();
+    registerPi(async () => piCredentials, refresh);
+    const service = createService();
+    await service.startLogin('openai-codex');
+    if (state === 'removed') await rm(path);
+    else await writeFile(path, JSON.stringify(state === 'expired' ? codexFile('example-account', 1) : codexFile('other-account')));
+    await expect(service.resolveRequestAuth('openai-codex')).rejects.toThrow('Codex login is unavailable');
+    expect(await service.getCachedAccessToken('openai-codex')).toBeUndefined();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('allows an explicit new login after linking Codex even while its file remains valid', async () => {
+    await writeFile(join(codexHome, 'auth.json'), JSON.stringify(codexFile()));
+    piMocks.provider = 'openai-codex';
+    const login = vi.fn(async () => piCredentials);
+    registerPi(login);
+    const service = createService();
+    await service.startLogin('openai-codex');
+    expect(login).not.toHaveBeenCalled();
+    await service.startLogin('openai-codex');
+    expect(login).toHaveBeenCalledOnce();
+    expect(documents.get('pi-ai/openai-codex/openai-codex')).not.toHaveProperty('codexAuthPath');
+  });
+
+  it.each(['missing', 'invalid', 'api-key', 'expired', 'wrong-account'])('falls back to ordinary login for %s Codex state', async state => {
+    if (state !== 'missing') {
+      const value = state === 'invalid' ? '{' : JSON.stringify(state === 'api-key'
+        ? { ...codexFile(), auth_mode: 'apikey', OPENAI_API_KEY: 'example-key' }
+        : state === 'expired' ? codexFile('example-account', 1)
+        : { ...codexFile(), tokens: { ...codexFile().tokens, account_id: 'other-account' } });
+      await writeFile(join(codexHome, 'auth.json'), value);
+    }
+    piMocks.provider = 'openai-codex';
+    const login = vi.fn(async () => piCredentials);
+    registerPi(login);
+    expect(await createService().startLogin('openai-codex')).toMatchObject({ status: 'authenticated' });
+    expect(login).toHaveBeenCalledOnce();
+  });
+
+  it('supplies a stable installation ID to the OpenAI ChatGPT login', async () => {
+    piMocks.provider = 'openai';
+    const ids: Array<string | undefined> = [];
+    registerPi(async (_interaction, options) => {
+      ids.push(options?.getDeviceId?.());
+      return piCredentials;
+    });
+    const service = createService();
+    await service.startLogin('openai');
+    await service.startLogin('openai');
+    expect(ids[0]).toMatch(/^[a-f0-9-]{36}$/);
+    expect(ids[1]).toBe(ids[0]);
+  });
+
+  it('completes the real Codex device-code flow without a browser callback', async () => {
+    const access = codexFile().tokens.access_token;
+    const fetcher = vi.fn(async (url: string | URL | Request) => {
+      const path = new URL(url instanceof Request ? url.url : url).pathname;
+      if (path.endsWith('/deviceauth/usercode')) return Response.json({ device_auth_id: 'example-device', user_code: 'EXAMPLE', interval: 0 });
+      if (path.endsWith('/deviceauth/token')) return Response.json({ authorization_code: 'example-code', code_verifier: 'example-verifier' });
+      if (path === '/oauth/token') return Response.json({ access_token: access, refresh_token: 'example-refresh', expires_in: 3600 });
+      throw new Error('Unexpected OAuth endpoint');
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const service = createService();
+    const started = await service.startLogin('openai-codex');
+    expect(started.status).toBe('pending');
+    const flow = service.getFlow('openai-codex')!;
+    expect(flow.prompt?.options).toContainEqual(expect.objectContaining({ id: 'device_code' }));
+    service.submitLogin('openai-codex', flow.flow_id, flow.prompt!.id, 'device_code');
+    await vi.waitFor(() => {
+      expect(service.getFlow('openai-codex')?.status).toBe('authenticated');
+    });
+    expect(service.getFlow('openai-codex')).toMatchObject({ user_code: 'EXAMPLE', verification_uri: 'https://auth.openai.com/codex/device' });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(await service.resolveRequestAuth('openai-codex')).toMatchObject({ apiKey: access });
+  });
 
   it('lists the public pi OAuth providers alongside Kimi', () => {
     expect(createService().listLoginProviders().map((entry) => entry.id))

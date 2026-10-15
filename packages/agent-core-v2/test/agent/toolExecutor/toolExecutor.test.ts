@@ -34,7 +34,7 @@ import {
   ToolProgress,
   ToolResultEvent,
 } from '#/agent/toolExecutor/toolExecutorEvents';
-import { AgentToolExecutorService } from '#/agent/toolExecutor/toolExecutorService';
+import { AgentToolExecutorService, type ToolExecutionTask } from '#/agent/toolExecutor/toolExecutorService';
 import { parseToolCallArguments } from '#/tool/tool-args-parse';
 import { IAgentToolResultTruncationService } from '#/agent/toolResultTruncation/toolResultTruncation';
 import { ToolResultTruncationService } from '#/agent/toolResultTruncation/toolResultTruncationService';
@@ -635,6 +635,36 @@ describe('AgentToolExecutorService', () => {
         isError: true,
       }),
     ]);
+  });
+
+  it('propagates a batch iterator rejection to the execute caller unchanged', async () => {
+    registry.register(new TestTool('echo'));
+    const sentinel = new Error('batch iterator exploded');
+    const internals = executor as unknown as {
+      executeBatch(tasks: readonly ToolExecutionTask[], signal: AbortSignal): AsyncIterable<unknown>;
+    };
+    vi.spyOn(internals, 'executeBatch').mockReturnValue({
+      [Symbol.asyncIterator]: () => ({
+        next: () => Promise.reject(sentinel),
+      }),
+    });
+
+    await expect(
+      execute([toolCall('call_batch_reject', 'echo', { text: 'hi' })]),
+    ).rejects.toBe(sentinel);
+  });
+
+  it('propagates a finalizeTimedResult rejection without replacing it', async () => {
+    registry.register(new TestTool('echo'));
+    const sentinel = new Error('finalize exploded');
+    const internals = executor as unknown as {
+      finalizeTimedResult(prepared: unknown, timedResult: unknown, options: unknown): Promise<unknown>;
+    };
+    vi.spyOn(internals, 'finalizeTimedResult').mockRejectedValue(sentinel);
+
+    await expect(
+      execute([toolCall('call_finalize_reject', 'echo', { text: 'hi' })]),
+    ).rejects.toBe(sentinel);
   });
 
   it('coerces an undefined tool return into an error result without breaking pairing', async () => {

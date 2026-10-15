@@ -48,6 +48,7 @@ import type {
   SaveOptions,
 } from '@moonshot-ai/agent-core-v2/app/file/fileService';
 import { FileErrors } from '@moonshot-ai/agent-core-v2/app/file/fileService';
+import { DesktopSettingsConflictError } from '@moonshot-ai/agent-core-v2/app/config/desktopSettings';
 import { Error2, ErrorCodes } from '@moonshot-ai/agent-core-v2/errors';
 
 import { Readable } from 'node:stream';
@@ -57,6 +58,7 @@ import type { EventSourceRef, IDisposable, ScopeRef } from '../../core/channel.j
 import { RPCError } from '../../core/errors.js';
 import { IEventService, serviceTokens } from './serviceRegistry.js';
 import { authContract } from '../../contract/global/auth.js';
+import { sessionTerminalContract } from '../../contract/session/terminal.js';
 
 /** Structural minimum of an engine `Scope` / `IScopeHandle`. */
 export interface ScopeLike {
@@ -224,6 +226,7 @@ const NOT_FOUND = 40404;
 const MCP_SERVER_NOT_FOUND = 40408;
 const MCP_OAUTH_FAILED = 40929;
 const PROMPT_ID_CONFLICT = 40927;
+const DESKTOP_SETTINGS_CONFLICT = 40930;
 
 /** Wire name of the engine's `IMcpManagementService` decorator id. */
 const MCP_MANAGEMENT_SERVICE = 'mcpManagementService';
@@ -244,6 +247,17 @@ const AGENT_CONTEXT_SERVICES: ReadonlySet<string> = new Set([
   'agentTokenCountingService',
   'agentUsageService',
 ]);
+
+function assertTerminalArgs(method: string, args: unknown[]): void {
+  const procedure = sessionTerminalContract[method as keyof typeof sessionTerminalContract];
+  if (procedure === undefined) {
+    throw new RPCError(REQUEST_INVALID, `method not found: sessionTerminalService.${method}`);
+  }
+  const parsed = procedure.input.safeParse(args);
+  if (!parsed.success) {
+    throw new RPCError(REQUEST_INVALID, 'invalid terminal request');
+  }
+}
 
 /**
  * Engine file errors cross the facade as public `RPCError`s, never as the
@@ -503,6 +517,9 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
         return wireClone(member);
       }
       const clonedArgs = args.map(wireClone);
+      if (service === 'sessionTerminalService') {
+        assertTerminalArgs(method, clonedArgs);
+      }
       const callArgs = AGENT_CONTEXT_SERVICES.has(service)
         ? [agentContextOf(resolved.like as IAgentScopeHandle), ...clonedArgs]
         : clonedArgs;
@@ -518,6 +535,9 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
         }
         if (error instanceof Error2 && error.code === ErrorCodes.PROMPT_ID_CONFLICT) {
           throw new RPCError(PROMPT_ID_CONFLICT, error.message, error.details);
+        }
+        if (error instanceof DesktopSettingsConflictError) {
+          throw new RPCError(DESKTOP_SETTINGS_CONFLICT, error.message);
         }
         throw error;
       }
@@ -608,6 +628,9 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
                 throw new RPCError(REQUEST_INVALID, `not a streaming method: ${service}.${method}`);
               }
               const clonedArgs = args.map(wireClone);
+              if (service === 'sessionTerminalService') {
+                assertTerminalArgs(method, clonedArgs);
+              }
               const iterable = (member as (...a: unknown[]) => unknown).apply(
                 instance,
                 clonedArgs,

@@ -11,7 +11,7 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createServer, type Socket } from "node:net";
+import { createConnection, createServer, type Socket } from "node:net";
 import { createServer as createHttpServer } from 'node:http';
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,8 +19,10 @@ import { parseSkillText } from "@moonshot-ai/agent-core-v2/features/skill/catalo
 import { InMemorySkillCatalog } from "@moonshot-ai/agent-core-v2/features/skill/catalog/registry";
 import { IAgentLifecycleService, ISessionManager, IAgentGoalService } from '@moonshot-ai/agent-core-v2';
 import { startServer } from '@moonshot-ai/kap-server';
+import { connectKlient } from '@moonshot-ai/klient/tcp';
 
 import {
+	connectRemoteRuntime,
 	connectRuntime,
 	reconnectRuntime,
 	RuntimeStoppedError,
@@ -33,6 +35,7 @@ import {
 	startRuntimeDaemon,
 	recoverRuntime,
 	acquireRuntimeLease,
+	VSP_RUNTIME_PROTOCOL_VERSION,
 	type RuntimeDaemon,
 } from "../src/index.js";
 
@@ -605,7 +608,7 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 		}));
 		const kill = vi.spyOn(process, "kill");
 		try {
-			await expect(stopRuntime(homeDir, 25)).rejects.toThrow(/ipc closed|ownership cannot be proven/u);
+			await expect(stopRuntime(homeDir, 25)).rejects.toThrow(/ENOENT|ipc closed|ownership cannot be proven/u);
 			expect(kill).not.toHaveBeenCalledWith(process.pid, "SIGTERM");
 		} finally {
 			kill.mockRestore();
@@ -1003,6 +1006,136 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 			expect((await connection.klient.global.kosong.listModels()).map(model => model.model)).toEqual(["example/custom"]);
 		} finally { await connection.close(); }
 	});
+
+	it("keeps a stable runtime id across restart and advertises it in state and handshake", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-runtime-id-"));
+		daemon = await startTestDaemon(homeDir);
+		const runtimeId = daemon.state.runtimeId;
+		expect(runtimeId).toMatch(/^[0-9a-f]{64}$/);
+		const paths = resolveRuntimePaths(homeDir);
+		const token = (await readFile(paths.tokenPath, "utf8")).trim();
+		const bridge = await tcpBridge(daemon.state.ipcPath);
+		try {
+			const { klient, handshake } = await connectKlient({ port: bridge.port, token });
+			try {
+				expect(handshake).toMatchObject({
+					pid: daemon.state.pid,
+					ownerNonce: daemon.state.ownerNonce,
+					homeDir,
+					controlProtocol: 1,
+					runtimeId,
+					protocolVersion: VSP_RUNTIME_PROTOCOL_VERSION,
+					desktopProtocol: 1,
+					version: identity.version,
+					capabilities: expect.arrayContaining(["klient-tunnel-v1", "history-snapshot-v1", "prompt-id-v1"]),
+				});
+			} finally { await klient.close(); }
+		} finally { await bridge.close(); }
+		await daemon.close();
+		daemon = undefined;
+		daemon = await startTestDaemon(homeDir);
+		expect(daemon.state.runtimeId).toBe(runtimeId);
+		const connection = await connectRuntime(homeDir);
+		try { expect(connection.state.runtimeId).toBe(runtimeId); }
+		finally { await connection.close(); }
+	});
+
+	it("derives a different runtime id for another home", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-runtime-id-a-"));
+		daemon = await startTestDaemon(homeDir);
+		const otherHome = await mkdtemp(join(tmpdir(), "vsp-runtime-id-b-"));
+		const other = await startTestDaemon(otherHome);
+		try {
+			expect(other.state.runtimeId).not.toBe(daemon.state.runtimeId);
+		} finally {
+			await other.close();
+			await rm(otherHome, { recursive: true, force: true });
+		}
+	});
+
+	it("fails closed when the persisted runtime identity is malformed", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-runtime-id-corrupt-"));
+		const paths = resolveRuntimePaths(homeDir);
+		await mkdir(paths.serverDir, { recursive: true });
+		await writeFile(join(paths.serverDir, "runtime-id"), "not-a-uuid\n");
+		await expect(startTestDaemon(homeDir)).rejects.toThrow("malformed");
+		await expect(inspectRuntime(homeDir)).resolves.toBeUndefined();
+	});
+
+	it("connects a remote runtime over a loopback tunnel and rejects mismatched peers", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-remote-runtime-"));
+		daemon = await startTestDaemon(homeDir);
+		const paths = resolveRuntimePaths(homeDir);
+		const token = (await readFile(paths.tokenPath, "utf8")).trim();
+		const runtimeId = daemon.state.runtimeId;
+		if (runtimeId === undefined) throw new Error("daemon did not publish a runtime id");
+		const bridge = await tcpBridge(daemon.state.ipcPath);
+		try {
+			const remote = await connectRemoteRuntime({ port: bridge.port, token, runtimeId, version: identity.version });
+			try {
+				expect(remote.runtimeId).toBe(runtimeId);
+				expect((await remote.klient.global.env()).homeDir).toBe(homeDir);
+			} finally { await remote.close(); }
+			const mismatch = await connectRemoteRuntime({ port: bridge.port, token, runtimeId: "f".repeat(64), version: identity.version })
+				.then(() => "connected", (error: unknown) => error);
+			expect(mismatch).toBeInstanceOf(Error);
+			expect((mismatch as Error).message).toContain("not compatible");
+			expect((mismatch as Error).message).not.toContain(token);
+			await expect(connectRemoteRuntime({ port: bridge.port, token, runtimeId, version: "0.0.0-other" })).rejects.toThrow("not compatible");
+			expect(await inspectRuntime(homeDir)).toMatchObject({ pid: daemon.state.pid });
+		} finally { await bridge.close(); }
+	});
+
+	it("counts remote tunnel clients toward runtime idle detection", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-remote-idle-"));
+		daemon = await startTestDaemon(homeDir, 200);
+		const paths = resolveRuntimePaths(homeDir);
+		const token = (await readFile(paths.tokenPath, "utf8")).trim();
+		const runtimeId = daemon.state.runtimeId;
+		if (runtimeId === undefined) throw new Error("daemon did not publish a runtime id");
+		const bridge = await tcpBridge(daemon.state.ipcPath);
+		try {
+			const first = await connectRemoteRuntime({ port: bridge.port, token, runtimeId, version: identity.version });
+			const second = await connectRemoteRuntime({ port: bridge.port, token, runtimeId, version: identity.version });
+			try {
+				await vi.waitFor(async () => {
+					expect(await inspectRuntimeActivity(homeDir)).toMatchObject({ clients: 2 });
+				});
+				await first.close();
+				await vi.waitFor(async () => {
+					expect(await inspectRuntimeActivity(homeDir)).toMatchObject({ clients: 1 });
+				});
+				await new Promise((resolve) => { setTimeout(resolve, 400); });
+				expect((await second.klient.global.env()).homeDir).toBe(homeDir);
+			} finally { await second.close(); }
+			await Promise.race([
+				daemon.closed,
+				new Promise<never>((_resolve, reject) => {
+					setTimeout(() => { reject(new Error("daemon did not exit after the last remote client detached")); }, 10_000).unref();
+				}),
+			]);
+			await expect(inspectRuntime(homeDir)).resolves.toBeUndefined();
+		} finally { await bridge.close(); }
+	});
+
+	it("persists a remote config mutation only in the fixture home", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-remote-config-"));
+		daemon = await startTestDaemon(homeDir);
+		const paths = resolveRuntimePaths(homeDir);
+		const token = (await readFile(paths.tokenPath, "utf8")).trim();
+		const runtimeId = daemon.state.runtimeId;
+		if (runtimeId === undefined) throw new Error("daemon did not publish a runtime id");
+		const bridge = await tcpBridge(daemon.state.ipcPath);
+		try {
+			const remote = await connectRemoteRuntime({ port: bridge.port, token, runtimeId, version: identity.version });
+			try {
+				await remote.klient.global.config.set({ domain: "thinking", patch: { effort: "low" } });
+				await remote.klient.global.config.reload();
+				expect(await remote.klient.global.config.get("thinking")).toMatchObject({ effort: "low" });
+			} finally { await remote.close(); }
+			expect(await readFile(paths.configPath, "utf8")).toContain('effort = "low"');
+		} finally { await bridge.close(); }
+	});
 });
 
 function startTestDaemon(homeDir: string, idleTimeoutMs = 0): Promise<RuntimeDaemon> {
@@ -1012,4 +1145,38 @@ function startTestDaemon(homeDir: string, idleTimeoutMs = 0): Promise<RuntimeDae
 		env: { ...process.env, HOME: homeDir },
 		idleTimeoutMs,
 	});
+}
+
+async function tcpBridge(socketPath: string): Promise<{ port: number; close(): Promise<void> }> {
+	const sockets = new Set<Socket>();
+	const server = createServer((tcp) => {
+		const remote = createConnection(socketPath);
+		sockets.add(tcp);
+		sockets.add(remote);
+		const drop = () => {
+			sockets.delete(tcp);
+			sockets.delete(remote);
+			remote.destroy();
+			tcp.destroy();
+		};
+		tcp.on("error", drop);
+		remote.on("error", drop);
+		tcp.on("close", drop);
+		remote.on("close", drop);
+		tcp.pipe(remote);
+		remote.pipe(tcp);
+	});
+	await new Promise<void>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", resolve);
+	});
+	const address = server.address();
+	if (address === null || typeof address === "string") throw new Error("TCP bridge did not bind a port");
+	return {
+		port: address.port,
+		close: async () => {
+			for (const socket of sockets) socket.destroy();
+			await new Promise<void>((resolve) => { server.close(() => { resolve(); }); });
+		},
+	};
 }
