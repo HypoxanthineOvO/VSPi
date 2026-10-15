@@ -205,11 +205,12 @@ export class SessionTerminalService extends Disposable implements ISessionTermin
           },
           512,
         );
-        sinkRegistered = true;
         try {
           await this.attach(terminal.id, { id: sinkId, send: onFrame });
+          sinkRegistered = true;
           if (done || failure !== undefined || exitSeen) detachSink();
         } catch (error) {
+          sinkRegistered = true;
           if (done || failure !== undefined) detachSink();
           else fail(error);
         }
