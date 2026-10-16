@@ -1,5 +1,5 @@
 import { type Terminal, TuiAltScreen, type TuiAltScreenOptions, type TuiStopOptions } from "@moonshot-ai/pi-tui";
-import { recordFrameRenderMs } from "./scrollback-terminal.js";
+import { type ScrollbackProcessTerminal, recordFrameRenderMs } from "./scrollback-terminal.js";
 import { writeClipboardText } from '../attachments/clipboard.js';
 
 export const DEFAULT_TUI_FRAME_INTERVAL_MS = 33;
@@ -29,6 +29,7 @@ export function resolveTuiScrollFrameInterval(env: NodeJS.ProcessEnv = process.e
 
 export class TuiFramePacer {
   private timer: NodeJS.Timeout | undefined;
+  private resizeTimer: NodeJS.Timeout | undefined;
   private lastForwardedAt = Number.NEGATIVE_INFINITY;
 
   constructor(private intervalMs: number) {}
@@ -37,7 +38,17 @@ export class TuiFramePacer {
     this.intervalMs = intervalMs;
   }
 
+  requestResize(forward: (force: boolean) => void): void {
+    this.cancel();
+    this.resizeTimer = setTimeout(() => {
+      this.resizeTimer = undefined;
+      this.request(false, forward);
+    }, 100);
+    this.resizeTimer.unref();
+  }
+
   request(force: boolean, forward: (force: boolean) => void): void {
+    if (this.resizeTimer && !force) return;
     if (force) {
       this.cancel();
       this.lastForwardedAt = performance.now();
@@ -61,6 +72,8 @@ export class TuiFramePacer {
   }
 
   cancel(): void {
+    if (this.resizeTimer) clearTimeout(this.resizeTimer);
+    this.resizeTimer = undefined;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
   }
@@ -114,7 +127,16 @@ export class VspiTuiAltScreen extends TuiAltScreen {
     this.framePacer.request(force, (nextForce) => super.requestRender(nextForce));
   }
 
+  protected override requestResizeRender(): void {
+    this.framePacer?.requestResize((force) => super.requestRender(force));
+  }
+
+  protected override requestInputRender(): void {
+    this.requestRender();
+  }
+
   protected override doRender(): void {
+    if ((this.terminal as Partial<ScrollbackProcessTerminal>).deferRender?.(() => this.requestRender())) return;
     const started = process.env.VSPI_FRAME_STATS ? performance.now() : 0;
     super.doRender();
     if (started) recordFrameRenderMs(performance.now() - started);

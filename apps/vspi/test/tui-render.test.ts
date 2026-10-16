@@ -15,8 +15,8 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { VirtualTerminal } from "../../../packages/pi-tui/test/virtual-terminal.js";
 import { AttachmentService } from "../src/v1/attachments/service.js";
-import type { ChatBackend, ChatBackendEvents } from "../src/v1/backend/types.js";
-import { ScrollbackTUI } from "../src/v1/ui/scrollback-terminal.js";
+import type { ChatBackend, ChatBackendEvents, TaskDashboardSnapshot } from "../src/v1/backend/types.js";
+import { ScrollbackTUI, adaptInteractiveTerminalOutput } from "../src/v1/ui/scrollback-terminal.js";
 import type { PolicyLevel, PolicySnapshot } from "../src/v1/policy/execution-policy.js";
 import type {
 	AgentRunSnapshot,
@@ -55,6 +55,7 @@ import {
 	renderRuntimeStatus,
 	renderStatusLines,
 } from "../src/v1/ui/status.js";
+import { TuiFramePacer } from "../src/v1/ui/tui-frame-pacer.js";
 import { TerminalFrameOptimizer } from "../src/v1/ui/terminal-frame-optimizer.js";
 import { createTheme } from "../src/v1/ui/theme.js";
 import {
@@ -239,6 +240,138 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		tui.setFocus(app);
 		return { terminal, tui, app, backend, events: () => events, setPolicy };
 	}
+
+	it("coalesces resize bursts and pending ordinary renders", () => {
+		vi.useFakeTimers();
+		try {
+			const pacer = new TuiFramePacer(33);
+			const render = vi.fn();
+			for (let i = 0; i < 10; i++) {
+				pacer.requestResize(render);
+				pacer.request(false, render);
+				vi.advanceTimersByTime(20);
+			}
+			expect(render).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(100);
+			expect(render).toHaveBeenCalledOnce();
+			pacer.cancel();
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("preserves atomic frame markers by default with an explicit compatibility opt-out", () => {
+		const frame = "\u001b[?2026h\u001b[3Jcontent\u001b[?2026l";
+		expect(adaptInteractiveTerminalOutput(frame, {})).toBe("\u001b[?2026hcontent\u001b[?2026l");
+		expect(adaptInteractiveTerminalOutput(frame, { VSPI_TUI_SYNC_OUTPUT: "0" })).toBe("content");
+	});
+
+	it("coalesces continuous terminal input without dropping characters", async () => {
+		const { app, tui, terminal } = renderFixture();
+		const render = vi.spyOn(app, "render");
+		tui.start();
+		try {
+			tui.renderNow();
+			render.mockClear();
+			for (let i = 0; i < 100; i++) {
+				terminal.sendInput("中");
+				await new Promise((resolve) => setTimeout(resolve, 2));
+			}
+			await new Promise((resolve) => setTimeout(resolve, 80));
+			await terminal.flush();
+			expect(app.composer.getText()).toBe("中".repeat(100));
+			expect(render.mock.calls.length).toBeLessThan(50);
+			expect(terminal.getViewport().some((line) => line.startsWith("╰") && line.endsWith("╯"))).toBe(true);
+		} finally { tui.stop(); await app.dispose(); }
+	});
+
+	it("waits for output capacity before rendering the latest draft", async () => {
+		const { app, tui, terminal } = renderFixture();
+		let resume: (() => void) | undefined;
+		let blocked = false;
+		Object.assign(terminal, { deferRender(callback: () => void) { if (!blocked) return false; resume = callback; return true; } });
+		const render = vi.spyOn(app, "render");
+		tui.start();
+		try {
+			tui.renderNow();
+			render.mockClear();
+			blocked = true;
+			for (let i = 0; i < 20; i++) terminal.sendInput("中");
+			await new Promise((resolve) => setTimeout(resolve, 80));
+			expect(render).not.toHaveBeenCalled();
+			expect(resume).toBeDefined();
+			blocked = false;
+			resume?.();
+			await new Promise((resolve) => setTimeout(resolve, 80));
+			await terminal.flush();
+			expect(app.composer.getText()).toBe("中".repeat(20));
+			expect(render).toHaveBeenCalled();
+		} finally { tui.stop(); await app.dispose(); }
+	});
+
+	it("keeps completion rows outside the composer bottom border", async () => {
+		const { app } = renderFixture();
+		try {
+			app.composer.handleInput("/");
+			await vi.waitFor(() => {
+				const lines = app.composer.render(80).map(stripTerminalSequences);
+				const border = lines.findIndex((line) => line.startsWith("╰"));
+				expect(border).toBe(2);
+				expect(lines.slice(border + 1).join("\n")).toContain("goal");
+				expect(lines[1]).not.toContain("────");
+			});
+		} finally { await app.dispose(); }
+	});
+
+	it("rebases completed output while busy and keeps small updates out of history", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-live-rebase-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		const write = vi.spyOn(terminal, "write");
+		try {
+			await app.start();
+			tui.start();
+			events().onBusy(true);
+			for (let index = 0; index < 100; index++) {
+				events().onMessage({ id: `completed-${index}`, role: "assistant", kind: "text", text: `HISTORY_LINE_${index}` });
+			}
+			await vi.waitFor(() => {
+				expect((app as unknown as { committedMessageCount: number }).committedMessageCount).toBeGreaterThan(50);
+			});
+			await terminal.flush();
+			write.mockClear();
+			app.composer.setText("SMALL_EDIT");
+			events().onUsage({ ...DEFAULT_USAGE, recentCacheHitPercent: 100 });
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getViewport().join("\n")).toContain("SMALL_EDIT");
+			});
+			const output = write.mock.calls.map(([chunk]) => chunk).join("");
+			expect(output).not.toContain("HISTORY_LINE_0");
+			expect(output).not.toContain("\u001b[2J");
+		} finally {
+			tui.stop();
+			await app.dispose();
+			await rm(home, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the live transcript cache when there is nothing to commit", () => {
+		const { app } = renderFixture();
+		Object.assign(app, { messages: [{ id: "short", role: "assistant", kind: "text", text: "Short output" }] });
+		const cache = (app as unknown as { transcriptRenderCache: { retain: (...args: unknown[]) => void } }).transcriptRenderCache;
+		const retain = vi.spyOn(cache, "retain");
+		expect(app.commitStableTranscript()).toBe(0);
+		expect(retain).not.toHaveBeenCalled();
+	});
+
+	it.each(["queued", "running"] as const)("does not commit a %s tool into immutable scrollback", (status) => {
+		const { app, tui } = renderFixture();
+		const commit = vi.spyOn(tui, "commitStatic").mockReturnValue(true);
+		Object.assign(app, { messages: [
+			{ id: "live", role: "assistant", kind: "tool", name: "Shell", summary: "pending", status, expanded: false },
+			...Array.from({ length: 100 }, (_, index) => ({ id: `later-${index}`, role: "assistant", kind: "text", text: "Later output" })),
+		] });
+		expect(app.commitStableTranscript()).toBe(0);
+		expect(commit).not.toHaveBeenCalled();
+	});
 
   it('opens side questions while the main agent runs and closes without interrupting it', async () => {
     const home = await mkdtemp(join(tmpdir(), 'vspi-side-'));
@@ -879,6 +1012,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 				renderReady: false,
 				requestRender,
 				scheduleStableTranscriptCommit: vi.fn(),
+				tui: { mode: "fullscreen" },
 			}) as {
 				compaction: unknown;
 				workingTimer: NodeJS.Timeout | undefined;
@@ -2703,15 +2837,55 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(lines).toHaveLength(2);
 		expect(lines.map(visibleWidth)).toEqual([120, 120]);
 		expect(lines[0]).toContain("GPT-5.6 · High");
-		expect(lines[0]).toContain("速度 ~42.8 tok/s");
-		expect(lines[0]).toContain("上下文 61K / 128K 48%");
+		expect(lines[0]).toContain("Speed ~42.8 tok/s");
+		expect(lines[0]).toContain("Context 61K / 128K 48%");
 		expect(lines[1]).toContain("~/Workspace/VSPi · Auto");
-		expect(lines[1]).toContain("累计 ↑ 18.4k ↓ 3.2k");
-		expect(lines[1]).toContain("缓存 12.7k · 命中 39%");
+		expect(lines[1]).toContain("Total ↑ 18.4k ↓ 3.2k");
+		expect(lines[1]).toContain("Cache read 12.7k · turn 39%");
 		expect(lines[1]).not.toContain("Cache 12.7k");
-		expect(lines[0]?.endsWith("上下文 61K / 128K 48%")).toBe(true);
+		expect(lines[0]?.endsWith("Context 61K / 128K 48%")).toBe(true);
 		expect(lines[1]?.endsWith("¥0.08")).toBe(true);
 		expect(lines.join("\n")).not.toMatch(/Model|Effort|Host/);
+	});
+
+	it("renders million-scale cumulative tokens without overflowing the footer", () => {
+		const usage = {
+			...DEFAULT_USAGE,
+			contextTokens: 259_000,
+			contextWindow: 1_000_000,
+			contextPercent: 26,
+			inputTokens: 14_068_985,
+			outputTokens: 86_198,
+			cacheReadTokens: 13_469_770,
+			recentCacheHitPercent: 50,
+		};
+		const input = {
+			cwd: "~/Workspace/VSPi",
+			usage,
+			modelLabel: "GPT-5.6",
+			effort: "high" as const,
+			busy: false,
+			policy: "Auto",
+		};
+		const wide = renderStatusLines(input, 120, theme).map(stripTerminalSequences);
+		const narrow = renderStatusLines(input, 80, theme).map(stripTerminalSequences);
+
+		expect(wide).toHaveLength(2);
+		for (const line of wide) expect(visibleWidth(line)).toBeLessThanOrEqual(120);
+		expect(wide[1]).toContain("Total ↑ 14.1M ↓ 86.2k");
+		expect(wide[1]).toContain("Cache read 13.5M · turn 50%");
+		expect(wide[0]).toContain("Context 259K / 1M 26%");
+		expect(narrow).toHaveLength(2);
+		for (const line of narrow) expect(visibleWidth(line)).toBeLessThanOrEqual(80);
+	});
+
+	it.each([60, 79, 80, 119, 120, 160])("keeps cache metrics complete at %i columns", (width) => {
+		const lines = renderStatusLines({
+			cwd: "/example", modelLabel: "Example", effort: "high", busy: false,
+			usage: { ...DEFAULT_USAGE, cacheReadTokens: 999_949_999, recentCacheHitPercent: 100 },
+		}, width, theme).map(stripTerminalSequences);
+		expect(lines[1]).toContain(width < 120 ? "Cache 100%" : "Cache read 999M · turn 100%");
+		for (const line of lines) expect(visibleWidth(line)).toBe(width);
 	});
 
 	it("keeps speed units and right-edge alignment at 80 columns", () => {
@@ -2735,8 +2909,8 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		).map(stripTerminalSequences);
 
 		expect(lines.map(visibleWidth)).toEqual([80, 80]);
-		expect(lines[0]).toContain("速度 ~42.8 tok/s");
-		expect(lines[0]?.endsWith("上下文 61K / 128K 48%")).toBe(true);
+		expect(lines[0]).toContain("Speed ~42.8 tok/s");
+		expect(lines[0]?.endsWith("Context 61K / 128K 48%")).toBe(true);
 		expect(lines[1]).not.toContain("—");
 	});
 
@@ -2754,6 +2928,72 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(state.agentConversation?.runId).toBe("run-a");
 		panels.setAgentConversation({ runId: "run-b", agentId: "child", blocks: [], tokenCount: 3, totalBlocks: 0 });
 		expect(state.agentConversation?.runId).toBe("run-b");
+	});
+
+	function taskNavigationFixture() {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		const run = panelsFailedAgentRun();
+		const agents = panelsAgentSnapshot(run);
+		agents.active.push({ ...run, id: "second-agent", agentId: "second-child" });
+		const snapshot: TaskDashboardSnapshot = {
+			agents: agents.active.map((agent) => ({ kind: "agent", taskId: agent.id, description: "Agent job", status: "completed", startedAt: 0, endedAt: 1 })),
+			processes: Array.from({ length: 20 }, (_, index) => ({
+				kind: "process", taskId: `process-${index}`, description: `Process ${index}`, status: "running", startedAt: Date.now(), endedAt: null,
+				command: `example-command-${index} ` + "long-argument ".repeat(20) + "COMMAND_END", pid: 1000 + index, exitCode: null,
+			})),
+			questions: [{ kind: "question", taskId: "last-question", description: "LAST_QUESTION", status: "running", startedAt: 0, endedAt: null, questionCount: 1 }],
+		};
+		panels.setAgentSnapshot(agents);
+		panels.setTaskSnapshot(snapshot);
+		panels.open("tasks");
+		return { panels, agents, snapshot };
+	}
+
+	it("keeps every task reachable while Agent snapshots refresh", () => {
+		const { panels, agents, snapshot } = taskNavigationFixture();
+		for (let index = 0; index < snapshot.agents.length + snapshot.processes.length; index++) {
+			panels.handleInput("\u001b[B");
+			panels.setAgentSnapshot(agents);
+			panels.setTaskSnapshot(snapshot);
+			const output = panels.render(80, 10, theme, DEFAULT_USAGE).map(stripTerminalSequences);
+			expect(output.some((line) => line.includes("›"))).toBe(true);
+			if (index >= 1 && index < 21) expect(output.find((line) => line.includes("›"))).toContain(`pid ${999 + index}`);
+		}
+		expect(panels.render(80, 10, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n")).toContain("›");
+		expect(panels.render(80, 10, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n")).toContain("LAST_QUESTION");
+	});
+
+	it("preserves task identity across reorder and exposes the complete command", () => {
+		const { panels, agents, snapshot } = taskNavigationFixture();
+		panels.handleInput("\u001b[F");
+		panels.handleInput("\u001b[A");
+		const last = snapshot.processes.at(-1)!;
+		panels.setTaskSnapshot({ ...snapshot, processes: [last, ...snapshot.processes.slice(0, -1)] });
+		panels.setAgentSnapshot(agents);
+		expect(panels.render(80, 10, theme, DEFAULT_USAGE).map(stripTerminalSequences).find((line) => line.includes("›"))).toContain("pid 1019");
+		panels.handleInput("\r");
+		const first = panels.render(80, 10, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n");
+		expect(first).toContain("Task · process-19");
+		expect(first).toContain("PID: 1019");
+		panels.handleInput("\u001b[6~");
+		expect(panels.render(80, 10, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n")).toContain("COMMAND_END");
+		panels.handleInput("\u001b");
+		expect(panels.kind).toBe("tasks");
+		expect(panels.render(80, 10, theme, DEFAULT_USAGE).map(stripTerminalSequences).find((line) => line.includes("›"))).toContain("pid 1019");
+		panels.handleInput("\u001b[H");
+		panels.handleInput("\u001b[6~");
+		expect(panels.render(80, 10, theme, DEFAULT_USAGE).map(stripTerminalSequences).find((line) => line.includes("›"))).toContain("pid 1005");
+	});
+
+	it("returns from task details when the selected task disappears", () => {
+		const { panels, snapshot } = taskNavigationFixture();
+		panels.handleInput("\u001b[F");
+		panels.handleInput("\r");
+		panels.setTaskSnapshot({ ...snapshot, questions: [] });
+		const output = panels.render(80, 10, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n");
+		expect(output).toContain("Tasks");
+		expect(output).not.toContain("Task · last-question");
+		expect(output).toContain("pid 1019");
 	});
 
 	it("renders multiline long process commands on one bounded row", () => {

@@ -145,6 +145,12 @@ export class TuiMainScreen extends TuiBase implements TUI {
 	private maxLinesRendered = 0;
 	private previousViewportTop = 0;
 
+	private viewportOnlyRedraw = false;
+
+	setViewportOnlyRedraw(enabled: boolean): void {
+		this.viewportOnlyRedraw = enabled;
+	}
+
 	captureRenderState(): TuiMainScreenRenderState {
 		return {
 			previousLines: [...this.previousLines],
@@ -335,10 +341,11 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			output.append("\x1b[?2026h"); // Begin synchronized output
 			if (clear) {
 				output.append(this.deleteKittyImages(this.previousKittyImageIds));
-				output.append("\x1b[2J\x1b[H\x1b[3J"); // Clear screen, home, then clear scrollback
+				output.append(this.viewportOnlyRedraw ? "\x1b[2J\x1b[H" : "\x1b[2J\x1b[H\x1b[3J"); // Clear screen, home, then clear scrollback
 			}
-			for (let i = 0; i < newLines.length; i++) {
-				if (i > 0) output.append("\r\n");
+			const firstRow = clear && this.viewportOnlyRedraw ? Math.max(0, newLines.length - height) : 0;
+			for (let i = firstRow; i < newLines.length; i++) {
+				if (i > firstRow) output.append("\r\n");
 				const line = newLines[i]!;
 				const isImage = isImageLine(line);
 				const imageReservedRows = isImage ? this.getKittyImageReservedRows(newLines, i) : 1;

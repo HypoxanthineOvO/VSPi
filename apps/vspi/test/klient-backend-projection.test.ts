@@ -5,6 +5,7 @@
  * Run: pnpm -C apps/vspi test
  */
 import type { AgentHandle, AgentTaskInfo, QuestionRequest } from "@moonshot-ai/klient";
+import { KlientValidationError } from "@moonshot-ai/klient";
 import type { ChatBackendEvents } from '../src/v1/backend/types.js';
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -118,7 +119,7 @@ function draftBackendFixture(
 	const connectionStates: Array<{ state: string; attempt: number }> = [];
 	const policies: string[] = [];
 	const start = (overrides: Partial<ChatBackendEvents> = {}) => backend.start({ onMessage: vi.fn(), onMessageUpdate: vi.fn(), onBusy: vi.fn(), onUsage: vi.fn(), onNotice: vi.fn(), onSessionReset: reset, onPolicySnapshot: (snapshot) => { policies.push(snapshot.policy); }, onRuntimeConnectionState: (state, attempt) => { connectionStates.push({ state, attempt }); }, ...overrides });
-	return { backend, connection, create, remove, restore, agent, reset, start, listeners, getConfig, policies, connectionStates, questions, disconnect: () => connectionError?.(new Error("ipc closed")) };
+	return { backend, connection, create, remove, restore, agent, reset, start, listeners, getConfig, policies, connectionStates, questions, disconnect: () => connectionError?.(new Error("ipc closed")), emitError: (error: Error) => connectionError?.(error) };
 }
 
 describe('model retry projection', () => {
@@ -829,6 +830,28 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 				expect.objectContaining({ message: "ipc closed" }),
 			),
 		);
+	});
+
+	it("routes event validation errors to a warning notice instead of session error", async () => {
+		const fixture = draftBackendFixture();
+		const onSessionError = vi.fn();
+		const onNotice = vi.fn();
+		const onBusy = vi.fn();
+		const onRuntimeCatalogChanged = vi.fn();
+		await fixture.start({ onSessionError, onNotice, onBusy, onRuntimeCatalogChanged });
+		onNotice.mockClear();
+		onBusy.mockClear();
+
+		fixture.emitError(new KlientValidationError("event", "goal.updated", [], { type: "goal.updated" }));
+
+		expect(onNotice).toHaveBeenCalledWith(expect.stringContaining("事件同步异常"), "warning");
+		expect(onNotice.mock.calls[0]?.[0]).toContain("goal.updated");
+		expect(onSessionError).not.toHaveBeenCalled();
+		expect(onBusy).not.toHaveBeenCalled();
+
+		// A subsequent normal event on the same hub is still processed.
+		fixture.listeners.get("kosong.providers.changed")?.({});
+		expect(onRuntimeCatalogChanged).toHaveBeenCalledOnce();
 	});
 
 	it("derives capability-driven effort choices and fallback", () => {
@@ -2027,6 +2050,58 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			expect.objectContaining({
 				costUsd: 4,
 				costEstimateKind: "complete",
+			}),
+		);
+	});
+
+	it("projects total input tokens as the sum of all input kinds", async () => {
+		const onUsage = vi.fn();
+		const backend = new KlientChatBackend(
+			{} as RuntimeConnection,
+			"/workspace",
+			"new",
+		);
+		Object.assign(backend, {
+			agent: {
+				getUsage: vi.fn().mockResolvedValue({
+					total: {
+						inputOther: 10,
+						inputCacheRead: 800,
+						inputCacheCreation: 190,
+						output: 50,
+					},
+					currentTurn: {
+						inputOther: 10,
+						inputCacheRead: 80,
+						inputCacheCreation: 10,
+						output: 5,
+					},
+					byModel: {},
+				}),
+				getContextTokenCount: vi.fn().mockResolvedValue(100),
+			},
+			events: { onUsage },
+			currentProvider: "example",
+			currentModel: "model-1",
+			modelOptionsPromise: Promise.resolve([
+				pricedModel("example/model-1", {}),
+			]),
+		});
+
+		await (
+			backend as unknown as { publishUsage(): Promise<void> }
+		).publishUsage();
+
+		expect(onUsage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				inputTokens: 1000,
+				outputTokens: 50,
+				cacheReadTokens: 800,
+				cacheWriteTokens: 190,
+				sessionCacheHitPercent: 80,
+				recentCacheHitPercent: 80,
+				costUsd: null,
+				costEstimateKind: "unknown",
 			}),
 		);
 	});

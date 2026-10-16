@@ -803,6 +803,7 @@ export class PanelController {
 	private agentListScroll = 0;
 	private agentPendingStopId: string | undefined;
 	private agentNotice: string | undefined;
+	private taskDetail = false;
 	private taskSnapshot: TaskDashboardSnapshot = {
 		agents: [],
 		processes: [],
@@ -882,7 +883,8 @@ export class PanelController {
 			this.state.selected = Math.max(0, current);
 		}
 		if (kind === "subagentModels") this.subagentModelsPanel.open();
-		if (kind === "agents" || kind === "tasks") {
+		if (kind === "tasks") this.taskDetail = false;
+		if (kind === "agents") {
 			const selectedIndex = this.agentSelectedRunId
 				? this.agentRuns().findIndex(
 						(run) => run.id === this.agentSelectedRunId,
@@ -1189,7 +1191,7 @@ export class PanelController {
 
 	setAgentSnapshot(snapshot: AgentSnapshot): void {
 		const selected =
-			this.kind === "agents" || this.kind === "tasks"
+			this.kind === "agents"
 				? this.selectedAgentRun()?.id
 				: this.agentSelectedRunId;
 		this.agentSnapshot = structuredClone(snapshot);
@@ -1205,7 +1207,7 @@ export class PanelController {
 		const selectedIndex = selected
 			? runs.findIndex((run) => run.id === selected)
 			: -1;
-		if (this.kind === "agents" || this.kind === "tasks") {
+		if (this.kind === "agents") {
 			this.state.selected =
 				selectedIndex >= 0
 					? selectedIndex
@@ -1218,12 +1220,18 @@ export class PanelController {
 	}
 
 	setTaskSnapshot(snapshot: TaskDashboardSnapshot): void {
+		const selected = this.kind === "tasks" ? this.taskItems()[this.state.selected] : undefined;
 		this.taskSnapshot = structuredClone(snapshot);
-		if (this.kind === "tasks")
-			this.state.selected = Math.min(
-				this.state.selected,
-				Math.max(0, this.taskItems().length - 1),
-			);
+		if (this.kind !== "tasks") return;
+		const items = this.taskItems();
+		const index = selected
+			? items.findIndex((item) => item.kind === selected.kind && item.taskId === selected.taskId)
+			: -1;
+		this.state.selected = index >= 0 ? index : Math.min(this.state.selected, Math.max(0, items.length - 1));
+		if (index < 0) {
+			this.taskDetail = false;
+			this.state.scroll = 0;
+		}
 	}
 
 	setAgentConversation(page: AgentConversationPage | undefined): void {
@@ -1508,7 +1516,10 @@ export class PanelController {
 				this.renderAgents(bodyWidth, bodyRows, theme),
 			];
 		} else if (this.kind === "tasks") {
-			[title, body] = ["Tasks", this.renderTasks(bodyWidth, theme)];
+			const selected = this.taskItems()[this.state.selected];
+			[title, body] = this.taskDetail && selected
+				? [`Task · ${selected.taskId}`, this.renderTaskDetail(selected, bodyWidth, theme)]
+				: ["Tasks", this.renderTasks(bodyWidth, theme)];
 		} else if (this.kind === "cron")
 			[title, body] = ["Cron", this.renderCron(bodyWidth, theme)];
 		else if (this.kind === "policy")
@@ -1621,7 +1632,7 @@ export class PanelController {
 				let selectionStart: number;
 				let selectionEnd: number;
 				// selectedLine may sit behind a panel gutter; only accept a leading marker after whitespace.
-				if (this.kind === "agents" && this.agentView === "detail") {
+				if ((this.kind === "agents" && this.agentView === "detail") || (this.kind === "tasks" && this.taskDetail)) {
 					selectionStart = this.state.scroll;
 					selectionEnd = selectionStart;
 				} else if (this.kind === "plan" && this.planSelectionRange) {
@@ -1758,7 +1769,9 @@ export class PanelController {
 				: this.kind === "tasks"
 					? this.agentPendingStopId
 						? `停止 ${this.agentPendingStopId}？ Y 确认  N/Esc 取消`
-						: "↑↓ 选择  S 停止  R 刷新  Esc 关闭"
+						: this.taskDetail
+							? "↑↓/PgUp/PgDn 滚动  R 刷新  Esc 返回"
+							: "↑↓/PgUp/PgDn 选择  Home/End 首尾  Enter 详情  S 停止  R 刷新  Esc 关闭"
 					: this.kind === "settings" && this.settingsEndpointEditing
 						? "输入 IP:端口、域名或完整 URL  Enter 确认  Esc 取消"
 						: this.kind === "question"
@@ -1905,7 +1918,7 @@ export class PanelController {
 			state.hasItems = this.agentRuns().length > 0;
 			state.agentDetail = this.agentView === "detail";
 		} else if (this.kind === "tasks") {
-			state.hasItems = this.agentRuns().length > 0;
+			state.hasItems = this.taskItems().length > 0;
 		} else if (this.kind === "cron") {
 			state.hasItems = this.cronTasks.length > 0;
 		}
@@ -3828,10 +3841,10 @@ export class PanelController {
 					: "— · 价格未提供";
 		const lines = [
 			alignRight("上下文", formatContextUsage(usage), width),
-			alignRight("输入 ↑", usage.inputTokens.toLocaleString("zh-CN"), width),
-			alignRight("输出 ↓", usage.outputTokens.toLocaleString("zh-CN"), width),
-			alignRight("Cache Read", tokens(usage.cacheReadTokens), width),
-			alignRight("Cache Write", tokens(usage.cacheWriteTokens), width),
+			alignRight("累计输入 ↑（含缓存）", usage.inputTokens.toLocaleString("zh-CN"), width),
+			alignRight("累计输出 ↓", usage.outputTokens.toLocaleString("zh-CN"), width),
+			alignRight("缓存读取（累计）", tokens(usage.cacheReadTokens), width),
+			alignRight("缓存写入（累计）", tokens(usage.cacheWriteTokens), width),
 			alignRight(
 				"当前 Turn 命中率",
 				percent(usage.recentCacheHitPercent),
@@ -4132,15 +4145,36 @@ export class PanelController {
 			return;
 		}
 		if (panelKey(data, Key.escape)) {
+			if (this.taskDetail) {
+				this.taskDetail = false;
+				this.state.scroll = 0;
+				return;
+			}
 			this.close();
 			return { type: "close" };
 		}
+		if (data === "r" || data === "R") return { type: "agentRefresh" };
+		if (this.taskDetail) {
+			if (panelKey(data, Key.up)) this.state.scroll = Math.max(0, this.state.scroll - 1);
+			else if (panelKey(data, Key.down)) this.state.scroll += 1;
+			else if (panelKey(data, Key.pageUp)) this.state.scroll = Math.max(0, this.state.scroll - 8);
+			else if (panelKey(data, Key.pageDown)) this.state.scroll += 8;
+			return;
+		}
 		const items = this.taskItems();
+		if (panelKey(data, Key.enter) && items[this.state.selected]) {
+			this.taskDetail = true;
+			this.state.scroll = 0;
+			return;
+		}
+		if (panelKey(data, Key.home)) this.state.selected = 0;
+		else if (panelKey(data, Key.end)) this.state.selected = Math.max(0, items.length - 1);
+		else if (panelKey(data, Key.pageUp)) this.state.selected = Math.max(0, this.state.selected - 8);
+		else if (panelKey(data, Key.pageDown)) this.state.selected = Math.min(Math.max(0, items.length - 1), this.state.selected + 8);
 		if (panelKey(data, Key.up) || panelKey(data, Key.down)) {
 			this.move(data, items.length);
 			return;
 		}
-		if (data === "r" || data === "R") return { type: "agentRefresh" };
 		if (data === "s" || data === "S") {
 			const selected = items[this.state.selected];
 			if (selected?.kind === "agent" && selected.status === "running")
@@ -4333,6 +4367,22 @@ export class PanelController {
 			);
 		}
 		return lines.map((line) => padLine(line, width));
+	}
+
+	private renderTaskDetail(item: TaskDashboardItem, width: number, theme: VspiTheme): string[] {
+		const fields = [
+			`Type: ${item.kind}`,
+			`Status: ${item.status} · ${taskDashboardElapsed(item)}`,
+			item.description,
+		];
+		if (item.kind === "process") {
+			fields.push(`PID: ${item.pid}`, `Exit code: ${item.exitCode ?? "—"}`, "", "Command:", item.command);
+		} else if (item.kind === "agent") {
+			if (item.agentId) fields.push(`Agent: ${item.agentId}`);
+			if (item.model) fields.push(`Model: ${item.model}`);
+		} else fields.push(`Questions: ${item.questionCount}`);
+		if (item.stopReason) fields.push("", `Stop reason: ${item.stopReason}`);
+		return fields.flatMap((field) => wrapTextWithAnsi(theme.text(stripAnsi(field)), width));
 	}
 
 	private taskItems(): TaskDashboardItem[] {

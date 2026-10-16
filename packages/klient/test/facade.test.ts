@@ -935,6 +935,77 @@ describe('event hub', () => {
     expect(errors).toHaveLength(1);
     expect(errors[0]).toBeInstanceOf(KlientValidationError);
   });
+
+  it('keeps stream metadata on agent-scoped events without weakening validation', async () => {
+    const channel = new FakeChannel();
+    const klient = createKlientFromChannel(channel);
+    const agent = klient.session('s1').agent('main');
+    const seen: unknown[] = [];
+    const errors: Error[] = [];
+    agent.events.onError((error) => {
+      errors.push(error);
+    });
+    agent.events.on('goal.updated', (event) => seen.push(event));
+
+    const live = { type: 'goal.updated', agentId: 'main', snapshot: null, viewSegment: 0 };
+    const durable = { type: 'goal.updated', agentId: 'main', snapshot: null, viewRevision: 7, viewSegment: 2 };
+    const invalidStatus = {
+      type: 'goal.updated',
+      agentId: 'main',
+      snapshot: {
+        goalId: 'g1',
+        objective: 'x',
+        status: 'archived',
+        turnsUsed: 0,
+        tokensUsed: 0,
+        wallClockMs: 0,
+        budget: {
+          tokenBudget: null,
+          turnBudget: null,
+          wallClockBudgetMs: null,
+          remainingTokens: null,
+          remainingTurns: null,
+          remainingWallClockMs: null,
+          tokenBudgetReached: false,
+          turnBudgetReached: false,
+          wallClockBudgetReached: false,
+          overBudget: false,
+        },
+      },
+      viewSegment: 1,
+    };
+    const unexpectedKey = { type: 'goal.updated', agentId: 'main', snapshot: null, rogue: true, viewSegment: 1 };
+    const clean = { type: 'goal.updated', agentId: 'main', snapshot: null };
+    channel.emit(0, live);
+    channel.emit(0, durable);
+    channel.emit(0, invalidStatus);
+    channel.emit(0, unexpectedKey);
+    channel.emit(0, clean);
+    await tick();
+
+    expect(seen).toEqual([live, durable, clean]);
+    expect(errors).toHaveLength(2);
+    for (const error of errors) expect(error).toBeInstanceOf(KlientValidationError);
+  });
+
+  it('passes raw metadata through untouched when validation is disabled', async () => {
+    const channel = new FakeChannel();
+    const klient = createKlientFromChannel(channel, { validate: false });
+    const agent = klient.session('s1').agent('main');
+    const seen: unknown[] = [];
+    const errors: Error[] = [];
+    agent.events.onError((error) => {
+      errors.push(error);
+    });
+    agent.events.on('goal.updated', (event) => seen.push(event));
+
+    const raw = { type: 'goal.updated', agentId: 'main', snapshot: null, viewSegment: 0, rogue: true };
+    channel.emit(0, raw);
+    await tick();
+
+    expect(seen).toEqual([raw]);
+    expect(errors).toHaveLength(0);
+  });
 });
 
 describe('files routing', () => {

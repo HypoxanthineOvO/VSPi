@@ -250,6 +250,7 @@ export interface EditorTheme {
 }
 
 export interface EditorOptions {
+	incrementalLayout?: boolean;
 	paddingX?: number;
 	autocompleteMaxVisible?: number;
 	disablePasteBurst?: boolean;
@@ -317,6 +318,8 @@ export class Editor implements Component, Focusable {
 
 	// Store last render geometry for cursor navigation and mouse hit-testing.
 	private lastWidth: number = 80;
+	private readonly incrementalLayout: boolean;
+	private layoutChunks: Array<{ source: string; width: number; pasteIds: string; chunks: TextChunk[] }> = [];
 	private renderedVisibleLineCount = 1;
 	private renderedAutocompleteHeight = 0;
 
@@ -403,6 +406,7 @@ export class Editor implements Component, Focusable {
 
 	constructor(tui: TUI, theme: EditorTheme, options: EditorOptions = {}) {
 		this.tui = tui;
+		this.incrementalLayout = options.incrementalLayout ?? false;
 		this.theme = theme;
 		this.borderColor = theme.borderColor;
 		const paddingX = options.paddingX ?? 0;
@@ -598,6 +602,10 @@ export class Editor implements Component, Focusable {
 	protected renderBottomBorder(width: number, hiddenLineCount: number): string {
 		const border = hiddenLineCount > 0 ? createScrollBorder("↓", hiddenLineCount, width) : "─".repeat(Math.max(0, width));
 		return this.borderColor(border);
+	}
+
+	getRenderedBodyRows(): number {
+		return this.renderedVisibleLineCount;
 	}
 
 	render(width: number): string[] {
@@ -1103,91 +1111,50 @@ export class Editor implements Component, Focusable {
 		}
 	}
 
-	private layoutText(contentWidth: number): LayoutLine[] {
-		const layoutLines: LayoutLine[] = [];
-
-		if (this.state.lines.length === 0 || (this.state.lines.length === 1 && this.state.lines[0] === "")) {
-			// Empty editor
-			layoutLines.push({
-				text: "",
-				hasCursor: true,
-				cursorPos: 0,
-			});
-			return layoutLines;
+	private wrapLayoutLine(line: string, width: number, index: number): TextChunk[] {
+		if (!this.incrementalLayout) {
+			if (visibleWidth(line) <= width) return [{ text: line, startIndex: 0, endIndex: line.length }];
+			return wordWrapLine(line, width, [...this.segment(line, "grapheme")]);
 		}
-
-		// Process each logical line
-		for (let i = 0; i < this.state.lines.length; i++) {
-			const line = this.state.lines[i] || "";
-			const isCurrentLine = i === this.state.cursorLine;
-			const lineVisibleWidth = visibleWidth(line);
-
-			if (lineVisibleWidth <= contentWidth) {
-				// Line fits in one layout line
-				if (isCurrentLine) {
-					layoutLines.push({
-						text: line,
-						hasCursor: true,
-						cursorPos: this.state.cursorCol,
-					});
-				} else {
-					layoutLines.push({
-						text: line,
-						hasCursor: false,
-					});
-				}
-			} else {
-				// Line needs wrapping - use word-aware wrapping
-				const chunks = wordWrapLine(line, contentWidth, [...this.segment(line, "grapheme")]);
-
-				for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
-					const chunk = chunks[chunkIndex];
-					if (!chunk) continue;
-
-					const cursorPos = this.state.cursorCol;
-					const isLastChunk = chunkIndex === chunks.length - 1;
-
-					// Determine if cursor is in this chunk
-					// For word-wrapped chunks, we need to handle the case where
-					// cursor might be in trimmed whitespace at end of chunk
-					let hasCursorInChunk = false;
-					let adjustedCursorPos = 0;
-
-					if (isCurrentLine) {
-						if (isLastChunk) {
-							// Last chunk: cursor belongs here if >= startIndex
-							hasCursorInChunk = cursorPos >= chunk.startIndex;
-							adjustedCursorPos = cursorPos - chunk.startIndex;
-						} else {
-							// Non-last chunk: cursor belongs here if in range [startIndex, endIndex)
-							// But we need to handle the visual position in the trimmed text
-							hasCursorInChunk = cursorPos >= chunk.startIndex && cursorPos < chunk.endIndex;
-							if (hasCursorInChunk) {
-								adjustedCursorPos = cursorPos - chunk.startIndex;
-								// Clamp to text length (in case cursor was in trimmed whitespace)
-								if (adjustedCursorPos > chunk.text.length) {
-									adjustedCursorPos = chunk.text.length;
-								}
-							}
-						}
-					}
-
-					if (hasCursorInChunk) {
-						layoutLines.push({
-							text: chunk.text,
-							hasCursor: true,
-							cursorPos: adjustedCursorPos,
-						});
-					} else {
-						layoutLines.push({
-							text: chunk.text,
-							hasCursor: false,
-						});
-					}
-				}
+		const pasteIds = [...this.pastes.keys()].join(",");
+		const cached = this.layoutChunks[index];
+		let prefix: TextChunk[] = [];
+		let start = 0;
+		if (cached?.width === width && cached.pasteIds === pasteIds) {
+			if (cached.source === line) return cached.chunks;
+			if (line.startsWith(cached.source) || cached.source.startsWith(line)) {
+				const reusable = cached.chunks.findIndex((chunk) => chunk.endIndex >= Math.min(line.length, cached.source.length));
+				const keep = Math.max(0, (reusable < 0 ? cached.chunks.length : reusable) - 2);
+				prefix = cached.chunks.slice(0, keep);
+				start = cached.chunks[keep]?.startIndex ?? 0;
 			}
 		}
+		const tail = line.slice(start);
+		const chunks = [...prefix, ...wordWrapLine(tail, width, [...this.segment(tail, "grapheme")]).map((chunk) => ({
+			text: chunk.text, startIndex: chunk.startIndex + start, endIndex: chunk.endIndex + start,
+		}))];
+		this.layoutChunks[index] = { source: line, width, pasteIds, chunks };
+		return chunks;
+	}
 
+	private layoutText(contentWidth: number): LayoutLine[] {
+		const layoutLines: LayoutLine[] = [];
+		if (this.incrementalLayout) this.layoutChunks.length = this.state.lines.length;
+		if (this.state.lines.length === 0) return [{ text: "", hasCursor: true, cursorPos: 0 }];
+		for (let i = 0; i < this.state.lines.length; i++) {
+			const line = this.state.lines[i] || "";
+			const chunks = this.wrapLayoutLine(line, contentWidth, i);
+			for (let index = 0; index < chunks.length; index++) {
+				const chunk = chunks[index]!;
+				const last = index === chunks.length - 1;
+				const cursor = this.state.cursorCol;
+				const hasCursor = i === this.state.cursorLine && cursor >= chunk.startIndex && (last || cursor < chunk.endIndex);
+				layoutLines.push(hasCursor ? {
+					text: chunk.text, hasCursor: true,
+					cursorPos: last ? cursor - chunk.startIndex : Math.min(chunk.text.length, cursor - chunk.startIndex),
+				} : { text: chunk.text, hasCursor: false });
+			}
+		}
 		return layoutLines;
 	}
 
@@ -1509,8 +1476,9 @@ export class Editor implements Component, Focusable {
 			const beforeCursor = line.slice(0, this.state.cursorCol);
 
 			// Find the last grapheme in the text before cursor
-			const graphemes = [...this.segment(beforeCursor, "grapheme")];
-			const lastGrapheme = graphemes[graphemes.length - 1];
+			const lastGrapheme = this.incrementalLayout && this.pastes.size === 0
+				? graphemeSegmenter.segment(beforeCursor).containing(beforeCursor.length - 1)
+				: [...this.segment(beforeCursor, "grapheme")].at(-1);
 			const graphemeLength = lastGrapheme ? lastGrapheme.segment.length : 1;
 			const isPastedSegmented = PASTE_MARKER_SINGLE.exec(lastGrapheme!.segment);
 

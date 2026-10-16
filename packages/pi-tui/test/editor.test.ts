@@ -4783,3 +4783,46 @@ describe("Editor narrow width rendering", () => {
 		assert.doesNotThrow(() => editor.render(-1));
 	});
 });
+
+describe("incremental editor wrapping", () => {
+	it("matches full layout through append, deletion, middle edits, resize and paste changes", () => {
+		const tui = createTestTUI();
+		const cached = new Editor(tui, defaultEditorTheme, { paddingX: 1, incrementalLayout: true });
+		const baseline = new Editor(tui, defaultEditorTheme, { paddingX: 1 });
+		cached.focused = baseline.focused = true;
+		const check = (width = 38) => assert.deepEqual(cached.render(width), baseline.render(width));
+		for (const source of ["中文内容".repeat(500), "longword ".repeat(500), "👩‍💻🇨🇳 é ".repeat(300)]) {
+			cached.setText(source); baseline.setText(source); check();
+			for (const input of ["中", "a", " ", "\u0301", "🇺", "🇸", "\x7f", "\x7f", "\x1b[D", "插入", "\x1b[200~" + "paste ".repeat(300) + "\x1b[201~"]) {
+				cached.handleInput(input); baseline.handleInput(input); check();
+			}
+			check(79); check(20); check(38);
+		}
+	});
+
+	it("does not segment the unchanged prefix on a long append", () => {
+		const editor = new Editor(createTestTUI(), defaultEditorTheme, { incrementalLayout: true });
+		editor.setText("中文文字".repeat(10000));
+		editor.render(80);
+		const internal = editor as unknown as { segment: (text: string, mode: string) => Intl.SegmentData[] };
+		const original = internal.segment.bind(editor);
+		let largest = 0;
+		internal.segment = (text, mode) => { largest = Math.max(largest, text.length); return original(text, mode); };
+		editor.handleInput("新");
+		editor.render(80);
+		editor.handleInput("\x7f");
+		editor.render(80);
+		assert.ok(largest < 500, `segmented ${largest} characters`);
+	});
+
+	it("exposes body rows separately from completion rows", async () => {
+		const editor = new Editor(createTestTUI(), defaultEditorTheme);
+		editor.setAutocompleteProvider(new CombinedAutocompleteProvider([{ name: "example", description: "Example command" }]));
+		editor.handleInput("/");
+		await flushAutocomplete();
+		const lines = editor.render(60);
+		assert.equal(editor.getRenderedBodyRows(), 1);
+		assert.ok(lines.length > editor.getRenderedBodyRows() + 2);
+		assert.ok(stripVTControlCharacters(lines.at(-1)!).includes("example"));
+	});
+});

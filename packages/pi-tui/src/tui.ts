@@ -893,7 +893,7 @@ export abstract class TuiBase extends Container implements TUI {
 		this.beforeTerminalStart();
 		this.terminal.start(
 			(data) => this.handleTerminalInput(data),
-			() => this.requestRender(),
+			() => this.requestResizeRender(),
 		);
 		this.afterTerminalStart();
 		this.terminal.hideCursor();
@@ -1099,8 +1099,16 @@ export abstract class TuiBase extends Container implements TUI {
 			this.focusedComponent.handleInput(data);
 			// Keyboard input is latency-sensitive. Avoid the throttled timer path,
 			// where even setTimeout(0) can take a full 16 ms tick on Windows.
-			this.requestImmediateRender();
+			this.requestInputRender();
 		}
+	}
+
+	protected requestInputRender(): void {
+		this.requestImmediateRender();
+	}
+
+	protected requestResizeRender(): void {
+		this.requestRender();
 	}
 
 	private consumeOsc11BackgroundResponse(data: string): boolean {

@@ -30,6 +30,11 @@ import {
   ISessionTerminalService,
   type TerminalStreamFrame,
 } from '@moonshot-ai/agent-core-v2/session/terminal/terminalService';
+import { ISessionManager } from '@moonshot-ai/agent-core-v2/app/sessionManager/sessionManager';
+import { getLiveSessionById } from '@moonshot-ai/agent-core-v2/app/sessionManager/sessionLookup';
+import { IAgentLifecycleService } from '@moonshot-ai/agent-core-v2/session/agentLifecycle/agentLifecycle';
+import { ensureMainAgent } from '@moonshot-ai/agent-core-v2/session/agentLifecycle/mainAgent';
+import { IAgentGoalService } from '@moonshot-ai/agent-core-v2/features/goal/goalService';
 
 import type { Klient } from '../../src/index.js';
 import type { ScopeRef } from '../../src/core/channel.js';
@@ -1200,6 +1205,70 @@ export function defineKlientConformance(
         await expect(agent.resumeGoal()).rejects.toThrow(/No current goal/);
         await expect(agent.cancelGoal()).rejects.toThrow(/No current goal/);
       } finally {
+        await target.klient.session(created.id).close();
+      }
+    });
+
+    it('agent goal events retain stream metadata through every transport', async () => {
+      const created = await target.klient.global.sessions.create({
+        workDir: process.cwd(),
+        title: 'conformance goal events',
+      });
+      const disposables: Array<{ dispose(): void }> = [];
+      try {
+        const agent = target.klient.session(created.id).agent('main');
+        const seen: Array<{
+          snapshot: { status: string } | null;
+          viewRevision?: unknown;
+          viewSegment?: unknown;
+        }> = [];
+        const errors: Error[] = [];
+        disposables.push(
+          agent.events.onError((error) => errors.push(error)),
+          agent.events.on('goal.updated', (event) =>
+            seen.push(
+              event as {
+                snapshot: { status: string } | null;
+                viewRevision?: unknown;
+                viewSegment?: unknown;
+              },
+            ),
+          ),
+        );
+        await agent.getGoal();
+
+        const session =
+          target.app.accessor.get(ISessionManager).get(created.id) ??
+          getLiveSessionById(target.app.accessor, created.id);
+        if (session === undefined) throw new Error(`session not materialized: ${created.id}`);
+        const context = await ensureMainAgent(session);
+        const handle = session.accessor
+          .get(IAgentLifecycleService)
+          .handleOf(context.agentId);
+        if (handle === undefined) throw new Error('main agent was not found');
+        const goals = handle.accessor.get(IAgentGoalService);
+
+        await goals.createGoal({ objective: 'Complete the example task' });
+        await agent.pauseGoal();
+        await agent.cancelGoal();
+
+        await waitFor(() => seen.length >= 3, 10_000);
+        expect(seen.map((event) => event.snapshot?.status ?? null)).toEqual([
+          'active',
+          'paused',
+          null,
+        ]);
+        expect(errors).toEqual([]);
+        for (const event of seen) {
+          // The dispatcher stamps every observed event with viewRevision;
+          // viewSegment only exists while a turn segment is live.
+          expect(Number.isSafeInteger(event.viewRevision)).toBe(true);
+          expect(
+            event.viewSegment === undefined || Number.isSafeInteger(event.viewSegment),
+          ).toBe(true);
+        }
+      } finally {
+        for (const disposable of disposables) disposable.dispose();
         await target.klient.session(created.id).close();
       }
     });

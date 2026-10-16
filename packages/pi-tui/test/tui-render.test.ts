@@ -1125,3 +1125,62 @@ describe("TUI steady-frame processed-line reuse", () => {
 		}
 	});
 });
+
+describe("host-controlled redraws", () => {
+	it("limits opted-in clearing redraws to the viewport and keeps subsequent cursor updates aligned", async () => {
+		const terminal = new LoggingVirtualTerminal(80, 12);
+		const tui = new TuiMainScreen(terminal);
+		const component = new TestComponent();
+		component.lines = Array.from({ length: 500 }, (_, index) => `line ${index}`);
+		tui.setViewportOnlyRedraw(true);
+		tui.addChild(component);
+		tui.start();
+		try {
+			tui.renderNow();
+			await terminal.flush();
+			terminal.clearWrites();
+			terminal.resize(79, 13);
+			tui.renderNow();
+			await terminal.flush();
+			assert.ok(terminal.getWrites().length < 2000);
+			assert.ok(!terminal.getWrites().includes("line 0\r\n"));
+			assert.ok(!terminal.getWrites().includes("\x1b[3J"));
+			assert.equal(terminal.getViewport().at(-1), "line 499");
+			component.lines[0] = "updated offscreen";
+			component.lines[499] = "updated last row";
+			tui.renderNow();
+			await terminal.flush();
+			assert.equal(terminal.getViewport().at(-1), "updated last row");
+			component.lines.push("appended row");
+			tui.renderNow();
+			await terminal.flush();
+			assert.equal(terminal.getViewport().at(-1), "appended row");
+			assert.ok(terminal.getScrollBuffer().some((line) => line === "line 0"));
+		} finally { tui.stop(); }
+	});
+
+	it("lets a host defer input rendering without dropping input", async () => {
+		class DeferredTui extends TuiMainScreen {
+			inputFrames = 0;
+			protected override requestInputRender(): void { this.inputFrames++; }
+		}
+		const terminal = new VirtualTerminal();
+		const tui = new DeferredTui(terminal);
+		const component = new InputComponent();
+		tui.addChild(component);
+		tui.setFocus(component);
+		tui.start();
+		try {
+			tui.renderNow();
+			const baseline = component.renderCount;
+			terminal.sendInput("first");
+			terminal.sendInput("second");
+			await new Promise((resolve) => setImmediate(resolve));
+			assert.equal(tui.inputFrames, 2);
+			assert.equal(component.renderCount, baseline);
+			assert.deepEqual(component.lines, ["second"]);
+			tui.renderNow();
+			assert.equal(component.renderCount, baseline + 1);
+		} finally { tui.stop(); }
+	});
+});

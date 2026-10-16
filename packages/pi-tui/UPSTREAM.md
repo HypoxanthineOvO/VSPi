@@ -192,3 +192,27 @@ Each card: **decision** and **why not in the app**. Status is `keep` or `absorbe
 **Decision:** Fullscreen hosts can register synchronous `addLayoutEffect` callbacks after layout and search reveal, before terminal output. An effect's `requestRender` coalesces into another complete layout pass without invalidating component caches; only the settled frame is written. Search keeps its selected occurrence while effect-driven layout shifts rendered rows; selections retain their content when effects only add or remove leading empty rows. Effects must converge within ten passes or rendering throws. With no effects registered, the existing rendering path is preserved.
 
 **Why not in the app:** The settled scroll state and the opportunity to repeat layout before terminal output belong to the alternate-screen render path. Hosts cannot reach this point through component composition alone.
+
+### host-input-frame-scheduling — keep
+
+**Decision:** Protected `requestInputRender` and `requestResizeRender` hooks let hosts coalesce input frames and debounce resize bursts. Defaults retain upstream's immediate input rendering and normal resize scheduling.
+
+**Why not in the app:** The private input dispatcher calls the immediate scheduler after the focused component returns, bypassing the host's `requestRender` override.
+
+### opt-in-viewport-only-redraw — keep
+
+**Decision:** `setViewportOnlyRedraw(true)` limits clearing redraws to the visible tail and preserves native scrollback. Initial output and append rendering remain unchanged; the default still replays the whole frame.
+
+**Why not in the app:** Resize and offscreen-change fallbacks are inside the main-screen differential renderer, which owns the logical cursor and viewport offsets.
+
+### editor-rendered-body-boundary — keep
+
+**Decision:** Expose the rendered editor body row count so hosts can distinguish input rows, borders and appended completion rows without guessing from the final row.
+
+**Why not in the app:** The editor owns scrolling and completion geometry; a host cannot infer its border position from the public draft text.
+
+### opt-in-incremental-editor-layout — keep
+
+**Decision:** `incrementalLayout` caches wrapping per logical line and rewraps only the trailing chunks for prefix-preserving edits. Width, paste-registry and other edits invalidate the affected cache. With no paste markers, backspace locates the final grapheme directly instead of materializing every preceding grapheme. Default editor behavior remains uncached.
+
+**Why not in the app:** Wrapping and cursor-to-layout mapping happen inside the editor, before the host sees visible rows.

@@ -116,7 +116,7 @@ export class Composer implements Component, Focusable {
           noMatch: (value) => theme.warning(value),
         },
       },
-      { paddingX: 1, autocompleteMaxVisible: 6 },
+      { paddingX: 1, autocompleteMaxVisible: 6, incrementalLayout: true },
     );
     this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider([GOAL_SLASH_COMMAND], cwd));
   }
@@ -235,7 +235,9 @@ export class Composer implements Component, Focusable {
     }
     const raw = this.editor.render(innerWidth);
     access.state.cursorCol = originalCursorCol;
-    let body = raw.slice(1, -1);
+    const bodyRows = this.editor.getRenderedBodyRows();
+    let body = raw.slice(1, 1 + bodyRows);
+    const completions = raw.slice(bodyRows + 2);
     const renderedCursorIndex = body.findIndex((line) => line.includes(CURSOR_MARKER));
     if (this.editor.getText() === "" && body[0]) {
       body[0] = `${body[0]}${this.theme.muted(" 输入消息…")}`;
@@ -286,6 +288,7 @@ export class Composer implements Component, Focusable {
       this.theme.focus(padLine(top, safeWidth)),
       ...body.map((line) => `${this.theme.focus(chars.v)}${padLine(line, innerWidth)}${this.theme.focus(chars.v)}`),
       this.theme.focus(padLine(bottom, safeWidth)),
+      ...completions.map((line) => padLine(line, safeWidth)),
     ];
   }
 

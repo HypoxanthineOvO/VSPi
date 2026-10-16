@@ -153,6 +153,15 @@ function fixedWithoutCarry(value: number, decimals: number): string {
 
 function formatTokens(input: number | null): string {
 	if (!isFiniteNumber(input)) return "?";
+	if (input >= 1_000_000) {
+		const divisor = input >= 1_000_000_000 ? 1_000_000_000 : 1_000_000;
+		const scaled = input / divisor;
+		const formatted =
+			scaled >= 1e21
+				? formatExponential(scaled)
+				: fixedWithoutCarry(scaled, scaled >= 100 ? 0 : 1).replace(/\.0$/, "");
+		return `${formatted}${divisor === 1_000_000_000 ? "B" : "M"}`;
+	}
 	if (input < 1000) return input.toString();
 	const thousands = input / 1000;
 	const formatted =
@@ -164,6 +173,7 @@ function formatTokens(input: number | null): string {
 
 export function formatContextTokens(input: number | null): string {
 	if (!isFiniteNumber(input)) return "?K";
+	if (input >= 1_000_000) return formatTokens(input);
 	const thousands = input / 1000;
 	if (input < 10_000 && input % 1000 !== 0)
 		return `${Number(fixedWithoutCarry(thousands, 1))}K`;
@@ -286,14 +296,14 @@ function contextField(
 				? `${usage.contextPercent}%`
 				: "";
 		return percent
-			? `${label("上下文", "focus", theme)}${value(percent, theme)}`
+			? `${label("Context", "focus", theme)}${value(percent, theme)}`
 			: "";
 	}
 	// 占用量未知时只展示已知的窗口容量；两者都未知（不可能，contextWindow 必填）则回退完整格式。
 	if (!isFiniteNumber(usage.contextTokens)) {
-		return `${label("上下文", "focus", theme)}${value(formatContextTokens(usage.contextWindow), theme)}`;
+		return `${label("Context", "focus", theme)}${value(formatContextTokens(usage.contextWindow), theme)}`;
 	}
-	return `${label("上下文", "focus", theme)}${value(formatContextUsage(usage), theme)}`;
+	return `${label("Context", "focus", theme)}${value(formatContextUsage(usage), theme)}`;
 }
 
 function formatSpeed(value: number | null): string {
@@ -314,7 +324,7 @@ function speedField(
 	const formatted = compact
 		? `~${formatSpeed(speed)}`
 		: `~${formatSpeed(speed)} tok/s`;
-	return `${label("速度", "blue", theme)}${value(formatted, theme)}`;
+	return `${label("Speed", "blue", theme)}${value(formatted, theme)}`;
 }
 
 function pathField(
@@ -357,7 +367,7 @@ function tokenField(
 		return "";
 	}
 	// ↑/↓ 是会话累计输入/输出 token 数，"累计" 与左侧 "上下文"（当前窗口占用）区分口径；无数据的一侧不渲染。
-	return value(`累计 ${parts.join(" ")}`, theme);
+	return value(`Total ${parts.join(" ")}`, theme);
 }
 
 // 缓存读取累计量 + 近一轮命中率；两者都无数据时不占位。
@@ -371,15 +381,15 @@ function cacheField(
 		: "";
 	if (compact) {
 		return hit
-			? `${label("缓存", "focus", theme)}${value(hit, theme)}`
+			? `${label("Cache", "focus", theme)}${value(hit, theme)}`
 			: "";
 	}
 	const read = isFiniteNumber(input.usage.cacheReadTokens)
 		? formatTokens(input.usage.cacheReadTokens)
 		: "";
-	const text = [read, hit ? `命中 ${hit}` : ""].filter(Boolean).join(" · ");
+	const text = [read, hit ? `turn ${hit}` : ""].filter(Boolean).join(" · ");
 	if (!text) return "";
-	return `${label("缓存", "focus", theme)}${value(text, theme)}`;
+	return `${label("Cache read", "focus", theme)}${value(text, theme)}`;
 }
 
 function costField(
@@ -428,11 +438,11 @@ function tracks(
 } {
 	if (width >= 80) {
 		const speedWidth = boundedTrackWidth(speed, 18, 18);
-		const contextWidth = boundedTrackWidth(context, 24, 25);
+		const contextWidth = boundedTrackWidth(context, 25, 30);
 		const costWidth = boundedTrackWidth(cost, 9, 12);
 		const contextStart = width - contextWidth;
 		const costStart = width - costWidth;
-		const cacheWidth = width >= 120 ? 22 : 11;
+		const cacheWidth = width >= 120 ? 32 : 12;
 		const cacheStart = costStart - cacheWidth;
 		return {
 			speed: contextStart - speedWidth,
@@ -447,7 +457,7 @@ function tracks(
 			speed: Math.max(20, width - 12),
 			context: width,
 			token: width - 36,
-			cache: width - 18,
+			cache: width - 20,
 			cost: width - 8,
 		};
 	return { speed: width, context: width, token: 18, cache: 28, cost: 38 };

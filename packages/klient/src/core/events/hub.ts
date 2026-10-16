@@ -196,17 +196,33 @@ export class EventHub<TPayloadMap extends object = KlientEventPayloads>
 
   private deliverValidated(event: string, reg: EventRegistration, data: unknown): void {
     let payload: unknown = data;
+    const hasViewMetadata =
+      this.validate &&
+      this.scope.agentId !== undefined &&
+      reg.kind === 'stream' &&
+      reg.name === 'events' &&
+      data !== null &&
+      typeof data === 'object' &&
+      !Array.isArray(data);
+    let viewRevision: unknown;
+    let viewSegment: unknown;
+    if (hasViewMetadata) {
+      const { viewRevision: revision, viewSegment: segment, ...body } = data as Record<string, unknown>;
+      viewRevision = revision;
+      viewSegment = segment;
+      payload = body;
+    }
     if (this.validate) {
-      const parsed = parseEvent(event, reg.schema, data);
+      const parsed = parseEvent(event, reg.schema, payload);
       if (!parsed.ok) {
         this.reportError(parsed.error);
         return;
       }
       payload = parsed.data;
     }
-    if (data !== null && typeof data === 'object' && payload !== null && typeof payload === 'object') {
-      const metadata = data as { viewRevision?: unknown; viewSegment?: unknown };
-      if (Number.isSafeInteger(metadata.viewRevision)) payload = { ...payload, viewRevision: metadata.viewRevision, viewSegment: Number.isSafeInteger(metadata.viewSegment) ? metadata.viewSegment : undefined };
+    if (hasViewMetadata && payload !== null && typeof payload === 'object') {
+      if (Number.isSafeInteger(viewRevision)) payload = { ...(payload as Record<string, unknown>), viewRevision };
+      if (Number.isSafeInteger(viewSegment)) payload = { ...(payload as Record<string, unknown>), viewSegment };
     }
     const set = this.listeners.get(event);
     if (set === undefined) return;

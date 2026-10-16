@@ -956,7 +956,7 @@ export class VspiApp implements Component, Focusable {
 		this.showNotice(
 			message.includes("ipc closed")
 				? "运行时连接已断开，请退出并重新启动 VSPi"
-				: `Session 接管失败：${message}`,
+				: `运行时错误：${message}`,
 			"error",
 		);
 	}
@@ -1741,6 +1741,8 @@ export class VspiApp implements Component, Focusable {
 			if (
 				!message ||
 				isQueuedTranscriptMessage(message) ||
+				(message.kind === "tool" &&
+					(message.status === "queued" || message.status === "running")) ||
 				("streaming" in message && message.streaming === true)
 			)
 				break;
@@ -1766,6 +1768,7 @@ export class VspiApp implements Component, Focusable {
 			visibleTail.nodes[0]?.messageIndexes[0] ?? stableMessages.length;
 		const commitEnd = this.committedMessageCount + firstVisibleMessage;
 		const messages = this.messages.slice(this.committedMessageCount, commitEnd);
+		if (messages.length === 0 && this.startupSurface.length === 0) return 0;
 		const lines = renderTranscript(messages, width, this.theme, {
 			thinkingDisplay: this.options.settings.thinkingDisplay,
 			wrapCode: this.options.settings.wrapCode,
@@ -2543,6 +2546,8 @@ export class VspiApp implements Component, Focusable {
 			if (this.workingTimer) clearInterval(this.workingTimer);
 			this.workingTimerInterval = timerInterval;
 			this.workingTimer = setInterval(() => {
+				if (this.tui.mode === "regular" && this.workspaceFocus !== "transcript")
+					this.commitStableTranscript();
 				if (!this.activityReducedMotion()) {
 					this.workingFrame = (this.workingFrame + 1) % 24;
 					this.queuedAnimationTick += 1;

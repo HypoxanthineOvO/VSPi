@@ -26,7 +26,7 @@ export function preserveTerminalScrollback(chunk: string): string {
 
 export function adaptInteractiveTerminalOutput(chunk: string, env: NodeJS.ProcessEnv = process.env): string {
   const preserved = preserveTerminalScrollback(chunk);
-  if (env.VSPI_TUI_SYNC_OUTPUT === "1") return preserved;
+  if (env.VSPI_TUI_SYNC_OUTPUT !== "0") return preserved;
   return preserved.split(BEGIN_SYNC).join("").split(END_SYNC).join("");
 }
 
@@ -60,6 +60,19 @@ export function renderSurfaceEpochBreak(lineOffset = 0): string {
 export class ScrollbackProcessTerminal extends ProcessTerminal implements StaticCommitTerminal {
   private readonly frameOptimizer = new TerminalFrameOptimizer();
   private reloadHandoff = false;
+  private pendingRender: (() => void) | undefined;
+  private readonly resumeRender = () => {
+    const render = this.pendingRender;
+    this.pendingRender = undefined;
+    render?.();
+  };
+
+  deferRender(render: () => void): boolean {
+    if (!process.stdout.writableNeedDrain) return false;
+    if (!this.pendingRender) process.stdout.once("drain", this.resumeRender);
+    this.pendingRender = render;
+    return true;
+  }
 
   /**
    * /reload 静默移交：续接进程已 spawn 并即将接管同一 TTY。
@@ -84,6 +97,8 @@ export class ScrollbackProcessTerminal extends ProcessTerminal implements Static
   }
 
   override stop(): void {
+    process.stdout.removeListener("drain", this.resumeRender);
+    this.pendingRender = undefined;
     // 静默移交后不写恢复序列、不恢复 termios（见 prepareReloadHandoff）。
     if (this.reloadHandoff) return;
     super.stop();
@@ -147,12 +162,22 @@ export class ScrollbackTUI extends TuiMainScreen {
     super(terminal, showHardwareCursor, logDirectory);
     this.framePacer = new TuiFramePacer(resolveTuiFrameInterval());
     this.setClearOnShrink(false);
+    this.setViewportOnlyRedraw(true);
     // Some terminals can report focus after switching away from fullscreen.
     // Treat those reports as terminal metadata, not latency-sensitive user input.
     this.addInputListener((data) => (data === FOCUS_IN || data === FOCUS_OUT ? { consume: true } : undefined));
   }
 
+  protected override requestResizeRender(): void {
+    this.framePacer?.requestResize((force) => super.requestRender(force));
+  }
+
+  protected override requestInputRender(): void {
+    this.requestRender();
+  }
+
   protected override doRender(): void {
+    if ((this.terminal as Partial<ScrollbackProcessTerminal>).deferRender?.(() => this.requestRender())) return;
     const started = FRAME_STATS_PATH ? performance.now() : 0;
     super.doRender();
     if (FRAME_STATS_PATH) recordFrameRenderMs(performance.now() - started);

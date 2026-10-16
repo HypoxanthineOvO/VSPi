@@ -11,6 +11,7 @@ import type {
 	SessionHandle,
 	SessionMeta,
 } from "@moonshot-ai/klient";
+import { KlientValidationError } from "@moonshot-ai/klient";
 import { RuntimeStoppedError, type RuntimeConnection } from "@vsp/vsp-runtime";
 import { loginWithOAuth } from "../providers/oauth-login.js";
 import { ensureProviderProxy } from '../providers/proxy-setup.js';
@@ -1334,6 +1335,10 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	private handleConnectionError(error: Error): void {
+		if (error instanceof KlientValidationError && error.phase === 'event') {
+			this.events?.onNotice?.(`事件同步异常（${error.procedure}）：${error.message}`, 'warning');
+			return;
+		}
 		if (error.message !== "ipc closed") { this.events?.onSessionError?.(error); return; }
 		if (this.connectionFailed) return;
 		this.connectionFailed = true;
@@ -2284,7 +2289,10 @@ export class KlientChatBackend implements ChatBackend {
 			const snapshot: UsageSnapshot = {
 				...DEFAULT_USAGE,
 				contextTokens,
-				inputTokens: total?.inputOther ?? 0,
+				inputTokens:
+					(total?.inputOther ?? 0) +
+					(total?.inputCacheRead ?? 0) +
+					(total?.inputCacheCreation ?? 0),
 				outputTokens: total?.output ?? 0,
 				cacheReadTokens: this.cacheTelemetryObserved
 					? (total?.inputCacheRead ?? 0)
