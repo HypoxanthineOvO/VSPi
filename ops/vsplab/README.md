@@ -1,5 +1,7 @@
 # VSPLab 中转站模型目录（Golden）
 
+2026-10-17：已同步 Babel 线上 `/vsp/models`，cn/tech 公网正文 SHA-256 均为 `a2b0945babff36e17b736ade1cc016ee203a71f096e25ba40a9ddab120c95378`，共 73 条。官方 Flash 标注为 V4.1-Flash-1017，新增 `deepseek-flash-free`（显示名 DeepSeek Flash Free，兼容 `deepseek-v4.1-flash-free`）；免费入口经真实 OpenCode → 生产混合组实测 995857 输入 tokens、首中尾标记检索和零费用账本后配置 1000000 总上下文/32000 最大输出。免费渠道是否已同步 1017 checkpoint 尚未确认。发布保留此前已提交的 GPT-6.1 Sol、Claude Sonnet 5.5 两项元数据，不改变其业务路由；无需重编译或重启服务。旧目录由固定免密安装器备份到 `/var/backups/vsp-model-catalog/`。
+
 2026-10-15：维护源增补 GPT-6.1 Sol、Claude Sonnet 5.5 的官方元数据（OpenAI 模型页/价格页/changelog，Claude 模型总览/价格页/effort 文档/新闻页，均于当日核对），共 72 条，SHA-256 为 `61af24d1911052dcbc06685ebff50ac71cbd080c9aeeba3834245acba7752092`。随 VSPi 2.7.0 作为内置默认值发布；**尚未同步到 Babel 线上 `/vsp/models`**。VSPi 常用模型推荐同时加入 GPT 6.1 Sol、Claude Sonnet 5.5 与 Gemini 4 Argon（Gemini 不经 VSPLab 目录）。
 
 2026-09-23：维护源增补 GPT-6 Sol/Luna、Claude Opus 5.5、MiMo V2.6 Flash/Pro、Grok 4.7 的官方元数据，并更新 VSPi 常用模型推荐。当前维护源和 Babel 用户目录暂存文件 SHA-256 均为 `41a7011dc0c4001f77a76f95c4c05166e922e6abc752330305d6923bd13ab6bf`。Babel 的 root 所有线上 `/etc/vsp-sub2api/model-catalog.json` 已通过受限免密安装工具替换，cn/tech 回包及 Windows 公网 tech 均核对为同一 SHA-256 和 70 条；旧文件备份在 `/var/backups/vsp-model-catalog/`。VSPi 2.5.3 已按 Linux 先行发布并更新 latest；已安装的 2.5.2 仍需用户更新。模型目录不受 Sub2API 账户、分组和路由是否可用的约束。
