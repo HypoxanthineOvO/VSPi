@@ -1748,14 +1748,13 @@ export class VspiApp implements Component, Focusable {
 				break;
 			stableEnd += 1;
 		}
+		const turnStart = this.latestTurnStart();
+		if (turnStart >= 0) stableEnd = Math.min(stableEnd, turnStart);
 		if (stableEnd <= this.committedMessageCount) return 0;
 
 		const width = Math.max(1, this.tui.terminal.columns);
-		const stableMessages = this.messages.slice(
-			this.committedMessageCount,
-			stableEnd,
-		);
-		const visibleTail = selectTranscriptWindow(stableMessages, {
+		const activeMessages = this.messages.slice(this.committedMessageCount);
+		const visibleTail = selectTranscriptWindow(activeMessages, {
 			width,
 			maxRows: this.transcriptViewportRows(width),
 			maxBlocks: 80,
@@ -1763,10 +1762,11 @@ export class VspiApp implements Component, Focusable {
 			thinkingDisplay: this.options.settings.thinkingDisplay,
 			collapseCompletedTools: this.options.settings.collapseTools,
 			cache: this.transcriptRenderCache,
+			pinnedNodeId: this.messages[turnStart]?.id,
 		});
 		const firstVisibleMessage =
-			visibleTail.nodes[0]?.messageIndexes[0] ?? stableMessages.length;
-		const commitEnd = this.committedMessageCount + firstVisibleMessage;
+			visibleTail.nodes[0]?.messageIndexes[0] ?? activeMessages.length;
+		const commitEnd = Math.min(stableEnd, this.committedMessageCount + firstVisibleMessage);
 		const messages = this.messages.slice(this.committedMessageCount, commitEnd);
 		if (messages.length === 0 && this.startupSurface.length === 0) return 0;
 		const lines = renderTranscript(messages, width, this.theme, {
@@ -1779,6 +1779,7 @@ export class VspiApp implements Component, Focusable {
 		if (
 			messages.length > 0 &&
 			commitEnd < this.messages.length &&
+			this.messages[commitEnd]?.role !== "user" &&
 			stripAnsi(lines.at(-1) ?? "") !== ""
 		) {
 			lines.push("");
@@ -4930,6 +4931,14 @@ export class VspiApp implements Component, Focusable {
 		this.requestRender();
 	}
 
+	private latestTurnStart(): number {
+		return this.messages.findLastIndex((message) =>
+			message.role === "user" && message.kind === "text" &&
+			message.delivery !== "steer" && message.delivery !== "cancelled" &&
+			message.deliveryState !== "cancelled" && !isQueuedTranscriptMessage(message),
+		);
+	}
+
 	private currentTranscriptWindow(
 		width?: number,
 		maxRows?: number,
@@ -4957,9 +4966,11 @@ export class VspiApp implements Component, Focusable {
 			// 只用于 requiresRebase 的 >0 判断，走 tail 快捷路径免掉每帧全量
 			// buildTranscriptNodes 扫描（长会话下是每键 O(N) 热点）。
 			exactHiddenBlocks: this.tui.mode !== "fullscreen",
-			...(this.workspaceFocus === "transcript" && this.inspectNodeId
-				? { pinnedNodeId: this.inspectNodeId }
-				: {}),
+			pinnedNodeId: this.workspaceFocus === "transcript"
+				? this.inspectNodeId
+				: this.tui.mode === "regular"
+					? this.messages[this.latestTurnStart()]?.id
+					: undefined,
 			...(this.workspaceFocus === "transcript" && this.transcriptStartNodeId
 				? { startNodeId: this.transcriptStartNodeId }
 				: {}),

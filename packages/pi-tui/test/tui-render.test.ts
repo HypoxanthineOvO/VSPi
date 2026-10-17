@@ -1127,7 +1127,7 @@ describe("TUI steady-frame processed-line reuse", () => {
 });
 
 describe("host-controlled redraws", () => {
-	it("limits opted-in clearing redraws to the viewport and keeps subsequent cursor updates aligned", async () => {
+	it("limits opted-in resize redraws while preserving complete content revisions", async () => {
 		const terminal = new LoggingVirtualTerminal(80, 12);
 		const tui = new TuiMainScreen(terminal);
 		const component = new TestComponent();
@@ -1146,16 +1146,23 @@ describe("host-controlled redraws", () => {
 			assert.ok(!terminal.getWrites().includes("line 0\r\n"));
 			assert.ok(!terminal.getWrites().includes("\x1b[3J"));
 			assert.equal(terminal.getViewport().at(-1), "line 499");
+			terminal.clearWrites();
 			component.lines[0] = "updated offscreen";
+			component.lines[250] = "new content in the middle";
 			component.lines[499] = "updated last row";
 			tui.renderNow();
 			await terminal.flush();
 			assert.equal(terminal.getViewport().at(-1), "updated last row");
+			assert.ok(terminal.getWrites().includes("new content in the middle"));
+			assert.ok(terminal.getScrollBuffer().includes("updated offscreen"));
 			component.lines.push("appended row");
 			tui.renderNow();
 			await terminal.flush();
 			assert.equal(terminal.getViewport().at(-1), "appended row");
 			assert.ok(terminal.getScrollBuffer().some((line) => line === "line 0"));
+			terminal.clearWrites();
+			tui.renderNow(true);
+			assert.ok(terminal.getWrites().includes("new content in the middle"));
 		} finally { tui.stop(); }
 	});
 

@@ -941,7 +941,7 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 		try {
 			const models = await connection.klient.global.kosong.listModels();
 			expect(models).toEqual(expect.arrayContaining([
-				expect.objectContaining({ model: "vsplab/deepseek-flash", display_name: "DeepSeek V4.1 Flash" }),
+				expect.objectContaining({ model: "vsplab/deepseek-flash", display_name: "DeepSeek V4.1 Flash 1017" }),
 				expect.objectContaining({ model: "vsplab/gpt-6-astra", display_name: "GPT-6 Astra" }),
 				expect.objectContaining({ model: "deepseek/deepseek-flash", display_name: "DeepSeek V4.1 Flash" }),
 			]));
@@ -967,7 +967,7 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 			expect(disk).not.toContain("overrides");
 			await connection.klient.global.config.replace({ domain: "models", value: {} });
 			expect(await connection.klient.global.kosong.listModels()).toEqual(expect.arrayContaining([
-				expect.objectContaining({ model: "vsplab/deepseek-flash", display_name: "DeepSeek V4.1 Flash", max_context_size: 1048576 }),
+				expect.objectContaining({ model: "vsplab/deepseek-flash", display_name: "DeepSeek V4.1 Flash 1017", max_context_size: 1000000 }),
 			]));
 		} finally { await connection.close(); }
 	});

@@ -1113,7 +1113,7 @@ export function defineKlientConformance(
         server: {
           name: 'conf-oauth',
           transport: 'http',
-          url: 'https://example.com/mcp',
+          url: 'http://127.0.0.1:1/mcp',
           auth: 'oauth',
         },
       });

@@ -321,6 +321,71 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		} finally { await app.dispose(); }
 	});
 
+	it("keeps the complete latest turn in scrollback when a long reply is revised offscreen", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-turn-scrollback-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		const write = vi.spyOn(terminal, "write");
+		try {
+			await app.start();
+			tui.start();
+			events().onMessage({ id: "current-input", role: "user", kind: "text", text: "CURRENT_INPUT" });
+			events().onBusy(true);
+			events().onMessage({ id: "long-answer", role: "assistant", kind: "text", streaming: true,
+				text: "DRAFT_HEADER\n\n" + Array.from({ length: 30 }, (_, index) => `DRAFT_${index}`).join("\n\n") });
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getScrollBuffer().join("\n")).toContain("DRAFT_29");
+			});
+			const paragraphs = Array.from({ length: 120 }, (_, index) => `FINAL_${String(index).padStart(3, "0")}`);
+			events().onMessageUpdate("long-answer", { text: "FINAL_HEADER\n\n" + paragraphs.join("\n\n"), streaming: false });
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				const buffer = terminal.getScrollBuffer().join("\n");
+				expect(buffer).toContain("CURRENT_INPUT");
+				for (const paragraph of paragraphs) expect(buffer).toContain(paragraph);
+			});
+			events().onBusy(false);
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			expect(app.render(80).map(stripTerminalSequences).join("\n")).toContain("CURRENT_INPUT");
+			write.mockClear();
+			terminal.sendInput("next draft");
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getViewport().join("\n")).toContain("next draft");
+			});
+			const update = write.mock.calls.map(([data]) => data).join("");
+			expect(update).not.toContain("FINAL_000");
+			expect(update).not.toContain("\u001b[2J");
+			terminal.resize(60, 30);
+			await new Promise((resolve) => setTimeout(resolve, 180));
+			await terminal.flush();
+			const resized = terminal.getScrollBuffer().join("\n");
+			for (const paragraph of paragraphs) expect(resized).toContain(paragraph);
+		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("commits previous turns without archiving the latest user input", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-turn-boundary-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		try {
+			await app.start();
+			tui.start();
+			events().onBusy(true);
+			for (let index = 0; index < 20; index++) {
+				events().onMessage({ id: `question-${index}`, role: "user", kind: "text", text: `QUESTION_${index}` });
+				events().onMessage({ id: `answer-${index}`, role: "assistant", kind: "text", text: `ANSWER_${index}` });
+			}
+			events().onMessage({ id: "latest-input", role: "user", kind: "text", text: "LATEST_INPUT" });
+			events().onMessage({ id: "latest-answer", role: "assistant", kind: "text", text: "Latest paragraph\n\n".repeat(100), streaming: true });
+			await vi.waitFor(() => expect((app as unknown as { committedMessageCount: number }).committedMessageCount).toBe(40));
+			await terminal.flush();
+			const frame = app.render(80).map(stripTerminalSequences).join("\n");
+			expect(frame).toContain("LATEST_INPUT");
+			expect(frame).not.toContain("QUESTION_0");
+			expect(terminal.getScrollBuffer().join("\n")).toContain("QUESTION_0");
+		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
 	it("rebases completed output while busy and keeps small updates out of history", async () => {
 		const home = await mkdtemp(join(tmpdir(), "vspi-live-rebase-"));
 		const { app, tui, terminal, events } = renderFixture(home);

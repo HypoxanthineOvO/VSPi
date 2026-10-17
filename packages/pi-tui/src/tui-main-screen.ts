@@ -335,7 +335,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		newLines = processedLines;
 
 		// Helper to clear scrollback and viewport and render all new lines
-		const fullRender = (clear: boolean): void => {
+		const fullRender = (clear: boolean, resized = false): void => {
 			this.fullRedrawCount += 1;
 			const output = new BoundedTerminalWriter((data) => this.terminal.write(data));
 			output.append("\x1b[?2026h"); // Begin synchronized output
@@ -343,7 +343,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 				output.append(this.deleteKittyImages(this.previousKittyImageIds));
 				output.append(this.viewportOnlyRedraw ? "\x1b[2J\x1b[H" : "\x1b[2J\x1b[H\x1b[3J"); // Clear screen, home, then clear scrollback
 			}
-			const firstRow = clear && this.viewportOnlyRedraw ? Math.max(0, newLines.length - height) : 0;
+			const firstRow = clear && resized && this.viewportOnlyRedraw ? Math.max(0, newLines.length - height) : 0;
 			for (let i = firstRow; i < newLines.length; i++) {
 				if (i > firstRow) output.append("\r\n");
 				const line = newLines[i]!;
@@ -401,7 +401,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		// Width changes always need a full re-render because wrapping changes.
 		if (widthChanged) {
 			logRedraw(`terminal width changed (${this.previousWidth} -> ${width})`);
-			fullRender(true);
+			fullRender(true, this.previousWidth > 0);
 			return;
 		}
 
@@ -410,7 +410,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		// In that environment, a full redraw causes the entire history to replay on every toggle.
 		if (heightChanged && !isTermuxSession()) {
 			logRedraw(`terminal height changed (${this.previousHeight} -> ${height})`);
-			fullRender(true);
+			fullRender(true, this.previousHeight > 0);
 			return;
 		}
 

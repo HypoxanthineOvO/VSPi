@@ -201,7 +201,7 @@ Each card: **decision** and **why not in the app**. Status is `keep` or `absorbe
 
 ### opt-in-viewport-only-redraw — keep
 
-**Decision:** `setViewportOnlyRedraw(true)` limits clearing redraws to the visible tail and preserves native scrollback. Initial output and append rendering remain unchanged; the default still replays the whole frame.
+**Decision:** `setViewportOnlyRedraw(true)` limits actual terminal-resize redraws to the visible tail and preserves native scrollback. Content revisions and explicit repaint requests still print the complete active frame so new offscreen text reaches scrollback. Initial output and append rendering remain unchanged; the default still replays the whole frame.
 
 **Why not in the app:** Resize and offscreen-change fallbacks are inside the main-screen differential renderer, which owns the logical cursor and viewport offsets.
 
