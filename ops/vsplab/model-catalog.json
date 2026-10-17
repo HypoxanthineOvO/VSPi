@@ -2196,12 +2196,13 @@
       "aliases": [
         "deepseek-v4.1-flash"
       ],
-      "name": "DeepSeek V4.1 Flash",
+      "name": "DeepSeek V4.1 Flash 1017",
       "reasoning": true,
       "input": [
-        "text"
+        "text",
+        "image"
       ],
-      "contextWindow": 1048576,
+      "contextWindow": 1000000,
       "maxTokens": 384000,
       "effortLevels": [
         "off",
@@ -2242,6 +2243,12 @@
           "checkedAt": "2026-09-12",
           "verification": "family-default",
           "defaultSource": "official"
+        },
+        "checkpoint": {
+          "source": "https://api-docs.deepseek.com/zh-cn/updates/",
+          "checkedAt": "2026-10-17",
+          "verification": "official-changelog",
+          "upstreamModel": "deepseek-flash"
         }
       },
       "curated": true,
@@ -2253,6 +2260,51 @@
         "low": "low",
         "high": "high",
         "max": "max"
+      },
+      "checkpoint": "DeepSeek-V4.1-Flash-1017"
+    },
+    {
+      "id": "deepseek-flash-free",
+      "aliases": [
+        "deepseek-v4.1-flash-free"
+      ],
+      "name": "DeepSeek Flash Free",
+      "protocol": "openai",
+      "reasoning": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "contextWindow": 1000000,
+      "maxTokens": 32000,
+      "cost": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0
+      },
+      "curated": true,
+      "description": "OpenCode Zen 免费入口；使用真实 OpenCode 客户端。生产长请求实测995857输入tokens并通过首中尾检索；免费渠道checkpoint同步情况未确认。",
+      "metadataSources": {
+        "cost": {
+          "source": "https://opencode.ai/v2/docs/console/models/",
+          "checkedAt": "2026-10-17",
+          "verification": "official-free-model-and-production-zero-billing"
+        },
+        "contextWindow": {
+          "source": "VSP production acceptance 2026-10-17",
+          "verification": "production-long-request-needle-retrieval",
+          "inputTokens": 995857,
+          "completionTokens": 98,
+          "configuredContext": 1000000
+        },
+        "maxTokens": {
+          "source": "https://models.dev/api.json",
+          "provider": "opencode",
+          "model": "deepseek-v4.1-flash-free",
+          "checkedAt": "2026-10-17",
+          "verification": "catalog-output-limit-retained"
+        }
       }
     },
     {
@@ -3398,7 +3450,7 @@
     "relayCharges": false
   },
   "releaseDateMeaning": "Model public release date (YYYY-MM-DD), not catalog registration or snapshot identifier date; see per-model provenance",
-  "updatedAt": "2026-10-15",
+  "updatedAt": "2026-10-17",
   "metadataSourceSnapshot": {
     "url": "https://models.dev/api.json",
     "sha256": "5ebd3e69924168e7b7c44495eb43d5447bf0e8b308fe4d6401ee4eb14ef34e4c",
