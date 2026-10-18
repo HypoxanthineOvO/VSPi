@@ -32,6 +32,7 @@ const TRANSCRIPT_RETENTION_LIMITS = { messages: 1000, characters: 4 * 1024 * 102
 export function retainTranscript(
 	messages: TranscriptMessage[], committedCount: number,
 	limits = TRANSCRIPT_RETENTION_LIMITS,
+	canRemove?: (message: TranscriptMessage, index: number) => boolean,
 ): { messages: TranscriptMessage[]; committedCount: number } {
 	const size = (message: TranscriptMessage) => Object.values(message).reduce((sum, value) => sum + (typeof value === 'string' ? value.length : 0), 0);
 	let characters = messages.reduce((sum, message) => sum + size(message), 0);
@@ -40,6 +41,7 @@ export function retainTranscript(
 	const removed = new Set<number>();
 	for (const [index, message] of messages.entries()) {
 		if (count <= limits.messages && characters <= limits.characters) break;
+		if (canRemove && !canRemove(message, index)) continue;
 		if (('streaming' in message && message.streaming) || isQueuedTranscriptMessage(message) || ('status' in message && ['running', 'queued'].includes(message.status))) continue;
 		removed.add(index);
 		characters -= size(message);
@@ -50,6 +52,17 @@ export function retainTranscript(
 }
 
 export interface TranscriptRenderOptions {
+	live?: {
+		maxRows: number;
+		deadline: number;
+		emit: (section: TranscriptSection, maxRows: number) => { lines: string[]; start: number; auxiliary?: boolean; origins?: { row: number; column: number }[] };
+		width: (id: string) => number | undefined;
+		committed: ReadonlySet<string>;
+		renderText: (message: Extract<TranscriptMessage, { kind: "text" | "thinking" }>, maxRows: number) => string[];
+		pending: (id: string) => boolean;
+		beginText: (id: string, gap: boolean) => boolean;
+		defer: () => void;
+	};
 	inspectedId?: string;
 	selectedNodeId?: string;
 	selectedToolId?: string;
@@ -599,7 +612,7 @@ function estimateTranscriptBlockRowsUncached(
 	return 2;
 }
 
-function attachmentSummary(
+export function attachmentSummary(
 	message: Extract<TranscriptMessage, { kind: "text" }>,
 ): string[] {
 	return (message.attachments ?? []).map(
@@ -608,7 +621,7 @@ function attachmentSummary(
 	);
 }
 
-function deliveryStatus(
+export function deliveryStatus(
 	message: Extract<TranscriptMessage, { kind: "text" }>,
 ): string | undefined {
 	if (message.delivery === "cancelled" || message.deliveryState === "cancelled")
@@ -1021,19 +1034,55 @@ function parseDiff(value: string): DiffLine[] {
 	});
 }
 
-export function renderTranscript(
+export interface TranscriptSection {
+	emission?: { start: number; auxiliary?: boolean; origins?: { row: number; column: number }[] };
+	layoutWidth?: number;
+	references?: readonly TranscriptMessage[];
+	nodeId: string;
+	kind: "message" | "toolGroup";
+	/** Indexes into the `messages` argument the section was rendered from. */
+	messageIndexes: number[];
+	/** Every message in the section is terminal (not queued/running/streaming). */
+	final: boolean;
+	/** Thinking blocks carry status/duration on their header row. */
+	thinking: boolean;
+	/** Rendered lines, including the leading separator row when present. */
+	lines: string[];
+}
+
+/** Messages that produce a transcript section (the rest render nothing). */
+export function isTranscriptSectionVisible(message: TranscriptMessage): boolean {
+	return !(
+		isQueuedTranscriptMessage(message) ||
+		message.kind === "subagent" ||
+		(message.kind === "tool" && internalControlTool(message.name))
+	);
+}
+
+function isSettledTranscriptMessage(message: TranscriptMessage): boolean {
+	if (isQueuedTranscriptMessage(message)) return false;
+	if (
+		message.kind === "tool" &&
+		(message.status === "queued" || message.status === "running")
+	)
+		return false;
+	return !("streaming" in message && message.streaming === true);
+}
+
+export function renderTranscriptSections(
 	messages: TranscriptMessage[],
 	width: number,
 	theme: VspiTheme,
 	options: TranscriptRenderOptions = {},
-): string[] {
-	const output: string[] = [];
-	const visible = messages.filter(
-		(message) =>
-			!isQueuedTranscriptMessage(message) &&
-			message.kind !== "subagent" &&
-			!(message.kind === "tool" && internalControlTool(message.name)),
-	);
+	previousMessage?: TranscriptMessage,
+): TranscriptSection[] {
+	const sections: TranscriptSection[] = [];
+	const visible: { message: TranscriptMessage; index: number }[] = [];
+	for (const [index, message] of messages.entries()) {
+		if (!isTranscriptSectionVisible(message)) continue;
+		visible.push({ message, index });
+	}
+	let renderedRows = 0;
 	const retainedCacheKeys = new Set<string>();
 	const cacheState = [
 		width,
@@ -1046,26 +1095,47 @@ export function renderTranscript(
 		options.inspectedId ?? "",
 	].join(":");
 	for (let index = 0; index < visible.length; ) {
-		const message = visible[index];
-		if (!message) break;
+		const entry = visible[index];
+		if (!entry) break;
+		const message = entry.message;
+		const nativeText = message.kind === "text" || (message.kind === "thinking" && !message.collapsed && options.thinkingDisplay !== "hidden");
+		const nodeId = message.kind === "tool" ? toolGroupNodeId(message) : message.id;
+		const skipped = options.live?.committed.has(nodeId) === true;
+		const renderWidth = options.live?.width(nodeId) ?? width;
+		const nodeCacheState = renderWidth === width ? cacheState : `${renderWidth}${cacheState.slice(String(width).length)}`;
+		if (!skipped && options.live && (renderedRows >= options.live.maxRows || (sections.length > 0 && performance.now() >= options.live.deadline))) {
+			options.live.defer();
+			break;
+		}
+		let section: TranscriptSection;
 		if (message.kind === "tool") {
 			const group = [message];
+			const groupIndexes = [entry.index];
 			let cursor = index + 1;
 			while (cursor < visible.length) {
-				const candidate = visible[cursor];
+				const candidate = visible[cursor]?.message;
 				if (candidate?.kind !== "tool" || !sameToolGroup(message, candidate))
 					break;
 				group.push(candidate);
+				groupIndexes.push(visible[cursor]!.index);
 				cursor += 1;
 			}
 			const key = toolGroupNodeId(message);
 			retainedCacheKeys.add(key);
-			const state = `${cacheState}:${group.map((tool) => (tool.expanded ? "1" : "0")).join("")}`;
-			output.push(
-				...(options.cache?.render(key, group, state, () =>
-					renderToolGroup(group, width, theme, options),
-				) ?? renderToolGroup(group, width, theme, options)),
-			);
+			const state = `${nodeCacheState}:${group.map((tool) => (tool.expanded ? "1" : "0")).join("")}`;
+			section = {
+				nodeId: key,
+				references: group,
+				kind: "toolGroup",
+				messageIndexes: groupIndexes,
+				final: group.every(isSettledTranscriptMessage),
+				thinking: false,
+				lines: skipped ? [] : [
+					...(options.cache?.render(key, group, state, () =>
+						renderToolGroup(group, renderWidth, theme, options),
+					) ?? renderToolGroup(group, renderWidth, theme, options)),
+				],
+			};
 			index = cursor;
 		} else {
 			const key = `message:${message.id}`;
@@ -1076,27 +1146,65 @@ export function renderTranscript(
 						? "collapsed"
 						: "expanded"
 					: "";
-			output.push(
-				...(options.cache?.render(
-					key,
-					[message],
-					`${cacheState}:${mutableState}`,
-					() => renderTranscriptMessage(message, width, theme, options),
-				) ?? renderTranscriptMessage(message, width, theme, options)),
-			);
+			section = {
+				nodeId: message.id,
+				references: [message],
+				kind: "message",
+				messageIndexes: [entry.index],
+				final: isSettledTranscriptMessage(message) && !options.live?.pending(message.id),
+				thinking: message.kind === "thinking",
+				lines: skipped ? [] : options.live && nativeText && (message.kind === "text" || message.kind === "thinking")
+					? options.live.renderText(message, Math.max(1, options.live.maxRows - renderedRows - 1))
+					: [
+					...(options.cache?.render(
+						key,
+						[message],
+						`${nodeCacheState}:${mutableState}`,
+						() => renderTranscriptMessage(message, renderWidth, theme, options),
+					) ?? renderTranscriptMessage(message, renderWidth, theme, options)),
+				],
+			};
+			section.final = isSettledTranscriptMessage(message) && !options.live?.pending(message.id);
 			index += 1;
 		}
-		// userSurface 等带底色块用整行空白做内边距——视同为分隔空行，不再叠加第二个空行。
-		// 同理，若下一块（用户消息）以底色内边距行开头，它本身就是分隔行。
-		const nextStartsWithPad =
-			index < visible.length &&
-			visible[index]!.kind === "text" &&
-			visible[index]!.role === "user";
-		if (index < visible.length && stripAnsi(output.at(-1) ?? "").trim() !== "" && !nextStartsWithPad)
-			output.push("");
+		// 分隔空行属于后一个 section：section 作为最后一块被冻结/提交时
+		// 不带分隔行，间隙由后继块提供，重建时间距保持一致。
+		// userSurface 等带底色块以整行空白作内边距开头，本身就是分隔行；
+		// 上一块以空白行结尾（用户消息的底色内边距）时也不再叠加。
+		const previous = sections.at(-1);
+		const previousEndsBlank = previous
+			? stripAnsi(previous.lines.at(-1) ?? "").trim() === ""
+			: previousMessage?.kind === "text" && previousMessage.role === "user";
+		const startsWithPad =
+			message.kind === "text" && message.role === "user";
+		const gap = (previous !== undefined || previousMessage !== undefined) && !previousEndsBlank && !startsWithPad;
+		if (!skipped) {
+			if (options.live && nativeText) {
+				if (options.live.beginText(message.id, gap)) section.lines.unshift("");
+			} else if (gap) section.lines.unshift("");
+		}
+		section.layoutWidth = renderWidth;
+		if (options.live) {
+			const emitted = options.live.emit(section, Math.max(1, options.live.maxRows - renderedRows));
+			section.lines = emitted.lines;
+			section.emission = { start: emitted.start, auxiliary: emitted.auxiliary, origins: emitted.origins };
+		}
+		renderedRows += section.lines.length;
+		sections.push(section);
 	}
-	options.cache?.retain(retainedCacheKeys, visible);
-	return output;
+	options.cache?.retain(retainedCacheKeys, visible.map((entry) => entry.message));
+	return sections;
+}
+
+export function renderTranscript(
+	messages: TranscriptMessage[],
+	width: number,
+	theme: VspiTheme,
+	options: TranscriptRenderOptions = {},
+): string[] {
+	return renderTranscriptSections(messages, width, theme, options).flatMap(
+		(section) => section.lines,
+	);
 }
 
 function internalControlTool(name: string): boolean {

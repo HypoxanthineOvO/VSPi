@@ -310,6 +310,8 @@ export interface MarkdownTheme {
 }
 
 export interface MarkdownOptions {
+	/** Keep table column widths independent of rows arriving later. Default: content. */
+	tableLayout?: "content" | "fixed";
 	/** Preserve source list markers instead of normalizing them. */
 	preserveOrderedListMarkers?: boolean;
 	/** Preserve source backslash escapes instead of normalizing escaped punctuation. */
@@ -957,95 +959,102 @@ export class Markdown implements Component {
 			return fallbackLines;
 		}
 
-		const maxUnbrokenWordWidth = 30;
-
-		// Calculate natural column widths (what each column needs without constraints)
-		const naturalWidths: number[] = [];
-		const minWordWidths: number[] = [];
-		for (let i = 0; i < numCols; i++) {
-			const headerText = this.renderInlineTokens(token.header[i]!.tokens || [], styleContext);
-			naturalWidths[i] = visibleWidth(headerText);
-			minWordWidths[i] = Math.max(1, this.getLongestWordWidth(headerText, maxUnbrokenWordWidth));
-		}
-		for (const row of token.rows) {
-			for (let i = 0; i < row.length; i++) {
-				const cellText = this.renderInlineTokens(row[i]!.tokens || [], styleContext);
-				naturalWidths[i] = Math.max(naturalWidths[i] || 0, visibleWidth(cellText));
-				minWordWidths[i] = Math.max(
-					minWordWidths[i] || 1,
-					this.getLongestWordWidth(cellText, maxUnbrokenWordWidth),
-				);
-			}
-		}
-
-		let minColumnWidths = minWordWidths;
-		let minCellsWidth = minColumnWidths.reduce((a, b) => a + b, 0);
-
-		if (minCellsWidth > availableForCells) {
-			minColumnWidths = new Array(numCols).fill(1);
-			const remaining = availableForCells - numCols;
-
-			if (remaining > 0) {
-				const totalWeight = minWordWidths.reduce((total, width) => total + Math.max(0, width - 1), 0);
-				const growth = minWordWidths.map((width) => {
-					const weight = Math.max(0, width - 1);
-					return totalWeight > 0 ? Math.floor((weight / totalWeight) * remaining) : 0;
-				});
-
-				for (let i = 0; i < numCols; i++) {
-					minColumnWidths[i]! += growth[i] ?? 0;
-				}
-
-				const allocated = growth.reduce((total, width) => total + width, 0);
-				let leftover = remaining - allocated;
-				for (let i = 0; leftover > 0 && i < numCols; i++) {
-					minColumnWidths[i]!++;
-					leftover--;
-				}
-			}
-
-			minCellsWidth = minColumnWidths.reduce((a, b) => a + b, 0);
-		}
-
-		// Calculate column widths that fit within available width
-		const totalNaturalWidth = naturalWidths.reduce((a, b) => a + b, 0) + borderOverhead;
 		let columnWidths: number[];
-
-		if (totalNaturalWidth <= availableWidth) {
-			// Everything fits naturally
-			columnWidths = naturalWidths.map((width, index) => Math.max(width, minColumnWidths[index]!));
+		if (this.options.tableLayout === "fixed") {
+			columnWidths = Array.from({ length: numCols }, (_, index) =>
+				Math.floor(availableForCells / numCols) + (index < availableForCells % numCols ? 1 : 0),
+			);
 		} else {
-			// Need to shrink columns to fit
-			const totalGrowPotential = naturalWidths.reduce((total, width, index) => {
-				return total + Math.max(0, width - minColumnWidths[index]!);
-			}, 0);
-			const extraWidth = Math.max(0, availableForCells - minCellsWidth);
-			columnWidths = minColumnWidths.map((minWidth, index) => {
-				const naturalWidth = naturalWidths[index]!;
-				const minWidthDelta = Math.max(0, naturalWidth - minWidth);
-				let grow = 0;
-				if (totalGrowPotential > 0) {
-					grow = Math.floor((minWidthDelta / totalGrowPotential) * extraWidth);
-				}
-				return minWidth + grow;
-			});
+			const maxUnbrokenWordWidth = 30;
 
-			// Adjust for rounding errors - distribute remaining space
-			const allocated = columnWidths.reduce((a, b) => a + b, 0);
-			let remaining = availableForCells - allocated;
-			while (remaining > 0) {
-				let grew = false;
-				for (let i = 0; i < numCols && remaining > 0; i++) {
-					if (columnWidths[i]! < naturalWidths[i]!) {
-						columnWidths[i]!++;
-						remaining--;
-						grew = true;
+			// Calculate natural column widths (what each column needs without constraints)
+			const naturalWidths: number[] = [];
+			const minWordWidths: number[] = [];
+			for (let i = 0; i < numCols; i++) {
+				const headerText = this.renderInlineTokens(token.header[i]!.tokens || [], styleContext);
+				naturalWidths[i] = visibleWidth(headerText);
+				minWordWidths[i] = Math.max(1, this.getLongestWordWidth(headerText, maxUnbrokenWordWidth));
+			}
+			for (const row of token.rows) {
+				for (let i = 0; i < row.length; i++) {
+					const cellText = this.renderInlineTokens(row[i]!.tokens || [], styleContext);
+					naturalWidths[i] = Math.max(naturalWidths[i] || 0, visibleWidth(cellText));
+					minWordWidths[i] = Math.max(
+						minWordWidths[i] || 1,
+						this.getLongestWordWidth(cellText, maxUnbrokenWordWidth),
+					);
+				}
+			}
+
+			let minColumnWidths = minWordWidths;
+			let minCellsWidth = minColumnWidths.reduce((a, b) => a + b, 0);
+
+			if (minCellsWidth > availableForCells) {
+				minColumnWidths = new Array(numCols).fill(1);
+				const remaining = availableForCells - numCols;
+
+				if (remaining > 0) {
+					const totalWeight = minWordWidths.reduce((total, width) => total + Math.max(0, width - 1), 0);
+					const growth = minWordWidths.map((width) => {
+						const weight = Math.max(0, width - 1);
+						return totalWeight > 0 ? Math.floor((weight / totalWeight) * remaining) : 0;
+					});
+
+					for (let i = 0; i < numCols; i++) {
+						minColumnWidths[i]! += growth[i] ?? 0;
+					}
+
+					const allocated = growth.reduce((total, width) => total + width, 0);
+					let leftover = remaining - allocated;
+					for (let i = 0; leftover > 0 && i < numCols; i++) {
+						minColumnWidths[i]!++;
+						leftover--;
 					}
 				}
-				if (!grew) {
-					break;
+
+				minCellsWidth = minColumnWidths.reduce((a, b) => a + b, 0);
+			}
+
+			// Calculate column widths that fit within available width
+			const totalNaturalWidth = naturalWidths.reduce((a, b) => a + b, 0) + borderOverhead;
+
+			if (totalNaturalWidth <= availableWidth) {
+				// Everything fits naturally
+				columnWidths = naturalWidths.map((width, index) => Math.max(width, minColumnWidths[index]!));
+			} else {
+				// Need to shrink columns to fit
+				const totalGrowPotential = naturalWidths.reduce((total, width, index) => {
+					return total + Math.max(0, width - minColumnWidths[index]!);
+				}, 0);
+				const extraWidth = Math.max(0, availableForCells - minCellsWidth);
+				columnWidths = minColumnWidths.map((minWidth, index) => {
+					const naturalWidth = naturalWidths[index]!;
+					const minWidthDelta = Math.max(0, naturalWidth - minWidth);
+					let grow = 0;
+					if (totalGrowPotential > 0) {
+						grow = Math.floor((minWidthDelta / totalGrowPotential) * extraWidth);
+					}
+					return minWidth + grow;
+				});
+
+				// Adjust for rounding errors - distribute remaining space
+				const allocated = columnWidths.reduce((a, b) => a + b, 0);
+				let remaining = availableForCells - allocated;
+				while (remaining > 0) {
+					let grew = false;
+					for (let i = 0; i < numCols && remaining > 0; i++) {
+						if (columnWidths[i]! < naturalWidths[i]!) {
+							columnWidths[i]!++;
+							remaining--;
+							grew = true;
+						}
+					}
+					if (!grew) {
+						break;
+					}
 				}
 			}
+
 		}
 
 		// Render top border

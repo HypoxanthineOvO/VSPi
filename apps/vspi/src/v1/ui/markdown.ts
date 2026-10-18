@@ -92,7 +92,7 @@ function codeLabel(fence: string): string {
   return (language || "CODE").toUpperCase();
 }
 
-function codeHeader(label: string, width: number, theme: VspiTheme, tone: "default" | "thinking" = "default"): string {
+export function codeHeader(label: string, width: number, theme: VspiTheme, tone: "default" | "thinking" = "default"): string {
   const prefix = theme.capabilities.colorLevel === 0 ? `${theme.capabilities.unicode ? "│" : "|"} ` : "  ";
   const header = `${prefix}${label}`;
   // 思考块内的代码块不再铺亮色背景，仅用灰调标签保持层级可辨。
@@ -100,7 +100,7 @@ function codeHeader(label: string, width: number, theme: VspiTheme, tone: "defau
   return fillBackground(theme.markdown.codeBlockBorder(header), width, theme.codeBlock);
 }
 
-function codeBody(line: string, width: number, theme: VspiTheme, tone: "default" | "thinking" = "default"): string {
+export function codeBody(line: string, width: number, theme: VspiTheme, tone: "default" | "thinking" = "default"): string {
   if (tone === "thinking") return padLine(theme.thinking(stripAnsi(line)), width);
   if (theme.capabilities.colorLevel > 0) return fillBackground(line, width, theme.codeBlock);
   const border = theme.capabilities.unicode ? "│" : "|";
@@ -234,6 +234,7 @@ export class VspiMarkdown implements Component {
       wrapCode?: boolean;
       tone?: "default" | "thinking";
       streaming?: boolean;
+      fixedTables?: boolean;
       mermaidRendering?: "off" | "final" | "streaming";
     } = {},
   ) {
@@ -245,6 +246,7 @@ export class VspiMarkdown implements Component {
       0,
       options.tone === "thinking" ? theme.thinkingMarkdown : theme.markdown,
       { color: options.tone === "thinking" ? theme.thinking : theme.text },
+      { tableLayout: options.fixedTables ? "fixed" : undefined },
     );
   }
 
@@ -286,6 +288,7 @@ export function renderMarkdown(
     wrapCode?: boolean;
     tone?: "default" | "thinking";
     streaming?: boolean;
+    fixedTables?: boolean;
     mermaidRendering?: "off" | "final" | "streaming";
   } = {},
 ): string[] {

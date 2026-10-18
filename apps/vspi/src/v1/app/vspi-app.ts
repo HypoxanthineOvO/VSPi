@@ -1,3 +1,4 @@
+import { LiveMarkdown, LIVE_TRANSCRIPT_MAX_ROWS } from '../ui/live-markdown.js';
 import { randomUUID } from "node:crypto";
 import { join } from 'node:path';
 import { resolveRuntimePaths } from '@vsp/vsp-runtime';
@@ -14,6 +15,7 @@ import {
 	Key,
 	matchesKey,
 	ScrollView,
+	sliceByColumn,
 	type TUI,
 	TuiAltScreen,
 	type TuiMainScreenRenderState,
@@ -121,7 +123,7 @@ import {
 	type QueuedMessagePresentation,
 } from "../ui/activity.js";
 import { AgentsDock } from "../ui/agents-dock.js";
-import { padLine, stripAnsi } from "../ui/ansi.js";
+import { padLine, stripAnsi, visibleWidth } from "../ui/ansi.js";
 import { AuthDialog } from "../ui/auth-dialog.js";
 import { Composer, type ComposerActivity } from "../ui/composer.js";
 import {
@@ -147,11 +149,15 @@ import type { VspiTheme } from "../ui/theme.js";
 import {
 	buildTranscriptNodes,
 	isQueuedTranscriptMessage,
+	isTranscriptSectionVisible,
 	renderTranscript,
+	renderTranscriptSections,
 	retainTranscript,
 	selectTranscriptWindow,
 	type TranscriptNode,
+	type TranscriptRenderOptions,
 	TranscriptRenderCache,
+	type TranscriptSection,
 	type TranscriptWindow,
 } from "../ui/transcript.js";
 import { VspiTuiAltScreen } from "../ui/tui-frame-pacer.js";
@@ -341,11 +347,57 @@ interface AppRenderDock {
 	runtime: string[];
 }
 
+const STARTUP_SURFACE_NODE_ID = "startup:surface";
+
+
+interface LiveTranscriptSection {
+	origins?: { row: number; column: number }[];
+	layoutWidth?: number;
+	layout?: LiveMarkdown;
+	layoutVersion?: number;
+	auxiliary?: boolean;
+	references?: readonly TranscriptMessage[];
+	nodeId: string;
+	kind: TranscriptSection["kind"] | "startup";
+	thinking: boolean;
+	final: boolean;
+	/** Row range of the emitted lines inside the last committed frame's body. */
+	start: number;
+	end: number;
+	/** Lines emitted into the live region this frame (post frozen-row slicing). */
+	emitted: string[];
+	/** Index into the node's full render where emitted[0] belongs. */
+	emittedStart: number;
+	/** Indexes into messages[liveSectionsBase..]. */
+	messageIndexes: number[];
+}
+
+interface FrozenTranscriptRows {
+  count: number;
+  column?: number;
+  width?: number;
+  completed?: Set<string>;
+  pendingSummary?: string[];
+}
+
+
 export class VspiApp implements Component, Focusable {
 	readonly composer: Composer;
 	private tui: TUI;
 	private messages: TranscriptMessage[] = [];
 	private committedMessageCount = 0;
+	/** Canonical row positions already frozen into native scrollback, per live node. */
+	private readonly frozenNodeRows = new Map<string, FrozenTranscriptRows>();
+	private readonly committedNodeIds = new Set<string>();
+	private readonly liveMarkdown = new Map<string, LiveMarkdown>();
+	private pendingLiveOutput = false;
+	private liveSections: LiveTranscriptSection[] = [];
+	private liveSectionsBase = 0;
+	/** Deferred frames may queue new layout, but they do not own terminal history. */
+	private lastNativeFrame: { sections: LiveTranscriptSection[]; base: number; rows: number } | undefined;
+	/** Rows at the top of the last committed frame owned by splash + transcript. */
+	private liveTranscriptRows = 0;
+	private startupSurfaceShown = false;
 	private activityPresentationActive = false;
 	private readonly panels: PanelController;
 	private readonly agentsDock = new AgentsDock();
@@ -384,8 +436,6 @@ export class VspiApp implements Component, Focusable {
 	private agentDockTimer: NodeJS.Timeout | undefined;
 	private agentConversationSubscription: BackendSubscription | undefined;
 	private agentConversationLoadId = 0;
-	private stableCommitTimer: NodeJS.Timeout | undefined;
-	private waterfallSettling = false;
 	private workspaceFocus: "composer" | "transcript" | "plan" = "composer";
 	private panelFocused = false;
 	private inspectIndex: number | undefined;
@@ -575,7 +625,7 @@ export class VspiApp implements Component, Focusable {
 					if (this.messages.length > 1000) {
 						this.messages = [...this.messages.slice(0, 899), { id: 'history-window-gap', role: 'assistant', kind: 'session', text: '中间历史已移出显示窗口；/history latest 返回最近记录，完整记录未删除。' }, ...this.messages.slice(-100)];
 					}
-					this.committedMessageCount = 0;
+					this.resetTranscriptSurfaceState();
 					this.transcriptRenderCache.clear();
 					this.requestRender();
 				},
@@ -985,7 +1035,6 @@ export class VspiApp implements Component, Focusable {
 		this.queuedAnimationTick = 0;
 		if (this.agentDockTimer) clearInterval(this.agentDockTimer);
 		this.disposeAgentConversation();
-		if (this.stableCommitTimer) clearTimeout(this.stableCommitTimer);
 		this.thinkingTranslationRevision += 1;
 		this.thinkingTranslationAbort?.abort();
 		this.thinkingTranslationAbort = undefined;
@@ -1025,16 +1074,38 @@ export class VspiApp implements Component, Focusable {
 	}
 
 	private pruneTranscript(): void {
-		const retained = retainTranscript(this.messages, this.committedMessageCount);
+		const nodeIds = new Map<number, string>();
+		if (this.tui.mode === "regular") {
+			for (const node of buildTranscriptNodes(this.messages)) for (const index of node.messageIndexes) nodeIds.set(index, node.id);
+		}
+		const retained = retainTranscript(this.messages, this.committedMessageCount, undefined,
+			this.tui.mode === "regular" ? (_message, index) => index < this.committedMessageCount || this.committedNodeIds.has(nodeIds.get(index) ?? "") : undefined,
+		);
 		if (retained.messages === this.messages) return;
 		this.messages = retained.messages;
 		this.committedMessageCount = retained.committedCount;
 		this.inspectIndex = undefined;
+		const indexes = new Map(this.messages.map((message, index) => [message.id, index]));
+		const retainedNodeIds = new Set(buildTranscriptNodes(this.messages).map(node => node.id));
+		for (const id of this.liveMarkdown.keys()) if (!indexes.has(id)) this.liveMarkdown.delete(id);
+		for (const id of this.frozenNodeRows.keys()) if (!retainedNodeIds.has(id)) this.frozenNodeRows.delete(id);
+		for (const id of this.committedNodeIds) if (!retainedNodeIds.has(id)) this.committedNodeIds.delete(id);
+		for (const section of this.liveSections) section.messageIndexes = section.references?.flatMap(message => indexes.has(message.id) ? [indexes.get(message.id)!] : []) ?? section.messageIndexes;
+		this.liveSectionsBase = 0;
 		this.transcriptRenderCache.clear();
 	}
 
 	private bindTui(tui: TUI): void {
 		if (tui instanceof TuiAltScreen) tui.setLayoutRoot(this.fullscreenLayout);
+		if (tui instanceof ScrollbackTUI) {
+			tui.onFrameRendered = () => {
+				this.freezeScrolledTranscriptRows();
+				this.lastNativeFrame = { sections: this.liveSections.map(section => ({ ...section, emitted: [...section.emitted] })), base: this.liveSectionsBase, rows: this.liveTranscriptRows };
+			};
+			tui.onRebuildSettled = () => {
+				this.reflowTranscriptViewport();
+			};
+		}
 	}
 
 	private switchTuiMode(mode: TuiMode): boolean {
@@ -1390,6 +1461,7 @@ export class VspiApp implements Component, Focusable {
 		// active frame makes the frame taller than the terminal and scrolls the
 		// picker title above the visible area.
 		this.startupSurface = this.panels.kind === "sessions" ? [] : [...lines];
+		if (this.startupSurface.length > 0) this.startupSurfaceShown = true;
 		this.fullscreenRenderRevision += 1;
 	}
 
@@ -1582,10 +1654,19 @@ export class VspiApp implements Component, Focusable {
 	}
 
 	private buildRenderBody(width: number, dock: AppRenderDock): string[] {
-		if (this.sideQuestion) return this.sideQuestion.render(width, this.theme, this.tui.terminal.rows - 2);
-		if (this.authDialog)
+		if (this.sideQuestion) {
+			this.liveSections = [];
+			this.liveTranscriptRows = 0;
+			return this.sideQuestion.render(width, this.theme, this.tui.terminal.rows - 2);
+		}
+		if (this.authDialog) {
+			this.liveSections = [];
+			this.liveTranscriptRows = 0;
 			return this.withStartupSurface(this.authDialog.render(width, this.theme));
+		}
 		if (this.panels.kind === "sessions") {
+			this.liveSections = [];
+			this.liveTranscriptRows = 0;
 			const terminalRows = Number.isFinite(this.tui.terminal.rows)
 				? this.tui.terminal.rows
 				: 24;
@@ -1620,7 +1701,6 @@ export class VspiApp implements Component, Focusable {
 			return [...blank, ...surface, ...blankBottom];
 		}
 		const {
-			activityActive,
 			agents,
 			composer,
 			activity,
@@ -1659,53 +1739,62 @@ export class VspiApp implements Component, Focusable {
 			: 24;
 		const questionGutterRows =
 			!previewLines && this.panels.kind === "question" ? 1 : 0;
-		const activeSurfaceRows =
-			this.tui.mode === "fullscreen"
-				? Number.MAX_SAFE_INTEGER
-				: interactiveSurfaceFocused
-					? terminalRows
-					: terminalRows * 3;
-		const transcriptRows = interactiveSurfaceFocused
-			? Math.max(
-					3,
-					activeSurfaceRows -
-						this.startupSurface.length -
-						composer.length -
-						activity.length -
-						queuedMessages.length -
-						agents.length -
-						status.length -
-						runtime.length -
-						reserved -
-						questionGutterRows,
-				)
-			: activeSurfaceRows;
-		const transcriptWindow = this.currentTranscriptWindow(
-			width,
-			transcriptRows,
-			this.tui.mode === "regular" && (activityActive || this.waterfallSettling),
-		);
-		const output = renderTranscript(
-			transcriptWindow.messages,
-			width,
-			this.theme,
-			{
-				...(transcriptFocused && this.inspectNodeId
-					? { selectedNodeId: this.inspectNodeId }
-					: {}),
-				...(transcriptFocused &&
-				this.inspectDepth === "tool" &&
-				this.inspectToolId
-					? { selectedToolId: this.inspectToolId }
-					: {}),
-				thinkingDisplay: this.options.settings.thinkingDisplay,
-				wrapCode: this.options.settings.wrapCode,
-				collapseCompletedTools: this.options.settings.collapseTools,
-				mermaidRendering: this.options.settings.mermaidRendering,
-				cache: this.transcriptRenderCache,
-			},
-		);
+		const liveTranscript = this.tui.mode === "regular" && !transcriptFocused;
+		const transcriptOptions: TranscriptRenderOptions = {
+			...(transcriptFocused && this.inspectNodeId
+				? { selectedNodeId: this.inspectNodeId }
+				: {}),
+			...(transcriptFocused &&
+			this.inspectDepth === "tool" &&
+			this.inspectToolId
+				? { selectedToolId: this.inspectToolId }
+				: {}),
+			thinkingDisplay: this.options.settings.thinkingDisplay,
+			wrapCode: this.options.settings.wrapCode,
+			collapseCompletedTools: this.options.settings.collapseTools,
+			mermaidRendering: this.options.settings.mermaidRendering,
+			cache: this.transcriptRenderCache,
+		};
+		let output: string[];
+		if (liveTranscript) {
+			// Regular live mode drains bounded batches; rows that scroll above
+			// the viewport freeze into native scrollback.
+			output = this.renderLiveTranscript(width, transcriptOptions, Math.max(1, terminalRows - dock.lines.length - reserved - runtime.length - (interactiveSurfaceFocused ? panelRows : 0) - 1));
+		} else {
+			this.liveSections = [];
+			this.liveTranscriptRows = 0;
+			const activeSurfaceRows = interactiveSurfaceFocused
+				? terminalRows
+				: Number.MAX_SAFE_INTEGER;
+			const transcriptRows = interactiveSurfaceFocused
+				? Math.max(
+						3,
+						activeSurfaceRows -
+							this.startupSurface.length -
+							composer.length -
+							activity.length -
+							queuedMessages.length -
+							agents.length -
+							status.length -
+							runtime.length -
+							reserved -
+							questionGutterRows,
+					)
+				: activeSurfaceRows;
+			const transcriptWindow = this.currentTranscriptWindow(
+				width,
+				transcriptRows,
+			);
+			output = renderTranscript(
+				transcriptWindow.messages,
+				width,
+				this.theme,
+				transcriptOptions,
+			);
+		}
 		if (output.length > 0) output.push("");
+		// Rows past this point belong to preview/panels and are never frozen.
+		if (liveTranscript) this.liveTranscriptRows = output.length;
 		if (previewLines) {
 			output.push(...previewLines);
 			output.push(this.theme.muted(padLine(this.previewLabel, width)));
@@ -1727,69 +1816,276 @@ export class VspiApp implements Component, Focusable {
 			if (hint !== undefined) output.push(hint);
 		}
 		if (questionGutterRows > 0) output.push("");
-		return this.withStartupSurface(output);
+		// The live path already emitted the startup surface rows at the top.
+		return liveTranscript ? output : this.withStartupSurface(output);
 	}
 
-	commitStableTranscript(): number {
-		const commit = (
-			this.tui as TUI & { commitStatic?: (lines: readonly string[]) => boolean }
-		).commitStatic;
-		if (!commit) return 0;
-		let stableEnd = this.committedMessageCount;
-		while (stableEnd < this.messages.length) {
-			const message = this.messages[stableEnd];
-			if (
-				!message ||
-				isQueuedTranscriptMessage(message) ||
-				(message.kind === "tool" &&
-					(message.status === "queued" || message.status === "running")) ||
-				("streaming" in message && message.streaming === true)
-			)
+	/** Emit bounded batches; only frames actually written to the terminal freeze rows. */
+	private renderLiveTranscript(
+		width: number,
+		options: TranscriptRenderOptions,
+		previewRows = 8,
+	): string[] {
+		this.pendingLiveOutput = false;
+		for (const message of this.messages) if (message.kind === "thinking" && (message.collapsed || options.thinkingDisplay === "hidden")) this.liveMarkdown.delete(message.id);
+		const liveOptions: TranscriptRenderOptions = { ...options, live: {
+			maxRows: LIVE_TRANSCRIPT_MAX_ROWS,
+			deadline: performance.now() + 8,
+			emit: (section, maxRows) => {
+				const emitted = this.emitLiveSectionLines(section, maxRows);
+				if (emitted.more || emitted.lines.length > maxRows) {
+					this.pendingLiveOutput = true;
+					section.final = false;
+				}
+				return { ...emitted, lines: emitted.lines.slice(0, maxRows) };
+			},
+			width: id => this.frozenNodeRows.get(id)?.width,
+			committed: this.committedNodeIds,
+			renderText: (message, maxRows) => {
+				let layout = this.liveMarkdown.get(message.id);
+				if (!layout) { layout = new LiveMarkdown(); this.liveMarkdown.set(message.id, layout); }
+				const lines = layout.render(message, width, this.theme, options, maxRows, previewRows);
+				if (layout.pending) this.pendingLiveOutput = true;
+				return lines;
+			},
+			pending: id => this.liveMarkdown.get(id)?.pending ?? false,
+			beginText: (id, gap) => this.liveMarkdown.get(id)?.beginSection(gap) ?? false,
+			defer: () => { this.pendingLiveOutput = true; },
+		} };
+		const base = this.committedMessageCount;
+		const startup = this.emitLiveSectionLines({
+			nodeId: STARTUP_SURFACE_NODE_ID,
+			kind: "message",
+			messageIndexes: [],
+			final: true,
+			thinking: false,
+			lines: this.startupSurface,
+		});
+		// The first live section leads with a separator row when the last
+		// committed message needs one; the decision comes from the previous
+		// visible message rather than from rows still on screen.
+		let previousMessage: TranscriptMessage | undefined;
+		for (let index = base - 1; index >= 0; index -= 1) {
+			const candidate = this.messages[index]!;
+			if (isTranscriptSectionVisible(candidate)) {
+				previousMessage = candidate;
 				break;
-			stableEnd += 1;
+			}
 		}
-		const turnStart = this.latestTurnStart();
-		if (turnStart >= 0) stableEnd = Math.min(stableEnd, turnStart);
-		if (stableEnd <= this.committedMessageCount) return 0;
-
-		const width = Math.max(1, this.tui.terminal.columns);
-		const activeMessages = this.messages.slice(this.committedMessageCount);
-		const visibleTail = selectTranscriptWindow(activeMessages, {
+		const sections = renderTranscriptSections(
+			this.messages.slice(base),
 			width,
-			maxRows: this.transcriptViewportRows(width),
-			maxBlocks: 80,
-			maxCharacters: 60_000,
-			thinkingDisplay: this.options.settings.thinkingDisplay,
-			collapseCompletedTools: this.options.settings.collapseTools,
-			cache: this.transcriptRenderCache,
-			pinnedNodeId: this.messages[turnStart]?.id,
-		});
-		const firstVisibleMessage =
-			visibleTail.nodes[0]?.messageIndexes[0] ?? activeMessages.length;
-		const commitEnd = Math.min(stableEnd, this.committedMessageCount + firstVisibleMessage);
-		const messages = this.messages.slice(this.committedMessageCount, commitEnd);
-		if (messages.length === 0 && this.startupSurface.length === 0) return 0;
-		const lines = renderTranscript(messages, width, this.theme, {
-			thinkingDisplay: this.options.settings.thinkingDisplay,
-			wrapCode: this.options.settings.wrapCode,
-			collapseCompletedTools: this.options.settings.collapseTools,
-			mermaidRendering: this.options.settings.mermaidRendering,
-			cache: this.transcriptRenderCache,
-		});
-		if (
-			messages.length > 0 &&
-			commitEnd < this.messages.length &&
-			this.messages[commitEnd]?.role !== "user" &&
-			stripAnsi(lines.at(-1) ?? "") !== ""
-		) {
-			lines.push("");
+			this.theme,
+			liveOptions,
+			previousMessage,
+		);
+		const live: LiveTranscriptSection[] = [];
+		const output = [...startup.lines];
+		if (this.startupSurface.length > 0) {
+			live.push({
+				nodeId: STARTUP_SURFACE_NODE_ID,
+				kind: "startup",
+				thinking: false,
+				final: true,
+				start: 0,
+				end: startup.lines.length,
+				emitted: startup.lines,
+				emittedStart: startup.start,
+				messageIndexes: [],
+			});
 		}
-		const prefix = [...this.startupSurface, ...lines];
-		if (prefix.length === 0 || commit.call(this.tui, prefix) !== true) return 0;
-		const committed = commitEnd - this.committedMessageCount;
-		this.committedMessageCount = commitEnd;
-		this.startupSurface = [];
-		return committed;
+		for (const section of sections) {
+			const emitted = section.emission ? { lines: section.lines, ...section.emission } : this.emitLiveSectionLines(section);
+			const start = output.length;
+			output.push(...emitted.lines);
+			live.push({
+				nodeId: section.nodeId,
+				origins: emitted.origins,
+				layoutWidth: section.layoutWidth,
+				layout: this.liveMarkdown.get(section.nodeId),
+				layoutVersion: this.liveMarkdown.get(section.nodeId)?.version,
+				references: section.references,
+				kind: section.kind,
+				thinking: section.thinking,
+				final: section.final,
+				start,
+				end: output.length,
+				emitted: emitted.lines,
+				emittedStart: emitted.start,
+				auxiliary: emitted.auxiliary,
+				messageIndexes: section.messageIndexes,
+			});
+		}
+		this.liveSections = live;
+		this.liveSectionsBase = base;
+		return output;
+	}
+
+	/** Keep generic row coordinates stable across resize and retain notices until frozen. */
+	private emitLiveSectionLines(section: TranscriptSection, maxRows = LIVE_TRANSCRIPT_MAX_ROWS): {
+		lines: string[];
+		start: number;
+		auxiliary?: boolean;
+		more?: boolean;
+		origins?: { row: number; column: number }[];
+	} {
+		if (this.liveMarkdown.has(section.nodeId)) return { lines: section.lines, start: 0 };
+		const frozen = this.frozenNodeRows.get(section.nodeId);
+		const start = Math.min(frozen?.count ?? 0, section.lines.length);
+		const lines = section.lines.slice(start);
+		if (frozen && (lines.length === 0 || lines.length === 1 && (frozen.column ?? 0) >= visibleWidth(stripAnsi(lines[0]!).trimEnd())) && section.kind === "toolGroup") {
+			const completed = (section.references ?? []).filter(message => message.kind === "tool" && message.status !== "running" && message.status !== "queued");
+			const fresh = completed.filter(message => !frozen.completed?.has(message.id));
+			if (fresh.length) {
+				frozen.completed = new Set(completed.map(message => message.id));
+				const last = fresh.at(-1)!;
+				const summary = last.kind === "tool" ? `${last.name} · ${last.summary}` : "";
+				frozen.pendingSummary = wrapTextWithAnsi(this.theme.muted(`✓ Tools ${completed.length}/${section.references?.length ?? completed.length} · ${summary}`), Math.max(1, this.tui.terminal.columns)).slice(0, 3);
+			}
+			if (frozen.pendingSummary?.length) return { lines: frozen.pendingSummary, start: 0, auxiliary: true };
+		}
+		const output: string[] = [];
+		const origins: { row: number; column: number }[] = [];
+		const width = Math.max(1, this.tui.terminal.columns);
+		let row = start;
+		let column = frozen?.column ?? 0;
+		while (row < section.lines.length && output.length < maxRows) {
+			const line = section.lines[row]!;
+			const used = visibleWidth(stripAnsi(line).trimEnd());
+			if (column >= used) {
+				if (column === 0) { output.push(""); origins.push({ row: row + 1, column: 0 }); }
+				row++; column = 0;
+				continue;
+			}
+			let part = sliceByColumn(line, column, Math.min(width, used - column), true);
+			if (visibleWidth(part) === 0) part = sliceByColumn(line, column, Math.min(2, used - column));
+			output.push(part);
+			column += visibleWidth(part);
+			if (column >= used) { row++; column = 0; }
+			origins.push({ row, column });
+		}
+		return { lines: output, start, origins, more: row < section.lines.length };
+	}
+
+	/**
+	 * Freeze the rows the last committed frame scrolled above the viewport.
+	 * Runs synchronously after every rendered regular-mode frame.
+	 */
+	private freezeScrolledTranscriptRows(): void {
+		if (this.tui.mode !== "regular" || this.workspaceFocus === "transcript") return;
+		const tui = this.tui as TUI & {
+			captureRenderState?: () => TuiMainScreenRenderState;
+			commitStatic?: (lines: readonly string[]) => boolean;
+			hasOverlay?: () => boolean;
+		};
+		if (tui.hasOverlay?.()) return;
+		const state = tui.captureRenderState?.();
+		const commitStatic = tui.commitStatic;
+		if (!state || !commitStatic) return;
+		const m = Math.min(state.previousViewportTop, this.liveTranscriptRows);
+		const base = this.liveSectionsBase;
+		const frozenRows = m > 0 && commitStatic.call(this.tui, state.previousLines.slice(0, m)) ? m : 0;
+		if (frozenRows) this.freezeLivePrefix(frozenRows);
+		// Nodes whose emitted remainder collapsed to zero rows are entirely in
+		// scrollback; once final they join the committed prefix even when nothing
+		// scrolled this frame.
+		for (const section of this.liveSections) {
+			if (section.emitted.length === 0 && section.final)
+				this.commitLiveSection(section);
+		}
+		this.advanceCommittedPrefix(base);
+		this.rebaseLiveSections(frozenRows);
+		this.pruneTranscript();
+		if (this.pendingLiveOutput) this.requestRender();
+	}
+
+	private freezeLivePrefix(rows: number): void {
+		for (const section of this.liveSections) {
+			if (section.start >= rows) break;
+			const count = Math.max(0, Math.min(section.end, rows) - section.start);
+			if (count) {
+				const layout = this.liveMarkdown.get(section.nodeId);
+				if (layout && section.layout === layout && section.layoutVersion === layout.version) layout.freeze(count);
+				else if (!section.layout) {
+					const entry = this.frozenNodeRows.get(section.nodeId) ?? { count: 0 };
+					if (section.auxiliary) entry.pendingSummary?.splice(0, count);
+					else {
+						const position = section.origins?.[count - 1];
+						entry.count = position?.row ?? section.emittedStart + count;
+						entry.column = position?.column ?? 0;
+						entry.width ??= section.layoutWidth ?? this.tui.terminal.columns;
+					}
+					entry.completed ??= new Set((section.references ?? []).filter(message => message.kind === "tool" && message.status !== "running" && message.status !== "queued").map(message => message.id));
+					this.frozenNodeRows.set(section.nodeId, entry);
+				}
+			}
+			if (section.final && section.end <= rows && (!section.layout || section.layout === this.liveMarkdown.get(section.nodeId) && section.layoutVersion === section.layout.version)) this.commitLiveSection(section);
+		}
+	}
+
+	private rebaseLiveSections(rows: number): void {
+		for (const section of this.liveSections) {
+			const removed = Math.max(0, Math.min(section.end, rows) - section.start);
+			section.emitted = section.emitted.slice(removed);
+			section.origins = section.origins?.slice(removed);
+			section.emittedStart = this.liveMarkdown.has(section.nodeId) ? 0 : section.emittedStart + removed;
+			section.start = Math.max(0, section.start - rows);
+			section.end = Math.max(0, section.end - rows);
+		}
+		this.liveTranscriptRows = Math.max(0, this.liveTranscriptRows - rows);
+	}
+
+	private commitLiveSection(section: LiveTranscriptSection): void {
+		if (section.nodeId === STARTUP_SURFACE_NODE_ID) {
+			this.startupSurface = [];
+			this.frozenNodeRows.delete(section.nodeId);
+			return;
+		}
+		this.committedNodeIds.add(section.nodeId);
+	}
+
+	private advanceCommittedPrefix(base: number): void {
+		for (const section of this.liveSections) {
+			if (section.nodeId === STARTUP_SURFACE_NODE_ID) continue;
+			if (!this.committedNodeIds.has(section.nodeId)) break;
+			const last = section.messageIndexes.at(-1);
+			if (last !== undefined)
+				this.committedMessageCount = Math.max(
+					this.committedMessageCount,
+					base + last + 1,
+				);
+			this.committedNodeIds.delete(section.nodeId);
+			this.frozenNodeRows.delete(section.nodeId);
+			this.liveMarkdown.delete(section.nodeId);
+		}
+	}
+
+	/** Archive the already emitted live rows; native resize reflow owns their history. */
+	private reflowTranscriptViewport(): void {
+		if (this.tui.mode !== "regular") return;
+		const tui = this.tui as TUI & { reflowViewport?: () => void };
+		const frame = this.lastNativeFrame;
+		this.liveSections = frame?.sections.map(section => ({ ...section, emitted: [...section.emitted] })) ?? [];
+		this.liveSectionsBase = frame?.base ?? this.committedMessageCount;
+		this.liveTranscriptRows = frame?.rows ?? 0;
+		this.freezeLivePrefix(this.liveTranscriptRows);
+		this.advanceCommittedPrefix(this.liveSectionsBase);
+		this.rebaseLiveSections(this.liveTranscriptRows);
+		for (const layout of this.liveMarkdown.values()) layout.beginViewport();
+		if (tui.reflowViewport) tui.reflowViewport();
+		else this.beginTuiSurfaceEpoch();
+	}
+
+	private resetTranscriptSurfaceState(): void {
+		this.committedMessageCount = 0;
+		this.lastNativeFrame = undefined;
+		this.liveMarkdown?.clear();
+		this.pendingLiveOutput = false;
+		this.frozenNodeRows.clear();
+		this.committedNodeIds.clear();
+		this.liveSections = [];
+		this.liveSectionsBase = 0;
+		this.liveTranscriptRows = 0;
 	}
 
 	/** Start one append-only surface epoch after all restored Session state has hydrated. */
@@ -1797,40 +2093,22 @@ export class VspiApp implements Component, Focusable {
 		mode: "append" | "replace" = "append",
 	): void {
 		this.startupSurface = [];
-		this.committedMessageCount = 0;
+		this.resetTranscriptSurfaceState();
 		if (this.tui.mode === "fullscreen") {
 			this.forceRepaint();
 			return;
 		}
 		if (mode === "append") {
-			// Keep committedMessageCount at 0 and run the normal settle pipeline: the
-			// settling render paints every restored message, then the stable commit
-			// rebases all but the active window into native scrollback. Advancing the
-			// counter to the window start instead would mark the earlier restored
-			// history as committed without ever printing it.
+			// Restored messages drain in bounded batches; row freezing commits
+			// each printed prefix into native scrollback.
 			this.beginTuiSurfaceEpoch();
-			this.scheduleStableTranscriptCommit();
 			return;
 		}
-		this.forceRepaint();
+		this.beginTuiSurfaceEpoch();
 	}
 
-	/**
-	 * Commit stable regular-mode content before a clearing force render so it
-	 * survives in native scrollback instead of being wiped by the repaint.
-	 */
 	private forceRepaint(): void {
-		if (this.tui.mode === "regular") {
-			// Render the pending state first so the stable-commit prefix matches the
-			// current frame; process.nextTick renders flush before setImmediate.
-			this.requestRender();
-			setImmediate(() => {
-				this.commitStableTranscript();
-				this.requestRender(true);
-			});
-			return;
-		}
-		this.requestRender(true);
+		this.requestRender(this.tui.mode !== "regular");
 	}
 
 	private beginTuiSurfaceEpoch(): void {
@@ -2547,8 +2825,6 @@ export class VspiApp implements Component, Focusable {
 			if (this.workingTimer) clearInterval(this.workingTimer);
 			this.workingTimerInterval = timerInterval;
 			this.workingTimer = setInterval(() => {
-				if (this.tui.mode === "regular" && this.workspaceFocus !== "transcript")
-					this.commitStableTranscript();
 				if (!this.activityReducedMotion()) {
 					this.workingFrame = (this.workingFrame + 1) % 24;
 					this.queuedAnimationTick += 1;
@@ -2567,7 +2843,7 @@ export class VspiApp implements Component, Focusable {
 			this.workingStartedAt = undefined;
 			this.workingFrame = 0;
 		}
-		if (completedActivity) this.scheduleStableTranscriptCommit();
+		if (completedActivity) this.requestRender();
 		if (this.renderReady) this.tui.terminal.setProgress(active);
 		this.requestRender();
 	}
@@ -2661,35 +2937,6 @@ export class VspiApp implements Component, Focusable {
 		this.agentConversationSubscription?.dispose();
 		this.agentConversationSubscription = undefined;
 		this.panels.clearAgentConversation();
-	}
-
-	private scheduleStableTranscriptCommit(attempt = 0): void {
-		if (this.stableCommitTimer) clearTimeout(this.stableCommitTimer);
-		this.waterfallSettling = true;
-		this.requestRender();
-		this.stableCommitTimer = setTimeout(() => {
-			this.stableCommitTimer = undefined;
-			if (this.activityActive()) return;
-			const boundedWindow = this.currentTranscriptWindow();
-			const requiresRebase = boundedWindow.hiddenBlocks > 0;
-			const committed = this.commitStableTranscript();
-			if (requiresRebase && committed === 0 && attempt < 20) {
-				this.scheduleStableTranscriptCommit(attempt + 1);
-				return;
-			}
-			if (requiresRebase && committed === 0 && attempt === 20) {
-				// Prefix validation has failed for ~0.5s, likely because the rendered
-				// frame drifted from the committed prefix. Rebuild the surface from a
-				// fresh append-only epoch and retry once; otherwise the uncommitted
-				// window would stay stuck out of scrollback forever.
-				this.beginTuiSurfaceEpoch();
-				this.scheduleStableTranscriptCommit(attempt + 1);
-				return;
-			}
-			this.waterfallSettling = false;
-			this.requestRender();
-		}, 24);
-		this.stableCommitTimer.unref();
 	}
 
 	private completeOneShotPanel(): void {
@@ -4619,7 +4866,7 @@ export class VspiApp implements Component, Focusable {
 			this.queuedMessages?.clear();
 			this.queuedPresentations.clear();
 			this.compaction = undefined;
-			this.committedMessageCount = 0;
+			this.resetTranscriptSurfaceState();
 			this.activityPresentationActive = false;
 			this.messages = [];
 		} else if (projection.kind === "snapshot-message") {
@@ -4931,18 +5178,9 @@ export class VspiApp implements Component, Focusable {
 		this.requestRender();
 	}
 
-	private latestTurnStart(): number {
-		return this.messages.findLastIndex((message) =>
-			message.role === "user" && message.kind === "text" &&
-			message.delivery !== "steer" && message.delivery !== "cancelled" &&
-			message.deliveryState !== "cancelled" && !isQueuedTranscriptMessage(message),
-		);
-	}
-
 	private currentTranscriptWindow(
 		width?: number,
 		maxRows?: number,
-		unboundedActiveTail = false,
 	): TranscriptWindow {
 		const terminalWidth = width ?? this.tui.terminal.columns;
 		const safeWidth = Number.isFinite(terminalWidth)
@@ -4954,23 +5192,17 @@ export class VspiApp implements Component, Focusable {
 				: this.messages.slice(this.committedMessageCount);
 		return selectTranscriptWindow(source, {
 			width: safeWidth,
-			maxRows: unboundedActiveTail
-				? Number.MAX_SAFE_INTEGER
-				: Math.max(1, maxRows ?? this.transcriptViewportRows(safeWidth)),
-			maxBlocks: unboundedActiveTail ? Number.MAX_SAFE_INTEGER : 80,
-			maxCharacters: unboundedActiveTail ? Number.MAX_SAFE_INTEGER : 60_000,
+			maxRows: Math.max(1, maxRows ?? this.transcriptViewportRows(safeWidth)),
+			maxBlocks: 80,
+			maxCharacters: 60_000,
 			thinkingDisplay: this.options.settings.thinkingDisplay,
 			collapseCompletedTools: this.options.settings.collapseTools,
 			cache: this.transcriptRenderCache,
-			// 精确 hiddenBlocks 只有锚点浏览（Inspect 翻页）需要；尾随模式下它
-			// 只用于 requiresRebase 的 >0 判断，走 tail 快捷路径免掉每帧全量
-			// buildTranscriptNodes 扫描（长会话下是每键 O(N) 热点）。
+			// 精确 hiddenBlocks 只有锚点浏览（Inspect 翻页）需要；尾随模式走
+			// tail 快捷路径免掉每帧全量 buildTranscriptNodes 扫描。
 			exactHiddenBlocks: this.tui.mode !== "fullscreen",
-			pinnedNodeId: this.workspaceFocus === "transcript"
-				? this.inspectNodeId
-				: this.tui.mode === "regular"
-					? this.messages[this.latestTurnStart()]?.id
-					: undefined,
+			pinnedNodeId:
+				this.workspaceFocus === "transcript" ? this.inspectNodeId : undefined,
 			...(this.workspaceFocus === "transcript" && this.transcriptStartNodeId
 				? { startNodeId: this.transcriptStartNodeId }
 				: {}),
@@ -5011,7 +5243,7 @@ export class VspiApp implements Component, Focusable {
 		this.transcriptStartNodeId = all[selectedGlobal]?.id;
 	}
 
-	/** Rows retained in the active waterfall before stable content is rebased into native scrollback. */
+	/** Transcript window budget for Inspect/Plan focus and fullscreen mode. */
 	private transcriptViewportRows(width: number): number {
 		const terminalRows = Number.isFinite(this.tui.terminal.rows)
 			? this.tui.terminal.rows
@@ -5560,11 +5792,8 @@ export class VspiApp implements Component, Focusable {
 			this.activeSubmission.restored = true;
 			this.activeSubmission = undefined;
 		}
-		this.committedMessageCount = 0;
+		this.resetTranscriptSurfaceState();
 		this.activityPresentationActive = false;
-		this.waterfallSettling = false;
-		if (this.stableCommitTimer) clearTimeout(this.stableCommitTimer);
-		this.stableCommitTimer = undefined;
 		this.messages = [];
 		this.thinkingTranslationRevision += 1;
 		this.thinkingTranslationAbort?.abort();

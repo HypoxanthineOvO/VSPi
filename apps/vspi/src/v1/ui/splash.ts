@@ -79,7 +79,9 @@ function withAutowrapDisabled(content: string): string {
 }
 
 export function renderStartupViewportReset(): string {
-  return `\u001b[?2026h${withAutowrapDisabled("\u001b[2J\u001b[H")}\u001b[?2026l`;
+  // Erase the placeholder row in place. ESC[2J would push the shell screen and
+  // the placeholder into native scrollback on terminals like macOS Terminal.
+  return `\u001b[?2026h${withAutowrapDisabled("\r\u001b[2K")}\u001b[?2026l`;
 }
 
 export async function runStartupSequence(options: StartupSequenceOptions): Promise<void> {

@@ -13,7 +13,9 @@ VSPi is a separate product from Kimi Code. Treat `apps/vspi/src/v1` as the sourc
 
 ## Constraints
 
-- Preserve chronological transcript order. Updating a tool or task must update its existing node rather than move it to the tail.
+- Preserve chronological transcript order. Updating a tool or task must update its existing node rather than move it to the tail. In regular (main-screen) mode, rows that scroll above the viewport are frozen into native scrollback and never rewritten; a tool finalized after its rows froze shows its completed summary at the top of the live region, and Inspect/history views render its final state in the original chronological position.
+- Regular mode never clears native scrollback or emits `ESC[2J`. After a resize settles, archive the already emitted live rows and open an append-only surface epoch at the bottom of the resized viewport. The new activity adapts to the new size; older output remains readable through native scrollback and is never replayed.
+- Native transcript layout processes bounded source batches into at most 200 transcript rows per frame; excess content is queued, never omitted. Frozen rows leave the layout cache. Streaming tables use fixed column widths, and unprinted messages must survive frontend retention until they have been emitted.
 - Busy-input behavior must distinguish a non-empty composer from an empty one: user text must not be discarded by an interrupt action.
 - `/agents` is the Subagent browser with one read-only chronological child process stream; its wide-list preview and detail view share the same commentary/tool/final projection and never render thinking. `/tasks` is a separate grouped background-work dashboard for Agent jobs, processes, and questions; Agent rows in `/tasks` never expose child conversation.
 - Live Subagent state belongs in the docked Agents surface and `/agents`, never in chronological transcript child cards.

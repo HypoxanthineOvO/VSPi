@@ -7,16 +7,10 @@ import { resolveTuiFrameInterval, TuiFramePacer } from "./tui-frame-pacer.js";
 const CLEAR_SCROLLBACK = "\u001b[3J";
 const BEGIN_SYNC = "\u001b[?2026h";
 const END_SYNC = "\u001b[?2026l";
-const DISABLE_AUTOWRAP = "\u001b[?7l";
-const ENABLE_AUTOWRAP = "\u001b[?7h";
-const CLEAR_VIEWPORT_HOME = "\u001b[2J\u001b[H";
 const FOCUS_IN = "\u001b[I";
 const FOCUS_OUT = "\u001b[O";
 
 export interface StaticCommitTerminal extends Terminal {
-  commitStatic(lines: readonly string[]): void;
-  appendStatic(lines: readonly string[]): void;
-  replaceStatic(lines: readonly string[]): void;
   beginSurfaceEpoch(lineOffset?: number): void;
 }
 
@@ -28,28 +22,6 @@ export function adaptInteractiveTerminalOutput(chunk: string, env: NodeJS.Proces
   const preserved = preserveTerminalScrollback(chunk);
   if (env.VSPI_TUI_SYNC_OUTPUT !== "0") return preserved;
   return preserved.split(BEGIN_SYNC).join("").split(END_SYNC).join("");
-}
-
-export function renderStaticCommit(lines: readonly string[], rows: number): string {
-  if (lines.length === 0) return "";
-  const height = Math.max(1, Math.floor(rows));
-  const content = lines.join("\r\n");
-  return `${BEGIN_SYNC}${DISABLE_AUTOWRAP}${CLEAR_VIEWPORT_HOME}${content}${"\r\n".repeat(height)}${CLEAR_VIEWPORT_HOME}${ENABLE_AUTOWRAP}${END_SYNC}`;
-}
-
-export function renderStaticAppend(lines: readonly string[]): string {
-  if (lines.length === 0) return "";
-  const content = lines.join("\r\n");
-  return `${BEGIN_SYNC}${DISABLE_AUTOWRAP}${CLEAR_VIEWPORT_HOME}${content}\r\n${ENABLE_AUTOWRAP}${END_SYNC}`;
-}
-
-export function renderStaticReplacement(lines: readonly string[], rows: number): string {
-  if (lines.length === 0) {
-    return `${BEGIN_SYNC}${DISABLE_AUTOWRAP}${CLEAR_VIEWPORT_HOME}${CLEAR_SCROLLBACK}${ENABLE_AUTOWRAP}${END_SYNC}`;
-  }
-  const height = Math.max(1, Math.floor(rows));
-  const content = lines.join("\r\n");
-  return `${BEGIN_SYNC}${DISABLE_AUTOWRAP}${CLEAR_VIEWPORT_HOME}${CLEAR_SCROLLBACK}${content}${"\r\n".repeat(height)}${CLEAR_VIEWPORT_HOME}${ENABLE_AUTOWRAP}${END_SYNC}`;
 }
 
 export function renderSurfaceEpochBreak(lineOffset = 0): string {
@@ -114,20 +86,6 @@ export class ScrollbackProcessTerminal extends ProcessTerminal implements Static
     super.write(adaptInteractiveTerminalOutput(this.frameOptimizer.optimize(data, this.rows, this.columns)));
   }
 
-  commitStatic(lines: readonly string[]): void {
-    this.frameOptimizer.invalidateTail();
-    super.write(renderStaticCommit(lines, this.rows));
-  }
-
-  appendStatic(lines: readonly string[]): void {
-    this.frameOptimizer.invalidateTail();
-    super.write(renderStaticAppend(lines));
-  }
-
-  replaceStatic(lines: readonly string[]): void {
-    this.frameOptimizer.invalidateTail();
-    super.write(renderStaticReplacement(lines, this.rows));
-  }
 
   beginSurfaceEpoch(lineOffset = 0): void {
     this.frameOptimizer.invalidateTail();
@@ -157,19 +115,48 @@ export function recordFrameRenderMs(ms: number): void {
 
 export class ScrollbackTUI extends TuiMainScreen {
   private framePacer: TuiFramePacer | undefined;
+  private clearingDeferred = false;
+  /** Runs synchronously after every rendered frame so the host can freeze scrolled-off rows. */
+  onFrameRendered: (() => void) | undefined;
+  /** Runs after resize or a clearing fallback settles; the host preserves the old frame. */
+  onRebuildSettled: ((reason: string) => void) | undefined;
 
   constructor(terminal: Terminal, showHardwareCursor = true, logDirectory?: string) {
     super(terminal, showHardwareCursor, logDirectory);
     this.framePacer = new TuiFramePacer(resolveTuiFrameInterval());
     this.setClearOnShrink(false);
-    this.setViewportOnlyRedraw(true);
     // Some terminals can report focus after switching away from fullscreen.
     // Treat those reports as terminal metadata, not latency-sensitive user input.
-    this.addInputListener((data) => (data === FOCUS_IN || data === FOCUS_OUT ? { consume: true } : undefined));
+    this.addInputListener(data => data === FOCUS_IN || data === FOCUS_OUT ? { consume: true } : undefined);
+  }
+
+  private rebuildSettleArmed = false;
+
+  /**
+   * Arm the rebuild settle timer. Resize events re-arm it so a drag rebuilds
+   * once after the size settles; deferred frames only arm it, otherwise a
+   * busy stream of deferred renders would starve the rebuild indefinitely.
+   */
+  private armRebuildSettle(reason: string, rearm: boolean): void {
+    if (this.rebuildSettleArmed && !rearm) return;
+    this.rebuildSettleArmed = true;
+    this.framePacer?.requestSettle(() => {
+      this.rebuildSettleArmed = false;
+      this.onRebuildSettled?.(reason);
+    });
+  }
+
+  protected override deferClearingRedraw(reason: string): boolean {
+    // The host opens a new native surface instead of clearing; coalesce bursts through
+    // the same settle timer as resize drags.
+    this.clearingDeferred = true;
+    this.armRebuildSettle(reason, false);
+    return true;
   }
 
   protected override requestResizeRender(): void {
-    this.framePacer?.requestResize((force) => super.requestRender(force));
+    // Resize drags report a stream of sizes; rebuild once after the size settles.
+    this.armRebuildSettle("resize", true);
   }
 
   protected override requestInputRender(): void {
@@ -178,12 +165,34 @@ export class ScrollbackTUI extends TuiMainScreen {
 
   protected override doRender(): void {
     if ((this.terminal as Partial<ScrollbackProcessTerminal>).deferRender?.(() => this.requestRender())) return;
+    const previous = this.captureRenderState();
+    if (previous.previousWidth > 0 && (previous.previousWidth !== this.terminal.columns || previous.previousHeight !== this.terminal.rows)) {
+      this.deferClearingRedraw("resize");
+      return;
+    }
     const started = FRAME_STATS_PATH ? performance.now() : 0;
+    // A deferred clearing redraw leaves the render state pinned to the
+    // pre-resize frame; the host's per-node row ranges no longer match it, so
+    // freeze bookkeeping must wait for the next committed frame.
+    this.clearingDeferred = false;
     super.doRender();
     if (FRAME_STATS_PATH) recordFrameRenderMs(performance.now() - started);
+    if (!this.clearingDeferred) this.onFrameRendered?.();
+  }
+
+  override renderNow(force = false): void {
+    if (force && this.framePacer && this.captureRenderState().previousWidth > 0) {
+      this.armRebuildSettle("force", false);
+      return;
+    }
+    super.renderNow(force);
   }
 
   override requestRender(force = false): void {
+    if (force && this.framePacer && this.captureRenderState().previousWidth > 0) {
+      this.armRebuildSettle("force", false);
+      return;
+    }
     if (!this.framePacer) {
       super.requestRender(force);
       return;
@@ -193,11 +202,15 @@ export class ScrollbackTUI extends TuiMainScreen {
 
   override pauseRendering(): void {
     this.framePacer?.cancel();
+    this.framePacer?.cancelSettle();
+    this.rebuildSettleArmed = false;
     super.pauseRendering();
   }
 
   override stop(options = {}): void {
     this.framePacer?.cancel();
+    this.framePacer?.cancelSettle();
+    this.rebuildSettleArmed = false;
     super.stop(options);
   }
 
@@ -221,10 +234,16 @@ export class ScrollbackTUI extends TuiMainScreen {
     return true;
   }
 
-  replaceStatic(lines: readonly string[]): void {
-    (this.terminal as StaticCommitTerminal).replaceStatic(lines);
+
+  preserveViewportEpoch(): void {
+    this.terminal.write(`${BEGIN_SYNC}\u001b[${Math.max(1, this.terminal.rows)};1H\r\n${END_SYNC}`);
     this.resetScrollbackRenderState();
   }
+
+  reflowViewport(): void {
+    this.preserveViewportEpoch();
+  }
+
 
   beginSurfaceEpoch(): void {
     const state = this.captureRenderState();

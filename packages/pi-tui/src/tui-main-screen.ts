@@ -151,6 +151,17 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		this.viewportOnlyRedraw = enabled;
 	}
 
+	/**
+	 * Consulted before every non-first-render clearing redraw (full re-render
+	 * preceded by a screen clear). Returning true suppresses the frame entirely:
+	 * nothing is written and the previous render state stays untouched, so the
+	 * host can replay history itself (e.g. after a resize settles) instead of
+	 * pushing the visible screen into native scrollback via ESC[2J.
+	 */
+	protected deferClearingRedraw(_reason: string): boolean {
+		return false;
+	}
+
 	captureRenderState(): TuiMainScreenRenderState {
 		return {
 			previousLines: [...this.previousLines],
@@ -400,7 +411,9 @@ export class TuiMainScreen extends TuiBase implements TUI {
 
 		// Width changes always need a full re-render because wrapping changes.
 		if (widthChanged) {
-			logRedraw(`terminal width changed (${this.previousWidth} -> ${width})`);
+			const reason = `terminal width changed (${this.previousWidth} -> ${width})`;
+			if (this.deferClearingRedraw(reason)) return;
+			logRedraw(reason);
 			fullRender(true, this.previousWidth > 0);
 			return;
 		}
@@ -409,7 +422,9 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		// but Termux changes height when the software keyboard shows or hides.
 		// In that environment, a full redraw causes the entire history to replay on every toggle.
 		if (heightChanged && !isTermuxSession()) {
-			logRedraw(`terminal height changed (${this.previousHeight} -> ${height})`);
+			const reason = `terminal height changed (${this.previousHeight} -> ${height})`;
+			if (this.deferClearingRedraw(reason)) return;
+			logRedraw(reason);
 			fullRender(true, this.previousHeight > 0);
 			return;
 		}
@@ -418,7 +433,9 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		// (overlays need the padding, so only do this when no overlays are active)
 		// Configurable via setClearOnShrink()
 		if (this.getClearOnShrink() && newLines.length < this.maxLinesRendered && !this.hasOverlayEntries) {
-			logRedraw(`clearOnShrink (maxLinesRendered=${this.maxLinesRendered})`);
+			const reason = `clearOnShrink (maxLinesRendered=${this.maxLinesRendered})`;
+			if (this.deferClearingRedraw(reason)) return;
+			logRedraw(reason);
 			fullRender(true);
 			return;
 		}
@@ -473,27 +490,33 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		// All changes are in deleted lines (nothing to render, just clear)
 		if (firstChanged >= newLines.length) {
 			if (this.previousLines.length > newLines.length) {
-				const output = new BoundedTerminalWriter((data) => this.terminal.write(data));
-				output.append("\x1b[?2026h");
-				output.append(this.deleteChangedKittyImages(firstChanged, lastChanged));
-				// Move to end of new content (clamp to 0 for empty content)
+				// Defer decisions happen before the writer exists: returning with
+				// a partially flushed synchronized-output block would leave the
+				// terminal waiting for a frame that never completes.
 				const targetRow = Math.max(0, newLines.length - 1);
 				if (targetRow < prevViewportTop) {
-					logRedraw(`deleted lines moved viewport up (${targetRow} < ${prevViewportTop})`);
+					const reason = `deleted lines moved viewport up (${targetRow} < ${prevViewportTop})`;
+					if (this.deferClearingRedraw(reason)) return;
+					logRedraw(reason);
 					fullRender(true);
 					return;
 				}
+				// Clear extra lines without scrolling
+				const extraLines = this.previousLines.length - newLines.length;
+				if (extraLines > height) {
+					const reason = `extraLines > height (${extraLines} > ${height})`;
+					if (this.deferClearingRedraw(reason)) return;
+					logRedraw(reason);
+					fullRender(true);
+					return;
+				}
+				const output = new BoundedTerminalWriter((data) => this.terminal.write(data));
+				output.append("\x1b[?2026h");
+				output.append(this.deleteChangedKittyImages(firstChanged, lastChanged));
 				const lineDiff = computeLineDiff(targetRow);
 				if (lineDiff > 0) output.append(`\x1b[${lineDiff}B`);
 				else if (lineDiff < 0) output.append(`\x1b[${-lineDiff}A`);
 				output.append("\r");
-				// Clear extra lines without scrolling
-				const extraLines = this.previousLines.length - newLines.length;
-				if (extraLines > height) {
-					logRedraw(`extraLines > height (${extraLines} > ${height})`);
-					fullRender(true);
-					return;
-				}
 				const clearStartOffset = newLines.length === 0 ? 0 : 1;
 				if (extraLines > 0 && clearStartOffset > 0) {
 					output.append(`\x1b[${clearStartOffset}B`);
@@ -525,29 +548,53 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		// Differential rendering can only touch what was actually visible.
 		// If the first changed line is above the previous viewport, we need a full redraw.
 		if (firstChanged < prevViewportTop) {
-			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
+			const reason = `firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`;
+			if (this.deferClearingRedraw(reason)) return;
+			logRedraw(reason);
 			fullRender(true);
 			return;
 		}
 
 		// Render from first changed line to end
 		// Keep updates wrapped in synchronized output while writing bounded chunks.
+		//
+		// Cursor/scroll adjustments and the kitty pre-clear bounds check are
+		// decided before the writer exists: deferring mid-frame could leave a
+		// partially flushed synchronized-output block on the wire.
+		const prevViewportBottom = prevViewportTop + height - 1;
+		const moveTargetRow = appendStart ? firstChanged - 1 : firstChanged;
+		let moveToBottom = 0;
+		let scrollLines = 0;
+		if (moveTargetRow > prevViewportBottom) {
+			const currentScreenRow = Math.max(0, Math.min(height - 1, hardwareCursorRow - prevViewportTop));
+			moveToBottom = height - 1 - currentScreenRow;
+			scrollLines = moveTargetRow - prevViewportBottom;
+			prevViewportTop += scrollLines;
+			viewportTop += scrollLines;
+			hardwareCursorRow = moveTargetRow;
+		}
+		const renderEnd = Math.min(lastChanged, newLines.length - 1);
+		for (let i = firstChanged; i <= renderEnd; i++) {
+			const line = newLines[i]!;
+			if (!isImageLine(line)) continue;
+			const imageReservedRows = this.getKittyImageReservedRows(newLines, i, renderEnd);
+			if (imageReservedRows <= 1) continue;
+			const imageStartScreenRow = i - viewportTop;
+			if (imageStartScreenRow < 0 || imageStartScreenRow + imageReservedRows > height) {
+				const reason = `kitty image pre-clear would scroll (${imageStartScreenRow} + ${imageReservedRows} > ${height})`;
+				if (this.deferClearingRedraw(reason)) return;
+				break;
+			}
+		}
+
 		const output = new BoundedTerminalWriter((data) => this.terminal.write(data));
 		output.append("\x1b[?2026h"); // Begin synchronized output
 		output.append(this.deleteChangedKittyImages(firstChanged, lastChanged));
-		const prevViewportBottom = prevViewportTop + height - 1;
-		const moveTargetRow = appendStart ? firstChanged - 1 : firstChanged;
-		if (moveTargetRow > prevViewportBottom) {
-			const currentScreenRow = Math.max(0, Math.min(height - 1, hardwareCursorRow - prevViewportTop));
-			const moveToBottom = height - 1 - currentScreenRow;
-			if (moveToBottom > 0) {
-				output.append(`\x1b[${moveToBottom}B`);
-			}
-			const scroll = moveTargetRow - prevViewportBottom;
-			output.append("\r\n".repeat(scroll));
-			prevViewportTop += scroll;
-			viewportTop += scroll;
-			hardwareCursorRow = moveTargetRow;
+		if (moveToBottom > 0) {
+			output.append(`\x1b[${moveToBottom}B`);
+		}
+		if (scrollLines > 0) {
+			output.append("\r\n".repeat(scrollLines));
 		}
 
 		// Move cursor to first changed line (use hardwareCursorRow for actual position)
@@ -562,7 +609,6 @@ export class TuiMainScreen extends TuiBase implements TUI {
 
 		// Only render changed lines (firstChanged to lastChanged), not all lines to end
 		// This reduces flicker when only a single line changes (e.g., spinner animation)
-		const renderEnd = Math.min(lastChanged, newLines.length - 1);
 		for (let i = firstChanged; i <= renderEnd; i++) {
 			if (i > firstChanged) output.append("\r\n");
 			const line = newLines[i]!;
@@ -571,9 +617,16 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			if (imageReservedRows > 1) {
 				const imageStartScreenRow = i - viewportTop;
 				if (imageStartScreenRow < 0 || imageStartScreenRow + imageReservedRows > height) {
-					logRedraw(
-						`kitty image pre-clear would scroll (${imageStartScreenRow} + ${imageReservedRows} > ${height})`,
-					);
+					// The pre-scan above already deferred this case; keep the
+					// upstream fallback, but never return leaving an open
+					// synchronized-output block on the wire.
+					const reason = `kitty image pre-clear would scroll (${imageStartScreenRow} + ${imageReservedRows} > ${height})`;
+					if (this.deferClearingRedraw(reason)) {
+						output.append("\x1b[?2026l");
+						output.flush();
+						return;
+					}
+					logRedraw(reason);
 					fullRender(true);
 					return;
 				}

@@ -1127,12 +1127,48 @@ describe("TUI steady-frame processed-line reuse", () => {
 });
 
 describe("host-controlled redraws", () => {
-	it("limits opted-in resize redraws while preserving complete content revisions", async () => {
+	it("lets a host defer clearing redraws without writing or losing render state", async () => {
+		class DeferringTui extends TuiMainScreen {
+			deferredReasons: string[] = [];
+			protected override deferClearingRedraw(reason: string): boolean {
+				this.deferredReasons.push(reason);
+				return true;
+			}
+		}
+		const terminal = new LoggingVirtualTerminal(80, 12);
+		const tui = new DeferringTui(terminal);
+		const component = new TestComponent();
+		component.lines = Array.from({ length: 500 }, (_, index) => `line ${index}`);
+		tui.addChild(component);
+		tui.start();
+		try {
+			tui.renderNow();
+			await terminal.flush();
+			terminal.clearWrites();
+			const baseline = tui.captureRenderState();
+			const baselineRedraws = tui.fullRedraws;
+			terminal.resize(79, 12);
+			tui.renderNow();
+			await terminal.flush();
+			assert.equal(terminal.getWrites(), "");
+			assert.equal(tui.fullRedraws, baselineRedraws);
+			assert.deepEqual(tui.captureRenderState(), baseline);
+			assert.ok(tui.deferredReasons.length >= 1);
+			assert.ok(tui.deferredReasons.every((reason) => reason.includes("width changed")));
+			// The deferred state stays pinned: a second render defers again instead of clearing.
+			component.lines[499] = "updated last row";
+			tui.renderNow();
+			await terminal.flush();
+			assert.equal(terminal.getWrites(), "");
+			assert.deepEqual(tui.captureRenderState(), baseline);
+		} finally { tui.stop(); }
+	});
+
+	it("still performs clearing redraws when the hook is not overridden", async () => {
 		const terminal = new LoggingVirtualTerminal(80, 12);
 		const tui = new TuiMainScreen(terminal);
 		const component = new TestComponent();
 		component.lines = Array.from({ length: 500 }, (_, index) => `line ${index}`);
-		tui.setViewportOnlyRedraw(true);
 		tui.addChild(component);
 		tui.start();
 		try {
@@ -1142,27 +1178,8 @@ describe("host-controlled redraws", () => {
 			terminal.resize(79, 13);
 			tui.renderNow();
 			await terminal.flush();
-			assert.ok(terminal.getWrites().length < 2000);
-			assert.ok(!terminal.getWrites().includes("line 0\r\n"));
-			assert.ok(!terminal.getWrites().includes("\x1b[3J"));
+			assert.ok(terminal.getWrites().includes("\x1b[2J\x1b[H\x1b[3J"));
 			assert.equal(terminal.getViewport().at(-1), "line 499");
-			terminal.clearWrites();
-			component.lines[0] = "updated offscreen";
-			component.lines[250] = "new content in the middle";
-			component.lines[499] = "updated last row";
-			tui.renderNow();
-			await terminal.flush();
-			assert.equal(terminal.getViewport().at(-1), "updated last row");
-			assert.ok(terminal.getWrites().includes("new content in the middle"));
-			assert.ok(terminal.getScrollBuffer().includes("updated offscreen"));
-			component.lines.push("appended row");
-			tui.renderNow();
-			await terminal.flush();
-			assert.equal(terminal.getViewport().at(-1), "appended row");
-			assert.ok(terminal.getScrollBuffer().some((line) => line === "line 0"));
-			terminal.clearWrites();
-			tui.renderNow(true);
-			assert.ok(terminal.getWrites().includes("new content in the middle"));
 		} finally { tui.stop(); }
 	});
 
@@ -1188,6 +1205,35 @@ describe("host-controlled redraws", () => {
 			assert.deepEqual(component.lines, ["second"]);
 			tui.renderNow();
 			assert.equal(component.renderCount, baseline + 1);
+		} finally { tui.stop(); }
+	});
+});
+
+
+describe("legacy viewport-only resize compatibility", () => {
+	it("preserves the opt-in resize limit and complete content revisions", async () => {
+		const terminal = new LoggingVirtualTerminal(80, 12);
+		const tui = new TuiMainScreen(terminal);
+		const component = new TestComponent();
+		component.lines = Array.from({ length: 500 }, (_, index) => `line ${index}`);
+		tui.setViewportOnlyRedraw(true);
+		tui.addChild(component);
+		tui.start();
+		try {
+			tui.renderNow(); await terminal.flush(); terminal.clearWrites();
+			terminal.resize(79, 13); tui.renderNow(); await terminal.flush();
+			assert.ok(terminal.getWrites().length < 2000);
+			assert.ok(!terminal.getWrites().includes("\x1b[3J"));
+			terminal.clearWrites();
+			terminal.resize(79, 10); tui.renderNow(); await terminal.flush();
+			assert.ok(terminal.getWrites().length < 2000);
+			assert.ok(!terminal.getWrites().includes("line 0\r\n"));
+			assert.ok(!terminal.getWrites().includes("\x1b[3J"));
+			component.lines[0] = "updated offscreen";
+			component.lines[250] = "new content in the middle";
+			tui.renderNow(); await terminal.flush();
+			assert.ok(terminal.getWrites().includes("new content in the middle"));
+			assert.ok(terminal.getScrollBuffer().includes("updated offscreen"));
 		} finally { tui.stop(); }
 	});
 });

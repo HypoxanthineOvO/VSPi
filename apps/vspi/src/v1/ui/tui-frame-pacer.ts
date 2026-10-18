@@ -8,6 +8,9 @@ export const DEFAULT_TUI_SCROLL_INTERVAL_MS = 100;
 // drops so each wheel burst costs fewer (larger) frames near the terminal.
 export const DEFAULT_TUI_SCROLL_FRAME_INTERVAL_MS = 66;
 const SCROLL_FRAME_WINDOW_MS = 500;
+// Main-screen resize rebuilds wait for the drag to settle so a burst of
+// reported sizes produces a single history rebuild.
+export const TUI_RESIZE_SETTLE_MS = 300;
 
 export function resolveTuiFrameInterval(env: NodeJS.ProcessEnv = process.env): number {
   const configured = Number(env.VSPI_TUI_FRAME_INTERVAL_MS);
@@ -30,6 +33,7 @@ export function resolveTuiScrollFrameInterval(env: NodeJS.ProcessEnv = process.e
 export class TuiFramePacer {
   private timer: NodeJS.Timeout | undefined;
   private resizeTimer: NodeJS.Timeout | undefined;
+  private settleTimer: NodeJS.Timeout | undefined;
   private lastForwardedAt = Number.NEGATIVE_INFINITY;
 
   constructor(private intervalMs: number) {}
@@ -45,6 +49,23 @@ export class TuiFramePacer {
       this.request(false, forward);
     }, 100);
     this.resizeTimer.unref();
+  }
+
+  /** Rearm on every call; the callback fires once after `delayMs` of quiet. */
+  requestSettle(settled: () => void, delayMs = TUI_RESIZE_SETTLE_MS): void {
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    this.settleTimer = setTimeout(() => {
+      this.settleTimer = undefined;
+      settled();
+    }, delayMs);
+    this.settleTimer.unref();
+  }
+
+  /** Pause/stop teardown only: cancel() must not kill an armed settle, or a
+   * force render during the settle window would strand a deferred rebuild. */
+  cancelSettle(): void {
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    this.settleTimer = undefined;
   }
 
   request(force: boolean, forward: (force: boolean) => void): void {
@@ -186,12 +207,14 @@ export class VspiTuiAltScreen extends TuiAltScreen {
   override pauseRendering(): void {
     this.cancelScroll();
     this.framePacer?.cancel();
+    this.framePacer?.cancelSettle();
     super.pauseRendering();
   }
 
   override stop(options: TuiStopOptions = {}): void {
     this.cancelScroll();
     this.framePacer?.cancel();
+    this.framePacer?.cancelSettle();
     super.stop(options);
   }
 }

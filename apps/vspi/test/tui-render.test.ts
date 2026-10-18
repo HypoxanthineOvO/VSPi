@@ -346,7 +346,8 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			});
 			events().onBusy(false);
 			await new Promise((resolve) => setTimeout(resolve, 300));
-			expect(app.render(80).map(stripTerminalSequences).join("\n")).toContain("CURRENT_INPUT");
+			await terminal.flush();
+			expect(terminal.getScrollBuffer().join("\n")).toContain("CURRENT_INPUT");
 			write.mockClear();
 			terminal.sendInput("next draft");
 			await vi.waitFor(async () => {
@@ -357,16 +358,19 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			expect(update).not.toContain("FINAL_000");
 			expect(update).not.toContain("\u001b[2J");
 			terminal.resize(60, 30);
-			await new Promise((resolve) => setTimeout(resolve, 180));
+			await new Promise((resolve) => setTimeout(resolve, 400));
 			await terminal.flush();
-			const resized = terminal.getScrollBuffer().join("\n");
-			for (const paragraph of paragraphs) expect(resized).toContain(paragraph);
+			const resized = terminal.getScrollBuffer();
+			for (const paragraph of paragraphs) {
+				expect(resized.filter((line) => line.includes(paragraph))).toHaveLength(1);
+			}
 		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
 	});
 
 	it("commits previous turns without archiving the latest user input", async () => {
 		const home = await mkdtemp(join(tmpdir(), "vspi-turn-boundary-"));
 		const { app, tui, terminal, events } = renderFixture(home);
+		const write = vi.spyOn(terminal, "write");
 		try {
 			await app.start();
 			tui.start();
@@ -377,12 +381,14 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			}
 			events().onMessage({ id: "latest-input", role: "user", kind: "text", text: "LATEST_INPUT" });
 			events().onMessage({ id: "latest-answer", role: "assistant", kind: "text", text: "Latest paragraph\n\n".repeat(100), streaming: true });
-			await vi.waitFor(() => expect((app as unknown as { committedMessageCount: number }).committedMessageCount).toBe(40));
-			await terminal.flush();
-			const frame = app.render(80).map(stripTerminalSequences).join("\n");
-			expect(frame).toContain("LATEST_INPUT");
-			expect(frame).not.toContain("QUESTION_0");
-			expect(terminal.getScrollBuffer().join("\n")).toContain("QUESTION_0");
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getScrollBuffer().join("\n")).toContain("QUESTION_0");
+			});
+			const buffer = terminal.getScrollBuffer();
+			expect(buffer.filter((line) => line.includes("LATEST_INPUT"))).toHaveLength(1);
+			expect(buffer.filter((line) => line.includes("QUESTION_0"))).toHaveLength(1);
+			expect(write.mock.calls.map(([data]) => data).join("")).not.toContain("\u001b[2J");
 		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
 	});
 
@@ -418,24 +424,355 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		}
 	});
 
-	it("keeps the live transcript cache when there is nothing to commit", () => {
-		const { app } = renderFixture();
-		Object.assign(app, { messages: [{ id: "short", role: "assistant", kind: "text", text: "Short output" }] });
-		const cache = (app as unknown as { transcriptRenderCache: { retain: (...args: unknown[]) => void } }).transcriptRenderCache;
-		const retain = vi.spyOn(cache, "retain");
-		expect(app.commitStableTranscript()).toBe(0);
-		expect(retain).not.toHaveBeenCalled();
+	it("freezes nothing into scrollback while the frame fits the viewport", async () => {
+		const { app, tui, terminal } = renderFixture();
+		const commit = vi.spyOn(tui, "commitStatic");
+		tui.start();
+		try {
+			Object.assign(app, { messages: [{ id: "short", role: "assistant", kind: "text", text: "Short output" }] });
+			tui.requestRender();
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getViewport().join("\n")).toContain("Short output");
+			});
+			expect(commit).not.toHaveBeenCalled();
+		} finally { tui.stop(); await app.dispose(); }
 	});
 
-	it.each(["queued", "running"] as const)("does not commit a %s tool into immutable scrollback", (status) => {
-		const { app, tui } = renderFixture();
-		const commit = vi.spyOn(tui, "commitStatic").mockReturnValue(true);
-		Object.assign(app, { messages: [
-			{ id: "live", role: "assistant", kind: "tool", name: "Shell", summary: "pending", status, expanded: false },
-			...Array.from({ length: 100 }, (_, index) => ({ id: `later-${index}`, role: "assistant", kind: "text", text: "Later output" })),
-		] });
-		expect(app.commitStableTranscript()).toBe(0);
-		expect(commit).not.toHaveBeenCalled();
+	it.each(["queued", "running"] as const)("does not freeze a %s tool that is still on screen", async (status) => {
+		const { app, tui, terminal } = renderFixture();
+		tui.start();
+		try {
+			Object.assign(app, { messages: [
+				{ id: `live-${status}`, role: "assistant", kind: "tool", name: "Shell", summary: `PENDING_${status}`, status, expanded: false },
+			] });
+			tui.requestRender();
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getViewport().join("\n")).toContain(`PENDING_${status}`);
+			});
+			const internals = app as unknown as {
+				frozenNodeRows: Map<string, unknown>;
+				committedMessageCount: number;
+			};
+			expect(internals.committedMessageCount).toBe(0);
+			expect(internals.frozenNodeRows.size).toBe(0);
+		} finally { tui.stop(); await app.dispose(); }
+	});
+
+	it("freezes a tool-heavy turn into scrollback without a clearing redraw", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-tool-heavy-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		const write = vi.spyOn(terminal, "write");
+		const rebuild = vi.spyOn(tui, "reflowViewport");
+		const markers: string[] = [];
+		try {
+			await app.start();
+			tui.start();
+			events().onBusy(true);
+			events().onMessage({ id: "input", role: "user", kind: "text", text: "HEAVY_INPUT" });
+			markers.push("HEAVY_INPUT");
+			for (let index = 0; index < 8; index++) {
+				const id = `grouped-${index}`;
+				events().onMessage({ id, role: "assistant", kind: "tool", groupId: "alpha", name: "Shell", summary: `GROUP_QUEUED_${index}`, status: "queued", expanded: false });
+				events().onMessageUpdate(id, { status: "running", summary: `GROUP_RUNNING_${index}` });
+				events().onMessageUpdate(id, { status: "success", summary: `GROUP_DONE_${index}` });
+			}
+			markers.push("工具调用 · 8 项");
+			for (let index = 0; index < 32; index++) {
+				const tag = String(index).padStart(2, "0");
+				const id = `single-${index}`;
+				events().onMessage({ id, role: "assistant", kind: "tool", name: "Shell", summary: `SINGLE_QUEUED_${tag}`, status: "queued", expanded: true });
+				events().onMessageUpdate(id, { status: "running", summary: `SINGLE_RUNNING_${tag}` });
+				events().onMessageUpdate(id, { status: "success", summary: `SINGLE_DONE_${tag}` });
+				markers.push(`SINGLE_DONE_${tag}`);
+				const text = `PARA_${tag}`;
+				events().onMessage({ id: `text-${index}`, role: "assistant", kind: "text", text, streaming: false });
+				markers.push(text);
+				if (index % 8 === 0) {
+					const thinkId = `think-${index}`;
+					events().onMessage({ id: thinkId, role: "assistant", kind: "thinking", effort: "high", text: `THINK_BODY_${tag}`, collapsed: true, streaming: false });
+					events().onMessageUpdate(thinkId, { durationMs: 1234 + index });
+				}
+				if (index % 8 === 7) await terminal.flush();
+			}
+			events().onBusy(false);
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getScrollBuffer().join("\n")).toContain("PARA_31");
+			});
+			await new Promise((resolve) => setTimeout(resolve, 120));
+			await terminal.flush();
+			for (const chunk of write.mock.calls.map(([data]) => data)) {
+				expect(chunk).not.toContain("\u001b[2J");
+			}
+			expect(rebuild).not.toHaveBeenCalled();
+			const buffer = terminal.getScrollBuffer();
+			let lastIndex = -1;
+			for (const marker of markers) {
+				const found = buffer
+					.map((line, index) => ({ line, index }))
+					.filter(({ line }) => line.includes(marker));
+				expect(found, `marker ${marker}`).toHaveLength(1);
+				expect(found[0]!.index, `order of ${marker}`).toBeGreaterThan(lastIndex);
+				lastIndex = found[0]!.index;
+			}
+		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("reflows the viewport once after a resize drag without replaying history", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-resize-drag-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		const write = vi.spyOn(terminal, "write");
+		const paragraphs = Array.from({ length: 120 }, (_, index) => `DRAG_PARA_${String(index).padStart(3, "0")}`);
+		try {
+			await app.start();
+			tui.start();
+			events().onMessage({ id: "input", role: "user", kind: "text", text: "DRAG_INPUT" });
+			for (let index = 0; index < 3; index++) {
+				const id = `drag-tool-${index}`;
+				events().onMessage({ id, role: "assistant", kind: "tool", name: "Shell", summary: `DRAG_TOOL_${index}`, status: "running", expanded: false });
+				events().onMessageUpdate(id, { status: "success" });
+			}
+			events().onMessage({ id: "answer", role: "assistant", kind: "text", text: paragraphs.join("\n\n"), streaming: false });
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getScrollBuffer().join("\n")).toContain("DRAG_PARA_119");
+			});
+			write.mockClear();
+			for (let step = 0; step < 30; step++) {
+				terminal.resize(Math.max(50, 79 - step), 24);
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+			await new Promise((resolve) => setTimeout(resolve, 400));
+			await terminal.flush();
+			const chunks = write.mock.calls.map(([data]) => data);
+			const reflows = chunks.filter((chunk) => /\u001b\[\d+;1H\r\n/u.test(chunk));
+			expect(reflows).toHaveLength(1);
+			for (const chunk of chunks) {
+				expect(chunk).not.toContain("\u001b[2J");
+				expect(chunk).not.toContain("\u001b[3J");
+			}
+			const buffer = terminal.getScrollBuffer();
+			let lastIndex = -1;
+			for (const paragraph of paragraphs) {
+				const found = buffer
+					.map((line, index) => ({ line, index }))
+					.filter(({ line }) => line.includes(paragraph));
+				expect(found, `marker ${paragraph}`).toHaveLength(1);
+				expect(found[0]!.index, `order of ${paragraph}`).toBeGreaterThan(lastIndex);
+				lastIndex = found[0]!.index;
+			}
+			for (const line of buffer) {
+				if (line.trim() === "") continue;
+				expect(visibleWidth(line), JSON.stringify(line)).toBeLessThanOrEqual(50);
+			}
+		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("keeps the splash title unique in scrollback across a resize rebuild", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-splash-scrollback-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		try {
+			await app.start();
+			app.setStartupSurface(renderSplash(80, theme, 1, app.startupStatus()));
+			tui.start();
+			const paragraphs = Array.from({ length: 80 }, (_, index) => `SPLASH_PARA_${index}`);
+			events().onMessage({ id: "answer", role: "assistant", kind: "text", text: paragraphs.join("\n\n"), streaming: false });
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getScrollBuffer().join("\n")).toContain("SPLASH_PARA_79");
+			});
+			expect(terminal.getScrollBuffer().filter((line) => line.includes("◈ VSPi"))).toHaveLength(1);
+			terminal.resize(60, 24);
+			await new Promise((resolve) => setTimeout(resolve, 400));
+			await terminal.flush();
+			const buffer = terminal.getScrollBuffer();
+			expect(buffer.filter((line) => line.includes("◈ VSPi"))).toHaveLength(1);
+			expect(buffer.join("\n")).toContain("SPLASH_PARA_79");
+		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("resurfaces a frozen running tool's completion and preserves it on resize", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-frozen-tool-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		try {
+			await app.start();
+			tui.start();
+			events().onMessage({ id: "input", role: "user", kind: "text", text: "TOOL_INPUT" });
+			events().onMessage({ id: "tool", role: "assistant", kind: "tool", name: "Shell", summary: "RUNNING_MARKER", status: "running", expanded: true });
+			for (let index = 0; index < 40; index++) {
+				events().onMessage({ id: `pad-${index}`, role: "assistant", kind: "text", text: `PAD_${index}`, streaming: false });
+			}
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				const buffer = terminal.getScrollBuffer();
+				expect(buffer.join("\n")).toContain("PAD_39");
+				expect(buffer.filter((line) => line.includes("RUNNING_MARKER"))).toHaveLength(1);
+			});
+			events().onMessageUpdate("tool", { status: "success", summary: "DONE_MARKER" });
+			for (let index = 40; index < 70; index++) {
+				events().onMessage({ id: `pad-${index}`, role: "assistant", kind: "text", text: `PAD_${index}`, streaming: false });
+			}
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getScrollBuffer().join("\n")).toContain("PAD_69");
+			});
+			const beforeRebuild = terminal.getScrollBuffer();
+			const summaryIndex = beforeRebuild.findIndex((line) => line.includes("DONE_MARKER"));
+			expect(summaryIndex).toBeGreaterThanOrEqual(0);
+			const settledPadIndex = beforeRebuild.map((line) => line.includes("PAD_20")).lastIndexOf(true);
+			expect(summaryIndex).toBeGreaterThan(settledPadIndex);
+			terminal.resize(60, 24);
+			await new Promise((resolve) => setTimeout(resolve, 400));
+			await terminal.flush();
+			const rebuilt = terminal.getScrollBuffer();
+			const doneLines = rebuilt
+				.map((line, index) => ({ line, index }))
+				.filter(({ line }) => line.includes("DONE_MARKER"));
+			expect(doneLines).toHaveLength(1);
+			expect(doneLines[0]!.index).toBeGreaterThan(rebuilt.findIndex((line) => line.includes("PAD_20")));
+		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("rebuilds once when a force render lands inside the resize settle window", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-settle-force-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		const rebuild = vi.spyOn(tui, "reflowViewport");
+		try {
+			await app.start();
+			tui.start();
+			events().onMessage({ id: "input", role: "user", kind: "text", text: "SETTLE_INPUT" });
+			events().onMessage({ id: "answer", role: "assistant", kind: "text", text: "SETTLE_ANSWER", streaming: false });
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getViewport().join("\n")).toContain("SETTLE_ANSWER");
+			});
+			terminal.resize(60, 24);
+			// A forced frame inside the settle window must not cancel the rebuild.
+			tui.requestRender(true);
+			await new Promise((resolve) => setTimeout(resolve, 400));
+			await terminal.flush();
+			expect(rebuild).toHaveBeenCalledTimes(1);
+			events().onMessage({ id: "after", role: "assistant", kind: "text", text: "AFTER_SETTLE", streaming: false });
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getViewport().join("\n")).toContain("AFTER_SETTLE");
+			});
+		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("draws the takeover notice in the next frame without a rebuild", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-takeover-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		const write = vi.spyOn(terminal, "write");
+		const rebuild = vi.spyOn(tui, "reflowViewport");
+		try {
+			await app.start();
+			tui.start();
+			events().onMessage({ id: "pre", role: "assistant", kind: "text", text: "PRE_TAKEOVER", streaming: false });
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getViewport().join("\n")).toContain("PRE_TAKEOVER");
+			});
+			write.mockClear();
+			events().onTakeover?.();
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getViewport().join("\n")).toContain("Session 已移交到新终端");
+			});
+			const output = write.mock.calls.map(([data]) => data).join("");
+			expect(output).not.toContain("\u001b[2J");
+			expect(output).not.toContain("\u001b[3J");
+			expect(rebuild).not.toHaveBeenCalled();
+		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("prunes over-limit history without a clearing redraw", async () => {
+		const { app, tui, terminal } = renderFixture();
+		const write = vi.spyOn(terminal, "write");
+		try {
+			await app.start();
+			tui.start();
+			const internals = app as unknown as {
+				messages: TranscriptMessage[];
+				committedMessageCount: number;
+				pruneTranscript(): void;
+			};
+			internals.messages = Array.from({ length: 1100 }, (_, index) => ({
+				id: `m-${index}`,
+				role: "assistant",
+				kind: "text",
+				text: `PRUNE_ROW_${index}`,
+				streaming: false,
+			})) as TranscriptMessage[];
+			internals.committedMessageCount = 1100;
+			write.mockClear();
+			internals.pruneTranscript();
+			expect(internals.messages.length).toBe(1000);
+			expect(internals.committedMessageCount).toBe(1000);
+			expect(internals.messages[0]).toMatchObject({ text: "PRUNE_ROW_100" });
+			const output = write.mock.calls.map(([data]) => data).join("");
+			expect(output).not.toContain("\u001b[2J");
+			expect(output).not.toContain("\u001b[3J");
+		} finally { tui.stop(); await app.dispose(); }
+	});
+
+	it("keeps the live splash unique when the viewport reflows", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-splash-early-"));
+		const { app, tui, terminal } = renderFixture(home);
+		const rebuild = vi.spyOn(tui, "reflowViewport");
+		try {
+			await app.start();
+			app.setStartupSurface(renderSplash(80, theme, 1, app.startupStatus()));
+			tui.start();
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getViewport().join("\n")).toContain("◈ VSPi");
+			});
+			terminal.resize(60, 24);
+			await new Promise((resolve) => setTimeout(resolve, 400));
+			await terminal.flush();
+			expect(rebuild).toHaveBeenCalledTimes(1);
+			const buffer = terminal.getScrollBuffer();
+			expect(buffer.filter((line) => line.includes("◈ VSPi"))).toHaveLength(1);
+		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("keeps one blank row between sections across the commit boundary and rebuild", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-gap-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		try {
+			await app.start();
+			tui.start();
+			events().onBusy(true);
+			for (let index = 0; index < 40; index++) {
+				events().onMessage({ id: `gap-${index}`, role: "assistant", kind: "text", text: `GAP_${index}`, streaming: false });
+				await new Promise((resolve) => setTimeout(resolve, 45));
+				await terminal.flush();
+			}
+			events().onBusy(false);
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getScrollBuffer().join("\n")).toContain("GAP_39");
+			});
+			const assertSingleGap = (buffer: string[], upto: number) => {
+				for (let index = 0; index + 1 < upto; index++) {
+					const here = buffer.findIndex((line) => line.includes(`GAP_${index}`));
+					const next = buffer.findIndex((line) => line.includes(`GAP_${index + 1}`));
+					expect(here, `GAP_${index} present`).toBeGreaterThanOrEqual(0);
+					expect(next, `GAP_${index + 1} present`).toBeGreaterThanOrEqual(0);
+					const between = buffer.slice(here + 1, next);
+					expect(between, `rows between GAP_${index} and GAP_${index + 1}`).toHaveLength(1);
+					expect(between[0]!.trim(), `blank row between GAP_${index} and GAP_${index + 1}`).toBe("");
+				}
+			};
+			assertSingleGap(terminal.getScrollBuffer(), 40);
+			terminal.resize(60, 24);
+			await new Promise((resolve) => setTimeout(resolve, 400));
+			await terminal.flush();
+			assertSingleGap(terminal.getScrollBuffer(), 40);
+		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
 	});
 
   it('opens side questions while the main agent runs and closes without interrupting it', async () => {
@@ -1076,7 +1413,6 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 				options: { settings: { reducedMotion: true, workingStyle: 1 } },
 				renderReady: false,
 				requestRender,
-				scheduleStableTranscriptCommit: vi.fn(),
 				tui: { mode: "fullscreen" },
 			}) as {
 				compaction: unknown;
@@ -1111,9 +1447,12 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			cancelPendingApproval: vi.fn(),
 			activeSubmission: undefined,
 			committedMessageCount: 1,
+			frozenNodeRows: new Map(),
+			committedNodeIds: new Set(),
+			liveSections: [],
+			liveSectionsBase: 0,
+			liveTranscriptRows: 0,
 			activityPresentationActive: true,
-			waterfallSettling: false,
-			stableCommitTimer: undefined,
 			messages: [],
 			thinkingTranslationRevision: 0,
 			thinkingTranslationAbort: undefined,

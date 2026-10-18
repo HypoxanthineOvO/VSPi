@@ -1878,3 +1878,24 @@ describe("Markdown negative width safety", () => {
 		assert.doesNotThrow(() => markdown.render(-1));
 	});
 });
+
+
+describe("fixed table layout", () => {
+	it("keeps existing table rows unchanged when wider cells arrive", () => {
+		const source = "| Item | Value |\n| --- | --- |\n| stable | short |";
+		const markdown = new Markdown(source, 0, 0, defaultMarkdownTheme, undefined, { tableLayout: "fixed" });
+		const before = markdown.render(60);
+		markdown.setText(`${source}\n| next | ${"long ".repeat(30)} |`);
+		const after = markdown.render(60);
+		assert.deepStrictEqual(after.slice(0, before.length - 1), before.slice(0, -1));
+		assert.ok(after.join("\n").includes("next"));
+	});
+
+	it("retains content-based column widths unless explicitly enabled", () => {
+		const source = "| Item | Value |\n| --- | --- |\n| stable | short |";
+		const defaultLayout = new Markdown(source, 0, 0, defaultMarkdownTheme).render(60);
+		const explicit = new Markdown(source, 0, 0, defaultMarkdownTheme, undefined, { tableLayout: "content" }).render(60);
+		assert.deepStrictEqual(defaultLayout, explicit);
+		assert.ok(stripAnsi(defaultLayout[0]!).trimEnd().length < 60);
+	});
+});

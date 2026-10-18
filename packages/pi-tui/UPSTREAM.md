@@ -199,11 +199,11 @@ Each card: **decision** and **why not in the app**. Status is `keep` or `absorbe
 
 **Why not in the app:** The private input dispatcher calls the immediate scheduler after the focused component returns, bypassing the host's `requestRender` override.
 
-### opt-in-viewport-only-redraw — keep
+### defer-clearing-redraw-hook — keep
 
-**Decision:** `setViewportOnlyRedraw(true)` limits actual terminal-resize redraws to the visible tail and preserves native scrollback. Content revisions and explicit repaint requests still print the complete active frame so new offscreen text reaches scrollback. Initial output and append rendering remain unchanged; the default still replays the whole frame.
+**Decision:** A protected `deferClearingRedraw(reason)` hook runs before every non-first-render clearing redraw (width/height change, clearOnShrink, viewport-moved-up deletes, oversized extra lines, above-viewport first change, kitty pre-clear scroll). When it returns true the renderer writes nothing and keeps the previous render state unchanged, so the host can rebuild history itself. The default returns false and preserves upstream clearing behavior.
 
-**Why not in the app:** Resize and offscreen-change fallbacks are inside the main-screen differential renderer, which owns the logical cursor and viewport offsets.
+**Why not in the app:** The clearing fallbacks live inside the main-screen differential renderer, which owns the logical cursor and viewport offsets; a host cannot intercept them without this hook.
 
 ### editor-rendered-body-boundary — keep
 
@@ -216,3 +216,17 @@ Each card: **decision** and **why not in the app**. Status is `keep` or `absorbe
 **Decision:** `incrementalLayout` caches wrapping per logical line and rewraps only the trailing chunks for prefix-preserving edits. Width, paste-registry and other edits invalidate the affected cache. With no paste markers, backspace locates the final grapheme directly instead of materializing every preceding grapheme. Default editor behavior remains uncached.
 
 **Why not in the app:** Wrapping and cursor-to-layout mapping happen inside the editor, before the host sees visible rows.
+
+
+### opt-in-fixed-table-columns — keep
+
+**Decision:** `MarkdownOptions.tableLayout = "fixed"` divides the available table width between its columns, independently of later rows. The default remains content-based. This lets streaming hosts freeze rows without subsequent cells changing previous wrapping.
+
+**Why not in the app:** Table column allocation and inline cell rendering are private to the Markdown component.
+
+
+### legacy-opt-in-viewport-only-resize — keep
+
+**Decision:** Existing `setViewportOnlyRedraw` callers keep viewport-only resize redraws, without clearing native scrollback. Ordinary content revisions still render the full changed content. The default remains off.
+
+**Why not in the app:** This is an existing main-screen renderer option. New host redraw hooks must remain additive and preserve callers that use it.
