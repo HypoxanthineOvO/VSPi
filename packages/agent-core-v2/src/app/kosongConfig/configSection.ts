@@ -1,3 +1,4 @@
+import { DeepSeekConfigSchema } from '#/llm-adapter/provider/deepseek/capabilities';
 import { z } from 'zod';
 
 import {
@@ -149,6 +150,7 @@ export const MODELS_SECTION = 'models';
 export const DEFAULT_MODEL_SECTION = 'defaultModel';
 
 const ModelBaseSchema = z.object({
+  deepseek: DeepSeekConfigSchema.optional(),
   providerId: z.string().optional(),
 
   baseUrl: z.string().optional(),
@@ -287,8 +289,11 @@ export const modelsFromToml = (rawSnake: unknown): unknown => {
       continue;
     }
     const converted = transformPlainObject(entry);
+    if (isPlainObject(converted['deepseek'])) converted['deepseek'] = transformPlainObject(converted['deepseek']);
     if (isPlainObject(converted['overrides'])) {
-      converted['overrides'] = transformPlainObject(converted['overrides']);
+      const overrides = transformPlainObject(converted['overrides']);
+      if (isPlainObject(overrides['deepseek'])) overrides['deepseek'] = transformPlainObject(overrides['deepseek']);
+      converted['overrides'] = overrides;
     }
     out[id] = converted;
   }
@@ -308,6 +313,8 @@ export const modelsToToml = (value: unknown, rawSnake: unknown): unknown => {
     for (const [key, field] of Object.entries(entry)) {
       if (key === 'capabilities' && Array.isArray(field)) {
         merged[camelToSnake(key)] = [...field];
+      } else if (key === 'deepseek' && isPlainObject(field)) {
+        merged[camelToSnake(key)] = plainObjectToToml(field, undefined);
       } else if (key === 'overrides' && isPlainObject(field)) {
         merged['overrides'] = modelOverridesToToml(field, merged['overrides']);
       } else {
@@ -325,7 +332,9 @@ function modelOverridesToToml(
 ): Record<string, unknown> {
   const out = cloneRecord(rawSnake);
   for (const [key, value] of Object.entries(overrides)) {
-    if (key === 'capabilities' && Array.isArray(value)) {
+    if (key === 'deepseek' && isPlainObject(value)) {
+      out[key] = plainObjectToToml(value, undefined);
+    } else if (key === 'capabilities' && Array.isArray(value)) {
       out[camelToSnake(key)] = [...value];
     } else {
       setDefined(out, camelToSnake(key), value);

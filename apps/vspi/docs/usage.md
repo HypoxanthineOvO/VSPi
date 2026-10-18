@@ -218,6 +218,53 @@ Kimi K2.8 Preview 尚未核实到独立的官方档位说明，不套用 K3 的�
 
 `/subagent-model` 单独管理用户的 `[secondary_model]`：`Enter` 加入或移除候选，`Ctrl+D` 设置默认模型，`Ctrl+P` 编辑能力/用途说明。候选使用已有的 `Provider/model` 配置引用，不自动从星标生成，也不自动跨 Provider 选路。清空候选后继承主模型；保存只影响后续创建的 Subagent，不改变主模型或已运行的子任务。已有 `force=true` 时该候选界面只读，需要先通过 core 配置明确关闭强制模式。
 
+## DeepSeek Messages 与可选联网工具
+
+2.8.0 起，DeepSeek 的能力按连接协议声明。现有 OpenAI 中转继续发送完整工具定义与 `reasoning_content`；切换到原生 Messages 后保留 thinking 文本，并且只向相同 Provider、模型和连接地址回传对应签名。旧会话和来自其他协议的消息仍可继续使用，外来或缺失的签名不会传给新连接。
+
+官方直连可在配置中为指定模型选择 Messages，不影响其他模型：
+
+```toml
+[providers.deepseek]
+type = "deepseek"
+api_key_env = "DEEPSEEK_API_KEY"
+
+[models."deepseek/deepseek-flash"]
+protocol = "anthropic"
+base_url = "https://api.deepseek.com/anthropic"
+
+[models."deepseek/deepseek-flash".deepseek]
+native_messages = true
+```
+
+官方 Flash 默认支持对话中的系统提示词更新和工具追加。新增提醒保留在对话中的位置；工具定义顺序固定，延迟工具通过 `defer_loading` 和 `tool_addition` 激活。启用已有的 `[experimental] tool_select = true` 后，MCP 的加载过程也使用该机制。Pro 和未知模型默认使用开头系统提示词和完整工具列表。缓存命中由上游返回的 usage 统计；更换工具集合、初始提示词或模型仍可能使缓存失效。
+
+Anthropic 协议中转需要明确声明其支持 DeepSeek Messages，不能仅凭模型名称推断。以下配置只适用于已经支持这些扩展的中转，地址使用服务商提供的 Messages 根路径：
+
+```toml
+[models."example/flash".deepseek]
+native_messages = true
+system_prompt_update = "in-history"
+tool_update = "addition-only"
+```
+
+该模型还需配置 `protocol = "anthropic"`、`provider`、`model` 和上下文上限。未声明上述能力时，中转沿用原来的协议行为。原生连接可设 `system_prompt_update = "leading-only"`、`tool_update = "none"`，关闭对话内更新并发送完整工具列表。已经使用过的同名工具若更改 schema，需要新建会话；Flash 的追加能力不支持工具移除。原生思考档位为 Low、High、Max 或通过配置关闭，不接受 Medium 等未声明的值。Messages 不提供受约束的 JSON 输出，需要该能力时使用 Chat 或 Responses 连接。
+
+Search 和 Fetch 分别选择，不依赖当前模型，配置存在时优先于其他联网服务。每项服务都需要明确指定自己的凭证；不会自动拿模型连接或中转的 API Key 去请求官方服务。
+
+```toml
+[services.deepseek_search]
+api_key_env = "DEEPSEEK_TOOLS_API_KEY"
+count = 10
+
+[services.deepseek_fetch]
+api_key_env = "DEEPSEEK_TOOLS_API_KEY"
+```
+
+默认使用官方 `/v1/tools/search` 和 `/v1/tools/fetch`；支持这些接口的中转可分别设置 `base_url` 为完整接口地址，也可通过 `custom_headers` 配置路由头。可设置 `timeout_ms`（默认 60000，最大 120000），Search 的 `count` 范围为 1–50、查询长度为 1–128 个 Unicode 字符，Fetch 接受无账号密码的 HTTP(S) URL。请求支持取消，拒绝携带凭证跟随重定向；HTTP 错误直接返回，不自动改用其他付费服务。删除相应配置项即可恢复原有服务选择。
+
+适配依据：[DeepSeek Harness 0.2.1-rc.2](https://github.com/deepseek-ai/deepseek-harness/tree/dsh-v0.2.1-rc.2)、[Search](https://api-docs.deepseek.com/guides/search/) 与 [Fetch](https://api-docs.deepseek.com/api/fetch/)。
+
 ## 配置文件与重载
 
 配置默认位于 `~/.vspi/config.toml`，`vspi config path` 输出实际路径。设置 `VSPI_HOME` 可隔离配置、会话与 daemon。

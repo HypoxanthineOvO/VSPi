@@ -1,3 +1,4 @@
+import type { DeepSeekConfig } from '../provider/deepseek/capabilities';
 import { z } from 'zod';
 
 import { createDecorator, type ServiceIdentifier } from '#/_base/di/instantiation';
@@ -14,6 +15,7 @@ export const ProtocolSchema = z.enum(['anthropic', 'openai', 'openai_responses',
 export type Protocol = z.infer<typeof ProtocolSchema>;
 
 export interface ProtocolProviderOptions {
+  readonly deepseek?: DeepSeekConfig;
   readonly relay?: boolean;
   readonly reasoningKey?: string;
   readonly defaultMaxTokens?: number;
@@ -28,6 +30,7 @@ export interface ProtocolProviderOptions {
 }
 
 export interface ProtocolAdapterConfig {
+  readonly providerName?: string;
   readonly effortMapping?: Readonly<Record<string, string | null>>;
   readonly capabilities?: ModelCapability;
   readonly thinking?: ThinkingCapability;

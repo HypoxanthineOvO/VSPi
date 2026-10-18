@@ -43,6 +43,7 @@ export class PiLlmRequester implements LlmRequester {
   ): Promise<void> {
     const adapter: ProtocolAdapterConfig = {
       protocol: this.model.protocol,
+      providerName: this.model.providerName,
       providerType: this.model.providerType,
       modelName: config.model.model,
       baseUrl: config.model.baseUrl,

@@ -81,6 +81,17 @@ describe('WebFetchService', () => {
     return ix.get(IWebFetchService).getUrlFetcher();
   }
 
+  it('uses explicit DeepSeek Fetch without borrowing model credentials or falling back after an error', async () => {
+    providers = { [NON_OAUTH_PROVIDER]: { type: 'deepseek', apiKey: 'PROVIDER_KEY' } };
+    servicesConfig = { deepseekFetch: { apiKey: 'FETCH_KEY' }, moonshotFetch: { baseUrl: 'https://example.test/fetch', apiKey: 'OTHER_KEY' } };
+    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 429 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(fetcher().fetch('https://example.com')).rejects.toMatchObject({ status: 429 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('https://api.deepseek.com/v1/tools/fetch');
+    expect(resolveTokenProvider).not.toHaveBeenCalled();
+  });
+
   it('yields the local fetcher when the managed provider is not configured', () => {
     providers = { [NON_OAUTH_PROVIDER]: { type: 'openai', apiKey: 'sk-test' } };
     expect(fetcher()).toBeInstanceOf(LocalFetchURLProvider);

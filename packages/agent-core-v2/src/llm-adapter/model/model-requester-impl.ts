@@ -240,7 +240,7 @@ export class ModelRequesterImpl implements ModelRequester {
     const config: LlmRequestConfig = {
       model: resolved.model,
       systemPrompt: input.systemPrompt,
-      tools: wireTools(input.tools),
+      tools: this.model.capabilities.native_tool_updates === true ? input.tools : wireTools(input.tools),
       cacheKey: params?.cacheKey,
       thinking:
         params?.thinkingEffort === undefined

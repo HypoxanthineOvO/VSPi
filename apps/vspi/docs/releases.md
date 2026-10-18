@@ -4,6 +4,17 @@
 
 发行包本地构建并直接发布，发版流程见[开发指南](development.md#发布)。各版本的平台验收范围分别记录；2.4.0 按 Linux 先行发布，Windows 验收后置，不沿用旧版本的结论。
 
+## 2.8.0 — DeepSeek 原生 Messages 与可选 Search/Fetch
+
+- 引入 DeepSeek 连接能力声明与签名回放兼容；原生 thinking 签名绑定 Provider、模型及地址，旧会话和跨协议消息保留文本。现有 OpenAI 中转继续回传完整工具列表与 `reasoning_content`。
+- 显式选择官方 Messages 的 Flash 支持对话内系统更新、延迟工具定义和工具追加，保持已有请求前缀；Pro、未知模型和未声明扩展的中转使用保守能力。原生思考支持 Low、High、Max 和 Off。
+- 新增分别配置的 DeepSeek Search/Fetch，支持独立 API Key 或环境变量、服务中转地址、超时和取消。未配置时沿用原有联网服务；配置后优先使用 DeepSeek，错误不静默切换服务，不携带凭证跟随重定向。
+- 配置示例与能力开关见[使用说明](usage.md#deepseek-messages-与可选联网工具)。
+- Linux 发布检查分包完成：Core 7,478、Klient 278、服务端 1,416、运行时 92、VSPi 528 项通过，共 9,792 项；28 项按既有条件跳过，其中 24 项依赖独立旧服务端。类型检查、lint（0 错误）、import 边界和发布器 2 项测试通过。
+- 真实 API 验证通过：官方 Messages 与现有中转的两轮思考模式工具调用、原生系统更新和工具追加、官方 Search/Fetch；打包后的 VSPi daemon 也完成了官方 Messages 工具调用。
+- 同一 tarball 在 Linux Node 24.15.0、最低支持版本 22.19.0 和 Windows Node 24.20.0 下通过隔离安装、包校验及 daemon 启停验证；另有 7 项打包 daemon 测试通过。macOS 和 Windows 源码构建本轮未验收。
+- 官方 Messages 与现有 OpenAI 中转均通过真实两轮思考和工具调用；第二轮分别返回 384 和 256 个缓存读取 token。官方 Messages 同时验证系统提醒和延迟工具追加；官方 Search/Fetch 各完成一次真实调用。缓存数值仅记录本次验收，不作为命中率保证。
+
 ## 2.7.2 — 恢复长回答的完整滚动历史
 
 - 修复 2.7.1 把普通内容更新误当作窗口缩放、仅重绘屏幕底部而漏写长回答前半部分的回归；可见区域重绘只用于真实的终端尺寸变化。

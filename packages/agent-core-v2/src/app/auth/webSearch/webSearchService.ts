@@ -13,6 +13,7 @@ import { IProviderService, type ProviderConfig } from '#/llm-adapter/provider/pr
 import { isOAuthCatalogVendor } from '#/llm-adapter/provider/provider-definition';
 
 import { SERVICES_SECTION, type ServicesConfig } from '../configSection';
+import { DeepSeekWebSearchProvider } from '#/app/web/providers/deepseek-tools';
 import { MoonshotWebSearchProvider } from './providers/moonshot-web-search';
 import type { WebSearchProvider } from '#/agent/tools/web-search/web-search';
 import { IWebSearchProviderService } from './webSearch';
@@ -29,11 +30,12 @@ export class WebSearchProviderService implements IWebSearchProviderService {
   ) {}
 
   getWebSearchProvider(): WebSearchProvider | undefined {
-    return this.fromServicesConfig() ?? this.fromManagedOAuth();
+    const deepseek = this.config.get<ServicesConfig>(SERVICES_SECTION)?.deepseekSearch;
+    return deepseek === undefined ? this.fromServicesConfig() ?? this.fromManagedOAuth() : new DeepSeekWebSearchProvider(deepseek);
   }
 
   hasWebSearchProvider(): boolean {
-    return this.configuredSearch() !== undefined || this.managedTokenProvider() !== undefined;
+    return this.config.get<ServicesConfig>(SERVICES_SECTION)?.deepseekSearch !== undefined || this.configuredSearch() !== undefined || this.managedTokenProvider() !== undefined;
   }
 
   private configuredSearch(): (ServicesConfig['moonshotSearch'] & { baseUrl: string }) | undefined {

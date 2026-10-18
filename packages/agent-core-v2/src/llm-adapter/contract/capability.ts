@@ -1,6 +1,10 @@
 import type { ModelCapability as LlmModelCapability } from '#human/llm/capability';
 
 export interface ModelCapability {
+  readonly native_messages?: boolean;
+  readonly system_prompt_updates?: boolean;
+  readonly native_tool_updates?: boolean;
+  readonly signed_thinking_replay?: boolean;
   readonly image_in: boolean;
   readonly video_in: boolean;
   readonly audio_in: boolean;

@@ -119,6 +119,16 @@ async function collect(stream: AsyncIterable<ModelRequestEvent>): Promise<ModelR
 const INPUT = { systemPrompt: 'sys', tools: [], messages: [] };
 
 describe('ModelRequesterImpl request execution', () => {
+  it('retains deferred declarations only for native tool-update routes', async () => {
+    const requester = new FakeLlmRequester();
+    requester.handler = (_i, emit) => textStream(emit);
+    const base = modelWith(createStaticCredentialProvider('YOUR_API_KEY'));
+    const impl = new ModelRequesterImpl({ ...base, capabilities: { ...base.capabilities, native_tool_updates: true } }, gatewayReturning(requester));
+    const tools = [{ name: 'deferred', description: 'Tool', parameters: {}, deferred: true as const }];
+    await collect(impl.request({ systemPrompt: 'System', tools, messages: [] }));
+    expect(requester.calls[0]?.config.tools).toEqual(tools);
+  });
+
   it('maps ModelRequestParams onto LlmRequestConfig, content and control', async () => {
     const requester = new FakeLlmRequester();
     requester.handler = (_i, emit) => textStream(emit);

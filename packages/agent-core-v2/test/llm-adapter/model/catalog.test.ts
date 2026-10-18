@@ -1219,3 +1219,22 @@ describe('local model metadata across catalog updates', () => {
     } finally { host.dispose(); }
   });
 });
+
+describe('DeepSeek native catalog capabilities', () => {
+  it('resolves explicit Messages models while retaining OpenAI relay models', () => {
+    const { host, catalog } = createHost({
+      providers: { deepseek: { type: 'deepseek', apiKey: 'YOUR_API_KEY' }, relay: { type: 'openai', apiKey: 'YOUR_API_KEY', baseUrl: 'https://relay.example.test/v1' } },
+      models: {
+        native: { provider: 'deepseek', model: 'deepseek-flash', protocol: 'anthropic', maxContextSize: 1000000 },
+        relay: { provider: 'relay', model: 'deepseek-flash', maxContextSize: 1000000 },
+        nativeOverride: { provider: 'relay', model: 'deepseek-flash', protocol: 'anthropic', maxContextSize: 1000000, deepseek: { nativeMessages: true, systemPromptUpdate: 'in-history', toolUpdate: 'addition-only' }, overrides: { deepseek: { toolUpdate: 'none' } } },
+      },
+    });
+    try {
+      expect(catalog.get('native')).toMatchObject({ protocol: 'anthropic', baseUrl: 'https://api.deepseek.com/anthropic', capabilities: { tool_use: true, thinking: true, native_messages: true, system_prompt_updates: true, native_tool_updates: true, signed_thinking_replay: true } });
+      expect(catalog.get('relay')).toMatchObject({ protocol: 'openai', baseUrl: 'https://relay.example.test/v1' });
+      expect(catalog.get('relay').capabilities.native_messages).toBeUndefined();
+      expect(catalog.get('nativeOverride')).toMatchObject({ capabilities: { native_messages: true, native_tool_updates: false }, providerOptions: { deepseek: { nativeMessages: true, systemPromptUpdate: 'in-history', toolUpdate: 'none' } } });
+    } finally { host.dispose(); }
+  });
+});

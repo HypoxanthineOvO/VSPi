@@ -1,3 +1,4 @@
+import { deepSeekBaseUrl, resolveDeepSeekCapabilities } from '../provider/deepseek/capabilities';
 import { isRelayModel } from './relayDefaults';
 import { listPiProviders, listPiModelRecords } from '../provider/pi/catalog';
 import { normalizeThinkingCapability } from '../contract/capability';
@@ -401,10 +402,11 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
     const credentialProvider = this.buildCredentialProvider(providerName, auth);
 
     const providerType = providerConfig?.type ?? protocol;
-    const resolvedBaseUrl =
+    const protocolBaseUrl =
       protocol === 'anthropic' && rawBaseUrl !== undefined
         ? stripTrailingV1(rawBaseUrl)
         : rawBaseUrl;
+    const resolvedBaseUrl = deepSeekBaseUrl({ protocol, providerType, modelName: wireName ?? '', baseUrl: protocolBaseUrl });
     if (wireName === undefined) {
       throw new Error2(
         CONFIG_INVALID_ERROR_CODE,
@@ -435,6 +437,14 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
       providerConfig,
       resolvedBaseUrl,
     );
+    const deepseek = resolveDeepSeekCapabilities({ protocol, providerType, providerName, modelName: wireName, baseUrl: resolvedBaseUrl }, model.deepseek);
+    if (deepseek.nativeMessages) {
+      Object.assign(capabilities, {
+        native_messages: true, system_prompt_updates: deepseek.systemPromptUpdate === 'in-history',
+        native_tool_updates: deepseek.toolUpdate !== 'none', signed_thinking_replay: true,
+        dynamically_loaded_tools: deepseek.toolUpdate !== 'none',
+      });
+    }
     const declared = new Set((model.capabilities ?? []).map((c) => c.trim().toLowerCase()));
 
     return {
@@ -610,6 +620,7 @@ function effectiveRecordOf(definition: CatalogModel): ModelRecord {
   return {
     ...base,
     ...overrides,
+    deepseek: overrides?.deepseek === undefined ? raw.deepseek : { ...raw.deepseek, ...overrides.deepseek },
     capabilities: overrides?.capabilities ?? raw.capabilities,
     maxContextSize: definition.maxContextSize,
     maxInputSize: definition.maxInputSize,
@@ -631,6 +642,7 @@ function buildProtocolProviderOptions(
   baseUrl: string | undefined,
 ): ProtocolProviderOptions | undefined {
   const options: MutableProtocolProviderOptions = {};
+  if (model.deepseek !== undefined) options.deepseek = model.deepseek;
   if (isRelayModel(model, provider)) options.relay = true;
   if (model.maxOutputSize !== undefined) options.defaultMaxTokens = model.maxOutputSize;
 

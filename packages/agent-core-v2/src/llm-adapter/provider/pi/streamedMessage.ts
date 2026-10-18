@@ -34,6 +34,7 @@ import type { ResponseDiagnostics } from './responseDiagnostics';
 import { classifyProviderBusinessError, providerErrorDetail } from './providerErrors';
 
 export interface PiResponseState {
+  replayRoute?: string;
   provider?: string;
   status?: number;
   headers?: Record<string, string>;
@@ -196,7 +197,7 @@ export class PiStreamedMessage implements StreamedMessage {
     yield* this.startTool(index, call);
     const state = this.toolStates.get(index)!;
     if (call.thoughtSignature !== undefined)
-      state.extras['thought_signature_b64'] = encodePiSignature(message, call.thoughtSignature);
+      state.extras['thought_signature_b64'] = encodePiSignature(message, call.thoughtSignature, undefined, this.response.replayRoute);
     if (call.namespace !== undefined) state.extras['namespace'] = call.namespace;
     if (state.arguments.length === 0) {
       const args = JSON.stringify(call.arguments);
@@ -240,7 +241,7 @@ export class PiStreamedMessage implements StreamedMessage {
           textSignature:
             block.textSignature === undefined
               ? undefined
-              : encodePiSignature(message, block.textSignature),
+              : encodePiSignature(message, block.textSignature, undefined, this.response.replayRoute),
         };
     } else {
       const think = block.thinking.slice(this.thinkingLengths.get(index) ?? 0);
@@ -252,7 +253,7 @@ export class PiStreamedMessage implements StreamedMessage {
           encrypted:
             block.thinkingSignature === undefined
               ? undefined
-              : encodePiSignature(message, block.thinkingSignature, block.redacted),
+              : encodePiSignature(message, block.thinkingSignature, block.redacted, this.response.replayRoute),
         };
     }
     this.endedBlocks.add(index);

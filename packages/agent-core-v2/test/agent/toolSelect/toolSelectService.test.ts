@@ -551,6 +551,17 @@ describe('AgentToolSelectService gate', () => {
 });
 
 describe('AgentToolSelectService S0 baseline (gate closed)', () => {
+  it('keeps unloaded MCP schemas deferred on native update routes for a stable tool catalog', () => {
+    flagEnabled = true;
+    capabilities = { ...capabilities, native_tool_updates: true };
+    const h = createHarness();
+    registerMcp(h, new StubMcpTool(MCP_ALPHA));
+    const shaped = h.sut.shapeTools(h.registry.list());
+    expect(shaped.find(entry => entry.name === MCP_ALPHA)).toMatchObject({ deferred: true });
+    h.sut.load([MCP_ALPHA]);
+    expect(h.sut.shapeTools(h.registry.list()).find(entry => entry.name === MCP_ALPHA)).toMatchObject({ deferred: true });
+  });
+
   it('shapeTools returns the identical array when dynamically_loaded_tools is absent', () => {
     const h = createHarness();
     registerBuiltin(h, new EchoTool());

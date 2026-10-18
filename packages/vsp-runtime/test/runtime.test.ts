@@ -949,6 +949,29 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 		} finally { await connection.close(); }
 	});
 
+	it("persists opt-in Messages capabilities and web services while keeping the shipped relay route", async () => {
+		homeDir = await mkdtemp(join(tmpdir(), "vsp-deepseek-native-"));
+		await writeFile(resolveRuntimePaths(homeDir).configPath, '[providers.deepseek]\ntype = "deepseek"\n[providers.vsplab]\ntype = "openai"\n');
+		daemon = await startTestDaemon(homeDir);
+		const connection = await connectRuntime(homeDir);
+		try {
+			await connection.klient.global.config.set({ domain: "models", patch: { "deepseek/deepseek-flash": { protocol: "anthropic", deepseek: { nativeMessages: true } } } });
+			await connection.klient.global.config.set({ domain: "services", patch: { deepseekSearch: { apiKeyEnv: "EXAMPLE_DEEPSEEK_KEY", count: 3 }, deepseekFetch: { apiKeyEnv: "EXAMPLE_DEEPSEEK_KEY" } } });
+			await connection.klient.global.config.reload();
+			const models = await connection.klient.global.kosong.listModels();
+			const native = models.find(model => model.model === "deepseek/deepseek-flash");
+			expect(native).toMatchObject({ protocol: "anthropic" });
+			expect(native?.capabilities).toEqual(expect.arrayContaining(["native_messages", "native_tool_updates", "signed_thinking_replay"]));
+			const relay = models.find(model => model.model === "vsplab/deepseek-flash");
+			expect(relay).toMatchObject({ protocol: "openai" });
+			expect(relay?.capabilities).not.toContain("native_messages");
+			const text = await readFile(resolveRuntimePaths(homeDir).configPath, "utf8");
+			expect(text).toContain("native_messages = true");
+			expect(text).toContain("[services.deepseek_search]");
+			expect(text).toContain('api_key_env = "EXAMPLE_DEEPSEEK_KEY"');
+		} finally { await connection.close(); }
+	});
+
 	it("preserves a flat user override through refresh and reload without persisting builtin defaults", async () => {
 		homeDir = await mkdtemp(join(tmpdir(), "vsp-model-overrides-"));
 		await writeFile(resolveRuntimePaths(homeDir).configPath, '[providers.vsplab]\ntype = "openai"\n');

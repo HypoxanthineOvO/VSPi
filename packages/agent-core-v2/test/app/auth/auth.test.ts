@@ -1643,6 +1643,18 @@ describe('WebSearchProviderService', () => {
     return ix.get(IWebSearchProviderService);
   }
 
+  it('uses explicitly configured DeepSeek Search before existing services and does not fall back on failure', async () => {
+    providers = { [NON_OAUTH_PROVIDER]: { type: 'deepseek', apiKey: 'PROVIDER_KEY' } };
+    servicesConfig = { deepseekSearch: { apiKey: 'SEARCH_KEY' }, moonshotSearch: { baseUrl: 'https://example.test/search', apiKey: 'OTHER_KEY' } };
+    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 402 }));
+    vi.stubGlobal('fetch', fetchMock);
+    expect(createService().hasWebSearchProvider()).toBe(true);
+    await expect(createService().getWebSearchProvider()!.search('query')).rejects.toMatchObject({ status: 402 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('https://api.deepseek.com/v1/tools/search');
+    expect(resolveTokenProvider).not.toHaveBeenCalled();
+  });
+
   it('returns undefined when the managed provider is not configured', () => {
     providers = { [NON_OAUTH_PROVIDER]: { type: 'openai', apiKey: 'sk-test' } };
     expect(createService().getWebSearchProvider()).toBeUndefined();
@@ -2336,5 +2348,16 @@ describe('AuthLegacyService', () => {
     defaultModel = 'k2';
     await expect(svc.get()).resolves.toMatchObject({ models_ready: true });
     expect(configReload).not.toHaveBeenCalled();
+  });
+});
+
+describe('DeepSeek services config', () => {
+  it('round trips optional service configuration independently from existing services', () => {
+    const raw = { deepseek_search: { api_key_env: 'EXAMPLE_DEEPSEEK_KEY', count: 5, timeout_ms: 1000, custom_headers: { 'X-Route': 'example' } }, deepseek_fetch: { api_key: 'YOUR_API_KEY', base_url: 'https://relay.example.test/fetch' } };
+    const config = ServicesConfigSchema.parse(servicesFromToml(raw));
+    expect(config.deepseekSearch?.apiKeyEnv).toBe('EXAMPLE_DEEPSEEK_KEY');
+    expect(servicesToToml(config, {})).toEqual(raw);
+    expect(() => ServicesConfigSchema.parse({ deepseekSearch: { count: 51 } })).toThrow();
+    expect(() => ServicesConfigSchema.parse({ deepseekFetch: { timeoutMs: 0 } })).toThrow();
   });
 });

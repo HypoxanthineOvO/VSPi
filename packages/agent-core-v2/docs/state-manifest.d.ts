@@ -995,6 +995,10 @@ export interface AgentStateSnapshot {
     readonly resolved: /* ProfileModelContext — packages/agent-core-v2/src/agent/profile/profile.ts */ {
       readonly modelAlias: string;
       readonly modelCapabilities: /* ModelCapability — packages/agent-core-v2/src/llm-adapter/contract/capability.ts */ {
+        readonly native_messages?: boolean;
+        readonly system_prompt_updates?: boolean;
+        readonly native_tool_updates?: boolean;
+        readonly signed_thinking_replay?: boolean;
         readonly image_in: boolean;
         readonly video_in: boolean;
         readonly audio_in: boolean;

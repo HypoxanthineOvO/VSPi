@@ -105,7 +105,7 @@ export class AgentToolSelectService extends Service implements IAgentToolSelectS
         shaped.push(entry);
         continue;
       }
-      if (!loaded.has(entry.name)) continue;
+      if (!loaded.has(entry.name) && this.profile.getModelCapabilities().native_tool_updates !== true) continue;
       shaped.push({ ...entry, deferred: true });
     }
     return shaped;

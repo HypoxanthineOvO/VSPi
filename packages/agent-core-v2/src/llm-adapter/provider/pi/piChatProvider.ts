@@ -39,6 +39,8 @@ import { ResponseDiagnostics } from './responseDiagnostics';
 import { relayNativeProvider } from './catalog';
 import { errorProvider } from './providerErrors';
 import { withProviderTransport } from '../transport';
+import { deepSeekBaseUrl, deepSeekRouteIdentity, resolveDeepSeekCapabilities } from '../deepseek/capabilities';
+import { DEEPSEEK_TOOL_CHANGES_BETA, prepareDeepSeekMessages } from '../deepseek/messages';
 
 const API_BY_PROTOCOL: Record<ProtocolAdapterConfig['protocol'], Api> = {
   openai: 'openai-completions',
@@ -269,8 +271,13 @@ export class PiChatProvider implements ChatProvider {
       tools = tools.map(normalizeTool);
       history = history.map(message => message.tools === undefined ? message : { ...message, tools: message.tools.map(normalizeTool) });
     }
+    const endpoint = resolveProviderEndpoint(this.config.providerType ?? this.config.protocol);
+    const route = { ...this.config, baseUrl: deepSeekBaseUrl({ ...this.config, baseUrl: options.auth?.baseUrl ?? this.config.baseUrl ?? endpoint.baseUrl ?? this.model.baseUrl }) };
+    const deepseek = resolveDeepSeekCapabilities(route, this.config.providerOptions?.deepseek);
+    if (deepseek.nativeMessages && options.responseFormat !== undefined)
+      throw new ChatProviderError('DeepSeek Messages does not support structured response formats. Use an OpenAI-compatible Chat or Responses route for JSON output.');
     if (
-      this.legacyCompat !== undefined &&
+      !deepseek.nativeMessages && this.legacyCompat !== undefined &&
       (this.config.providerType === 'kimi' || this.config.providerOptions?.reasoningKey !== undefined ||
         tools.some((tool) => tool.name.startsWith('$')) ||
         history.some(
@@ -303,13 +310,12 @@ export class PiChatProvider implements ChatProvider {
         ? controller.signal
         : AbortSignal.any([controller.signal, options.signal]);
     const diagnostics = new ResponseDiagnostics(this.config.protocol);
-    const response: PiResponseState = { diagnostics, provider: errorProvider(this.config.providerType, this.config.modelName) };
+    const response: PiResponseState = { diagnostics, provider: errorProvider(this.config.providerType, this.config.modelName), replayRoute: deepseek.nativeMessages ? deepSeekRouteIdentity(route) : undefined };
     try {
-      const endpoint = resolveProviderEndpoint(this.config.providerType ?? this.config.protocol);
       const model: Model<Api> = {
         ...this.model,
-        baseUrl:
-          options.auth?.baseUrl ?? this.config.baseUrl ?? endpoint.baseUrl ?? this.model.baseUrl,
+        baseUrl: route.baseUrl ?? this.model.baseUrl,
+        compat: deepseek.nativeMessages ? { ...this.model.compat, allowEmptySignature: true, supportsMidConvoSystemMessages: deepseek.systemPromptUpdate === 'in-history', supportsMidConvoToolChanges: false } : this.model.compat,
         headers: { ...this.model.headers },
       };
       for (const name of options.auth?.removeHeaders ?? []) {
@@ -326,7 +332,7 @@ export class PiChatProvider implements ChatProvider {
         this.config.thinking?.defaultEffort ??
         configuredEfforts[Math.floor(configuredEfforts.length / 2)] ??
         (levels.includes('medium') ? 'medium' : (levels.find((level) => level !== 'off') ?? 'off'));
-      const effort = options.thinking?.effort ?? defaultEffort;
+      const effort = options.thinking?.effort ?? (deepseek.nativeMessages && this.config.thinking === undefined ? 'high' : defaultEffort);
       const fixedThinking = this.config.thinking !== undefined && this.config.thinking.availability !== 'none' &&
         !this.config.thinking.controls.includes('effort') && !this.config.thinking.controls.includes('budget');
       const selectedEffort = fixedThinking && effort !== 'off' ? 'high' : effort === 'on' ? defaultEffort : effort;
@@ -338,6 +344,10 @@ export class PiChatProvider implements ChatProvider {
         for (const key of Object.keys(headers))
           if (key.toLowerCase() === name.toLowerCase()) delete headers[key];
         headers[name] = null;
+      }
+      if (deepseek.nativeMessages) {
+        for (const key of Object.keys(headers)) if (key.toLowerCase() === 'anthropic-beta') delete headers[key];
+        headers['anthropic-beta'] = deepseek.toolUpdate !== 'none' ? DEEPSEEK_TOOL_CHANGES_BETA : null;
       }
       const common: ProviderStreamOptions = {
         signal,
@@ -363,6 +373,11 @@ export class PiChatProvider implements ChatProvider {
                 options.onProtocolProgress?.('start');
                 let received: Response;
                 try {
+                  if (deepseek.nativeMessages) {
+                    const target = new URL(input instanceof Request ? input.url : input);
+                    target.searchParams.delete('beta');
+                    input = input instanceof Request ? new Request(target, input) : target;
+                  }
                   received = await fetch(input, init);
                 } catch (error) {
                   diagnostics.failure(error);
@@ -404,6 +419,7 @@ export class PiChatProvider implements ChatProvider {
               };
             else payload['top_p'] = topP;
           }
+          if (deepseek.nativeMessages) payload = prepareDeepSeekMessages(payload, context, tools, history, deepseek, response.replayRoute!, selectedEffort);
           responseFormatPayload(payload, this.model.api, options);
           if (options.cacheKey !== undefined && this.model.api === 'anthropic-messages')
             payload['metadata'] = {
@@ -434,7 +450,9 @@ export class PiChatProvider implements ChatProvider {
       };
       const exactGoogleLevel = (this.model.api === 'google-generative-ai' || this.model.api === 'google-vertex') &&
         modelEffortProfile(this.model.id)?.efforts.includes(selectedEffort) === true;
-      const source = exactGoogleLevel
+      const source = deepseek.nativeMessages
+        ? this.provider.stream(model, context, { ...common, thinkingEnabled: false })
+        : exactGoogleLevel
         ? this.provider.stream(model, context, { ...common, ...rawThinkingOptions(this.model.api, selectedEffort) })
         :
         selectedEffort === undefined || selectedEffort === 'off' || isThinkingLevel(selectedEffort)

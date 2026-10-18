@@ -13,6 +13,7 @@ import { ITelemetryService } from '#/app/telemetry/telemetry';
 import { IProviderService } from '#/llm-adapter/provider/provider';
 import { isOAuthCatalogVendor } from '#/llm-adapter/provider/provider-definition';
 
+import { DeepSeekFetchURLProvider } from './providers/deepseek-tools';
 import { LocalFetchURLProvider } from './providers/local-fetch-url';
 import { MoonshotFetchURLProvider } from './providers/moonshot-fetch-url';
 import type { UrlFetcher } from './tools/fetch-url-types';
@@ -34,7 +35,8 @@ export class WebFetchService implements IWebFetchService {
   }
 
   getUrlFetcher(): UrlFetcher {
-    return this.fromServicesConfig() ?? this.fromManagedOAuth() ?? this.localFetcher;
+    const deepseek = this.config.get<ServicesConfig>(SERVICES_SECTION)?.deepseekFetch;
+    return deepseek === undefined ? this.fromServicesConfig() ?? this.fromManagedOAuth() ?? this.localFetcher : new DeepSeekFetchURLProvider(deepseek);
   }
 
   private fromServicesConfig(): UrlFetcher | undefined {

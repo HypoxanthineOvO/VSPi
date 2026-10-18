@@ -58,8 +58,19 @@ export const MoonshotServiceConfigSchema = z.object({
 
 export type MoonshotServiceConfig = z.infer<typeof MoonshotServiceConfigSchema>;
 
+export const DeepSeekServiceConfigSchema = z.object({
+  baseUrl: z.url().optional(),
+  apiKey: z.string().min(1).optional(),
+  apiKeyEnv: z.string().min(1).optional(),
+  timeoutMs: z.number().int().min(1).max(120000).optional(),
+  customHeaders: StringRecordSchema.optional(),
+}).strict();
+export type DeepSeekServiceConfig = z.infer<typeof DeepSeekServiceConfigSchema>;
+
 export const ServicesConfigSchema = z
   .object({
+    deepseekSearch: DeepSeekServiceConfigSchema.extend({ count: z.number().int().min(1).max(50).optional() }).optional(),
+    deepseekFetch: DeepSeekServiceConfigSchema.optional(),
     moonshotSearch: MoonshotServiceConfigSchema.optional(),
     moonshotFetch: MoonshotServiceConfigSchema.optional(),
   })
@@ -194,6 +205,8 @@ export const servicesToToml = (value: unknown, rawSnake: unknown): unknown => {
   const out = cloneRecord(rawSnake);
   writeService(out, 'moonshot_search', value['moonshotSearch']);
   writeService(out, 'moonshot_fetch', value['moonshotFetch']);
+  writeService(out, 'deepseek_search', value['deepseekSearch']);
+  writeService(out, 'deepseek_fetch', value['deepseekFetch']);
   return out;
 };
 

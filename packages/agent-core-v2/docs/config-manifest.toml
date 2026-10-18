@@ -272,6 +272,10 @@ merge_all_available_skills = true
 
 # one [models."<name>"] table per entry:
 # [models."<name>"]
+  # deepseek: object
+    # native_messages: boolean
+    # system_prompt_update: "leading-only" | "in-history"
+    # tool_update: "none" | "addition-only" | "in-history"
   # provider_id: string
   # base_url: string
   # api_key: string
@@ -315,6 +319,10 @@ merge_all_available_skills = true
     # cache_write_usd_per_million: number
     # context_tiers: object[]
   # overrides: object
+    # deepseek: object
+      # native_messages: boolean
+      # system_prompt_update: "leading-only" | "in-history"
+      # tool_update: "none" | "addition-only" | "in-history"
     # max_context_size: integer
     # max_input_size: integer
     # max_output_size: integer
@@ -447,6 +455,21 @@ merge_all_available_skills = true
 # ##########################################################################
 
 [services]
+
+# [services.deepseek_search]
+  # base_url: string
+  # api_key: string
+  # api_key_env: string
+  # timeout_ms: integer
+  # custom_headers: record<string, string>
+  # count: integer
+
+# [services.deepseek_fetch]
+  # base_url: string
+  # api_key: string
+  # api_key_env: string
+  # timeout_ms: integer
+  # custom_headers: record<string, string>
 
 # [services.moonshot_search]
   # base_url: string

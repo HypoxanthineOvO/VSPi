@@ -1,3 +1,4 @@
+import { resolveDeepSeekCapabilities } from '../provider/deepseek/capabilities';
 import { findPiModel, piModelRecord } from '../provider/pi/catalog';
 import { defaultRelayProtocol, isRelayModel } from './relayDefaults';
 import { applyModelEffortProfile } from './effortProfiles';
@@ -99,10 +100,12 @@ export function effectiveModelConfig(
       ? applyModelEffortProfile(model, profile)
       : model;
   const { overrides, ...base } = resolved;
+  const deepseek = overrides?.deepseek === undefined ? base.deepseek : { ...base.deepseek, ...overrides.deepseek };
+  const nativeDeepSeek = base.protocol === 'anthropic' && resolveDeepSeekCapabilities({ protocol: 'anthropic', providerType, modelName: base.name ?? base.model ?? '', baseUrl: base.baseUrl ?? provider?.baseUrl }, deepseek).nativeMessages;
   const piModel = findPiModel(
     providerType ?? base.providerId ?? base.provider,
     base.name ?? base.model ?? '',
-    base.protocol,
+    nativeDeepSeek ? 'openai' : base.protocol,
   );
   const defaults =
     piModel === undefined
@@ -118,6 +121,8 @@ export function effectiveModelConfig(
     ...Object.fromEntries(Object.entries(base).filter(([, value]) => value !== undefined)),
     ...overrides,
   };
+
+  if (deepseek !== undefined) effective.deepseek = deepseek;
 
   if (defaults !== undefined || base.thinking !== undefined || overrides?.thinking !== undefined) {
     effective.thinking = {

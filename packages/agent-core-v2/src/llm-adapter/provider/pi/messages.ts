@@ -17,7 +17,8 @@ import type { ContentPart, Message, ToolCall } from '#/llm-adapter/contract/mess
 import type { Tool } from '#/llm-adapter/contract/message';
 import { normalizeToolCallIdsForProvider, sanitizeToolCallId } from '#/human/llm/requester/bases/tool-call-id';
 
-interface Signature {
+export interface Signature {
+  route?: string;
   api: string;
   provider: string;
   model: string;
@@ -29,11 +30,12 @@ export function encodePiSignature(
   model: Pick<AssistantMessage, 'api' | 'provider' | 'model'>,
   signature: string,
   redacted?: boolean,
+  route?: string,
 ): string {
-  return `pi-signature:${JSON.stringify({ api: model.api, provider: model.provider, model: model.model, signature, redacted })}`;
+  return `pi-signature:${JSON.stringify({ api: model.api, provider: model.provider, model: model.model, signature, redacted, route })}`;
 }
 
-function decodeSignature(value: string | undefined): Signature | undefined {
+export function decodePiSignature(value: string | undefined): Signature | undefined {
   if (value === undefined || !value.startsWith('pi-signature:')) return undefined;
   try {
     const parsed: unknown = JSON.parse(value.slice('pi-signature:'.length));
@@ -47,6 +49,7 @@ function decodeSignature(value: string | undefined): Signature | undefined {
     )
       return undefined;
     return {
+      route: typeof record['route'] === 'string' ? record['route'] : undefined,
       api: record['api'],
       provider: record['provider'],
       model: record['model'],
@@ -74,7 +77,7 @@ export function toLegacyHistory(history: Message[], model: Model<Api>): Message[
     ...message,
     content: message.content.map((part) => {
       if (part.type !== 'think') return part;
-      const signature = decodeSignature(part.encrypted);
+      const signature = decodePiSignature(part.encrypted);
       if (signature === undefined) return part;
       const sameModel =
         signature.api === model.api &&
@@ -84,7 +87,7 @@ export function toLegacyHistory(history: Message[], model: Model<Api>): Message[
     }),
     toolCalls: message.toolCalls.map((call) => {
       const value = call.extras?.['thought_signature_b64'];
-      const signature = typeof value === 'string' ? decodeSignature(value) : undefined;
+      const signature = typeof value === 'string' ? decodePiSignature(value) : undefined;
       if (signature === undefined) return call;
       const extras = { ...call.extras };
       if (
@@ -156,7 +159,7 @@ function convertToolCall(call: ToolCall): PiToolCall {
     arguments: args as JsonObject,
     thoughtSignature:
       typeof signature === 'string'
-        ? (decodeSignature(signature)?.signature ?? signature)
+        ? (decodePiSignature(signature)?.signature ?? signature)
         : undefined,
     namespace:
       typeof call.extras?.['namespace'] === 'string' ? call.extras['namespace'] : undefined,
@@ -177,7 +180,7 @@ function convertAssistant(
         model.compat.requiresReasoningContentOnAssistantMessages === true));
   for (const part of message.content) {
     if (part.type === 'text') {
-      const signature = decodeSignature(part.textSignature);
+      const signature = decodePiSignature(part.textSignature);
       origin ??= signature;
       content.push({
         type: 'text',
@@ -185,7 +188,7 @@ function convertAssistant(
         textSignature: signature?.signature ?? part.textSignature,
       });
     } else if (part.type === 'think') {
-      const signature = decodeSignature(part.encrypted);
+      const signature = decodePiSignature(part.encrypted);
       origin ??= signature;
       const thinking: ThinkingContent = {
         type: 'thinking',
@@ -202,15 +205,15 @@ function convertAssistant(
   }
   for (const call of message.toolCalls) {
     const signature = call.extras?.['thought_signature_b64'];
-    if (typeof signature === 'string') origin ??= decodeSignature(signature);
+    if (typeof signature === 'string') origin ??= decodePiSignature(signature);
     content.push(convertToolCall(call));
   }
   return {
     role: 'assistant',
     content,
-    api: origin?.api ?? model.api,
-    provider: origin?.provider ?? model.provider,
-    model: origin?.model ?? model.id,
+    api: requiresReasoningContent ? model.api : origin?.api ?? model.api,
+    provider: requiresReasoningContent ? model.provider : origin?.provider ?? model.provider,
+    model: requiresReasoningContent ? model.id : origin?.model ?? model.id,
     usage: emptyPiUsage(),
     stopReason: message.toolCalls.length > 0 ? 'toolUse' : 'stop',
     timestamp,

@@ -1,3 +1,4 @@
+import type { DeepSeekConfig } from '../provider/deepseek/capabilities';
 import { createDecorator, type ServiceIdentifier } from '#/_base/di/instantiation';
 import type { Event, IWaitUntil } from '#/_base/event';
 import type { ThinkingCapabilityInput } from '#/llm-adapter/contract/capability';
@@ -6,6 +7,7 @@ import type { Protocol } from '../protocol/protocol';
 import type { OAuthRef } from '../provider/provider';
 
 export interface ModelOverride {
+  deepseek?: DeepSeekConfig;
   pricingSource?: 'official' | 'provider';
   effortMapping?: Record<string, string | null>;
   curated?: boolean;
@@ -38,6 +40,7 @@ export interface ModelPricingTier {
 }
 
 export interface ModelRecord {
+  deepseek?: DeepSeekConfig;
   pricingSource?: 'official' | 'provider';
   effortMapping?: Record<string, string | null>;
   curated?: boolean;

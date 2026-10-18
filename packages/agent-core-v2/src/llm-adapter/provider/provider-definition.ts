@@ -1,4 +1,4 @@
-import { listPiProviders } from './pi/catalog';
+import { findPiModel, listPiProviders, piCapability } from './pi/catalog';
 import { BugIndicatingError } from '#/_base/errors/errors';
 import type { ModelCapability as HumanModelCapability } from '#human/llm/capability';
 import type { ProtocolEndpoint, ProviderConnection } from '#human/llm/protocol/connection';
@@ -265,6 +265,19 @@ registerProviderDefinition({
     baseUrlEnv: 'VSPLAB_BASE_URL',
     defaultBaseUrl: 'https://api.vsplab.cn/v1',
   },
+});
+
+registerProviderDefinition({
+  id: 'deepseek', baseProtocol: 'openai', modelSource: 'static',
+  endpoint: { apiKeyEnv: 'DEEPSEEK_API_KEY', defaultBaseUrl: 'https://api.deepseek.com' },
+});
+registerProviderDefinition({
+  id: 'deepseek', baseProtocol: 'anthropic', modelSource: 'static',
+  capability: name => {
+    const model = findPiModel('deepseek', name, 'openai', { allowFallback: false });
+    return model === undefined ? undefined : piCapability(model);
+  },
+  endpoint: { apiKeyEnv: 'DEEPSEEK_API_KEY', defaultBaseUrl: 'https://api.deepseek.com/anthropic' },
 });
 
 for (const provider of listPiProviders()) {
