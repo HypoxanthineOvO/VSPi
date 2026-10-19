@@ -118,6 +118,35 @@ describe('Devin native chat', () => {
     await expect(consume(mockProvider([connectFrame(field(3, 'partial'))]).provider)).rejects.toThrow('end-stream trailer');
     await expect(consume(mockProvider([connectFrame(field(6, message(field(1, 'call'), field(2, 'lookup'), field(3, '{')))), trailer]).provider)).rejects.toThrow('incomplete JSON');
   });
+  it.each(['gemini-3-5-flash', 'MODEL_GOOGLE_GEMINI_3_5_FLASH', 'claude-example', 'swe-1-6-fast'])('normalizes tool schemas only for Gemini wire UIDs: %s', async uid => {
+    const parameters = {
+      type: 'object', additionalProperties: false,
+      properties: {
+        value: { type: ['number', 'null'], minimum: 0 },
+        nested: { type: 'array', items: { type: ['string', 'number', 'null'] } },
+        choice: { anyOf: [{ type: ['string', 'null'] }, { const: 'example' }] },
+        type: { type: ['boolean', 'null'] },
+        additionalProperties: { type: 'string' },
+      }, required: ['value'],
+    };
+    const before = structuredClone(parameters);
+    const request = decode(await buildDevinRequest({ ...config, modelName: 'gemini-alias', effortMapping: { high: uid } }, 'System', [{ ...tool, parameters }], [], { thinking: { effort: 'high' } }, 'example-token', 'example-jwt'));
+    const schema: unknown = JSON.parse(text(child(request, 10), 3));
+    expect(text(request, 21)).toBe(uid);
+    expect(parameters).toEqual(before);
+    if (uid.startsWith('gemini-') || uid.startsWith('MODEL_GOOGLE_GEMINI_')) {
+      expect(schema).toMatchObject({
+        type: 'object', required: ['value'], propertyOrdering: Object.keys(parameters.properties),
+        properties: {
+          value: { type: 'number', nullable: true, description: expect.stringContaining('minimum') },
+          nested: { type: 'array', items: { nullable: true, anyOf: [{ type: 'string' }, { type: 'number' }] } },
+          choice: { anyOf: [{ type: 'string', nullable: true }, { type: 'string', enum: ['example'] }] },
+          type: { type: 'boolean', nullable: true }, additionalProperties: { type: 'string' },
+        },
+      });
+      expect(schema).not.toHaveProperty('additionalProperties');
+    } else expect(schema).toEqual(parameters);
+  });
   it('replays tool results and signed thinking, routes efforts and retains image input', async () => {
     const history: Message[] = [createUserMessage('Hello'), { role: 'assistant', content: [{ type: 'think', think: 'Thought', encrypted: 'devin:{"model":"example-model","signature":"sig"}' }], toolCalls: [{ type: 'function', id: 'foreign|tool.id', name: 'lookup', arguments: '{"value":"x"}' }] }, createToolMessage('foreign|tool.id', [{ type: 'text', text: 'Result' }, { type: 'image_url', imageUrl: { url: 'data:image/png;base64,aGVsbG8=' } }])];
     const request = decode(await buildDevinRequest({ ...config, effortMapping: { high: 'example-high' } }, 'System', [tool], history, { thinking: { effort: 'high' }, cacheKey: 'example-session' }, 'example-token', 'example-jwt'));

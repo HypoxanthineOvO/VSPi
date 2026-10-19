@@ -5,6 +5,7 @@ import { APIIncompleteStreamError, APIProtocolError, ChatProviderError } from '#
 import type { ProtocolAdapterConfig } from '#/llm-adapter/protocol/protocol';
 import { checkTrailer, child, children, connectFrame, ConnectDecoder, decode, double, field, message, number, text } from './protobuf';
 import { DEVIN_BASE_URL, DEVIN_CHAT_PATH, devinHttpError, devinMetadata, devinRequestAuth } from './wire';
+import { normalizeDevinGeminiSchema } from './schema';
 
 function stableId(seed: string): string {
   const hash = createHash('sha256').update(seed).digest('hex');
@@ -64,7 +65,8 @@ export async function buildDevinRequest(config: ProtocolAdapterConfig, system: s
     field(12, field(1, 'auto')), field(13, field(1, 1)),
     field(8, message(field(1, 1), field(2, options.maxCompletionTokens ?? config.providerOptions?.defaultMaxTokens ?? 64000),
       field(3, 400), double(5, options.sampling?.temperature ?? 1), field(7, 40), double(8, Math.fround(options.sampling?.topP ?? 0.95)))),
-    ...tools.map(tool => field(10, message(field(1, tool.name), field(2, tool.description), field(3, JSON.stringify(tool.parameters))))));
+    ...tools.map(tool => field(10, message(field(1, tool.name), field(2, tool.description), field(3,
+      JSON.stringify(/^(?:gemini[-_]|MODEL_GOOGLE_GEMINI_)/i.test(uid) ? normalizeDevinGeminiSchema(tool.parameters) : tool.parameters))))));
 }
 
 export class DevinChatProvider implements ChatProvider {

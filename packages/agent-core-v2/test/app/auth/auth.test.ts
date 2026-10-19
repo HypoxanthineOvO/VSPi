@@ -295,6 +295,30 @@ describe('OAuthService', () => {
     expect(await readFile(path, 'utf8')).toContain('windsurf_api_key');
   });
 
+  it.each(['shared', 'legacy', 'disabled'] as const)('scopes Devin discovery to the %s account proxy preference', async preference => {
+    const devin = await import('#/app/auth/devinCredential');
+    const scoped = await import('#/_base/utils/scopedProxy');
+    const catalog = await import('#/llm-adapter/provider/devin/catalog');
+    const path = join(codexHome, 'devin-proxy.toml');
+    vi.spyOn(devin, 'devinAuthPath').mockReturnValue(path);
+    await writeFile(path, `windsurf_api_key = "header.${Buffer.from(JSON.stringify({ session_id: 'example-session' })).toString('base64url')}.signature"`);
+    proxy = preference === 'legacy' ? undefined : { url: preference === 'disabled' ? '' : 'https://proxy.example.test:8443' };
+    oauthNetwork = { openaiProxyPort: 7890 };
+    const expected = preference === 'shared' ? 'https://proxy.example.test:8443' : preference === 'legacy' ? 'http://127.0.0.1:7890' : undefined;
+    let activeProxy: string | undefined;
+    const scope = vi.spyOn(scoped, 'withScopedProxy').mockImplementation(async (url, run) => {
+      activeProxy = url;
+      try { return await run(); } finally { activeProxy = undefined; }
+    });
+    const discover = vi.spyOn(catalog, 'fetchDevinModels').mockImplementation(async () => {
+      expect(activeProxy).toBe(expected);
+      return {};
+    });
+    expect(await createService().startLogin('devin')).toMatchObject({ status: 'authenticated' });
+    expect(discover).toHaveBeenCalledOnce();
+    expect(scope).toHaveBeenCalledWith(expected, expect.any(Function));
+  });
+
   it('supports Devin PKCE manual callbacks, exchanges JSON and rejects expired browser credentials', async () => {
     const devin = await import('#/app/auth/devinCredential');
     vi.spyOn(devin, 'devinAuthPath').mockReturnValue(join(codexHome, 'missing.toml'));
