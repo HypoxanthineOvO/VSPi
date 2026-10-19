@@ -551,10 +551,12 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	private async loadModelOptions(): Promise<RuntimeModelOption[]> {
-		const [models, providers] = await Promise.all([
+		const [models, providers, catalogConfig] = await Promise.all([
 			this.connection.klient.global.kosong.listModels(),
 			this.connection.klient.global.kosong.listProviders(),
+			this.connection.klient.global.config.get<{ providerPriority?: string[] } | undefined>('modelCatalog'),
 		]);
+		const providerPriority = catalogConfig?.providerPriority;
 		await Promise.all(
 			providers
 				.filter(
@@ -581,6 +583,9 @@ export class KlientChatBackend implements ChatBackend {
 		return models
 			.filter((model) => selectableProviders.has(model.provider))
 			.map((model) => ({
+				canonical: model.canonical,
+				health: model.health,
+				sourcePriority: providerPriority === undefined ? undefined : providerPriority.includes(model.provider) ? providerPriority.indexOf(model.provider) : providerPriority.length,
 				id: displayModelId(model.provider, model.model),
 				wireId: model.wire_model,
 				modelAliases: model.aliases?.map(id => displayModelId(model.provider, id)),
@@ -1971,6 +1976,7 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	private finishTurnSegment(): void {
+		this.modelOptionsPromise = undefined;
 		const turn = this.turn;
 		if (turn === undefined) return;
 		for (const id of [turn.assistantId, turn.thinkingId]) {

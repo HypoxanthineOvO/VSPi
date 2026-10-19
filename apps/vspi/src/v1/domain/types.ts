@@ -219,6 +219,10 @@ export interface ModelPrice {
 }
 
 export interface ModelOption {
+	canonical?: { id: string; company: string; displayName: string };
+	health?: { lastSuccess?: number; lastFailure?: { at: number; category: 'auth' | 'not_found' | 'rate_limit' | 'network' | 'other' }; expiresAt: number };
+	sourcePriority?: number;
+	contextWindow?: number;
 	id: string;
 	displayIds?: string[];
 	wireId?: string;

@@ -45,6 +45,7 @@ import { IProviderCatalogRuntime, rawRecordOf } from './catalog-runtime';
 import { runWithCredentialRecovery, streamWithCredentialRecovery } from './credential-recovery';
 import { ModelCatalogErrors } from './errors';
 import { IHostRequestHeaders } from './host-request-headers';
+import { IModelHealth } from './health';
 import { IModelService, type ModelRecord } from './model';
 import {
   deriveProviderId,
@@ -86,6 +87,7 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
     @IProtocolAdapterRegistry
     private readonly protocolRegistry: IProtocolAdapterRegistry,
     @IHostRequestHeaders private readonly hostRequestHeaders: IHostRequestHeaders,
+    @IModelHealth private readonly health: IModelHealth,
   ) {
     super();
     this._register(
@@ -140,7 +142,7 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
     const model = this.buildModel(id);
     const entry: CatalogEntry = {
       model,
-      requester: new ModelRequesterImpl(model, this.protocolRegistry),
+      requester: new ModelRequesterImpl(model, this.protocolRegistry, error => this.health.record(model.providerName, model.id, error)),
     };
     this.cache.set(id, entry);
     return entry;
@@ -211,11 +213,13 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
       if (definition === undefined) continue;
       const record = rawRecordOf(definition);
       const providerType = this.providerTypeOf(record);
+      let item: ModelCatalogItem;
       try {
-        out.push(toProtocolModel(this.get(modelId), record, providerType));
+        item = toProtocolModel(this.get(modelId), record, providerType);
       } catch {
-        out.push(toProtocolModelFallback(modelId, record, providerType));
+        item = toProtocolModelFallback(modelId, record, providerType);
       }
+      out.push({ ...item, health: this.health.get(item.provider, modelId) });
     }
     return out;
   }

@@ -130,7 +130,9 @@ export function resolveCatalogEffort(
 }
 
 export function visibleEffortLevels(levels: readonly EffortLevel[]): EffortLevel[] {
-	return [...new Set(levels.filter((level) => level !== "off"))];
+	const order = ['on', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+	const rank = (level: string) => { const index = order.indexOf(level); return index < 0 ? order.length : index; };
+	return [...new Set(levels.filter((level) => level !== "off"))].toSorted((left, right) => rank(left) - rank(right));
 }
 
 export function preferredVisibleEffort(

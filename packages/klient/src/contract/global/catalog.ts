@@ -22,6 +22,19 @@ export const thinkingCapabilitySchema = z.object({
 });
 
 export const modelCatalogItemSchema = z.object({
+  health: z.object({
+    lastSuccess: z.number().nonnegative().optional(),
+    lastFailure: z.object({
+      at: z.number().nonnegative(),
+      category: z.enum(['auth', 'not_found', 'rate_limit', 'network', 'other']),
+    }).optional(),
+    expiresAt: z.number().nonnegative(),
+  }).optional(),
+  canonical: z.object({
+    id: z.string().min(1),
+    company: z.string().min(1),
+    displayName: z.string().min(1),
+  }).optional(),
   protocol: z.enum(['anthropic', 'openai', 'openai_responses', 'google-genai']).optional(),
   pricing_source: z.enum(['official', 'provider']).optional(),
   curated: z.boolean().optional(),

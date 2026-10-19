@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { loadSettings, loadSettingsLayers, saveSettings, settingsPaths } from '../src/v1/config/settings.js';
+import { loadModelPicks, saveModelPicks, loadSettings, loadSettingsLayers, saveSettings, settingsPaths } from '../src/v1/config/settings.js';
 import { DEFAULT_SETTINGS } from '../src/v1/domain/defaults.js';
 import { HttpThinkingTranslator } from '../src/v1/translation/thinking-translator.js';
 
@@ -68,5 +68,14 @@ describe('Thinking translation authorization', () => {
     const request = vi.fn<typeof fetch>();
     await expect(new HttpThinkingTranslator(request).translate('Example source', 'https://user.example.test/translate', AbortSignal.abort())).rejects.toThrow();
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it('round-trips remembered model sources without losing legacy pins or recents', async () => {
+    const { home } = await settingsFixture();
+    const picks = { pinned: ['gateway\u0000model'], recent: ['gateway\u0000model'], sources: { 'anthropic/claude-opus-5.5': 'gateway\u0000model' }, lastUsed: { 'gateway\u0000model': 1000 } };
+    await saveModelPicks(picks, home);
+    expect(await loadModelPicks(home)).toEqual(picks);
+    await saveModelPicks({ pinned: ['legacy'], recent: [] }, home);
+    expect(await loadModelPicks(home)).toMatchObject({ pinned: ['legacy'], recent: [] });
   });
 });

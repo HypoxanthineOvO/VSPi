@@ -5079,9 +5079,12 @@ export class VspiApp implements Component, Focusable {
 	private recordRecentModel(identity: { provider: string; id: string }): void {
 		const key = modelIdentityKey(identity);
 		if (!key) return;
+		const canonical = this.modelOptions.find(model => modelIdentityKey(model) === key)?.canonical;
 		this.modelPicks = {
 			...this.modelPicks,
 			recent: [key, ...this.modelPicks.recent.filter((item) => item !== key)].slice(0, 5),
+			sources: canonical ? { ...this.modelPicks.sources, [canonical.id]: key } : this.modelPicks.sources,
+			lastUsed: { ...this.modelPicks.lastUsed, [key]: Date.now() },
 		};
 		this.panels.setModelPicks(this.modelPicks);
 		this.persistModelPicks();

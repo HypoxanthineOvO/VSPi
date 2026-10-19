@@ -49,6 +49,9 @@ import {
 	sessionsSurfaceRowLimit,
 } from "../src/v1/ui/panels.js";
 import { renderSplash } from "../src/v1/ui/splash.js";
+import { ModelPicker } from '../src/v1/ui/model-picker.js';
+import { canonicalModelGroups, searchCanonicalModels, sourceUnhealthy } from '../src/v1/domain/canonical-models.js';
+import { modelIdentityKey } from '../src/v1/domain/model-presentation.js';
 import { shutdownInteractiveSession } from "../src/v1/app/startup.js";
 import {
 	appendRuntimeStatus,
@@ -3669,4 +3672,75 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(finished.indexOf("较早任务")).toBeGreaterThanOrEqual(0);
 		expect(finished.indexOf("较早任务")).toBeLessThan(finished.indexOf("较晚任务"));
 	});
+});
+
+describe('canonical model picker', () => {
+  const theme = createTheme(detectTerminalCapabilities({ TERM: 'xterm-256color', LANG: 'zh_CN.UTF-8' }), 'VSPi Dark');
+  const source = (provider: string, health?: ModelOption['health']): ModelOption => ({
+    id: 'claude-opus-5-5', alias: `${provider}/claude-opus-5-5`, provider, brand: provider,
+    label: 'Claude Opus 5.5', canonical: { id: 'anthropic/claude-opus-5.5', company: 'Anthropic', displayName: 'Claude Opus 5.5' },
+    curated: true, vision: true, efforts: ['low', 'high', 'max'], price: { inputUsdPerMillion: 5, outputUsdPerMillion: 25 }, contextWindow: 1000000, health,
+  });
+  const failed = () => ({ lastFailure: { at: Date.now(), category: 'auth' as const }, expiresAt: Date.now() + 60000 });
+
+  it('groups sources and skips an unhealthy remembered source', () => {
+    const devin = source('devin');
+    const relay = source('vsplab', failed());
+    const [group] = canonicalModelGroups([relay, devin], { 'anthropic/claude-opus-5.5': modelIdentityKey(relay) });
+    expect(group?.sources).toHaveLength(2);
+    expect(group?.defaultSource).toMatchObject(devin);
+    expect(group?.sources.at(-1)).toMatchObject(relay);
+    expect(searchCanonicalModels([group!], 'opus @devin')[0]?.sources).toMatchObject([devin]);
+    expect(searchCanonicalModels([group!], 'opus @missing')).toEqual([]);
+  });
+
+  it('honors manual choices before global priority and treats expired failures as stale', () => {
+    const official = source('anthropic');
+    const gateway = source('gateway');
+    expect(canonicalModelGroups([gateway, official])[0]?.defaultSource).toMatchObject(official);
+    expect(canonicalModelGroups([gateway, official], { 'anthropic/claude-opus-5.5': modelIdentityKey(gateway) })[0]?.defaultSource).toMatchObject(gateway);
+    expect(sourceUnhealthy(source('expired', { ...failed(), expiresAt: Date.now() - 1 }))).toBe(false);
+  });
+
+  it('does not auto-select any failed source and requires an explicit warning confirmation', () => {
+    const picker = new ModelPicker();
+    picker.setModels([source('vsplab', failed())], '');
+    picker.open();
+    expect(picker.handleInput('\r')).toMatchObject({ type: 'notice', tone: 'warning' });
+    expect(picker.handleInput('\r')).toMatchObject({ type: 'notice', tone: 'warning' });
+    expect(picker.handleInput('\r')).toMatchObject({ type: 'model', model: { provider: 'vsplab' } });
+  });
+
+  it('returns the concrete selected source and preserves the picker through Effort cancellation', () => {
+    const panels = new PanelController(DEFAULT_SETTINGS);
+    panels.setModels([source('devin'), source('gateway')]);
+    panels.open('models');
+    expect(panels.acceptsInput('\t')).toBe(true);
+    panels.handleInput('\t');
+    panels.handleInput('\x1b[B');
+    expect(panels.handleInput('\r')).toMatchObject({ type: 'model', model: { provider: 'gateway' } });
+    panels.openEffort('high', ['low', 'high', 'max']);
+    panels.returnToModels();
+    expect(panels.handleInput('\r')).toMatchObject({ type: 'model', model: { provider: 'gateway' } });
+  });
+
+  it.each([[120, 36], [80, 24]])('renders a real grouped panel within %sx%s', async (width, height) => {
+    const panels = new PanelController(DEFAULT_SETTINGS);
+    panels.setModels([source('devin'), source('gateway'), source('vsplab', failed())]);
+    panels.open('models');
+    const lines = [...panels.render(width, height - 1, theme, DEFAULT_USAGE), panels.renderHint(width, theme)];
+    expect(lines.length).toBeLessThanOrEqual(height);
+    for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    const terminal = new VirtualTerminal(width, height);
+    terminal.write('\x1b[?7l\x1b[H' + lines.join('\r\n'));
+    await terminal.flush();
+    const text = terminal.getViewport().join('\n');
+    expect(text).toContain('Anthropic');
+    expect(text).toContain('Claude Opus 5.5');
+    expect(text).toContain('devin ●');
+    panels.handleInput('\t');
+    const expanded = stripTerminalSequences(panels.render(width, height - 1, theme, DEFAULT_USAGE).join('\n'));
+    expect(expanded).toContain('401/403');
+    expect(expanded).toContain('USD / 1M');
+  });
 });
