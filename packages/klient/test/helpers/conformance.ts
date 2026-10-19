@@ -899,10 +899,10 @@ export function defineKlientConformance(
       try {
         await config.replaceSections({ sections: {
           providers: { ...beforeProviders.userValue, example: { type: 'openai', baseUrl: 'https://example.test/v1', apiKey: 'YOUR_API_KEY' } },
-          models: { ...beforeModels.userValue, 'example/review': { provider: 'example', model: 'actual-model', aliases: ['alternate-model'], maxContextSize: 8192 } },
+          models: { ...beforeModels.userValue, 'example/review': { provider: 'example', model: 'actual-model', aliases: ['alternate-model'], maxContextSize: 8192, canonical: { id: 'anthropic/claude-opus-5.5' } } },
         } });
         const model = (await target.klient.global.kosong.listModels()).find(item => item.model === 'example/review');
-        expect(model).toMatchObject({ model: 'example/review', wire_model: 'actual-model', aliases: ['alternate-model'], base_url: 'https://example.test/v1' });
+        expect(model).toMatchObject({ model: 'example/review', wire_model: 'actual-model', aliases: ['alternate-model'], base_url: 'https://example.test/v1', canonical: { id: 'anthropic/claude-opus-5.5', company: 'Anthropic', displayName: 'Claude Opus 5.5' } });
       } finally {
         await config.replaceSections({ sections: { providers: beforeProviders.userValue ?? {}, models: beforeModels.userValue ?? {} } });
       }

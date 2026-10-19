@@ -10,6 +10,8 @@ import type { Protocol, ProtocolProviderOptions } from '../protocol/protocol';
 import type { ProviderConfig } from '../provider/provider';
 
 import type { ModelRecord } from './model';
+import { resolveCanonicalModel } from './canonical';
+import { modelHealthSchema } from './health';
 import { effectiveModelConfig, resolveModelProtocol } from './model-auth';
 import { ProtocolSchema } from '../protocol/protocol';
 import { normalizeThinkingCapability, thinkingEffortsForProvider } from '../contract/capability';
@@ -66,6 +68,12 @@ const thinkingCapabilityWireSchema = z.object({
 });
 
 export const modelCatalogItemSchema = z.object({
+  health: modelHealthSchema.optional(),
+  canonical: z.object({
+    id: z.string().min(1),
+    company: z.string().min(1),
+    displayName: z.string().min(1),
+  }).optional(),
   protocol: ProtocolSchema.optional(),
   pricing_source: z.enum(['official', 'provider']).optional(),
   curated: z.boolean().optional(),
@@ -135,6 +143,7 @@ export function toProtocolModel(
   const thinking = normalizeThinkingCapability(model.thinking ?? effective.thinking);
   const efforts = thinkingEffortsForProvider(thinking, providerType ?? model.providerType);
   return {
+    canonical: resolveCanonicalModel(model.id, effective, model.providerName),
     provider: model.providerName,
     protocol: model.protocol,
     curated: effective.curated,
@@ -163,6 +172,7 @@ export function toProtocolModelFallback(
   const thinking = normalizeThinkingCapability(effective.thinking);
   const efforts = thinkingEffortsForProvider(thinking, providerType);
   return {
+    canonical: resolveCanonicalModel(modelId, effective),
     provider: effective.provider ?? '',
     protocol: resolveModelProtocol(effective, { type: providerType }),
     pricing_source: record.pricing === undefined ? effective.pricingSource : record.pricingSource ?? 'provider',

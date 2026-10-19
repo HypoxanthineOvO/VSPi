@@ -258,6 +258,7 @@ merge_all_available_skills = true
 # ##########################################################################
 
 [model_catalog]
+# provider_priority: string[]
 # refresh_interval_ms: integer
 # refresh_on_start: boolean
 
@@ -272,6 +273,10 @@ merge_all_available_skills = true
 
 # one [models."<name>"] table per entry:
 # [models."<name>"]
+  # canonical: object
+    # id: string
+    # company: string
+    # display_name: string
   # deepseek: object
     # native_messages: boolean
     # system_prompt_update: "leading-only" | "in-history"
@@ -319,6 +324,10 @@ merge_all_available_skills = true
     # cache_write_usd_per_million: number
     # context_tiers: object[]
   # overrides: object
+    # canonical: object
+      # id: string
+      # company: string
+      # display_name: string
     # deepseek: object
       # native_messages: boolean
       # system_prompt_update: "leading-only" | "in-history"

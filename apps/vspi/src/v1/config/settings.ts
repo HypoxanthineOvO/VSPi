@@ -141,6 +141,8 @@ export function settingsPaths(cwd: string, home = homedir()) {
 export interface ModelPicks {
 	pinned: string[];
 	recent: string[];
+	sources?: Record<string, string>;
+	lastUsed?: Record<string, number>;
 }
 
 export function modelPicksPath(home = homedir()): string {
@@ -153,7 +155,11 @@ function normalizeModelPicks(input: unknown): ModelPicks {
 			? value.filter((key): key is string => typeof key === "string" && key.length > 0)
 			: [];
 	const value = input && typeof input === "object" ? (input as Partial<ModelPicks>) : {};
-	return { pinned: keys(value.pinned), recent: keys(value.recent) };
+	const sources = value.sources && typeof value.sources === 'object' && !Array.isArray(value.sources)
+		? Object.fromEntries(Object.entries(value.sources).slice(-2000).filter(([key, source]) => key.length > 0 && typeof source === 'string' && source.length > 0)) : undefined;
+	const lastUsed = value.lastUsed && typeof value.lastUsed === 'object' && !Array.isArray(value.lastUsed)
+		? Object.fromEntries(Object.entries(value.lastUsed).slice(-2000).filter(([key, time]) => key.length > 0 && typeof time === 'number' && Number.isFinite(time) && time >= 0)) : undefined;
+	return { pinned: keys(value.pinned), recent: keys(value.recent), sources, lastUsed };
 }
 
 export async function loadModelPicks(home = homedir()): Promise<ModelPicks> {

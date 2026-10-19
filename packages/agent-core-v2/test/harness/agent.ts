@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { ModelHealthStore } from '#/llm-adapter/model/health';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { Readable, type Writable } from 'node:stream';
 
@@ -1050,7 +1051,7 @@ class ConfigBackedModelCatalog extends ModelCatalog {
     @IProtocolAdapterRegistry protocolRegistry: IProtocolAdapterRegistry,
     @IHostRequestHeaders hostRequestHeaders: IHostRequestHeaders,
   ) {
-    super(runtime, providerRegistry, modelRegistry, oauthTokens, protocolRegistry, hostRequestHeaders, fixtureConfig);
+    super(runtime, providerRegistry, modelRegistry, oauthTokens, protocolRegistry, hostRequestHeaders, fixtureConfig, new ModelHealthStore());
   }
 
   private syncRegistriesFromConfig(): void {

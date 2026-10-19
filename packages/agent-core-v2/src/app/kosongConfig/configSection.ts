@@ -150,6 +150,11 @@ export const MODELS_SECTION = 'models';
 export const DEFAULT_MODEL_SECTION = 'defaultModel';
 
 const ModelBaseSchema = z.object({
+  canonical: z.object({
+    id: z.string().trim().min(1),
+    company: z.string().trim().min(1).optional(),
+    displayName: z.string().trim().min(1).optional(),
+  }).optional(),
   deepseek: DeepSeekConfigSchema.optional(),
   providerId: z.string().optional(),
 
@@ -290,8 +295,10 @@ export const modelsFromToml = (rawSnake: unknown): unknown => {
     }
     const converted = transformPlainObject(entry);
     if (isPlainObject(converted['deepseek'])) converted['deepseek'] = transformPlainObject(converted['deepseek']);
+    if (isPlainObject(converted['canonical'])) converted['canonical'] = transformPlainObject(converted['canonical']);
     if (isPlainObject(converted['overrides'])) {
       const overrides = transformPlainObject(converted['overrides']);
+      if (isPlainObject(overrides['canonical'])) overrides['canonical'] = transformPlainObject(overrides['canonical']);
       if (isPlainObject(overrides['deepseek'])) overrides['deepseek'] = transformPlainObject(overrides['deepseek']);
       converted['overrides'] = overrides;
     }
@@ -313,7 +320,7 @@ export const modelsToToml = (value: unknown, rawSnake: unknown): unknown => {
     for (const [key, field] of Object.entries(entry)) {
       if (key === 'capabilities' && Array.isArray(field)) {
         merged[camelToSnake(key)] = [...field];
-      } else if (key === 'deepseek' && isPlainObject(field)) {
+      } else if ((key === 'deepseek' || key === 'canonical') && isPlainObject(field)) {
         merged[camelToSnake(key)] = plainObjectToToml(field, undefined);
       } else if (key === 'overrides' && isPlainObject(field)) {
         merged['overrides'] = modelOverridesToToml(field, merged['overrides']);
@@ -332,7 +339,7 @@ function modelOverridesToToml(
 ): Record<string, unknown> {
   const out = cloneRecord(rawSnake);
   for (const [key, value] of Object.entries(overrides)) {
-    if (key === 'deepseek' && isPlainObject(value)) {
+    if ((key === 'deepseek' || key === 'canonical') && isPlainObject(value)) {
       out[key] = plainObjectToToml(value, undefined);
     } else if (key === 'capabilities' && Array.isArray(value)) {
       out[camelToSnake(key)] = [...value];
@@ -394,6 +401,7 @@ registerConfigSection(THINKING_SECTION, ThinkingConfigSchema, {
 export const MODEL_CATALOG_SECTION = 'modelCatalog';
 
 export const ModelCatalogConfigSchema = z.object({
+  providerPriority: z.array(z.string().min(1)).optional(),
   refreshIntervalMs: z.number().int().min(0).optional(),
   refreshOnStart: z.boolean().optional(),
 });

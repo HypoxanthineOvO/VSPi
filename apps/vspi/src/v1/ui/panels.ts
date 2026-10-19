@@ -89,6 +89,8 @@ import {
 import { formatContextUsage } from "./status.js";
 import type { VspiTheme } from "./theme.js";
 import { SubagentModelsPanel } from "./subagent-models-panel.js";
+import { ModelPicker } from './model-picker.js';
+import type { ModelPicks } from '../config/settings.js';
 
 export function sessionsSurfaceRowLimit(availableRows: number): number {
 	return Math.max(3, Math.floor(availableRows * 0.8));
@@ -654,6 +656,8 @@ export class PanelController {
 	private selectedGroupId = "";
 	private models: ModelOption[] = [];
 	private readonly subagentModelsPanel = new SubagentModelsPanel();
+	private readonly modelPicker = new ModelPicker();
+	private usesCanonicalPicker(): boolean { return this.modelGroups.length === 0 && this.models.some(model => model.canonical !== undefined); }
 	private modelShowAll = false;
 	private modelPinned = new Set<string>();
 	private modelRecent: string[] = [];
@@ -846,6 +850,7 @@ export class PanelController {
 		this.state = { kind, selected: 0, scroll: 0 };
 		if (kind === "commands") this.state.selected = 0;
 		if (kind === "models") {
+			this.modelPicker.open();
 			this.modelNarrowDetail = false;
 			this.modelSearch = "";
 			this.modelShowAll = false;
@@ -1003,6 +1008,7 @@ export class PanelController {
 		this.selectedGroupId =
 			this.modelGroups.find((group) => group.id === this.selectedGroupId)?.id ??
 			"";
+		this.modelPicker.setModels(this.models, this.selectedModelKey);
 		if (this.kind === "models") this.state.selected = Math.max(0, this.filteredModels().findIndex((model) => focused !== undefined && modelHasIdentity(model, focused)));
 	}
 
@@ -1025,6 +1031,7 @@ export class PanelController {
 		if (model) {
 			const focused = modelKey(this.filteredModels()[this.state.selected]);
 			this.selectedModelKey = modelKey(model);
+			this.modelPicker.setModels(this.models, this.selectedModelKey);
 			this.filteredModelCache = undefined;
 			if (this.kind === 'models') this.state.selected = Math.max(0, this.filteredModels().findIndex(item => modelHasIdentity(item, focused)));
 		}
@@ -1035,7 +1042,8 @@ export class PanelController {
 			this.selectedGroupId = groupId;
 	}
 
-	setModelPicks(picks: { pinned: string[]; recent: string[] }): void {
+	setModelPicks(picks: ModelPicks): void {
+		this.modelPicker.setPicks(picks);
 		const focused =
 			this.kind === "models"
 				? modelKey(this.filteredModels()[this.state.selected])
@@ -1318,6 +1326,11 @@ export class PanelController {
 
 	handleInput(data: string): PanelEvent | undefined {
 		if (this.kind === 'providers') return this.handleProviders(data);
+		if (this.kind === 'models' && this.usesCanonicalPicker()) {
+			const event = this.modelPicker.handleInput(data);
+			if (event?.type === 'close') this.close();
+			return event;
+		}
 		if (this.kind === "subagentModels") {
 			const result = this.subagentModelsPanel.handleInput(data);
 			if (result === "close") { this.close(); return { type: "close" }; }
@@ -1639,12 +1652,11 @@ export class PanelController {
 			}
 		}
 		if (this.kind === "models") {
-			const total =
-				this.modelTab === 0
-					? this.filteredModels().length
-					: this.modelGroups.length;
-			if (total > 0)
-				footer = `${Math.min(this.state.selected + 1, total)} / ${total}`;
+			if (this.usesCanonicalPicker()) footer = this.modelPicker.position();
+			else {
+				const total = this.modelTab === 0 ? this.filteredModels().length : this.modelGroups.length;
+				if (total > 0) footer = `${Math.min(this.state.selected + 1, total)} / ${total}`;
+			}
 		} else if (this.kind === 'providers') {
 			footer = '';
 		}
@@ -1713,6 +1725,7 @@ export class PanelController {
 	renderHint(width: number, theme: VspiTheme): string {
 		this.lastBodyWidth = Math.max(1, width - 2);
 		if (this.kind === 'providers') return '';
+		if (this.kind === 'models' && this.usesCanonicalPicker()) return theme.muted(padLine(this.modelPicker.hint(), width));
 		if (this.kind === "subagentModels") return theme.muted(padLine(this.subagentModelsPanel.hint(), width));
 		const hint = renderInteractionHint(
 			"panel",
@@ -1788,6 +1801,7 @@ export class PanelController {
 	}
 
 	acceptsInput(data: string): boolean {
+		if (this.kind === 'models' && this.usesCanonicalPicker()) return true;
 		// 唯一候选的 Tab 补全由 composer 层完成；多候选时面板不拦截 Tab（Registry 宣告了 Tab 补全）。
 		if (this.kind === "commands" && panelKey(data, Key.tab)) return false;
 		// 带参数（含空白）的输入必须走 composer 完整提交路径：Enter 由 Editor 触发 submit(raw)，
@@ -2771,6 +2785,7 @@ export class PanelController {
 		bodyRows: number,
 		theme: VspiTheme,
 	): string[] {
+		if (this.usesCanonicalPicker()) return this.modelPicker.render(width, bodyRows, theme);
 		const head: string[] = [];
 		if (this.modelGroups.length > 0)
 			head.push(tabLine(["模型", "模型组"], this.modelTab, width, theme));

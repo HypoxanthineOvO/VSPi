@@ -73,6 +73,7 @@ export class ModelRequesterImpl implements ModelRequester {
   constructor(
     readonly model: Model,
     private readonly gateway: ModelLlmGateway,
+    private readonly onComplete?: (error?: unknown) => void,
   ) {}
 
   private resolve(): ResolvedLlmModel {
@@ -100,9 +101,11 @@ export class ModelRequesterImpl implements ModelRequester {
     const finished = this.runRequest(input, controller, queue, params)
       .then(
         () => {
+          if (!controller.signal.aborted) this.onComplete?.();
           queue.end();
         },
         (error) => {
+          if (!signal?.aborted && !isAbortError(error)) this.onComplete?.(error);
           queue.fail(error);
         },
       )

@@ -1132,6 +1132,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		const connection = {
 			klient: {
 				global: {
+					config: { get: vi.fn(async () => undefined) },
 					kosong: {
 						listModels: vi
 							.fn()
@@ -1173,6 +1174,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		const connection = {
 			klient: {
 				global: {
+					config: { get: vi.fn(async () => undefined) },
 					kosong: {
 						listModels: vi.fn().mockResolvedValue(models),
 						listProviders: vi.fn().mockResolvedValue([provider("acme")]),
@@ -1924,6 +1926,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		const connection = {
 			klient: {
 				global: {
+					config: { get: vi.fn(async () => undefined) },
 					kosong: {
 						listModels,
 						listProviders,
@@ -1970,6 +1973,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		const connection = {
 			klient: {
 				global: {
+					config: { get: vi.fn(async () => undefined) },
 					kosong: {
 						listModels,
 						listProviders,
@@ -2549,7 +2553,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 
 	it('preserves actual model IDs and declared aliases from the Core catalog', async () => {
 	 const listed = { ...model('example', 'review-fast'), wire_model: 'deepseek-flash', aliases: ['deepseek-v4.1-flash'], base_url: 'https://example.test/v1' };
-	 const connection = { klient: { global: { kosong: {
+	 const connection = { klient: { global: { config: { get: async () => undefined }, kosong: {
 	 listModels: async () => [listed], listProviders: async () => [provider('example')],
 	 getProvider: async () => provider('example'), queryAvailableModels: async () => ({ modelIds: [listed.model] }),
 	 } } } } as unknown as RuntimeConnection;
@@ -2559,7 +2563,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 
 	it("uses the effective Core price and capability projection without a second catalog", async () => {
 	 const listed = { ...model("example", "reasoner"), pricing_source: "official", capabilities: ["image_in"] };
-	 const connection = { klient: { global: { kosong: {
+	 const connection = { klient: { global: { config: { get: async () => undefined }, kosong: {
 	 listModels: async () => [listed], listProviders: async () => [provider("example")],
 	 getProvider: async () => provider("example"), queryAvailableModels: async () => ({ modelIds: [listed.model] }),
 	 } } } } as unknown as RuntimeConnection;

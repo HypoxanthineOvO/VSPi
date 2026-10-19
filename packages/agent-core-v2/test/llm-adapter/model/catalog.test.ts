@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { ModelHealthAdapter } from '#/app/kosongConfig/modelHealthAdapter';
 
 import { createScopedTestHost } from '#/_base/di/test';
 import { isErrorCode } from '#/_base/errors/codes';
@@ -26,6 +29,8 @@ import {
   toProtocolProvider,
 } from '#/llm-adapter/model/catalog';
 import { ModelCatalog } from '#/llm-adapter/model/catalog-service';
+import { resolveCanonicalModel } from '#/llm-adapter/model/canonical';
+import { IModelHealth, ModelHealthStore } from '#/llm-adapter/model/health';
 import { ProviderCatalogRuntimeService } from '#/llm-adapter/model/catalog-runtime';
 import '#/llm-adapter/model/errors';
 import { IHostRequestHeaders } from '#/llm-adapter/model/host-request-headers';
@@ -67,6 +72,7 @@ function createHost(
   const config = new StubConfigService(sections);
   const host = createScopedTestHost([
     [IConfigService, config],
+    [IModelHealth, new ModelHealthStore()],
     [IModelOAuthTokens, oauthTokens],
     [IHostRequestHeaders, hostHeadersPort(hostHeaders)],
   ]);
@@ -713,6 +719,7 @@ describe('ModelCatalog ping', () => {
           },
         }),
       } as unknown as IProtocolAdapterRegistry;
+      const health = new ModelHealthStore();
       const catalog = new ModelCatalog(
         new ProviderCatalogRuntimeService(models, providers),
         providers,
@@ -721,8 +728,10 @@ describe('ModelCatalog ping', () => {
         registry,
         { headers: {}, thirdPartyHeaders: {} },
         new StubConfigService(),
+        health,
       );
       const result = await catalog.ping('k1');
+      expect(health.get('kimi', 'k1')?.lastSuccess).toEqual(expect.any(Number));
       expect(result).toMatchObject({ ok: true, text: 'pong', finishReason: 'completed' });
       expect(result.usage).toEqual(emptyUsage());
       expect(result.durationMs).toBeGreaterThanOrEqual(0);
@@ -1262,5 +1271,144 @@ describe('DeepSeek native catalog capabilities', () => {
       expect(catalog.get('relay').capabilities.native_messages).toBeUndefined();
       expect(catalog.get('nativeOverride')).toMatchObject({ capabilities: { native_messages: true, native_tool_updates: false }, providerOptions: { deepseek: { nativeMessages: true, systemPromptUpdate: 'in-history', toolUpdate: 'none' } } });
     } finally { host.dispose(); }
+  });
+});
+
+describe('canonical model identity', () => {
+  it.each([
+    ['claude-opus-4-6', 'anthropic/claude-opus-4.6'],
+    ['anthropic/claude-opus-4.6', 'anthropic/claude-opus-4.6'],
+    ['claude-sonnet-4-6-20260217', 'anthropic/claude-sonnet-4.6'],
+    ['claude-opus-5-5-high', 'anthropic/claude-opus-5.5'],
+    ['openai/gpt-5.4', 'openai/gpt-5.4'],
+    ['moonshotai/kimi-k2.6', 'moonshot/kimi-k2.6'],
+    ['k3', 'moonshot/kimi-k3'],
+    ['kimi-k3', 'moonshot/kimi-k3'],
+    ['deepseek-v4-pro', 'deepseek/deepseek-v4-pro'],
+    ['glm-5.3', 'zhipu/glm-5.3'],
+    ['MiniMax-M3', 'minimax/minimax-m3'],
+    ['mimo-v2.5', 'xiaomi/mimo-v2.5'],
+    ['gpt-6-astra', 'openai/gpt-6-astra'],
+    ['swe-1-6', 'cognition/swe-1.6'],
+    ['deepseek-flash', 'deepseek/deepseek-v4.1-flash'],
+    ['claude-fable-5-1', 'anthropic/claude-fable-5.1'],
+    ['kimi-for-coding', 'moonshot/kimi-for-coding'],
+    ['kimi-k3-256k', 'moonshot/kimi-k3-256k'],
+    ['hy3', 'tencent/hy3'],
+  ])('normalizes %s', (model, canonical) => {
+    expect(resolveCanonicalModel('gateway/alias', { model }, 'gateway').id).toBe(canonical);
+  });
+
+  it.each([
+    ['gpt-6.1', 'gpt-6.1-codex'],
+    ['swe-1-6', 'swe-1-6-fast'],
+    ['deepseek-v4-pro', 'deepseek-v4-flash'],
+    ['gpt-5.4', 'gpt-5.4-mini'],
+    ['kimi-k2', 'kimi-k2-thinking'],
+  ])('does not merge %s with %s', (left, right) => {
+    expect(resolveCanonicalModel('left', { model: left }).id).not.toBe(resolveCanonicalModel('right', { model: right }).id);
+  });
+
+  it('uses a recognizable display label for opaque vendor UIDs', () => {
+    expect(resolveCanonicalModel('gateway/uid', { model: 'uid-a1', displayName: 'Claude Opus 5.5' })).toEqual({
+      id: 'anthropic/claude-opus-5.5', company: 'Anthropic', displayName: 'Claude Opus 5.5',
+    });
+  });
+
+  it('gives overrides precedence and preserves provider-scoped unknown models', () => {
+    expect(resolveCanonicalModel('alias', { model: 'gpt-5.4', canonical: { id: 'custom/model', company: 'Example', displayName: 'Custom' } })).toEqual({ id: 'custom/model', company: 'Example', displayName: 'Custom' });
+    expect(resolveCanonicalModel('alias', { model: 'unknown' }, 'first').id).not.toBe(resolveCanonicalModel('alias', { model: 'unknown' }, 'second').id);
+  });
+
+  it('exposes canonical metadata without changing the configured alias', async () => {
+    const { host, catalog } = createHost(kimiSections);
+    try {
+      expect(await catalog.listModels()).toEqual(expect.arrayContaining([expect.objectContaining({ model: 'k1', wire_model: 'kimi-k2', canonical: { id: 'moonshot/kimi-k2', company: 'Moonshot', displayName: 'Kimi K2' } })]));
+    } finally { host.dispose(); }
+  });
+
+  it.each([[401, 'auth'], [403, 'auth'], [404, 'not_found'], [429, 'rate_limit']])('records status %s without storing error text', (status, category) => {
+    const health = new ModelHealthStore();
+    health.record('gateway', 'alias', Object.assign(new Error('private error detail'), { status }));
+    expect(health.get('gateway', 'alias')?.lastFailure?.category).toBe(category);
+    expect(JSON.stringify(health.get('gateway', 'alias'))).not.toContain('private error detail');
+    expect(health.get('other', 'alias')).toBeUndefined();
+  });
+
+  it('retains failure history after a later successful probe and exposes it in the catalog', async () => {
+    const { host, catalog } = createHost(kimiSections);
+    try {
+      const health = host.app.accessor.get(IModelHealth);
+      health.record('kimi', 'k1', new TypeError('fetch failed'));
+      expect((await catalog.listModels())[0]?.health?.lastFailure?.category).toBe('network');
+      health.record('kimi', 'k1');
+      expect((await catalog.listModels())[0]?.health).toMatchObject({ lastSuccess: expect.any(Number), lastFailure: { category: 'network' } });
+    } finally { host.dispose(); }
+  });
+
+  it('persists health asynchronously in the selected runtime cache and retains it after restart', async () => {
+    const home = mkdtempSync(join(process.cwd(), '.tmp-health-'));
+    const stringify = vi.spyOn(JSON, 'stringify');
+    try {
+      const bootstrap = stubBootstrap(home);
+      const first = new ModelHealthAdapter(bootstrap);
+      first.record('gateway', 'alias', new TypeError('fetch failed'));
+      first.record('gateway', 'alias', Object.assign(new Error('credential detail'), { status: 401 }));
+      first.record('other', 'alias');
+      expect(new ModelHealthAdapter(bootstrap).get('gateway', 'alias')).toBeUndefined();
+      expect(stringify.mock.calls.filter(([value]) => Array.isArray(value) && Array.isArray(value[0]))).toHaveLength(0);
+      await vi.waitFor(() => {
+        expect(new ModelHealthAdapter(bootstrap).get('gateway', 'alias')?.lastFailure?.category).toBe('auth');
+      });
+      expect(stringify.mock.calls.filter(([value]) => Array.isArray(value) && Array.isArray(value[0]))).toHaveLength(1);
+      const second = new ModelHealthAdapter(bootstrap);
+      expect(second.get('other', 'alias')?.lastSuccess).toEqual(expect.any(Number));
+      second.record('gateway', 'alias');
+      await vi.waitFor(() => {
+        const restored = new ModelHealthAdapter(bootstrap).get('gateway', 'alias');
+        expect(restored?.lastSuccess).toBeGreaterThan(restored?.lastFailure?.at ?? 0);
+      });
+      second.record('gateway', 'alias', new TypeError('fetch failed'));
+      second.record('gateway', 'alias');
+      await vi.waitFor(() => {
+        const restored = new ModelHealthAdapter(bootstrap).get('gateway', 'alias');
+        expect(restored?.lastFailure?.category).toBe('network');
+        expect(restored?.lastSuccess).toBeGreaterThan(restored?.lastFailure?.at ?? 0);
+      });
+      expect(stringify.mock.calls.filter(([value]) => Array.isArray(value) && Array.isArray(value[0]))).toHaveLength(3);
+    } finally {
+      stringify.mockRestore();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('persists transitions and throttles repeated outcomes against the last persisted snapshot', () => {
+    class PersistedHealth extends ModelHealthStore {
+      writes = 0;
+      protected override save(): void {
+        this.writes++;
+        this.didPersist([...this.records]);
+      }
+    }
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      const health = new PersistedHealth();
+      health.record('gateway', 'alias', new TypeError('fetch failed'));
+      health.record('gateway', 'alias');
+      expect(health.writes).toBe(2);
+      for (let step = 1; step < 6; step++) {
+        now.mockReturnValue(1_000_000 + step * 10_000);
+        health.record('gateway', 'alias');
+      }
+      expect(health.writes).toBe(2);
+      now.mockReturnValue(1_060_010);
+      health.record('gateway', 'alias');
+      expect(health.writes).toBe(3);
+      health.record('gateway', 'alias', new TypeError('fetch failed'));
+      health.record('gateway', 'alias', Object.assign(new Error('denied'), { status: 403 }));
+      expect(health.writes).toBe(5);
+      health.record('gateway', 'alias', Object.assign(new Error('denied again'), { status: 403 }));
+      expect(health.writes).toBe(5);
+    } finally { now.mockRestore(); }
   });
 });
