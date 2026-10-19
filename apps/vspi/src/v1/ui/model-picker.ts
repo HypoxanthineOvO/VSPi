@@ -49,13 +49,17 @@ export class ModelPicker {
     this.warningKey = undefined;
   }
 
+  private isPinned(group: CanonicalModelGroup): boolean {
+    return this.picks.pinned.includes(`canonical:${group.id}`) || group.sources.some(source => this.picks.pinned.some(key => modelHasIdentity(source, key)));
+  }
+
   private groups(): CanonicalModelGroup[] {
     const groups = canonicalModelGroups(this.models, this.picks.sources, this.selectedKey);
-    const visible = this.showAll ? groups : groups.filter(group => group.sources.some(source => source.curated || this.picks.pinned.some(key => modelHasIdentity(source, key)) || this.picks.recent.some(key => modelHasIdentity(source, key))));
+    const visible = this.showAll ? groups : groups.filter(group => this.isPinned(group) || group.sources.some(source => source.curated || this.picks.recent.some(key => modelHasIdentity(source, key))));
     const filtered = searchCanonicalModels(visible, this.search.getValue());
     const keys = [...this.picks.pinned, ...this.picks.recent];
     const rank = (group: CanonicalModelGroup) => {
-      const index = keys.findIndex(key => group.sources.some(source => modelHasIdentity(source, key)));
+      const index = keys.findIndex(key => key === `canonical:${group.id}` || group.sources.some(source => modelHasIdentity(source, key)));
       return index < 0 ? keys.length : index;
     };
     return filtered.toSorted((left, right) => rank(left) - rank(right));
@@ -96,9 +100,8 @@ export class ModelPicker {
       return;
     }
     if (matchesKey(data, Key.ctrl('p')) && group) {
-      const pinned = group.sources.some(source => this.picks.pinned.some(key => modelHasIdentity(source, key)));
-      const keys = this.picks.pinned.filter(key => !group.sources.some(source => modelHasIdentity(source, key)));
-      if (!pinned) keys.push(modelIdentityKey(group.defaultSource ?? group.sources[0]));
+      const key = this.expanded ? modelIdentityKey(group.sources[this.sourceIndex]) : `canonical:${group.id}`;
+      const keys = this.picks.pinned.includes(key) ? this.picks.pinned.filter(pinned => pinned !== key) : [...this.picks.pinned, key];
       this.picks = { ...this.picks, pinned: keys };
       this.selected = Math.max(0, this.groups().findIndex(candidate => candidate.id === group.id));
       return { type: 'modelPin', pinned: keys };
@@ -147,7 +150,7 @@ export class ModelPicker {
     const entries: Array<{ text: string; selected?: boolean }> = [];
     let company = '';
     groups.forEach((group, index) => {
-      const pinned = group.sources.some(source => this.picks.pinned.some(key => modelHasIdentity(source, key)));
+      const pinned = this.isPinned(group);
       const recent = group.sources.some(source => this.picks.recent.some(key => modelHasIdentity(source, key)));
       const section = pinned || recent ? '★ 常用 / ↺ 最近' : group.company;
       if (section !== company) {

@@ -3702,6 +3702,51 @@ describe('canonical model picker', () => {
     expect(sourceUnhealthy(source('expired', { ...failed(), expiresAt: Date.now() - 1 }))).toBe(false);
   });
 
+  it('keeps the exact remembered alias when collapsing sources and confirming Enter', () => {
+    const first = { ...source('gateway'), id: 'alias-a', alias: 'gateway/alias-a', wireId: 'claude-opus-5.5' };
+    const remembered = { ...first, id: 'alias-b', alias: 'gateway/alias-b', efforts: ['max'] };
+    const official = source('anthropic');
+    const picks = { pinned: [], recent: [], sources: { 'anthropic/claude-opus-5.5': modelIdentityKey(remembered) } };
+    const [group] = canonicalModelGroups([first, remembered, official], picks.sources, modelIdentityKey(first));
+    expect(group?.sources).toHaveLength(2);
+    expect(group?.defaultSource).toMatchObject({ id: 'alias-b', alias: 'gateway/alias-b', efforts: ['max'] });
+    const picker = new ModelPicker();
+    picker.setModels([first, remembered, official], modelIdentityKey(first));
+    picker.setPicks(picks);
+    picker.open();
+    expect(picker.handleInput('\r')).toMatchObject({ type: 'model', model: { id: 'alias-b', alias: 'gateway/alias-b' } });
+  });
+
+  it('toggles only the highlighted source pin and preserves other source and canonical pins', () => {
+    const devin = source('devin');
+    const gateway = source('gateway');
+    const canonicalPin = 'canonical:anthropic/claude-opus-5.5';
+    const unrelatedPin = 'other\u0000model';
+    const picker = new ModelPicker();
+    picker.setModels([devin, gateway], '');
+    picker.setPicks({ pinned: [modelIdentityKey(devin), unrelatedPin], recent: [] });
+    picker.open();
+    expect(picker.handleInput('\u0010')).toMatchObject({ type: 'modelPin', pinned: [modelIdentityKey(devin), unrelatedPin, canonicalPin] });
+    expect(picker.handleInput('\u0010')).toMatchObject({ type: 'modelPin', pinned: [modelIdentityKey(devin), unrelatedPin] });
+    picker.handleInput('\t');
+    picker.handleInput('\x1b[B');
+    expect(picker.handleInput('\u0010')).toMatchObject({ type: 'modelPin', pinned: [modelIdentityKey(devin), unrelatedPin, modelIdentityKey(gateway)] });
+    expect(picker.handleInput('\u0010')).toMatchObject({ type: 'modelPin', pinned: [modelIdentityKey(devin), unrelatedPin] });
+    picker.handleInput('\x1b[A');
+    expect(picker.handleInput('\u0010')).toMatchObject({ type: 'modelPin', pinned: [unrelatedPin] });
+  });
+
+  it('retains canonical pins in the common view independently of source pins', () => {
+    const picker = new ModelPicker();
+    picker.setModels([{ ...source('gateway'), curated: false }], '');
+    picker.setPicks({ pinned: ['canonical:anthropic/claude-opus-5.5'], recent: [] });
+    picker.open();
+    expect(picker.position()).toBe('1 / 1');
+    expect(stripTerminalSequences(picker.render(120, 30, theme).join('\n'))).toContain('★ Claude Opus 5.5');
+    expect(picker.handleInput('\u0010')).toMatchObject({ type: 'modelPin', pinned: [] });
+    expect(picker.position()).toBe('0 / 0');
+  });
+
   it('does not auto-select any failed source and requires an explicit warning confirmation', () => {
     const picker = new ModelPicker();
     picker.setModels([source('vsplab', failed())], '');

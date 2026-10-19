@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'pathe';
 import { LifecycleScope } from '#/app/scopes';
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
@@ -7,6 +8,9 @@ import { IModelHealth, ModelHealthStore, modelHealthSchema } from '#/llm-adapter
 
 export class ModelHealthAdapter extends ModelHealthStore {
   private readonly path: string;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private writing = false;
+  private dirty = false;
 
   constructor(@IBootstrapService private readonly bootstrap: IBootstrapService) {
     super();
@@ -20,16 +24,35 @@ export class ModelHealthAdapter extends ModelHealthStore {
           if (health.success) this.records.set(entry[0], health.data);
         }
       }
+      this.didPersist([...this.records]);
     } catch {}
   }
 
   protected override save(): void {
+    this.dirty = true;
+    if (this.timer !== undefined || this.writing) return;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      void this.persist();
+    }, 100);
+    this.timer.unref();
+  }
+
+  private async persist(): Promise<void> {
+    this.dirty = false;
+    if (!this.needsPersistence()) return;
+    this.writing = true;
+    const entries = [...this.records];
     try {
-      mkdirSync(this.bootstrap.cacheDir, { recursive: true, mode: 0o700 });
+      await mkdir(this.bootstrap.cacheDir, { recursive: true, mode: 0o700 });
       const temporary = `${this.path}.${process.pid}.tmp`;
-      writeFileSync(temporary, JSON.stringify([...this.records]), { mode: 0o600 });
-      renameSync(temporary, this.path);
-    } catch {}
+      await writeFile(temporary, JSON.stringify(entries), { mode: 0o600 });
+      await rename(temporary, this.path);
+      this.didPersist(entries);
+    } catch {} finally {
+      this.writing = false;
+      if (this.dirty && this.needsPersistence()) this.save();
+    }
   }
 }
 

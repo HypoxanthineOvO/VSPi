@@ -26,7 +26,7 @@ export function sourceHealthLabel(model: ModelOption, now = Date.now()): string 
 
 export function canonicalModelGroups(models: readonly ModelOption[], remembered: Readonly<Record<string, string>> = {}, selectedKey = '', now = Date.now()): CanonicalModelGroup[] {
   const groups = new Map<string, CanonicalModelGroup>();
-  for (const model of groupModelAliases(models, selectedKey)) {
+  for (const model of models) {
     const canonical = model.canonical;
     const id = canonical?.id ?? `unclassified/${modelIdentityKey(model)}`;
     let group = groups.get(id);
@@ -37,6 +37,7 @@ export function canonicalModelGroups(models: readonly ModelOption[], remembered:
     group.sources.push(model);
   }
   for (const group of groups.values()) {
+    group.sources = groupModelAliases(group.sources, remembered[group.id] ?? selectedKey);
     const rank = (model: ModelOption) => {
       const index = DEFAULT_SOURCE_PRIORITY.indexOf(model.provider ?? '');
       return model.sourcePriority ?? (index < 0 ? DEFAULT_SOURCE_PRIORITY.length : index);

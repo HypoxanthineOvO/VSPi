@@ -1320,17 +1320,69 @@ describe('canonical model identity', () => {
     } finally { host.dispose(); }
   });
 
-  it('persists health in the selected runtime cache and retains it after restart', () => {
+  it('persists health asynchronously in the selected runtime cache and retains it after restart', async () => {
     const home = mkdtempSync(join(process.cwd(), '.tmp-health-'));
+    const stringify = vi.spyOn(JSON, 'stringify');
     try {
       const bootstrap = stubBootstrap(home);
       const first = new ModelHealthAdapter(bootstrap);
+      first.record('gateway', 'alias', new TypeError('fetch failed'));
       first.record('gateway', 'alias', Object.assign(new Error('credential detail'), { status: 401 }));
+      first.record('other', 'alias');
+      expect(new ModelHealthAdapter(bootstrap).get('gateway', 'alias')).toBeUndefined();
+      expect(stringify.mock.calls.filter(([value]) => Array.isArray(value) && Array.isArray(value[0]))).toHaveLength(0);
+      await vi.waitFor(() => {
+        expect(new ModelHealthAdapter(bootstrap).get('gateway', 'alias')?.lastFailure?.category).toBe('auth');
+      });
+      expect(stringify.mock.calls.filter(([value]) => Array.isArray(value) && Array.isArray(value[0]))).toHaveLength(1);
       const second = new ModelHealthAdapter(bootstrap);
-      expect(second.get('gateway', 'alias')?.lastFailure?.category).toBe('auth');
+      expect(second.get('other', 'alias')?.lastSuccess).toEqual(expect.any(Number));
       second.record('gateway', 'alias');
-      const restored = new ModelHealthAdapter(bootstrap).get('gateway', 'alias');
-      expect(restored?.lastSuccess).toBeGreaterThan(restored?.lastFailure?.at ?? 0);
-    } finally { rmSync(home, { recursive: true, force: true }); }
+      await vi.waitFor(() => {
+        const restored = new ModelHealthAdapter(bootstrap).get('gateway', 'alias');
+        expect(restored?.lastSuccess).toBeGreaterThan(restored?.lastFailure?.at ?? 0);
+      });
+      second.record('gateway', 'alias', new TypeError('fetch failed'));
+      second.record('gateway', 'alias');
+      await vi.waitFor(() => {
+        const restored = new ModelHealthAdapter(bootstrap).get('gateway', 'alias');
+        expect(restored?.lastFailure?.category).toBe('network');
+        expect(restored?.lastSuccess).toBeGreaterThan(restored?.lastFailure?.at ?? 0);
+      });
+      expect(stringify.mock.calls.filter(([value]) => Array.isArray(value) && Array.isArray(value[0]))).toHaveLength(3);
+    } finally {
+      stringify.mockRestore();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('persists transitions and throttles repeated outcomes against the last persisted snapshot', () => {
+    class PersistedHealth extends ModelHealthStore {
+      writes = 0;
+      protected override save(): void {
+        this.writes++;
+        this.didPersist([...this.records]);
+      }
+    }
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      const health = new PersistedHealth();
+      health.record('gateway', 'alias', new TypeError('fetch failed'));
+      health.record('gateway', 'alias');
+      expect(health.writes).toBe(2);
+      for (let step = 1; step < 6; step++) {
+        now.mockReturnValue(1_000_000 + step * 10_000);
+        health.record('gateway', 'alias');
+      }
+      expect(health.writes).toBe(2);
+      now.mockReturnValue(1_060_010);
+      health.record('gateway', 'alias');
+      expect(health.writes).toBe(3);
+      health.record('gateway', 'alias', new TypeError('fetch failed'));
+      health.record('gateway', 'alias', Object.assign(new Error('denied'), { status: 403 }));
+      expect(health.writes).toBe(5);
+      health.record('gateway', 'alias', Object.assign(new Error('denied again'), { status: 403 }));
+      expect(health.writes).toBe(5);
+    } finally { now.mockRestore(); }
   });
 });

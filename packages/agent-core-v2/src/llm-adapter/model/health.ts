@@ -31,6 +31,7 @@ export function modelHealthFailure(error: unknown): NonNullable<ModelHealth['las
 export class ModelHealthStore implements IModelHealth {
   declare readonly _serviceBrand: undefined;
   protected readonly records = new Map<string, ModelHealth>();
+  private readonly persisted = new Map<string, { health: ModelHealth; at: number }>();
 
   get(provider: string, model: string): ModelHealth | undefined {
     const health = this.records.get(JSON.stringify([provider, model]));
@@ -49,8 +50,33 @@ export class ModelHealthStore implements IModelHealth {
       lastFailure: category === undefined ? previous?.lastFailure : { at: now, category },
       expiresAt: now + ttl,
     });
-    while (this.records.size > 2000) this.records.delete(this.records.keys().next().value!);
-    if (category !== undefined || previous?.lastFailure !== undefined || now - (previous?.lastSuccess ?? 0) >= 60_000) this.save();
+    while (this.records.size > 2000) {
+      const oldest = this.records.keys().next().value!;
+      this.records.delete(oldest);
+      this.persisted.delete(oldest);
+    }
+    if (this.shouldPersist(key, this.records.get(key)!)) this.save();
+  }
+
+  private shouldPersist(key: string, health: ModelHealth): boolean {
+    const previous = this.persisted.get(key);
+    if (previous === undefined) return true;
+    const failure = (value: ModelHealth) => value.lastFailure && value.lastFailure.at > (value.lastSuccess ?? 0) ? value.lastFailure.category : undefined;
+    const previousFailure = failure(previous.health);
+    const transitioned = previousFailure === undefined ? health.lastFailure?.at !== previous.health.lastFailure?.at : health.lastSuccess !== previous.health.lastSuccess;
+    return failure(health) !== previousFailure || transitioned || Date.now() - previous.at >= 60_000;
+  }
+
+  protected needsPersistence(): boolean {
+    return [...this.records].some(([key, health]) => this.shouldPersist(key, health));
+  }
+
+  protected didPersist(entries: ReadonlyArray<readonly [string, ModelHealth]>): void {
+    this.persisted.clear();
+    const at = Date.now();
+    for (const [key, health] of entries) {
+      if (this.records.has(key)) this.persisted.set(key, { health, at });
+    }
   }
 
   protected save(): void {}
