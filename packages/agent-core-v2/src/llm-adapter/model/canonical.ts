@@ -27,9 +27,10 @@ const FAMILIES: ReadonlyArray<readonly [RegExp, string, string]> = [
   [/^(?:hunyuan(?:-|\d)|hy\d)/u, 'tencent', 'Tencent'],
   [/^longcat-\d/u, 'meituan', 'Meituan'],
   [/^step-\d/u, 'stepfun', 'StepFun'],
+  [/^nemotron-\d/u, 'nvidia', 'NVIDIA'],
 ];
 
-const VENDOR_PREFIX = /^(?:devin|claude|anthropic|openai|moonshotai|moonshot|google|deepseek|zhipu|z-ai|minimax|xiaomi|cognition|alibaba|qwen|x-ai|xai|tencent)\//u;
+const VENDOR_PREFIX = /^(?:devin|claude|anthropic|openai|moonshotai|moonshot|google|deepseek|zhipu|z-ai|minimax|xiaomi|cognition|alibaba|qwen|x-ai|xai|tencent|nvidia)\//u;
 const REVIEWED_ALIASES: Readonly<Record<string, string>> = { 'deepseek-flash': 'deepseek-v4.1-flash' };
 
 function normalizeIdentity(value: string): string {
@@ -71,7 +72,10 @@ export function resolveCanonicalModel(alias: string, record: ModelRecord, provid
   }
   const providerId = provider || record.provider || record.providerId;
   const aliasModel = providerId && alias.startsWith(`${providerId}/`) ? alias.slice(providerId.length + 1) : alias.slice(alias.indexOf('/') + 1);
-  for (const value of [record.name, record.model, record.displayName, aliasModel]) {
+  const identities = providerId === 'devin'
+    ? [record.displayName, aliasModel, record.name, record.model]
+    : [record.name, record.model, record.displayName, aliasModel];
+  for (const value of identities) {
     if (!value) continue;
     const match = identify(value);
     if (match) return match;

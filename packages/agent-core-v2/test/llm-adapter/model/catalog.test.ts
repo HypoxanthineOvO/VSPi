@@ -1333,6 +1333,101 @@ describe('canonical model identity', () => {
     expect(resolveCanonicalModel('devin/alias', { model }, 'devin').displayName).toBe(displayName);
   });
 
+  it.each([
+    ['Claude Fable 5', 'claude-fable-5', 'claude-5-fable-medium', 'anthropic/claude-fable-5'],
+    ['Claude Fable 5.1', 'claude-fable-5-1', 'claude-fable-5-1-medium', 'anthropic/claude-fable-5.1'],
+    ['Claude Haiku 5.5', 'claude-haiku-5-5', 'claude-haiku-5-5-medium', 'anthropic/claude-haiku-5.5'],
+    ['Claude Opus 4.5', 'claude-opus-4-5', 'MODEL_CLAUDE_4_5_OPUS_THINKING', 'anthropic/claude-opus-4.5'],
+    ['Claude Opus 4.6', 'claude-opus-4-6', 'claude-opus-4-6-thinking', 'anthropic/claude-opus-4.6'],
+    ['Claude Opus 4.6 1M', 'claude-opus-4-6-1m', 'claude-opus-4-6-thinking-1m', 'anthropic/claude-opus-4.6-1m'],
+    ['Claude Opus 4.7', 'claude-opus-4-7', 'claude-opus-4-7-medium', 'anthropic/claude-opus-4.7'],
+    ['Claude Opus 4.8', 'claude-opus-4-8', 'claude-opus-4-8-medium', 'anthropic/claude-opus-4.8'],
+    ['Claude Opus 4.8 Fast', 'claude-opus-4-8-fast', 'claude-opus-4-8-medium-fast', 'anthropic/claude-opus-4.8-fast'],
+    ['Claude Opus 5', 'claude-opus-5', 'claude-opus-5-medium', 'anthropic/claude-opus-5'],
+    ['Claude Opus 5.5', 'claude-opus-5-5', 'claude-opus-5-5-medium', 'anthropic/claude-opus-5.5'],
+    ['Claude Opus 5.5 Fast', 'claude-opus-5-5-fast', 'claude-opus-5-5-medium-fast', 'anthropic/claude-opus-5.5-fast'],
+    ['Claude Opus 5 Fast', 'claude-opus-5-fast', 'claude-opus-5-medium-fast', 'anthropic/claude-opus-5-fast'],
+    ['Claude Sonnet 4.6', 'claude-sonnet-4-6', 'claude-sonnet-4-6-thinking', 'anthropic/claude-sonnet-4.6'],
+    ['Claude Sonnet 4.6 1M', 'claude-sonnet-4-6-1m', 'claude-sonnet-4-6-thinking-1m', 'anthropic/claude-sonnet-4.6-1m'],
+    ['Claude Sonnet 5', 'claude-sonnet-5', 'claude-sonnet-5-medium', 'anthropic/claude-sonnet-5'],
+    ['Claude Sonnet 5.5', 'claude-sonnet-5-5', 'claude-sonnet-5-5-medium', 'anthropic/claude-sonnet-5.5'],
+    ['DeepSeek V4.1 Flash', 'deepseek-v4-1-flash', 'deepseek-v4-1-flash-1017-high', 'deepseek/deepseek-v4.1-flash'],
+    ['DeepSeek V4 Flash', 'deepseek-v4-flash', 'deepseek-v4-flash-high', 'deepseek/deepseek-v4-flash'],
+    ['DeepSeek V4 Pro', 'deepseek-v4-pro', 'deepseek-v4-pro-high', 'deepseek/deepseek-v4-pro'],
+    ['Gemini 3.1 Pro', 'gemini-3-1-pro', 'gemini-3-1-pro-low', 'google/gemini-3.1-pro'],
+    ['Gemini 3.5 Flash', 'gemini-3-5-flash', 'gemini-3-5-flash-medium', 'google/gemini-3.5-flash'],
+    ['Gemini 3.6 Flash', 'gemini-3-6-flash', 'gemini-3-6-flash-medium', 'google/gemini-3.6-flash'],
+    ['Gemini 3.7 Flash', 'gemini-3-7-flash', 'gemini-3-7-flash-medium', 'google/gemini-3.7-flash'],
+    ['Gemini 3.8 Flash', 'gemini-3-8-flash', 'gemini-3-8-flash-medium', 'google/gemini-3.8-flash'],
+    ['Gemini 3 Flash', 'gemini-3-flash', 'MODEL_GOOGLE_GEMINI_3_0_FLASH_MEDIUM', 'google/gemini-3-flash'],
+    ['Gemini 4 Argon', 'gemini-4-argon', 'gemini-4-argon-medium', 'google/gemini-4-argon'],
+    ['GLM-5.2', 'glm-5-2', 'glm-5-2', 'zhipu/glm-5.2'],
+    ['GLM-5.2 1M', 'glm-5-2-1m', 'glm-5-2-1m', 'zhipu/glm-5.2-1m'],
+    ['GLM-5.3 1M', 'glm-5-3-1m', 'glm-5-3-max', 'zhipu/glm-5.3-1m'],
+    ['GLM-5.3 Flash 1M', 'glm-5-3-flash-1m', 'glm-5-3-flash-max', 'zhipu/glm-5.3-flash-1m'],
+    ['GPT-5.1', 'gpt-5-1', 'MODEL_PRIVATE_14', 'openai/gpt-5.1'],
+    ['GPT-5.2', 'gpt-5-2', 'MODEL_GPT_5_2_MEDIUM', 'openai/gpt-5.2'],
+    ['GPT-5.3-Codex', 'gpt-5-3-codex', 'gpt-5-3-codex-medium', 'openai/gpt-5.3-codex'],
+    ['GPT-5.3-Codex Fast', 'gpt-5-3-codex-fast', 'gpt-5-3-codex-medium-priority', 'openai/gpt-5.3-codex-fast'],
+    ['GPT-5.4', 'gpt-5-4', 'gpt-5-4-medium', 'openai/gpt-5.4'],
+    ['GPT-5.4 Fast', 'gpt-5-4-fast', 'gpt-5-4-medium-priority', 'openai/gpt-5.4-fast'],
+    ['GPT-5.4 Mini', 'gpt-5-4-mini', 'gpt-5-4-mini-medium', 'openai/gpt-5.4-mini'],
+    ['GPT-5.5', 'gpt-5-5', 'gpt-5-5-low', 'openai/gpt-5.5'],
+    ['GPT-5.5 Fast', 'gpt-5-5-fast', 'gpt-5-5-medium-priority', 'openai/gpt-5.5-fast'],
+    ['GPT-5.6 Luna', 'gpt-5-6-luna', 'gpt-5-6-luna-medium', 'openai/gpt-5.6-luna'],
+    ['GPT-5.6 Luna Fast', 'gpt-5-6-luna-fast', 'gpt-5-6-luna-medium-priority', 'openai/gpt-5.6-luna-fast'],
+    ['GPT-5.6 Sol', 'gpt-5-6-sol', 'gpt-5-6-sol-medium', 'openai/gpt-5.6-sol'],
+    ['GPT-5.6 Sol Fast', 'gpt-5-6-sol-fast', 'gpt-5-6-sol-medium-priority', 'openai/gpt-5.6-sol-fast'],
+    ['GPT-5.6 Terra', 'gpt-5-6-terra', 'gpt-5-6-terra-medium', 'openai/gpt-5.6-terra'],
+    ['GPT-5.6 Terra Fast', 'gpt-5-6-terra-fast', 'gpt-5-6-terra-medium-priority', 'openai/gpt-5.6-terra-fast'],
+    ['GPT-6.1 Sol', 'gpt-6-1-sol', 'gpt-6-1-sol-medium', 'openai/gpt-6.1-sol'],
+    ['GPT-6.1 Sol Fast', 'gpt-6-1-sol-fast', 'gpt-6-1-sol-medium-priority', 'openai/gpt-6.1-sol-fast'],
+    ['GPT-6 Astra', 'gpt-6-astra', 'gpt-6-astra-medium', 'openai/gpt-6-astra'],
+    ['GPT-6 Astra Fast', 'gpt-6-astra-fast', 'gpt-6-astra-medium-priority', 'openai/gpt-6-astra-fast'],
+    ['GPT-6 Luna', 'gpt-6-luna', 'gpt-6-luna-medium', 'openai/gpt-6-luna'],
+    ['GPT-6 Luna Fast', 'gpt-6-luna-fast', 'gpt-6-luna-medium-priority', 'openai/gpt-6-luna-fast'],
+    ['GPT-6 Sol', 'gpt-6-sol', 'gpt-6-sol-medium', 'openai/gpt-6-sol'],
+    ['GPT-6 Sol Fast', 'gpt-6-sol-fast', 'gpt-6-sol-medium-priority', 'openai/gpt-6-sol-fast'],
+    ['Grok 4.5', 'grok-4-5', 'grok-4-5-medium', 'xai/grok-4.5'],
+    ['Grok 4.6', 'grok-4-6', 'grok-4-6-medium', 'xai/grok-4.6'],
+    ['Grok 4.7', 'grok-4-7', 'grok-4-7-medium', 'xai/grok-4.7'],
+    ['Kimi K2.6', 'kimi-k2-6', 'kimi-k2-6', 'moonshot/kimi-k2.6'],
+    ['Kimi K2.7', 'kimi-k2-7', 'kimi-k2-7', 'moonshot/kimi-k2.7'],
+    ['Kimi K3', 'kimi-k3', 'kimi-k3-high', 'moonshot/kimi-k3'],
+    ['GPT-4.1', 'MODEL_CHAT_GPT_4_1_2025_04_14', 'MODEL_CHAT_GPT_4_1_2025_04_14', 'openai/gpt-4.1'],
+    ['Claude Haiku 4.5', 'MODEL_PRIVATE_11', 'MODEL_PRIVATE_11', 'anthropic/claude-haiku-4.5'],
+    ['Nemotron 3 Ultra', 'nemotron-3-ultra', 'nemotron-3-ultra-high', 'nvidia/nemotron-3-ultra'],
+    ['SWE-1.6', 'swe-1-6', 'swe-1-6', 'cognition/swe-1.6'],
+    ['SWE-1.6 Fast', 'swe-1-6-fast', 'swe-1-6-fast', 'cognition/swe-1.6-fast'],
+    ['SWE-1.7', 'swe-1-7', 'swe-1-7-medium', 'cognition/swe-1.7'],
+    ['SWE-1.7 Lightning', 'swe-1-7-lightning', 'swe-1-7-lightning-medium', 'cognition/swe-1.7-lightning'],
+    ['SWE-2', 'swe-2', 'swe-2-high', 'cognition/swe-2'],
+    ['SWE-2 Fast', 'swe-2-fast', 'swe-2-medium-lightning', 'cognition/swe-2-fast'],
+  ])('resolves cached Devin %s from its logical identity, not wire %s', (label, id, wire, canonical) => {
+    const record = { provider: 'devin', name: wire, model: wire, displayName: label };
+    expect(resolveCanonicalModel(`devin/${id}`, record)).toMatchObject({ id: canonical });
+    expect(toProtocolModelFallback(`devin/${id}`, record, 'devin').canonical?.id).toBe(canonical);
+    const logicalId = canonical.slice(canonical.indexOf('/') + 1);
+    expect(resolveCanonicalModel('gateway/alias', { model: logicalId }).id).toBe(canonical);
+    if (!id.startsWith('MODEL_')) {
+      expect(resolveCanonicalModel(`devin/${id}`, { ...record, displayName: 'Unrecognized label' }).id).toBe(canonical);
+    }
+  });
+
+  it('keeps Devin context variants distinct and canonical overrides authoritative', () => {
+    const canonical = resolveCanonicalModel('devin/glm-5-3-1m', { model: 'glm-5-3-max', displayName: 'GLM 5.3 1M' }, 'devin');
+    expect(canonical).toEqual({ id: 'zhipu/glm-5.3-1m', company: 'Zhipu', displayName: 'GLM 5.3 1M' });
+    expect(canonical.id).not.toBe(resolveCanonicalModel('devin/glm-5-3', { model: 'glm-5-3-max', displayName: 'GLM 5.3' }, 'devin').id);
+    expect(resolveCanonicalModel('devin/sonnet', { model: 'claude-sonnet-4-6-thinking', displayName: 'Claude Sonnet 4.6', canonical: { id: 'custom/sonnet' } }, 'devin').id).toBe('custom/sonnet');
+    expect(resolveCanonicalModel('devin/sonnet', { model: 'claude-sonnet-4-6-thinking', displayName: 'Claude Sonnet 4.6', overrides: { canonical: { id: 'custom/override' } } }, 'devin').id).toBe('custom/override');
+  });
+
+  it('preserves distinct thinking-only gateway SKUs even when their label omits thinking', () => {
+    expect(resolveCanonicalModel('gateway/claude-sonnet-4-6-thinking', { model: 'claude-sonnet-4-6-thinking', displayName: 'Claude Sonnet 4.6' }, 'gateway').id).toBe('anthropic/claude-sonnet-4.6-thinking');
+    expect(resolveCanonicalModel('gateway/kimi-k2-thinking', { model: 'kimi-k2-thinking', displayName: 'Kimi K2' }, 'gateway').id).toBe('moonshot/kimi-k2-thinking');
+    expect(resolveCanonicalModel('gateway/claude-sonnet-4-6', { model: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6' }, 'gateway').id).toBe('anthropic/claude-sonnet-4.6');
+  });
+
   it('groups Devin Opus with a gateway Claude namespace', () => {
     expect(resolveCanonicalModel('devin/claude-opus-5-5', { model: 'devin/claude-opus-5-5' }, 'devin').id)
       .toBe(resolveCanonicalModel('gateway/opus', { model: 'Claude/claude-opus-5-5' }, 'gateway').id);
