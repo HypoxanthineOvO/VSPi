@@ -97,9 +97,116 @@ export function renderProviderManager(
     ? state.detail ? detailRows.slice(0, available) : visible
     : Array.from({ length: available }, (_, index) => `${padLine(visible[index] ?? '', leftWidth)} ${theme.border('│')} ${padLine(truncateToWidth(detailRows[index] ?? '', rightWidth), rightWidth)}`);
   const local = providers.filter(provider => provider.localCredential);
-  const banner = local.length ? theme.success(`检测到本机凭据 · ${local.map(provider => provider.localCredential!.name).join(' / ')} · L 复用，无需复制 Token`) : '';
+  const banner = local.length ? theme.success(`检测到本机凭据 · ${local.map(provider => provider.localCredential!.name).join(' / ')} · R 一键复用，无需复制 Token`) : '';
   return [truncateToWidth(banner || search, width), ...(banner ? [truncateToWidth(search, width)] : []), ...body.map(line => truncateToWidth(line, width)), '',
     truncateToWidth(theme.muted(narrow ? '↑↓选择 L登录 T测试 E编辑 D移除 /搜索 Tab模型 Enter详情 Esc返回' : '↑↓ 选择  L 登录/切换方式  T 测试  E 编辑  D 移除  / 搜索  Tab 模型  Enter 详情  Esc 返回'), width)].slice(0, height);
+}
+
+export type ProviderManagerAction =
+  | { type: 'login'; provider: ProviderOption; credential: 'api_key' | 'oauth' }
+  | { type: 'local' | 'test' | 'remove'; provider: ProviderOption }
+  | { type: 'save'; provider?: ProviderOption; value: GatewayFormValue }
+  | { type: 'close' };
+
+export class ProviderManagerController {
+  readonly state: ProviderManagerState = { selected: 0, query: '', searching: false, detail: false, modelFocus: false, modelOffset: 0 };
+  private providers: ProviderOption[] = [];
+  private readonly search = new Input();
+  private menu?: { label: string; action: ProviderManagerAction }[];
+  private menuSelected = 0;
+  private form?: ProviderGatewayForm;
+  private pending?: ProviderManagerAction;
+  private readonly checks = new Map<string, string>();
+
+  constructor(showCustom = true) { this.state.showCustom = showCustom; }
+
+  setProviders(providers: readonly ProviderOption[]): void {
+    const selected = this.visible()[this.state.selected]?.id;
+    this.providers = [...providers].sort((a, b) => Number(b.status !== '未配置') - Number(a.status !== '未配置'));
+    const index = this.visible().findIndex(provider => provider.id === selected);
+    this.state.selected = index < 0 ? Math.min(this.state.selected, Math.max(0, this.visible().length - 1)) : index;
+  }
+
+  selectProvider(id: string): void {
+    this.state.query = ''; this.search.setValue(''); this.state.searching = false;
+    this.state.selected = Math.max(0, this.providers.findIndex(provider => provider.id === id));
+    this.state.modelOffset = 0;
+  }
+
+  private visible(): ProviderOption[] {
+    const query = this.state.query.trim().toLowerCase();
+    return this.providers.filter(provider => `${provider.id} ${provider.label}`.toLowerCase().includes(query));
+  }
+
+  recordCheck(id: string, diagnostic: string): void { this.checks.set(id, diagnostic); }
+  finishSave(error?: string): void { if (error) this.form?.setError(error); else this.form = undefined; }
+
+  handleInput(data: string): ProviderManagerAction | undefined {
+    if (this.form) { this.form.handleInput(data); const action = this.pending; this.pending = undefined; return action; }
+    if (matchesKey(data, Key.escape)) {
+      if (this.menu) this.menu = undefined;
+      else if (this.state.searching) this.state.searching = false;
+      else if (this.state.modelFocus) this.state.modelFocus = false;
+      else if (this.state.detail) this.state.detail = false;
+      else if (this.state.query) { this.state.query = ''; this.search.setValue(''); this.state.selected = 0; }
+      else return { type: 'close' };
+      return;
+    }
+    if (this.menu) {
+      if (matchesKey(data, Key.up)) this.menuSelected = Math.max(0, this.menuSelected - 1);
+      else if (matchesKey(data, Key.down)) this.menuSelected = Math.min(this.menu.length - 1, this.menuSelected + 1);
+      else if (matchesKey(data, Key.enter)) { const action = this.menu[this.menuSelected]?.action; this.menu = undefined; return action; }
+      return;
+    }
+    if (this.state.searching) {
+      if (matchesKey(data, Key.enter)) this.state.searching = false;
+      else { this.search.handleInput(data); this.state.query = this.search.getValue(); this.state.selected = 0; this.state.modelOffset = 0; }
+      return;
+    }
+    if (data === '/') { this.state.searching = true; return; }
+    if (matchesKey(data, Key.tab)) { this.state.modelFocus = !this.state.modelFocus; this.state.detail = true; return; }
+    const providers = this.visible();
+    const provider = providers[this.state.selected];
+    if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
+      const delta = matchesKey(data, Key.up) ? -1 : 1;
+      if (this.state.modelFocus) this.state.modelOffset = Math.max(0, Math.min((provider?.models?.length ?? 1) - 1, this.state.modelOffset + delta));
+      else { this.state.selected = Math.max(0, Math.min(providers.length - Number(this.state.showCustom === false), this.state.selected + delta)); this.state.modelOffset = 0; }
+      return;
+    }
+    if (!provider) {
+      if (this.state.showCustom !== false && (matchesKey(data, Key.enter) || /^[eElL]$/.test(data))) this.edit();
+      return;
+    }
+    if (matchesKey(data, Key.enter)) { this.state.detail = true; return; }
+    if (/^[eE]$/.test(data)) { this.edit(provider); return; }
+    if (/^[tT]$/.test(data)) return { type: 'test', provider };
+    if (/^[rR]$/.test(data) && provider.localCredential) return { type: 'local', provider };
+    if (/^[dD]$/.test(data) && provider.storedCredential) {
+      this.menu = [{ label: `确认移除 ${provider.label} 的凭据（不删除外部 CLI 文件）`, action: { type: 'remove', provider } }];
+      this.menuSelected = 0;
+    }
+    if (/^[lL]$/.test(data)) {
+      this.menu = (provider.authMethods ?? [{ type: 'api_key' as const, label: 'API Key' }]).map(method => ({ label: method.label, action: { type: 'login', provider, credential: method.type } }));
+      this.menuSelected = 0;
+      if (this.menu.length === 1) { const action = this.menu[0]!.action; this.menu = undefined; return action; }
+    }
+  }
+
+  private edit(provider?: ProviderOption): void {
+    this.form = new ProviderGatewayForm(value => {
+      this.form?.setBusy(true);
+      this.pending = { type: 'save', provider, value };
+    }, () => { this.form = undefined; }, provider ? { name: provider.label, baseUrl: provider.baseUrl, protocol: provider.protocol } : undefined);
+  }
+
+  render(width: number, height: number, theme: VspiTheme): string[] {
+    if (this.form) return this.form.render(width, theme);
+    if (this.menu) return [theme.bold('Provider 操作'), '', ...this.menu.map((item, index) => index === this.menuSelected ? theme.selected(`› ${item.label}`) : `  ${item.label}`), '', theme.muted('↑↓ 选择 · Enter 确认 · Esc 返回')].map(line => truncateToWidth(line, width));
+    return renderProviderManager(this.visible(), this.state, width, height, theme, new Map(this.providers.map(provider => [provider.id, {
+      models: provider.models, account: provider.localCredential?.account, expiresAt: provider.localCredential?.expiresAt,
+      authLabel: provider.authLabel, defaultModel: provider.defaultModel, lastCheck: this.checks.get(provider.id),
+    }])));
+  }
 }
 
 export interface GatewayFormValue {

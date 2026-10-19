@@ -214,6 +214,7 @@ describe('OAuthService', () => {
           })) as IConfigService['inspect'],
           set: configSet as unknown as IConfigService['set'],
           replace: configReplace as unknown as IConfigService['replace'],
+          replaceSections: async (sections) => { for (const [domain, value] of Object.entries(sections)) await configReplace(domain, value); },
           reload: vi.fn().mockResolvedValue(undefined) as unknown as IConfigService['reload'],
           onDidChangeConfiguration: (() => ({ dispose: () => { } })) as IConfigService['onDidChangeConfiguration'],
           onDidSectionChange: (() => ({ dispose: () => { } })) as IConfigService['onDidSectionChange'],
@@ -274,6 +275,57 @@ describe('OAuthService', () => {
       expect(providerSet).not.toHaveBeenCalled();
       expect(documents.size).toBe(0);
     } finally { unregister(); }
+  });
+
+  it('uses browser login even when valid Codex CLI credentials are available', async () => {
+    await writeFile(join(codexHome, 'auth.json'), JSON.stringify(codexFile()));
+    piMocks.provider = 'openai-codex';
+    const login = vi.fn(async () => ({ ...piCredentials, expires: Date.now() + 3600_000 }));
+    registerPi(login);
+    const service = createService();
+    await service.startLogin('openai-codex', { source: 'browser' });
+    expect(login).toHaveBeenCalledOnce();
+    expect(documents.get(providers['openai-codex']!.oauth!.key)).not.toHaveProperty('codexAuthPath');
+    expect(providers['openai-codex']?.source?.['credential']).toBe('browser');
+  });
+
+  it.each(['validation', 'persistence'])('preserves previous OAuth credentials on candidate %s failure', async failure => {
+    registerPi(async () => ({ ...piCredentials, access: 'EXAMPLE_OLD_TOKEN', expires: Date.now() + 3600_000 }));
+    const service = createService();
+    await service.startLogin('anthropic');
+    const previous = structuredClone(providers);
+    const previousDocuments = structuredClone([...documents.entries()]);
+    registerPi(async () => ({ ...piCredentials, access: 'EXAMPLE_NEW_TOKEN', expires: Date.now() + 3600_000 }));
+    if (failure === 'validation') piMocks.oauth!.toAuth = async () => { throw new Error('Invalid candidate'); };
+    else vi.spyOn(ix.get(IConfigService), 'replaceSections').mockRejectedValueOnce(new Error('Atomic write failed'));
+    await expect(service.startLogin('anthropic', { source: 'browser' })).rejects.toThrow('OAuth login failed');
+    expect(providers).toEqual(previous);
+    expect([...documents.entries()]).toEqual(previousDocuments);
+    expect(await service.getCachedAccessToken('anthropic')).toBe('EXAMPLE_OLD_TOKEN');
+  });
+
+  it('does not publish a cancelled Devin candidate after model discovery finishes', async () => {
+    const devin = await import('#/app/auth/devinCredential');
+    const catalog = await import('#/llm-adapter/provider/devin/catalog');
+    const path = join(codexHome, 'cancelled-devin.toml');
+    vi.spyOn(devin, 'devinAuthPath').mockReturnValue(path);
+    await writeFile(path, `windsurf_api_key = "header.${Buffer.from(JSON.stringify({ session_id: 'example-session' })).toString('base64url')}.signature"`);
+    let release!: () => void;
+    const discovery = vi.spyOn(catalog, 'fetchDevinModels').mockImplementation(async () => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return { 'devin/example': { provider: 'devin', model: 'example' } };
+    });
+    providers['devin'] = { type: 'devin', apiKey: 'EXAMPLE_OLD_TOKEN' };
+    const service = createService();
+    const pending = service.startLogin('devin');
+    const rejected = expect(pending).rejects.toThrow('cancelled');
+    await vi.waitFor(() => expect(discovery).toHaveBeenCalledOnce());
+    await service.cancelLogin('devin');
+    release();
+    await rejected;
+    await vi.waitFor(() => expect(documents.size).toBe(0));
+    expect(providers['devin']).toEqual({ type: 'devin', apiKey: 'EXAMPLE_OLD_TOKEN' });
+    expect(models['devin/example']).toBeUndefined();
   });
 
   function registerPi(login: OAuthAuth['login'], refreshToken?: OAuthAuth['refresh']): void {
@@ -429,7 +481,7 @@ describe('OAuthService', () => {
     expect(login).not.toHaveBeenCalled();
     await service.startLogin('openai-codex');
     expect(login).toHaveBeenCalledOnce();
-    expect(documents.get('pi-ai/openai-codex/openai-codex')).not.toHaveProperty('codexAuthPath');
+    expect(documents.get(providers['openai-codex']!.oauth!.key)).not.toHaveProperty('codexAuthPath');
   });
 
   it.each(['missing', 'invalid', 'api-key', 'expired', 'wrong-account'])('falls back to ordinary login for %s Codex state', async state => {
@@ -2466,6 +2518,57 @@ describe('AuthLegacyService', () => {
 });
 
 describe('Local CLI credential discovery', () => {
+  it('detects Devin metadata without returning or modifying its token', async () => {
+    const { LocalCredentialRegistry } = await import('#/app/auth/localCredentials');
+    const home = await mkdtemp(join(tmpdir(), 'devin-credential-test-'));
+    try {
+      const directory = join(home, '.local', 'share', 'devin');
+      await mkdir(directory, { recursive: true });
+      const path = join(directory, 'credentials.toml');
+      const token = `header.${Buffer.from(JSON.stringify({ session_id: 'example-session' })).toString('base64url')}.signature`;
+      await writeFile(path, `windsurf_api_key = "${token}"`);
+      const registry = new LocalCredentialRegistry({ home, env: {} });
+      const before = await readFile(path, 'utf8');
+      const metadata = await registry.detect();
+      expect(metadata).toEqual([expect.objectContaining({ id: 'devin-cli', provider: 'devin', name: 'Devin CLI' })]);
+      expect(JSON.stringify(metadata)).not.toContain(token);
+      expect(await registry.resolve('devin-cli')).toEqual({ apiKey: token });
+      expect(await readFile(path, 'utf8')).toBe(before);
+      await rm(path);
+      expect(await registry.detect()).toEqual([]);
+    } finally { await rm(home, { recursive: true, force: true }); }
+  });
+
+  it('coalesces Copilot exchange and caches only until expiry or source-account rotation', async () => {
+    const { LocalCredentialRegistry } = await import('#/app/auth/localCredentials');
+    const home = await mkdtemp(join(tmpdir(), 'copilot-credential-test-'));
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    piMocks.provider = 'github-copilot';
+    const refresh = vi.fn(async (credential: OAuthCredential) => ({ ...credential, access: `EXAMPLE_SESSION_${credential.refresh}`, expires: Date.now() + 3600_000 }));
+    piMocks.oauth = { name: 'Example Copilot', login: vi.fn(), refresh, toAuth: async credential => ({ apiKey: credential.access }) };
+    try {
+      const directory = join(home, '.config', 'github-copilot');
+      await mkdir(directory, { recursive: true });
+      const path = join(directory, 'apps.json');
+      const writeSource = async (token: string) => writeFile(path, JSON.stringify({ 'github.com': { oauth_token: token } }));
+      await writeSource('EXAMPLE_FIRST');
+      const registry = new LocalCredentialRegistry({ home, env: {} });
+      const results = await Promise.all(Array.from({ length: 4 }, () => registry.resolve('github-copilot-cli')));
+      expect(results.every(result => result?.apiKey === 'EXAMPLE_SESSION_EXAMPLE_FIRST')).toBe(true);
+      expect(refresh).toHaveBeenCalledOnce();
+      await registry.resolve('github-copilot-cli');
+      expect(refresh).toHaveBeenCalledOnce();
+      clock.mockReturnValue(now + 3600_000);
+      await registry.resolve('github-copilot-cli');
+      expect(refresh).toHaveBeenCalledTimes(2);
+      await writeSource('EXAMPLE_SECOND');
+      expect(await registry.resolve('github-copilot-cli')).toMatchObject({ apiKey: 'EXAMPLE_SESSION_EXAMPLE_SECOND' });
+      expect(refresh).toHaveBeenCalledTimes(3);
+      expect(await readFile(path, 'utf8')).not.toContain('EXAMPLE_SESSION');
+    } finally { clock.mockRestore(); piMocks.oauth = undefined; piMocks.provider = 'anthropic'; await rm(home, { recursive: true, force: true }); }
+  });
+
   it('detects only parseable credentials, exposes metadata and rereads by reference', async () => {
     const { LocalCredentialRegistry } = await import('#/app/auth/localCredentials');
     const home = await mkdtemp(join(tmpdir(), 'local-credential-test-'));
@@ -2478,13 +2581,13 @@ describe('Local CLI credential discovery', () => {
       expect(await registry.detect()).toEqual([]);
       await writeFile(path, JSON.stringify({ access_token: 'EXAMPLE_ACCESS_TOKEN', expires_at: Date.now() / 1000 + 3600 }));
       const entries = await registry.detect();
-      expect(entries).toEqual([expect.objectContaining({ id: 'kimi-cli', provider: 'kimi', name: 'Kimi CLI' })]);
+      expect(entries).toEqual([expect.objectContaining({ id: 'kimi-cli', provider: 'kimi-coding', name: 'Kimi CLI' })]);
       expect(JSON.stringify(entries)).not.toContain('EXAMPLE_ACCESS_TOKEN');
       const before = await readFile(path, 'utf8');
-      expect(await registry.resolve('kimi-cli')).toEqual({ apiKey: 'EXAMPLE_ACCESS_TOKEN' });
+      expect(await registry.resolve('kimi-cli')).toEqual({ apiKey: 'EXAMPLE_ACCESS_TOKEN', baseUrl: 'https://api.kimi.com/coding' });
       expect(await readFile(path, 'utf8')).toBe(before);
       await writeFile(path, JSON.stringify({ access_token: 'EXAMPLE_NEW_TOKEN', expires_at: Date.now() / 1000 + 3600 }));
-      expect(await registry.resolve('kimi-cli')).toEqual({ apiKey: 'EXAMPLE_NEW_TOKEN' });
+      expect(await registry.resolve('kimi-cli')).toEqual({ apiKey: 'EXAMPLE_NEW_TOKEN', baseUrl: 'https://api.kimi.com/coding' });
       await rm(path);
       expect(await registry.resolve('kimi-cli')).toBeUndefined();
       expect(await registry.detect()).toEqual([]);

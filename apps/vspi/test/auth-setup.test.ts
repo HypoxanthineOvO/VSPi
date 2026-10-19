@@ -29,6 +29,96 @@ function fakeConnection() {
 }
 
 describe("VSPi auth setup", () => {
+  it('verifies a gateway over HTTP before atomically saving providers, models and default', async () => {
+    const { createServer } = await import('node:http');
+    const { saveProviderGateway } = await import('../src/v1/providers/provider-management.js');
+    let authorized = false;
+    const server = createServer((request, response) => {
+      expect(request.url).toBe('/v1/models');
+      expect(request.headers.authorization).toBe('Bearer YOUR_API_KEY');
+      response.writeHead(authorized ? 200 : 401, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ data: [{ id: 'example-model' }] }));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address() as import('node:net').AddressInfo;
+    const sections: Record<string, unknown> = { providers: {}, models: {} };
+    const replaceSections = vi.fn(async ({ sections: next }: { sections: Record<string, unknown> }) => { Object.assign(sections, next); });
+    const klient = { global: { config: { inspect: async (key: string) => ({ userValue: sections[key] }), get: async (key: string) => sections[key], replaceSections } } } as unknown as Klient;
+    const value = { name: 'Example Gateway', baseUrl: `http://127.0.0.1:${address.port}/v1`, protocol: 'openai' as const, apiKey: 'YOUR_API_KEY' };
+    try {
+      await expect(saveProviderGateway(klient, value)).rejects.toThrow('HTTP 401');
+      expect(replaceSections).not.toHaveBeenCalled();
+      authorized = true;
+      await saveProviderGateway(klient, value);
+      expect(replaceSections).toHaveBeenCalledOnce();
+      const providerId = Object.keys(sections.providers as object)[0];
+      expect(sections.defaultModel).toBe(`${providerId}/example-model`);
+      expect(sections.models).toMatchObject({ [`${providerId}/example-model`]: { provider: providerId, model: 'example-model', protocol: 'openai' } });
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  });
+
+  it('isolates search input from letter actions and exits search with Escape', async () => {
+    const { ProviderManagerController } = await import('../src/v1/ui/provider-manager.js');
+    const manager = new ProviderManagerController();
+    manager.setProviders([{ id: 'example', label: 'Example', protocol: 'openai', status: '已配置', detail: '', storedCredential: 'api_key' }]);
+    manager.handleInput('/');
+    for (const letter of ['l', 't', 'e', 'd']) expect(manager.handleInput(letter)).toBeUndefined();
+    expect(manager.state.query).toBe('lted');
+    manager.handleInput('\u001b');
+    expect(manager.state.searching).toBe(false);
+    manager.handleInput('\u001b');
+    expect(manager.state.query).toBe('');
+    expect(manager.handleInput('t')).toMatchObject({ type: 'test', provider: { id: 'example' } });
+    manager.handleInput('d');
+    expect(manager.handleInput('\r')).toMatchObject({ type: 'remove', provider: { id: 'example' } });
+  });
+
+  it('selects the custom row, preserves the busy form and retains values after save failure', async () => {
+    const { ProviderManagerController } = await import('../src/v1/ui/provider-manager.js');
+    const manager = new ProviderManagerController();
+    manager.setProviders([{ id: 'example', label: 'Example', protocol: 'openai', status: '已配置', detail: '' }]);
+    manager.handleInput('\u001b[B'); manager.handleInput('\r');
+    manager.handleInput('Example Gateway'); manager.handleInput('\t'); manager.handleInput('https://gateway.example.test/v1');
+    manager.handleInput('\t'); manager.handleInput('\u001b[C'); manager.handleInput('\t'); manager.handleInput('YOUR_API_KEY');
+    expect(manager.handleInput('\u0013')).toMatchObject({ type: 'save', value: { name: 'Example Gateway', protocol: 'openai_responses' } });
+    const theme = createTheme(detectTerminalCapabilities(), 'Terminal');
+    const text = () => stripAnsi(manager.render(76, 24, theme).join('\n'));
+    expect(text()).toContain('正在测试并保存');
+    expect(manager.handleInput('\u0013')).toBeUndefined();
+    manager.handleInput('\u001b');
+    expect(text()).toContain('Example Gateway');
+    manager.finishSave('HTTP 401');
+    expect(text()).toContain('HTTP 401'); expect(text()).toContain('Example Gateway');
+    expect(text()).not.toContain('YOUR_API_KEY');
+    expect(manager.handleInput('\u0013')).toMatchObject({ type: 'save', value: { apiKey: 'YOUR_API_KEY' } });
+  });
+
+  it('keeps check results process-local, uses the real default and scrolls model details', async () => {
+    const { ProviderManagerController } = await import('../src/v1/ui/provider-manager.js');
+    const manager = new ProviderManagerController();
+    const provider = { id: 'example', label: 'Example', protocol: 'openai', status: '已配置' as const, detail: '', defaultModel: 'example/model-8', models: Array.from({ length: 25 }, (_, index) => `example/model-${index}`) };
+    manager.setProviders([provider]); manager.recordCheck('example', '离线检查：配置完整');
+    manager.handleInput('\t'); for (let i = 0; i < 8; i++) manager.handleInput('\u001b[B');
+    expect(manager.state.modelOffset).toBe(8);
+    manager.setProviders([provider]);
+    const theme = createTheme(detectTerminalCapabilities(), 'Terminal');
+    const text = stripAnsi(manager.render(116, 28, theme).join('\n'));
+    expect(text).toContain('example/model-8'); expect(text).toContain('离线检查');
+    const fresh = new ProviderManagerController(); fresh.setProviders([provider]);
+    expect(stripAnsi(fresh.render(116, 28, theme).join('\n'))).toContain('尚未测试');
+  });
+
+  it('does not replace an existing credential when API key verification fails', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })));
+    const replace = vi.fn();
+    const current = { type: 'anthropic', apiKey: 'EXAMPLE_OLD_KEY', baseUrl: 'https://api.example.test/v1' };
+    const klient = { global: { config: { get: async () => ({ url: '' }), inspect: async () => ({ userValue: { anthropic: current } }), replace }, kosong: { listBuiltinProviders: async () => [] } } } as unknown as Klient;
+    await expect(loginProvider(klient, 'anthropic', 'api_key', { prompt: async () => 'EXAMPLE_NEW_KEY', notify: vi.fn() })).rejects.toThrow('HTTP 401');
+    expect(replace).not.toHaveBeenCalled(); expect(current.apiKey).toBe('EXAMPLE_OLD_KEY');
+  });
+
   it.each([76, 116])('renders the shared provider manager within %s columns', async width => {
     const { renderProviderManager } = await import('../src/v1/ui/provider-manager.js');
     const theme = createTheme(detectTerminalCapabilities(), 'Terminal');
@@ -94,17 +184,17 @@ describe("VSPi auth setup", () => {
 			expect(saved).toEqual({ domain: 'proxy', patch: { url } });
 			return { status: 'authenticated' };
 		});
-		const klient = { global: { config: { set, get: async () => undefined }, auth: { startLogin } } } as unknown as Klient;
+		const klient = { global: { config: { set, get: async () => undefined }, auth: { startLogin, listLocalCredentials: async () => [] } } } as unknown as Klient;
 		const prompt = vi.fn().mockResolvedValueOnce(input);
 		await loginProvider(klient, 'openai-codex', 'oauth', { prompt, notify: vi.fn() });
 		expect(prompt).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: 'text', message: '请输入代理地址', skip: { label: '跳过', value: '' } }));
-		expect(startLogin).toHaveBeenCalledWith('openai-codex');
+		expect(startLogin).toHaveBeenCalledWith('openai-codex', { source: 'browser' });
 	});
 
 	it.each(['0', '65536', '7890; command', 'http://example.test:0', 'socks5://example.test:1080', 'https://user:password@example.test:3128', 'example.test/path', 'example.test?key=value', 'example.test#fragment'])('rejects invalid OAuth proxy %s before any login or config write', async input => {
 		const set = vi.fn();
 		const startLogin = vi.fn();
-		const klient = { global: { config: { set, get: async () => undefined }, auth: { startLogin } } } as unknown as Klient;
+		const klient = { global: { config: { set, get: async () => undefined }, auth: { startLogin, listLocalCredentials: async () => [] } } } as unknown as Klient;
 		await expect(loginProvider(klient, 'openai-codex', 'oauth', {
 			prompt: vi.fn().mockResolvedValueOnce(input), notify: vi.fn(),
 		})).rejects.toThrow('代理地址');
@@ -115,7 +205,7 @@ describe("VSPi auth setup", () => {
 	it('lets invalid proxy input be corrected in place before saving', async () => {
 		const set = vi.fn(async () => {});
 		const startLogin = vi.fn(async () => ({ status: 'authenticated' }));
-		const klient = { global: { config: { set, get: async () => undefined }, auth: { startLogin } } } as unknown as Klient;
+		const klient = { global: { config: { set, get: async () => undefined }, auth: { startLogin, listLocalCredentials: async () => [] } } } as unknown as Klient;
 		const dialog = new AuthDialog('OpenAI OAuth', vi.fn(), vi.fn());
 		const login = configureProxy(klient, dialog);
 		dialog.handleInput('65536');
@@ -133,7 +223,7 @@ describe("VSPi auth setup", () => {
 	it.each(['tab', 'down'])('skips proxy setup explicitly with %s instead of treating an empty Enter as skipping', async mode => {
 		const set = vi.fn(async () => {});
 		const startLogin = vi.fn(async () => ({ status: 'authenticated' }));
-		const klient = { global: { config: { set, get: async () => undefined }, auth: { startLogin } } } as unknown as Klient;
+		const klient = { global: { config: { set, get: async () => undefined }, auth: { startLogin, listLocalCredentials: async () => [] } } } as unknown as Klient;
 		const dialog = new AuthDialog('OpenAI OAuth', vi.fn(), vi.fn());
 		const login = configureProxy(klient, dialog);
 		dialog.handleInput('\r');
@@ -148,7 +238,7 @@ describe("VSPi auth setup", () => {
 	it.each(['escape', 'button', 'ctrl-c'])('cancels proxy entry with %s without saving or starting OAuth', async mode => {
 		const set = vi.fn();
 		const startLogin = vi.fn();
-		const klient = { global: { config: { set, get: async () => undefined }, auth: { startLogin } } } as unknown as Klient;
+		const klient = { global: { config: { set, get: async () => undefined }, auth: { startLogin, listLocalCredentials: async () => [] } } } as unknown as Klient;
 		const dialog = new AuthDialog('OpenAI OAuth', vi.fn(), vi.fn());
 		const login = configureProxy(klient, dialog);
 		dialog.handleInput('proxy.example.com:7890');
@@ -212,17 +302,18 @@ describe("VSPi auth setup", () => {
 	it('uses the same proxy setup for an OAuth login inside the main TUI', async () => {
 		const set = vi.fn(async () => {});
 		const startLogin = vi.fn(async () => ({ status: 'authenticated' }));
-		const connection = { klient: { global: { config: { set, get: async () => undefined }, auth: { startLogin } } } } as unknown as RuntimeConnection;
+		const connection = { klient: { global: { config: { set, get: async () => undefined }, auth: { startLogin, listLocalCredentials: async () => [] } } } } as unknown as RuntimeConnection;
 		const backend = new KlientChatBackend(connection, '/project', 'new');
 		await backend.loginProvider('anthropic', 'oauth', { prompt: async () => 'proxy.example.com:3128', notify: vi.fn() });
 		expect(set).toHaveBeenCalledWith({ domain: 'proxy', patch: { url: 'http://proxy.example.com:3128' } });
-		expect(startLogin).toHaveBeenCalledWith('anthropic');
+		expect(startLogin).toHaveBeenCalledWith('anthropic', { source: 'browser' });
 	});
 
 	it('configures the shared proxy before requesting a Gemini API key', async () => {
 		let configured = false;
 		const configureBuiltinProvider = vi.fn(async () => {});
-		const klient = { global: { config: { get: async () => undefined, set: async () => { configured = true; }, inspect: async () => ({ userValue: {} }) }, kosong: { configureBuiltinProvider } } } as unknown as Klient;
+		vi.stubGlobal('fetch', vi.fn(async () => Response.json({ models: [{ name: 'models/example' }] })));
+		const klient = { global: { config: { get: async () => undefined, set: async () => { configured = true; }, inspect: async () => ({ userValue: {} }) }, kosong: { configureBuiltinProvider, listBuiltinProviders: async () => [{ id: 'google', type: 'google-genai', base_url: 'https://generativelanguage.googleapis.com/v1beta' }] } } } as unknown as Klient;
 		await loginProvider(klient, 'google', 'api_key', { notify: vi.fn(), prompt: async prompt => {
 			if (prompt.type === 'secret') { expect(configured).toBe(true); return 'YOUR_API_KEY'; }
 			return 'proxy.example.com:3128';
@@ -232,15 +323,16 @@ describe("VSPi auth setup", () => {
 
   it.each(['dialog', 'backend'])('replaces an environment credential with an inline key through %s', async entry => {
     const replace = vi.fn(async () => {});
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ data: [{ id: 'example' }] })));
     const klient = { global: { config: {
       get: async () => ({ url: '' }),
       inspect: async () => ({ userValue: { anthropic: { type: 'anthropic', apiKeyEnv: 'EXAMPLE_API_KEY' } } }),
       replace,
-    } } } as unknown as Klient;
+    }, kosong: { listBuiltinProviders: async () => [{ id: 'anthropic', type: 'anthropic', base_url: 'https://api.anthropic.com' }] } } } as unknown as Klient;
     const interaction = { prompt: async () => 'YOUR_API_KEY', notify: vi.fn() };
     if (entry === 'dialog') await loginProvider(klient, 'anthropic', 'api_key', interaction);
     else await new KlientChatBackend({ klient } as RuntimeConnection, '/project', 'new').loginProvider('anthropic', 'api_key', interaction);
-    expect(replace).toHaveBeenCalledWith({ domain: 'providers', value: { anthropic: { type: 'anthropic', apiKey: 'YOUR_API_KEY', apiKeyEnv: undefined, oauth: undefined } } });
+    expect(replace).toHaveBeenCalledWith({ domain: 'providers', value: { anthropic: { type: 'anthropic', apiKey: 'YOUR_API_KEY', apiKeyEnv: undefined, oauth: undefined, source: undefined } } });
   });
 
   it.each([true, false])('lists and removes an environment credential in logout setup when its value is present=%s', async hasApiKey => {
@@ -249,12 +341,12 @@ describe("VSPi auth setup", () => {
     const logout = vi.fn(async () => {});
     const config = { anthropic: { type: 'anthropic', apiKeyEnv: 'EXAMPLE_API_KEY', baseUrl: 'https://api.example.test' } };
     const klient = { global: {
-      config: { inspect: async () => ({ userValue: config }), replace },
+      config: { get: async () => undefined, inspect: async () => ({ userValue: config }), replace },
       kosong: {
         listProviders: async () => [{ id: 'anthropic', type: 'anthropic', has_api_key: hasApiKey, status: hasApiKey ? 'connected' : 'unconfigured', models: [] }],
-        listBuiltinProviders: async () => [],
+        listModels: async () => [], listBuiltinProviders: async () => [],
       },
-      auth: { listLoginProviders: async () => [{ id: 'anthropic' }], logout },
+      auth: { listLocalCredentials: async () => [], listLoginProviders: async () => [{ id: 'anthropic' }], logout },
     } } as unknown as Klient;
     const finish = vi.fn();
     const app = new AuthSetupApp(new TuiMainScreen(new VirtualTerminal(80, 24)), createTheme(detectTerminalCapabilities(), 'Terminal'), klient, 'logout', finish, true);
@@ -265,7 +357,7 @@ describe("VSPi auth setup", () => {
       expect(menu).toContain('API Key');
       expect(menu).not.toContain('订阅账号');
       await app.startInitial('anthropic');
-      expect(replace).toHaveBeenCalledWith({ domain: 'providers', value: { anthropic: { type: 'anthropic', baseUrl: 'https://api.example.test' } } });
+      expect(replace).toHaveBeenCalledWith({ domain: 'providers', value: { anthropic: { type: 'anthropic', baseUrl: 'https://api.example.test', apiKey: undefined, apiKeyEnv: undefined } } });
       expect(logout).not.toHaveBeenCalled();
       expect(finish).toHaveBeenCalledOnce();
       expect(process.env.EXAMPLE_API_KEY).toBe('YOUR_API_KEY');
@@ -274,18 +366,18 @@ describe("VSPi auth setup", () => {
 
 	it('offers Devin as an account-only provider', async () => {
 		const klient = { global: {
-			config: { inspect: async () => ({ userValue: {} }) },
+			config: { get: async () => undefined, inspect: async () => ({ userValue: {} }) },
 			kosong: {
 				listProviders: async () => [],
-				listBuiltinProviders: async () => [{ id: 'devin', type: 'devin', has_api_key: false, status: 'unconfigured', models: [] }],
+				listModels: async () => [], listBuiltinProviders: async () => [{ id: 'devin', type: 'devin', has_api_key: false, status: 'unconfigured', models: [] }],
 			},
-			auth: { listLoginProviders: async () => [{ id: 'devin', name: 'Devin' }] },
+			auth: { listLocalCredentials: async () => [], listLoginProviders: async () => [{ id: 'devin', name: 'Devin' }] },
 		} } as unknown as Klient;
 		const app = new AuthSetupApp(new TuiMainScreen(new VirtualTerminal(80, 24)), createTheme(detectTerminalCapabilities(), 'Terminal'), klient, 'login', vi.fn(), true);
 		await app.load();
 		const menu = stripAnsi(app.render(80).join('\n'));
 		expect(menu).toContain('Devin');
-		expect(menu).toContain('订阅账号');
+		expect(menu).toContain('L登录');
 		expect(menu).not.toContain('API Key');
 		const backend = new KlientChatBackend({ klient } as RuntimeConnection, '/project', 'new');
 		const options = await backend.getProviderOptions();
@@ -294,16 +386,16 @@ describe("VSPi auth setup", () => {
 
 	it('groups configured and addable providers by section with readable names', async () => {
 		const klient = { global: {
-			config: { inspect: async () => ({ userValue: { anthropic: { type: 'anthropic', apiKey: 'YOUR_API_KEY' } } }) },
+			config: { get: async () => undefined, inspect: async () => ({ userValue: { anthropic: { type: 'anthropic', apiKey: 'YOUR_API_KEY' } } }) },
 			kosong: {
 				listProviders: async () => [
 					{ id: 'anthropic', type: 'anthropic', has_api_key: true, status: 'connected', models: [] },
 					{ id: 'deepseek', type: 'deepseek', has_api_key: false, status: 'unconfigured', models: [] },
 					{ id: 'managed:internal', type: 'managed', has_api_key: false, status: 'unconfigured', models: [] },
 				],
-				listBuiltinProviders: async () => [],
+				listModels: async () => [], listBuiltinProviders: async () => [],
 			},
-			auth: { listLoginProviders: async () => [] },
+			auth: { listLocalCredentials: async () => [], listLoginProviders: async () => [] },
 		} } as unknown as Klient;
 		const app = new AuthSetupApp(new TuiMainScreen(new VirtualTerminal(80, 24)), createTheme(detectTerminalCapabilities(), 'Terminal'), klient, 'config', vi.fn(), true);
 		await app.load();
@@ -314,6 +406,7 @@ describe("VSPi auth setup", () => {
 		expect(menu).toContain('DeepSeek');
 		expect(menu).toContain('添加自定义中转站');
 		expect(menu).not.toContain('managed:internal');
+		app.handleInput('/');
 		app.handleInput('deep');
 		expect(stripAnsi(app.render(80).join('\n'))).toContain('DeepSeek');
 		expect(stripAnsi(app.render(80).join('\n'))).not.toContain('Anthropic');
@@ -321,16 +414,16 @@ describe("VSPi auth setup", () => {
 
 	it('moves selection in displayed order, not raw provider order', async () => {
 		const klient = { global: {
-			config: { inspect: async () => ({ userValue: { zeta: { type: 'openai', apiKey: 'YOUR_API_KEY' } } }) },
+			config: { get: async () => undefined, inspect: async () => ({ userValue: { zeta: { type: 'openai', apiKey: 'YOUR_API_KEY' } } }) },
 			kosong: {
 				listProviders: async () => [
 					{ id: 'alpha', type: 'openai', has_api_key: false, status: 'unconfigured', models: [] },
 					{ id: 'beta', type: 'openai', has_api_key: false, status: 'unconfigured', models: [] },
 					{ id: 'zeta', type: 'openai', has_api_key: true, status: 'connected', models: [] },
 				],
-				listBuiltinProviders: async () => [],
+				listModels: async () => [], listBuiltinProviders: async () => [],
 			},
-			auth: { listLoginProviders: async () => [] },
+			auth: { listLocalCredentials: async () => [], listLoginProviders: async () => [] },
 		} } as unknown as Klient;
 		const app = new AuthSetupApp(new TuiMainScreen(new VirtualTerminal(80, 24)), createTheme(detectTerminalCapabilities(), 'Terminal'), klient, 'config', vi.fn(), true);
 		await app.load();
@@ -344,9 +437,9 @@ describe("VSPi auth setup", () => {
 
   it('offers logout for a configured environment reference even when that variable is unset', async () => {
     const klient = { global: {
-      config: { inspect: async () => ({ userValue: { anthropic: { type: 'anthropic', apiKeyEnv: 'EXAMPLE_API_KEY' } } }) },
-      kosong: { listProviders: async () => [{ id: 'anthropic', type: 'anthropic', has_api_key: false, status: 'unconfigured', models: [] }], listBuiltinProviders: async () => [] },
-      auth: { listLoginProviders: async () => [{ id: 'anthropic' }] },
+      config: { get: async () => undefined, inspect: async () => ({ userValue: { anthropic: { type: 'anthropic', apiKeyEnv: 'EXAMPLE_API_KEY' } } }) },
+      kosong: { listProviders: async () => [{ id: 'anthropic', type: 'anthropic', has_api_key: false, status: 'unconfigured', models: [] }], listModels: async () => [], listBuiltinProviders: async () => [] },
+      auth: { listLocalCredentials: async () => [], listLoginProviders: async () => [{ id: 'anthropic' }] },
     } } as unknown as Klient;
     const backend = new KlientChatBackend({ klient } as RuntimeConnection, '/project', 'new');
     expect(await backend.getProviderOptions()).toEqual([expect.objectContaining({ id: 'anthropic', storedCredential: 'api_key' })]);
@@ -397,7 +490,7 @@ describe("VSPi auth setup", () => {
 		expect(prompt).toHaveBeenCalledOnce();
 		expect(set).toHaveBeenCalledWith({ domain: 'proxy', patch: { url: 'http://proxy.example.com:7890' } });
 	});
-	afterEach(() => vi.useRealTimers());
+	afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 	it("rejects non-interactive execution before touching the runtime", async () => {
 		await expect(
 			runAuthSetup({
@@ -543,20 +636,19 @@ describe("VSPi auth setup", () => {
 		await expect(answer).resolves.toBe("model-90");
 	});
 
-	it("uses Core model and effort choices when completing configuration", async () => {
-		const setDefaultModel = vi.fn();
-		const set = vi.fn();
+	it("atomically saves Core model and effort choices while preserving remembered efforts", async () => {
+		const replaceSections = vi.fn();
+		const modelEfforts = { 'other/model': 'low' };
 		const klient = {
 			global: { kosong: { listModels: async () => [{
 				provider: "example", model: "example/model", display_name: "Example Model",
-				thinking: { availability: "always", can_disable: false, controls: ["effort"], efforts: ["low", "high"], default_effort: "high" },
+				thinking: { availability: "dynamic", can_disable: true, controls: ["effort"], efforts: ["low", "high"], default_effort: "high" },
 				support_efforts: ["low", "high"], default_effort: "high",
-			}], listProviders: async () => [{ id: "example", type: "example" }], setDefaultModel }, config: { set } },
+			}], listProviders: async () => [{ id: "example", type: "example" }] }, config: { inspect: async () => ({ userValue: { modelEfforts } }), replaceSections } },
 		} as unknown as Klient;
 		const prompt = vi.fn().mockResolvedValueOnce("example/model").mockResolvedValueOnce("high");
 		await configureDefaultModel(klient, "example", { prompt, notify: vi.fn() });
 		expect(prompt.mock.calls[1]?.[0].options).toEqual([{ id: 'low', label: 'Low · 快速响应，适合简单任务' }, { id: 'high', label: 'High · 深入推理，适合复杂任务' }]);
-		expect(setDefaultModel).toHaveBeenCalledWith("example/model");
-		expect(set).toHaveBeenCalledWith({ domain: "thinking", patch: { enabled: true, effort: "high" } });
+		expect(replaceSections).toHaveBeenCalledExactlyOnceWith({ sections: { defaultModel: 'example/model', thinking: { enabled: true, effort: 'high', modelEfforts: { ...modelEfforts, 'example/model': 'high' } } } });
 	});
 });

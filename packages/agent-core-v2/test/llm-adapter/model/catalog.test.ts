@@ -116,6 +116,31 @@ afterEach(() => {
 });
 
 describe('Model assembly (pure data)', () => {
+  it('atomically provisions a builtin API key, catalog and first default while preserving user models', async () => {
+    const alias = { provider: 'anthropic', model: 'example-model', displayName: 'User alias' };
+    const { host, catalog, config } = createHost({ models: { custom: alias } });
+    try {
+      const commit = vi.spyOn(config, 'replaceSections');
+      await catalog.configureBuiltinProvider('anthropic', 'EXAMPLE_API_KEY');
+      expect(commit).toHaveBeenCalledOnce();
+      expect(config.get<Record<string, ProviderConfig>>('providers')['anthropic']).toMatchObject({ type: 'anthropic', apiKey: 'EXAMPLE_API_KEY', oauth: undefined });
+      expect(config.get<Record<string, ModelRecord>>('models')['custom']).toEqual(alias);
+      expect(config.get<string>('defaultModel')).toMatch(/^anthropic\//);
+    } finally { host.dispose(); }
+  });
+
+  it('leaves provider and model state intact when builtin provisioning cannot commit', async () => {
+    const previous = { anthropic: { type: 'anthropic', apiKey: 'EXAMPLE_OLD_KEY' } };
+    const { host, catalog, config } = createHost({ providers: previous, models: {}, defaultModel: 'example/default' });
+    try {
+      vi.spyOn(config, 'replaceSections').mockRejectedValueOnce(new Error('Atomic write failed'));
+      await expect(catalog.configureBuiltinProvider('anthropic', 'EXAMPLE_NEW_KEY')).rejects.toThrow('Atomic write failed');
+      expect(config.get('providers')).toEqual(previous);
+      expect(config.get('models')).toEqual({});
+      expect(config.get('defaultModel')).toBe('example/default');
+    } finally { host.dispose(); }
+  });
+
   it('assembles a kimi model: protocol resolves to the vendor base, never a vendor', () => {
     const { host, catalog } = createHost(kimiSections);
     try {
@@ -695,6 +720,7 @@ describe('ModelCatalog ping', () => {
         stubModelOAuthTokens(),
         registry,
         { headers: {}, thirdPartyHeaders: {} },
+        new StubConfigService(),
       );
       const result = await catalog.ping('k1');
       expect(result).toMatchObject({ ok: true, text: 'pong', finishReason: 'completed' });

@@ -1,5 +1,5 @@
 import { Input, Key, matchesKey } from "@moonshot-ai/pi-tui";
-import { renderProviderManager } from './provider-manager.js';
+import { ProviderManagerController, type ProviderManagerAction } from './provider-manager.js';
 import type { AgentRunSnapshot, AgentSnapshot } from "../agents/types.js";
 import type {
 	AgentConversationActivity,
@@ -124,19 +124,7 @@ export type PanelEvent =
 	| { type: "modelPin"; pinned: string[] }
 	| { type: "subagentModel"; edit: SubagentModelEdit }
 	| { type: "modelGroup"; group: ModelGroup }
-	| { type: "provider"; provider: ProviderOption }
-	| { type: "providerActions"; provider: ProviderOption; actions: string[] }
-	| {
-			type: "providerAction";
-			provider: ProviderOption;
-			action: string;
-			costConfirmed?: boolean;
-	  }
-	| {
-			type: "providerSave";
-			provider: ProviderOption;
-			value: { name: string; baseUrl: string; protocol: string };
-	  }
+	| { type: 'providerManager'; action: ProviderManagerAction }
 	| { type: "session"; session: SessionOption }
 	| { type: "fork"; session: SessionOption }
 	| { type: "externalImport"; session: ExternalSessionSummary }
@@ -693,23 +681,12 @@ export class PanelController {
 	private skillAddMode: "source" | "agent" = "source";
 	private skillAddText = "";
 	private skillScope: SkillScope = "user";
-	private providerQuery = '';
-	private providerSearching = false;
-	private providerDetail = false;
-	private providerModelFocus = false;
-	private providerModelOffset = 0;
+	private readonly providerManager = new ProviderManagerController();
+
+	finishProviderSave(error?: string): void { this.providerManager.finishSave(error); }
+	recordProviderCheck(id: string, diagnostic: string): void { this.providerManager.recordCheck(id, diagnostic); }
+
 	private allProviders: ProviderOption[] = [];
-	private providerEditing = false;
-	private providerActionMenu = false;
-	private activeProviderId: string | undefined;
-	private providerCostConfirmation = false;
-	private providerActions: string[] = [];
-	private providerField = 0;
-	private providerDraft = {
-		label: "",
-		baseUrl: "https://",
-		protocol: "OpenAI compatible",
-	};
 	private planItems: PlanItem[] = [];
 	private planSnapshot: StoredPlan | undefined;
 	private goalSnapshot: StoredGoal | undefined;
@@ -1106,9 +1083,8 @@ export class PanelController {
 			(left, right) => Number(right.status !== '未配置') - Number(left.status !== '未配置') ||
 				providerPriorityIndex(left.id) - providerPriorityIndex(right.id) || left.label.localeCompare(right.label),
 		);
-		this.providers = this.allProviders.filter(provider => `${provider.label} ${provider.id}`.toLowerCase().includes(this.providerQuery.toLowerCase()));
-		this.providerActionMenu = false;
-		this.providerEditing = false;
+		this.providers = [...this.allProviders];
+		this.providerManager.setProviders(this.providers);
 		clampSelection(this.state, this.providers.length);
 	}
 
@@ -1118,6 +1094,7 @@ export class PanelController {
 		);
 		if (index < 0) return undefined;
 		this.state.selected = index;
+		this.providerManager.selectProvider(providerId);
 		return this.providers[index];
 	}
 
@@ -1340,6 +1317,7 @@ export class PanelController {
 	}
 
 	handleInput(data: string): PanelEvent | undefined {
+		if (this.kind === 'providers') return this.handleProviders(data);
 		if (this.kind === "subagentModels") {
 			const result = this.subagentModelsPanel.handleInput(data);
 			if (result === "close") { this.close(); return { type: "close" }; }
@@ -1379,23 +1357,6 @@ export class PanelController {
 				this.promptImportPath = "";
 				return;
 			}
-			if (this.kind === 'providers' && (this.providerSearching || this.providerDetail || this.providerModelFocus)) {
-				this.providerSearching = false; this.providerDetail = false; this.providerModelFocus = false;
-				return;
-			}
-			if (this.providerEditing) {
-				this.providerEditing = false;
-				return;
-			}
-			if (this.providerActionMenu) {
-				this.providerActionMenu = false;
-				this.providerCostConfirmation = false;
-				this.state.selected = Math.max(
-					0,
-					this.providers.findIndex((item) => item.id === this.activeProviderId),
-				);
-				return;
-			}
 			if (this.kind === "settings") this.restoreSettingsDraft();
 			if (this.kind !== "plan") {
 				this.close();
@@ -1431,7 +1392,6 @@ export class PanelController {
 		if (this.kind === "commands")
 			return this.handleCommands(data, interaction.handler);
 		if (this.kind === "models") return this.handleModels(data);
-		if (this.kind === "providers") return this.handleProviders(data);
 		if (this.kind === "sessions")
 			return this.handleSessions(data, interaction.handler);
 		if (this.kind === "externalImport")
@@ -1685,12 +1645,8 @@ export class PanelController {
 					: this.modelGroups.length;
 			if (total > 0)
 				footer = `${Math.min(this.state.selected + 1, total)} / ${total}`;
-		} else if (this.kind === "providers" && !this.providerEditing) {
-			const total = this.providerActionMenu
-				? this.providerActions.length
-				: this.providers.length;
-			if (total > 0)
-				footer = `${Math.min(this.state.selected + 1, total)} / ${total}`;
+		} else if (this.kind === 'providers') {
+			footer = '';
 		}
 		if (questionFooterGap) body.push("");
 		return frame(body, width, theme, {
@@ -1756,7 +1712,7 @@ export class PanelController {
 
 	renderHint(width: number, theme: VspiTheme): string {
 		this.lastBodyWidth = Math.max(1, width - 2);
-		if (this.kind === 'providers' && !this.providerActionMenu && !this.providerEditing) return '';
+		if (this.kind === 'providers') return '';
 		if (this.kind === "subagentModels") return theme.muted(padLine(this.subagentModelsPanel.hint(), width));
 		const hint = renderInteractionHint(
 			"panel",
@@ -1893,18 +1849,6 @@ export class PanelController {
 			if (selected)
 				state.commandAvailable =
 					getActionDefinition(selected.command)?.availability !== "disabled";
-		} else if (this.kind === "providers") {
-			state.providerEditing = this.providerEditing;
-			state.providerActionMenu = this.providerActionMenu;
-			if (this.providerEditing) {
-				state.providerField =
-					this.providerField === 0 ? 0 : this.providerField === 1 ? 1 : 2;
-				const text =
-					this.providerField === 0
-						? this.providerDraft.label
-						: this.providerDraft.baseUrl;
-				state.providerTextPresent = this.providerField !== 2 && text.length > 0;
-			}
 		} else if (this.kind === "policy") {
 			state.policyYolo = false;
 		} else if (this.kind === "question") {
@@ -2017,158 +1961,9 @@ export class PanelController {
 	}
 
 	private handleProviders(data: string): PanelEvent | undefined {
-		if (!this.providerEditing && !this.providerActionMenu) {
-			if (!this.providerSearching && this.lastBodyWidth < 96 && matchesKey(data, Key.enter)) { this.providerDetail = true; return; }
-			if (data === '/') { this.providerSearching = true; return; }
-			if (this.providerSearching) {
-				if (matchesKey(data, Key.enter)) { this.providerSearching = false; return; }
-				this.providerQuery = this.editSharedTextField('provider-search', this.providerQuery, data, 200);
-				this.providers = this.allProviders.filter(provider => `${provider.label} ${provider.id}`.toLowerCase().includes(this.providerQuery.toLowerCase()));
-				this.state.selected = 0;
-				return;
-			}
-			if (matchesKey(data, Key.tab)) { this.providerModelFocus = !this.providerModelFocus; return; }
-			if (this.providerModelFocus && (matchesKey(data, Key.up) || matchesKey(data, Key.down))) {
-				this.providerModelOffset = Math.max(0, Math.min((this.providers[this.state.selected]?.models?.length ?? 1) - 1, this.providerModelOffset + (matchesKey(data, Key.up) ? -1 : 1)));
-				return;
-			}
-			const provider = this.providers[this.state.selected];
-			if (provider && /^[lLtTdDeE]$/.test(data)) {
-				this.activeProviderId = provider.id;
-				this.providerDraft = { label: provider.label, baseUrl: provider.baseUrl ?? 'https://', protocol: provider.protocol };
-				if (data.toLowerCase() === 'e') {
-					this.providerEditing = true; this.providerField = 0; this.state.selected = 0; return;
-				}
-				this.providerActions = data.toLowerCase() === 't' ? ['check-config', 'test-connection', 'minimal-generation']
-					: data.toLowerCase() === 'd' ? provider.storedCredential ? ['logout'] : []
-					: (provider.authMethods ?? []).map(method => `login:${method.type}`);
-				this.providerActionMenu = true;
-				this.state.selected = 0;
-				return { type: 'providerActions', provider, actions: [...this.providerActions] };
-			}
-		}
-		if (this.providerEditing) {
-			if (this.move(data, 3)) {
-				this.providerField = this.state.selected;
-				return;
-			}
-			if (
-				this.providerField === 2 &&
-				(matchesKey(data, Key.left) || matchesKey(data, Key.right))
-			) {
-				this.providerDraft.protocol =
-					this.providerDraft.protocol === "Responses"
-						? "OpenAI compatible"
-						: "Responses";
-				return;
-			}
-			const key =
-				this.providerField === 0
-					? "label"
-					: this.providerField === 1
-						? "baseUrl"
-						: undefined;
-			if (key) {
-				this.providerDraft[key] = this.editSharedTextField(
-					`provider-${key}`,
-					this.providerDraft[key],
-					data,
-					2_000,
-				);
-			}
-			if (matchesKey(data, Key.ctrl("s"))) {
-				const provider = this.providers.find(
-					(item) => item.id === this.activeProviderId,
-				);
-				if (!provider)
-					return {
-						type: "notice",
-						text: "Provider identity 已失效，拒绝保存",
-						tone: "error",
-					};
-				this.providerEditing = false;
-				return {
-					type: "providerSave",
-					provider,
-					value: {
-						name: this.providerDraft.label || provider.label,
-						baseUrl: this.providerDraft.baseUrl,
-						protocol: this.providerDraft.protocol,
-					},
-				};
-			}
-			return;
-		}
-		if (this.providerActionMenu) {
-			if (this.move(data, this.providerActions.length)) {
-				this.providerCostConfirmation = false;
-				return;
-			}
-			if (!matchesKey(data, Key.enter)) return;
-			const provider = this.providers.find(
-				(item) => item.id === this.activeProviderId,
-			);
-			const action = this.providerActions[this.state.selected];
-			if (!provider || !action) {
-				this.providerActionMenu = false;
-				return {
-					type: "notice",
-					text: "Provider identity 已失效，操作已取消",
-					tone: "error",
-				};
-			}
-			if (action === "minimal-generation" && !this.providerCostConfirmation) {
-				this.providerCostConfirmation = true;
-				return {
-					type: "notice",
-					text: "最小生成可能产生费用；再次按 Enter 确认",
-					tone: "warning",
-				};
-			}
-			if (action === "edit") {
-				this.providerEditing = true;
-				this.providerActionMenu = false;
-				this.providerField = 0;
-				this.state.selected = 0;
-			}
-			const costConfirmed =
-				action === "minimal-generation" && this.providerCostConfirmation;
-			this.providerCostConfirmation = false;
-			return {
-				type: "providerAction",
-				provider,
-				action,
-				...(costConfirmed ? { costConfirmed } : {}),
-			};
-		}
-		if (this.move(data, this.providers.length)) return;
-		if (matchesKey(data, Key.enter)) {
-			const provider = this.providers[this.state.selected];
-			if (!provider) return;
-			this.activeProviderId = provider.id;
-			this.providerDraft = {
-				label: provider.label,
-				baseUrl: provider.baseUrl ?? "https://",
-				protocol: provider.protocol,
-			};
-			this.providerActions = [
-				...(provider.authMethods ?? []).map((method) => `login:${method.type}`),
-				...(provider.storedCredential ? ["logout"] : []),
-				"edit",
-				"check-config",
-				"test-connection",
-				"minimal-generation",
-			];
-			this.providerActionMenu = true;
-			this.providerCostConfirmation = false;
-			this.state.selected = 0;
-			return {
-				type: "providerActions",
-				provider,
-				actions: [...this.providerActions],
-			};
-		}
-		return undefined;
+		const action = this.providerManager.handleInput(data);
+		if (action?.type === 'close') { this.close(); return { type: 'close' }; }
+		return action ? { type: 'providerManager', action } : undefined;
 	}
 
 	private handleSessions(
@@ -3247,57 +3042,7 @@ export class PanelController {
 		bodyRows: number,
 		theme: VspiTheme,
 	): string[] {
-		if (this.providerEditing) {
-			const fields = [
-				["名称", this.providerDraft.label || "自定义 Provider"],
-				["Base URL", this.providerDraft.baseUrl],
-				["协议", this.providerDraft.protocol],
-			];
-			return fields.map(([label, value], index) =>
-				selectedLine(
-					`${theme.muted(`${label}  `)}${value}`,
-					index === this.providerField,
-					width,
-					theme,
-				),
-			);
-		}
-		if (this.providerActionMenu) {
-			const provider =
-				this.providers.find((item) => item.id === this.activeProviderId) ??
-				this.providers[this.state.selected];
-			const labels: Record<string, string> = {
-				"login:oauth": "登录订阅账号",
-				"login:api_key": "配置 API Key",
-				logout: "移除已保存的凭据",
-				edit: "编辑本地配置",
-				"check-config": "检查配置（离线）",
-				"test-connection": "测试连接（网络）",
-				"minimal-generation": "最小生成（需费用确认）",
-			};
-			return [
-				provider
-					? `  ${theme.bold(provider.label)}  ${theme.muted(provider.protocol)}`
-					: "",
-				"",
-				...this.providerActions.map((action, index) =>
-					selectedLine(
-						action === "minimal-generation" && this.providerCostConfirmation
-							? "再次 Enter 确认最小生成费用"
-							: (labels[action] ?? action),
-						index === this.state.selected,
-						width,
-						theme,
-					),
-				),
-			];
-		}
-		if (this.providers.length === 0)
-			return [theme.muted(padLine("没有可用 Provider", width))];
-		return renderProviderManager(this.providers, {
-			selected: this.state.selected, query: this.providerQuery, searching: this.providerSearching, detail: this.providerDetail,
-			modelFocus: this.providerModelFocus, modelOffset: this.providerModelOffset,
-		}, width, bodyRows, theme);
+		return this.providerManager.render(width, bodyRows, theme);
 	}
 
 	private renderSessions(width: number, theme: VspiTheme): string[] {

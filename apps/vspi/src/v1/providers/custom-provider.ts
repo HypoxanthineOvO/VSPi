@@ -35,20 +35,7 @@ export async function discoverProviderModels(
 	options: { fetch?: typeof fetch } = {},
 ): Promise<DiscoveredModel[]> {
 	try {
-		const endpoint = modelListEndpoint(baseUrl);
-		const response = await (options.fetch ?? fetch)(endpoint, {
-			headers: discoveryHeaders(protocol, apiKey),
-			redirect: "error",
-			signal: AbortSignal.timeout(5_000),
-		});
-		if (!response.ok) throw new Error(`模型列表请求失败（HTTP ${response.status}）`);
-		const body = (await response.json()) as unknown;
-		const models = modelEntries(body)
-			.map(modelFromEntry)
-			.filter((model): model is DiscoveredModel => model !== undefined)
-			.slice(0, 200);
-		if (models.length === 0) throw new Error("接口没有返回可识别的模型 ID");
-		return models;
+		return await fetchProviderModels(baseUrl, protocol, apiKey, options.fetch);
 	} catch (error) {
 		interaction.notify({
 			type: "info",
@@ -62,6 +49,14 @@ export async function discoverProviderModels(
 		});
 		return modelsFromManualInput(manual);
 	}
+}
+
+export async function fetchProviderModels(baseUrl: string, protocol: CustomProviderProtocol, apiKey: string, fetchImpl: typeof fetch = fetch): Promise<DiscoveredModel[]> {
+  const response = await fetchImpl(modelListEndpoint(baseUrl), { headers: discoveryHeaders(protocol, apiKey), redirect: 'error', signal: AbortSignal.timeout(5_000) });
+  if (!response.ok) throw new Error(`模型列表请求失败（HTTP ${response.status}）`);
+  const models = modelEntries(await response.json()).map(modelFromEntry).filter((model): model is DiscoveredModel => model !== undefined).slice(0, 200);
+  if (!models.length) throw new Error('接口没有返回可识别的模型 ID');
+  return models;
 }
 
 export function modelsFromManualInput(value: string): DiscoveredModel[] {

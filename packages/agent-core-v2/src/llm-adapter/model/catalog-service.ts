@@ -11,6 +11,7 @@ import {
 } from '@moonshot-ai/kimi-code-oauth/provider-credential';
 
 import { Disposable } from '#/_base/di/lifecycle';
+import { IConfigService } from '#/app/config/config';
 import { LifecycleScope } from '#/app/scopes';
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
 import { Error2 } from '#/_base/errors/errors';
@@ -86,6 +87,7 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
     @IProtocolAdapterRegistry
     private readonly protocolRegistry: IProtocolAdapterRegistry,
     @IHostRequestHeaders private readonly hostRequestHeaders: IHostRequestHeaders,
+    @IConfigService private readonly config: IConfigService,
   ) {
     super();
     this._register(
@@ -266,21 +268,21 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
       );
     }
     const previous = this.providers.get(providerId);
-    await this.providers.set(providerId, {
-      ...previous,
-      type: previous?.type ?? (providerId === 'vsplab' ? registration.protocol : providerId),
-      baseUrl: previous?.baseUrl ?? registration.baseUrl,
-      apiKey,
-      apiKeyEnv: undefined,
-      oauth: undefined,
-    });
-    if (piBuiltin === undefined) return;
-    const current = this.models.list();
-    await this.models.replaceAll({ ...listPiModelRecords(providerId), ...current });
-    if (this.models.getDefaultModel() === undefined) {
-      const first = piBuiltin.models[0];
-      if (first !== undefined) await this.models.setDefaultModel(`${providerId}/${first.id}`);
-    }
+    const previousProviders = this.config.inspect<Record<string, unknown>>('providers').userValue;
+    const previousModels = this.config.inspect<Record<string, ModelRecord>>('models').userValue;
+    const previousDefault = this.config.inspect<string>('defaultModel').userValue;
+    const records = piBuiltin === undefined ? {} : listPiModelRecords(providerId);
+    await this.config.replaceSections({
+      providers: { ...previousProviders, [providerId]: {
+        ...previous,
+        type: previous?.type ?? (providerId === 'vsplab' ? registration.protocol : providerId),
+        baseUrl: previous?.baseUrl ?? registration.baseUrl,
+        apiKey, apiKeyEnv: undefined, oauth: undefined,
+        source: { ...previous?.source, credential: undefined },
+      } },
+      models: { ...records, ...previousModels },
+      defaultModel: this.models.getDefaultModel() ?? Object.keys(records)[0],
+    }, undefined, { expectedValues: { providers: previousProviders, models: previousModels, defaultModel: previousDefault } });
   }
 
   async listProviders(): Promise<readonly ProviderCatalogItem[]> {

@@ -964,7 +964,14 @@ export function defineKlientConformance(
       const status = await target.klient.global.auth.status();
       expect(typeof status.loggedIn).toBe('boolean');
       expect((await target.klient.global.auth.listLoginProviders()).map((provider) => provider.id))
-        .toEqual(expect.arrayContaining(['managed:kimi-code', 'anthropic', 'openai-codex', 'github-copilot']));
+        .toEqual(expect.arrayContaining(['managed:kimi-code', 'anthropic', 'openai-codex', 'github-copilot', 'devin']));
+      const localCredentials = await target.klient.global.auth.listLocalCredentials();
+      expect(Array.isArray(localCredentials)).toBe(true);
+      for (const entry of localCredentials) {
+        expect(typeof entry.id).toBe('string');
+        expect(Object.keys(entry).every(key => ['id', 'provider', 'name', 'account', 'expiresAt'].includes(key))).toBe(true);
+      }
+      await expect(target.klient.global.auth.useLocalCredential('nonexistent-example-cli')).rejects.toThrow();
       await expect(target.klient.global.auth.submitLogin('anthropic', 'stale-flow', 'stale-prompt', 'example-code'))
         .rejects.toThrow();
     });

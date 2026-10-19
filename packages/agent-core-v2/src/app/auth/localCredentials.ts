@@ -5,6 +5,7 @@ import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import type { OAuthCredential } from '@earendil-works/pi-ai';
 import type { ProviderRequestAuth } from '#/llm-adapter/contract/provider';
 import { readCodexCredential } from './codexCredential';
+import { readDevinCredential } from './devinCredential';
 
 export interface LocalCredentialInfo {
   readonly id: string;
@@ -36,6 +37,9 @@ export function registerLocalCredentialDetector(detector: LocalCredentialDetecto
 }
 
 export class LocalCredentialRegistry {
+  private copilotCache?: { token: string; expires: number; auth: ProviderRequestAuth };
+  private copilotPending?: { token: string; promise: Promise<ProviderRequestAuth | undefined> };
+
   constructor(private readonly context: LocalCredentialContext = { home: homedir(), env: process.env }) {}
 
   async detect(): Promise<readonly LocalCredentialInfo[]> {
@@ -51,7 +55,24 @@ export class LocalCredentialRegistry {
   async resolve(id: string, provider?: string): Promise<ProviderRequestAuth | undefined> {
     const detector = this.detectors().find(item => item.id === id && (provider === undefined || item.provider === provider));
     if (!detector) return undefined;
-    try { return await detector.resolve(this.context); } catch { return undefined; }
+    try {
+      if (id !== 'github-copilot-cli') return await detector.resolve(this.context);
+      const credential = await copilot(this.context);
+      if (!credential) { this.copilotCache = undefined; return undefined; }
+      if (this.copilotCache?.token === credential.refresh && this.copilotCache.expires > Date.now() + 60_000) return this.copilotCache.auth;
+      if (this.copilotPending?.token === credential.refresh) return await this.copilotPending.promise;
+      const promise = (async () => {
+        const oauth = builtinProviders().find(item => item.id === 'github-copilot')?.auth.oauth;
+        if (!oauth) return undefined;
+        const refreshed = await oauth.refresh(credential, AbortSignal.timeout(10_000));
+        const auth = await piAuth('github-copilot', refreshed);
+        if (auth) this.copilotCache = { token: credential.refresh, expires: refreshed.expires, auth };
+        return auth;
+      })();
+      const pending = { token: credential.refresh, promise };
+      this.copilotPending = pending;
+      try { return await promise; } finally { if (this.copilotPending === pending) this.copilotPending = undefined; }
+    } catch { return undefined; }
   }
 
   private detectors(): readonly LocalCredentialDetector[] { return [...builtinDetectors, ...additionalDetectors.values()]; }
@@ -117,12 +138,15 @@ async function piAuth(provider: string, credential: OAuthCredential | undefined)
 }
 
 const builtinDetectors: readonly LocalCredentialDetector[] = [
+  { id: 'devin-cli', provider: 'devin', name: 'Devin CLI',
+    detect: async context => { const value = await readDevinCredential(join(context.home, '.local', 'share', 'devin', 'credentials.toml')); return value ? { expiresAt: value.expires === Number.MAX_SAFE_INTEGER ? undefined : new Date(value.expires).toISOString() } : undefined; },
+    resolve: async context => { const value = await readDevinCredential(join(context.home, '.local', 'share', 'devin', 'credentials.toml')); return value ? { apiKey: value.access } : undefined; } },
   { id: 'codex-cli', provider: 'openai-codex', name: 'Codex CLI',
     detect: async context => { const value = await codex(context); return value ? { account: value.accountId, expiresAt: new Date(value.expires).toISOString() } : undefined; },
     resolve: async context => { const auth = await piAuth('openai-codex', await codex(context)); return auth ? { ...auth, baseUrl: 'https://chatgpt.com/backend-api' } : undefined; } },
-  { id: 'kimi-cli', provider: 'kimi', name: 'Kimi CLI',
+  { id: 'kimi-cli', provider: 'kimi-coding', name: 'Kimi CLI',
     detect: async context => { const value = await kimi(context); return value ? { expiresAt: new Date(value.expires).toISOString() } : undefined; },
-    resolve: async context => { const value = await kimi(context); return value ? { apiKey: value.access } : undefined; } },
+    resolve: async context => { const value = await kimi(context); return value ? { apiKey: value.access, baseUrl: 'https://api.kimi.com/coding' } : undefined; } },
   { id: 'github-copilot-cli', provider: 'github-copilot', name: 'GitHub Copilot CLI',
     detect: async context => (builtinProviders().some(item => item.id === 'github-copilot' && item.auth.oauth) && await copilot(context)) ? {} : undefined,
     resolve: async context => piAuth('github-copilot', await copilot(context)) },

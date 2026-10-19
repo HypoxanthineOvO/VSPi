@@ -96,6 +96,7 @@ export const refreshOAuthProviderModelsResponseSchema = z.object({
 
 export const oAuthLoginOptionsSchema = z.object({
   region: z.enum(['mainland-cn', 'global']).optional(),
+  source: z.literal('browser').optional(),
 });
 
 export const authContract = {

@@ -13,8 +13,9 @@ import type {
 } from "@moonshot-ai/klient";
 import { KlientValidationError } from "@moonshot-ai/klient";
 import { RuntimeStoppedError, type RuntimeConnection } from "@vsp/vsp-runtime";
-import { loginWithOAuth } from "../providers/oauth-login.js";
-import { ensureProviderProxy } from '../providers/proxy-setup.js';
+import { loginProvider as configureProviderLogin } from '../providers/provider-login.js';
+import { checkProvider, loadProviderOptions, saveProviderGateway } from '../providers/provider-management.js';
+import type { GatewayFormValue } from '../ui/provider-manager.js';
 
 import type { AgentSnapshot } from "../agents/types.js";
 import type { CompactOptions } from "../continuity/compaction-profiles.js";
@@ -670,38 +671,7 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	async getProviderOptions(): Promise<ProviderOption[]> {
-		const [providers, builtins, loginProviders, configured, localCredentials] = await Promise.all([
-			this.connection.klient.global.kosong.listProviders(),
-			this.connection.klient.global.kosong.listBuiltinProviders(),
-			this.connection.klient.global.auth.listLoginProviders(),
-			this.connection.klient.global.config.inspect<Record<string, Record<string, unknown>>>("providers"),
-			this.connection.klient.global.auth.listLocalCredentials?.() ?? [],
-		]);
-		return [...new Map([...builtins, ...providers].map((provider) => [provider.id, provider])).values()]
-			.filter((provider) => !hiddenLegacyProvider(provider.id))
-			.map((provider) => ({
-				id: provider.id,
-				label: formatProviderDisplayName(provider.id),
-				protocol: provider.type,
-				status:
-					provider.status === "connected"
-						? "已配置"
-						: provider.status === "error"
-							? "异常"
-							: "未配置",
-				detail: `${String(provider.models?.length ?? 0)} 个模型`,
-				models: provider.models,
-				localCredential: localCredentials.find(item => item.provider === provider.id),
-				baseUrl: provider.base_url,
-				custom: true,
-				authMethods: [
-					...provider.type === 'devin' || provider.id === 'devin' ? [] : [{ type: "api_key" as const, label: "API Key" }],
-					...(localCredentials.some(item => item.provider === provider.id) || loginProviders.some((login) => login.id === provider.type || login.id === provider.id))
-						? [{ type: "oauth" as const, label: "本机凭据 / 订阅账号" }] : [],
-				],
-				storedCredential: configured.userValue?.[provider.id]?.["oauth"] !== undefined
-					? "oauth" : provider.has_api_key || configured.userValue?.[provider.id]?.["apiKeyEnv"] !== undefined ? "api_key" : undefined,
-			}));
+		return (await loadProviderOptions(this.connection.klient, formatProviderDisplayName)).filter(provider => !hiddenLegacyProvider(provider.id));
 	}
 
 	async getVsplabEndpoint(): Promise<'cn' | 'tech'> {
@@ -807,13 +777,7 @@ export class KlientChatBackend implements ChatBackend {
 		) {
 			return { ok: false, diagnostic: "已取消最小生成测试" };
 		}
-		return {
-			ok: true,
-			diagnostic:
-				mode === "check-config"
-					? `Provider ${providerId} 配置完整，包含 ${String(provider.models?.length ?? 0)} 个模型`
-					: `Provider ${providerId} 的模型与凭据已由 Core 解析；当前 Core 不提供无计费网络探测`,
-		};
+		return checkProvider(this.connection.klient, providerId);
 	}
 
 	async loginProvider(
@@ -821,48 +785,15 @@ export class KlientChatBackend implements ChatBackend {
 		type: "api_key" | "oauth",
 		interaction: ProviderAuthInteraction,
 	): Promise<void> {
-		await ensureProviderProxy(this.connection.klient, providerId, interaction);
-		if (type === "api_key") {
-			const apiKey = await interaction.prompt({
-				type: "secret",
-				message: `${providerId} API Key`,
-				placeholder: "API Key",
-				signal: interaction.signal,
-			});
-			const inspection =
-				await this.connection.klient.global.config.inspect<
-					Record<string, Record<string, unknown>>
-				>("providers");
-			const providers = { ...inspection.userValue };
-			const provider = providers[providerId];
-			if (provider === undefined) {
-				await this.connection.klient.global.kosong.configureBuiltinProvider(providerId, apiKey);
-				return;
-			}
-			providers[providerId] = { ...provider, apiKey, apiKeyEnv: undefined, oauth: undefined };
-			await this.connection.klient.global.config.replace({
-				domain: "providers",
-				value: providers,
-			});
-			interaction.notify({
-				type: "info",
-				message: "API Key 已保存到 VSPi Core 配置",
-			});
-			return;
-		}
-		const local = (await this.connection.klient.global.auth.listLocalCredentials?.() ?? []).find(item => item.provider === providerId);
-		if (local) {
-			const loginProviders = await this.connection.klient.global.auth.listLoginProviders();
-			if (!loginProviders.some(provider => provider.id === providerId)) {
-				await this.connection.klient.global.auth.useLocalCredential(local.id);
-				return;
-			}
-			const method = await interaction.prompt({ type: 'select', message: '认证方式', options: [
-				{ id: 'local', label: `复用本机 ${local.name} 凭据` }, { id: 'browser', label: '浏览器登录 / 订阅账号' },
-			], signal: interaction.signal });
-			if (method === 'local') { await this.connection.klient.global.auth.useLocalCredential(local.id); return; }
-		}
-		await loginWithOAuth(this.connection.klient.global.auth, providerId, interaction);
+		await configureProviderLogin(this.connection.klient, providerId, type, interaction);
+	}
+
+	async useLocalProviderCredential(id: string): Promise<void> {
+		await this.connection.klient.global.auth.useLocalCredential(id);
+	}
+
+	async saveProviderGateway(value: GatewayFormValue, provider?: ProviderOption): Promise<void> {
+		await saveProviderGateway(this.connection.klient, value, provider);
 	}
 
 	async logoutProvider(providerId: string): Promise<void> {

@@ -130,7 +130,7 @@ export class OAuthService extends Disposable implements IOAuthService {
       docs,
       providerService,
       bootstrap.scope('credentials'),
-      (provider, type) => this.provisionPiModels(provider, type),
+      (provider, type, config, auth, signal) => this.provisionPiModels(provider, type, config, auth, signal),
       (provider) => {
         if (!usesAccountProxy(provider)) return undefined;
         const preference = accountProxyPreference(this.config.get<ProxyConfig>(PROXY_SECTION), this.config.get<OAuthNetworkConfig>(OAUTH_NETWORK_SECTION));
@@ -147,8 +147,8 @@ export class OAuthService extends Disposable implements IOAuthService {
     provider = KIMI_CODE_PROVIDER_NAME,
     options: OAuthLoginOptions = {},
   ): Promise<OAuthFlowStart> {
-    if (provider !== KIMI_CODE_PROVIDER_NAME && this.pi.handles(provider)) {
-      return this.pi.startLogin(provider);
+    if (provider !== KIMI_CODE_PROVIDER_NAME && (this.pi.handles(provider) || this.pi.list().some(item => item.id === (this.providerService.get(provider)?.type ?? provider)))) {
+      return this.pi.startLogin(provider, options.source);
     }
     this.log.info('oauth startLogin: enter', { provider });
     const loginAuth = this.resolveLoginAuth(provider, options.region);
@@ -273,6 +273,8 @@ export class OAuthService extends Disposable implements IOAuthService {
     }
     if (provider !== KIMI_CODE_PROVIDER_NAME && this.pi.handles(provider)) {
       await this.pi.logout(provider);
+      const current = this.providerService.get(provider);
+      if (current?.oauth) await this.providerService.set(provider, { ...current, oauth: undefined, source: { ...current.source, credential: undefined } });
       return { logged_out: true, provider };
     }
     const oauthRef =
@@ -307,14 +309,22 @@ export class OAuthService extends Disposable implements IOAuthService {
 
   async useLocalCredential(id: string): Promise<void> {
     const entry = (await this.localCredentials.detect()).find(item => item.id === id);
-    if (!entry || !await this.localCredentials.resolve(id)) throw new AuthTokenMissingError(entry?.provider ?? id);
+    if (!entry) throw new AuthTokenMissingError(id);
+    if (id === 'codex-cli' || id === 'devin-cli') {
+      const flow = await this.pi.startLogin(entry.provider, 'local');
+      if (flow.status !== 'authenticated') throw new AuthTokenMissingError(entry.provider);
+      return;
+    }
+    const auth = await this.localCredentials.resolve(id, entry.provider);
+    if (!auth) throw new AuthTokenMissingError(entry.provider);
     const current = this.providerService.get(entry.provider);
-    await this.provisionPiModels(entry.provider, entry.provider);
-    await this.providerService.set(entry.provider, {
-      ...current, type: current?.type ?? entry.provider,
+    const type = id === 'kimi-cli' ? 'kimi-coding' : current?.type ?? entry.provider;
+    await this.provisionPiModels(entry.provider, type, {
+      ...current, type, baseUrl: auth.baseUrl ?? current?.baseUrl,
+      source: { ...current?.source, credential: 'local-cli' },
       apiKey: undefined, apiKeyEnv: undefined,
       oauth: { storage: 'file', key: `local-cli/${id}` },
-    });
+    }, auth);
   }
 
   private localCredentialId(provider: string, oauthRef?: OAuthRef): string | undefined {
@@ -360,20 +370,24 @@ export class OAuthService extends Disposable implements IOAuthService {
     this.pi.submitLogin(provider, flowId, promptId, input);
   }
 
-  private async provisionPiModels(provider: string, type: string): Promise<void> {
+  private async provisionPiModels(provider: string, type: string, candidate: ProviderConfig, auth: ProviderRequestAuth, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    const previousProviders = this.config.inspect<Record<string, ProviderConfig>>(PROVIDERS_SECTION).userValue;
+    const previousModels = this.config.inspect<Record<string, ModelRecord>>(MODELS_SECTION).userValue;
+    const previousDefault = this.config.inspect<string>(DEFAULT_MODEL_SECTION).userValue;
     const discovered = type === 'devin'
       ? await withScopedProxy(accountProxyPreference(this.config.get<ProxyConfig>(PROXY_SECTION), this.config.get<OAuthNetworkConfig>(OAUTH_NETWORK_SECTION)) || undefined, async () =>
-          (await import('#/llm-adapter/provider/devin/catalog')).fetchDevinModels((await this.pi.getCachedAccessToken(provider))!, provider))
+          (await import('#/llm-adapter/provider/devin/catalog')).fetchDevinModels(auth.apiKey!, provider))
       : listPiModelRecords(type, provider);
-    const current = this.config.inspect<Record<string, ModelRecord>>(MODELS_SECTION).userValue ?? {};
-    const records = Object.fromEntries(Object.entries(discovered).map(([key, model]) => [
-      key, { ...model, baseUrl: undefined },
-    ]));
-    const merged = { ...records, ...current };
-    await this.config.replace(MODELS_SECTION, merged);
-    const defaultModel = this.config.get<string | undefined>(DEFAULT_MODEL_SECTION);
-    const first = Object.keys(records)[0];
-    if (!defaultModel && first !== undefined) await this.config.replace(DEFAULT_MODEL_SECTION, first);
+    const records = Object.fromEntries(Object.entries(discovered).map(([key, model]) => [key, { ...model, baseUrl: undefined }]));
+    signal?.throwIfAborted();
+    await this.config.replaceSections({
+      [PROVIDERS_SECTION]: { ...previousProviders, [provider]: candidate },
+      [MODELS_SECTION]: { ...records, ...previousModels },
+      [DEFAULT_MODEL_SECTION]: this.config.get<string | undefined>(DEFAULT_MODEL_SECTION) || Object.keys(records)[0],
+    }, undefined, { expectedValues: {
+      [PROVIDERS_SECTION]: previousProviders, [MODELS_SECTION]: previousModels, [DEFAULT_MODEL_SECTION]: previousDefault,
+    } });
   }
 
   getManagedUsage(provider = KIMI_CODE_PROVIDER_NAME): Promise<AuthManagedUsageResult> {

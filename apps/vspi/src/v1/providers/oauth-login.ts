@@ -49,7 +49,7 @@ export async function loginWithOAuth(
 	};
 	try {
 		signal.throwIfAborted();
-		const started = await abortable(auth.startLogin(providerId), signal);
+		const started = await abortable(auth.startLogin(providerId, { source: 'browser' }), signal);
 		if (started.status === "authenticated") {
 			completed = true;
 			return;

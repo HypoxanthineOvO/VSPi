@@ -1042,7 +1042,7 @@ class PersistenceAppendLogStore implements IAppendLogStore {
 class ConfigBackedModelCatalog extends ModelCatalog {
   constructor(
     private readonly options: TestModelProviderOptions = {},
-    @IConfigService private readonly config: IConfigService,
+    @IConfigService private readonly fixtureConfig: IConfigService,
     @IProviderCatalogRuntime runtime: IProviderCatalogRuntime,
     @IProviderService private readonly providerRegistry: IProviderService,
     @IModelService private readonly modelRegistry: IModelService,
@@ -1050,17 +1050,17 @@ class ConfigBackedModelCatalog extends ModelCatalog {
     @IProtocolAdapterRegistry protocolRegistry: IProtocolAdapterRegistry,
     @IHostRequestHeaders hostRequestHeaders: IHostRequestHeaders,
   ) {
-    super(runtime, providerRegistry, modelRegistry, oauthTokens, protocolRegistry, hostRequestHeaders);
+    super(runtime, providerRegistry, modelRegistry, oauthTokens, protocolRegistry, hostRequestHeaders, fixtureConfig);
   }
 
   private syncRegistriesFromConfig(): void {
     this.providerRegistry.loadAll(
-      this.config.get<ProvidersSection>(PROVIDERS_SECTION) ?? {},
-      this.config.get<string>(DEFAULT_PROVIDER_SECTION),
+      this.fixtureConfig.get<ProvidersSection>(PROVIDERS_SECTION) ?? {},
+      this.fixtureConfig.get<string>(DEFAULT_PROVIDER_SECTION),
     );
     this.modelRegistry.loadAll(
-      this.config.get<ModelsSection>(MODELS_SECTION) ?? {},
-      this.config.get<string>(DEFAULT_MODEL_SECTION),
+      this.fixtureConfig.get<ModelsSection>(MODELS_SECTION) ?? {},
+      this.fixtureConfig.get<string>(DEFAULT_MODEL_SECTION),
     );
   }
 

@@ -516,6 +516,8 @@ export interface ChatBackend {
 		interaction: ProviderAuthInteraction,
 	): Promise<void>;
 	logoutProvider?(providerId: string): Promise<void>;
+	useLocalProviderCredential?(id: string): Promise<void>;
+	saveProviderGateway?(value: import('../ui/provider-manager.js').GatewayFormValue, provider?: ProviderOption): Promise<void>;
 	dispose(): Promise<void>;
 }
 

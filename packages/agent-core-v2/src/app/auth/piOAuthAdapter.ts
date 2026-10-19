@@ -54,7 +54,7 @@ export class PiOAuthAdapter {
     private readonly docs: IAtomicDocumentStore,
     private readonly providers: IProviderService,
     private readonly scope: string,
-    private readonly provisionModels: (provider: string, type: string) => Promise<void>,
+    private readonly provisionModels: (provider: string, type: string, config: import('#/llm-adapter/provider/provider').ProviderConfig, auth: ProviderRequestAuth, signal: AbortSignal) => Promise<void>,
     private readonly proxyForProvider: (provider: string) => string | undefined = () => undefined,
   ) {}
 
@@ -67,9 +67,9 @@ export class PiOAuthAdapter {
     return this.definition(provider, ref) !== undefined;
   }
 
-  async startLogin(provider: string): Promise<OAuthFlowStart> {
+  async startLogin(provider: string, source?: 'browser' | 'local'): Promise<OAuthFlowStart> {
     if (this.disposed) throw authError('OAuth service has been disposed.');
-    const definition = this.definition(provider);
+    const definition = this.definition(provider, { storage: 'file', key: `pi-ai/${this.providers.get(provider)?.type ?? provider}` });
     if (definition === undefined) throw authError('OAuth provider is not supported.');
     this.cancelLogin(provider);
     clearTimeout(this.flows.get(provider)?.timer);
@@ -96,7 +96,7 @@ export class PiOAuthAdapter {
     this.flows.set(provider, flow);
     flow.timer = setTimeout(() => this.finish(flow, 'expired'), FLOW_TIMEOUT_MS);
     flow.timer.unref();
-    void this.login(provider, definition, flow);
+    void this.login(provider, definition, flow, source);
     return flow.ready;
   }
 
@@ -153,6 +153,7 @@ export class PiOAuthAdapter {
   }
 
   async getCachedAccessToken(provider: string, ref?: OAuthRef): Promise<string | undefined> {
+    if ((ref ?? this.providers.get(provider)?.oauth) === undefined) return undefined;
     const definition = this.definition(provider, ref);
     if (definition === undefined) return undefined;
     const credentials = await this.docs.get<OAuthCredential>(this.scope, this.credentialKey(provider, ref));
@@ -206,7 +207,7 @@ export class PiOAuthAdapter {
     return resolved;
   }
 
-  private async login(provider: string, definition: PiOAuthProvider, flow: PiFlow): Promise<void> {
+  private async login(provider: string, definition: PiOAuthProvider, flow: PiFlow, source?: 'browser' | 'local'): Promise<void> {
     try {
       const deviceId = definition.id === 'openai' ? await this.transaction('openai-device-id', async () => {
         const saved = await this.docs.get<string>(this.scope, 'openai-device-id');
@@ -216,12 +217,15 @@ export class PiOAuthAdapter {
         return id;
       }) : undefined;
       const path = codexAuthPath();
-      const previous = await this.docs.get<OAuthCredential>(this.scope, this.credentialKey(provider));
-      const codex = definition.id === 'openai-codex' && previous?.['codexAuthPath'] === undefined
+      const activeKey = this.providers.get(provider)?.oauth?.key;
+      const previousKey = activeKey?.startsWith('pi-ai/') ? activeKey : `pi-ai/${definition.id}/${encodeURIComponent(provider)}`;
+      const previous = await this.docs.get<OAuthCredential>(this.scope, previousKey);
+      const codex = source !== 'browser' && definition.id === 'openai-codex' && (source === 'local' || previous?.['codexAuthPath'] === undefined)
         ? await readCodexCredential(path) : undefined;
       const devinPath = devinAuthPath();
-      const devin = definition.id === 'devin' && previous?.['devinAuthPath'] === undefined
+      const devin = source !== 'browser' && definition.id === 'devin' && (source === 'local' || previous?.['devinAuthPath'] === undefined)
         ? await readDevinCredential(devinPath) : undefined;
+      if (source === 'local' && !codex && !devin) throw authError('Local CLI credentials are unavailable.');
       const credentials: OAuthCredential = codex
         ? { type: 'oauth', access: '', refresh: '', expires: 0, codexAuthPath: path, accountId: codex.accountId }
         : devin
@@ -251,24 +255,24 @@ export class PiOAuthAdapter {
         prompt: (prompt) => this.prompt(flow, prompt),
       }, { getDeviceId: deviceId === undefined ? undefined : () => deviceId }));
       if (flow.snapshot.status !== 'pending') return;
-      const key = this.credentialKey(provider);
-      await this.transaction(key, async () => {
+      const key = previous ? `${previousKey}/${randomUUID()}` : previousKey;
+      const auth = await definition.oauth.toAuth(codex ?? devin ?? credentials);
+      await this.transaction(previousKey, async () => {
         if (flow.snapshot.status !== 'pending') return;
-        flow.provisioning = true;
         await this.docs.set(this.scope, key, credentials);
-        if (flow.snapshot.status !== 'pending') {
+        try {
+          flow.controller.signal.throwIfAborted();
+          const configured = this.providers.get(provider);
+          flow.provisioning = true;
+          await this.provisionModels(provider, definition.id, {
+            ...configured, type: definition.id, apiKey: undefined, apiKeyEnv: undefined,
+            source: { ...configured?.source, credential: codex || devin ? 'local-cli' : 'browser' },
+            oauth: { storage: 'file', key },
+          }, { apiKey: auth.apiKey, baseUrl: codex ? 'https://chatgpt.com/backend-api' : auth.baseUrl }, flow.controller.signal);
+        } catch (error) {
           await this.docs.delete(this.scope, key);
-          return;
+          throw error;
         }
-        const configured = this.providers.get(provider);
-        await this.providers.set(provider, {
-          ...configured,
-          type: configured?.type ?? definition.id,
-          apiKey: undefined,
-          apiKeyEnv: undefined,
-          oauth: { storage: 'file', key },
-        });
-        if (flow.snapshot.status === 'pending') await this.provisionModels(provider, definition.id);
       });
       if (flow.snapshot.status === 'pending') this.finish(flow, 'authenticated');
     } catch {
@@ -336,6 +340,7 @@ export class PiOAuthAdapter {
   }
 
   async getRequestAuth(provider: string, ref: OAuthRef | undefined, force = false): Promise<ProviderRequestAuth> {
+    if ((ref ?? this.providers.get(provider)?.oauth) === undefined) throw authError('OAuth credentials are missing; please log in.');
     const key = this.credentialKey(provider, ref);
     const generation = this.generations.get(key) ?? 0;
     return this.transaction(key, async () => {

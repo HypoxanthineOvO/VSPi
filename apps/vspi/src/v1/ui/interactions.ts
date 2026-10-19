@@ -19,10 +19,6 @@ export interface InteractionState {
   retryable?: boolean;
   expandable?: boolean;
   inspectDepth?: "node" | "tool";
-  providerEditing?: boolean;
-  providerActionMenu?: boolean;
-  providerField?: 0 | 1 | 2;
-  providerTextPresent?: boolean;
   policyYolo?: boolean;
   questionMode?: "choice" | "ranking" | "freeText" | "review";
   approvalReasonEditing?: boolean;
@@ -608,95 +604,13 @@ const actions: InteractionDefinition[] = [
     handler: "editModelSearch",
     matcher: editingInput,
   }),
-  keyAction({
-    id: "panel.providers.list-move",
-    surface: "panel",
-    context: "providers",
-    keys: ["Up", "Down"],
-    keyValues: [Key.up, Key.down],
-    handler: "moveSelection",
-    enabled: (state) => state.providerEditing !== true,
-    hint: "↑↓ 选择",
-  }),
-  keyAction({
-    id: "panel.providers.activate",
-    surface: "panel",
-    context: "providers",
-    keys: ["Enter"],
-    keyValues: [Key.enter],
-    handler: "activateProvider",
-    enabled: (state) => state.providerEditing !== true,
-    hint: (state) => (state.providerActionMenu === true ? "Enter 选择操作" : "Enter 打开操作"),
-  }),
-  keyAction({
-    id: "panel.providers.edit-up",
-    surface: "panel",
-    context: "providers",
-    keys: ["Up"],
-    keyValues: [Key.up],
-    handler: "moveSelection",
-    enabled: (state) => state.providerEditing === true && state.providerField !== 0,
-    hint: "↑ 上一项",
-  }),
-  keyAction({
-    id: "panel.providers.edit-down",
-    surface: "panel",
-    context: "providers",
-    keys: ["Down"],
-    keyValues: [Key.down],
-    handler: "moveSelection",
-    enabled: (state) => state.providerEditing === true && state.providerField !== 2,
-    hint: "↓ 下一项",
-  }),
   inputAction({
-    id: "panel.providers.edit-text",
+    id: "panel.providers.manager",
     surface: "panel",
     context: "providers",
-    keys: ["Text", "Editing keys"],
-    handler: "editProvider",
-    matcher: editingInput,
-    enabled: (state) => state.providerEditing === true && state.providerField !== 2,
-    hint: "输入文字",
-  }),
-  keyAction({
-    id: "panel.providers.edit-backspace",
-    surface: "panel",
-    context: "providers",
-    keys: ["Backspace"],
-    keyValues: [Key.backspace],
-    handler: "editProvider",
-    enabled: (state) =>
-      state.providerEditing === true && state.providerField !== 2 && state.providerTextPresent === true,
-    hint: "Backspace 删除",
-  }),
-  keyAction({
-    id: "panel.providers.edit-protocol",
-    surface: "panel",
-    context: "providers",
-    keys: ["Left", "Right"],
-    keyValues: [Key.left, Key.right],
-    handler: "editProviderProtocol",
-    enabled: (state) => state.providerEditing === true && state.providerField === 2,
-    hint: "←→ 切换协议",
-  }),
-  keyAction({
-    id: "panel.providers.save",
-    surface: "panel",
-    context: "providers",
-    keys: ["Ctrl+S"],
-    keyValues: [Key.ctrl("s")],
-    handler: "saveProvider",
-    enabled: (state) => state.providerEditing === true,
-    hint: "Ctrl+S 保存",
-  }),
-  keyAction({
-    id: "panel.providers.close",
-    surface: "panel",
-    context: "providers",
-    keys: ["Escape"],
-    keyValues: [Key.escape],
-    handler: "closePanel",
-    hint: (state) => (state.providerEditing === true ? "Esc 取消" : "Esc 关闭"),
+    keys: ["Up", "Down", "L", "T", "E", "D", "R", "/", "Tab", "Enter", "Escape", "Text", "Editing keys"],
+    handler: "handleProviders",
+    matcher: () => true,
   }),
   keyAction({
     id: "panel.settings.scope",

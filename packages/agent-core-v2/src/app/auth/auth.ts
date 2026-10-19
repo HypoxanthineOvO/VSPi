@@ -32,6 +32,7 @@ export interface AuthStatus {
 
 export interface OAuthLoginOptions {
   readonly region?: KimiRegion;
+  readonly source?: 'browser';
 }
 
 export interface IOAuthService {

@@ -3515,55 +3515,32 @@ export class VspiApp implements Component, Focusable {
 					"error",
 				);
 			}
-		} else if (event.type === "provider") {
-			this.showNotice(
-				`${event.provider.label} 请先从操作菜单选择离线检查、网络测试或编辑`,
-				"info",
-			);
-		} else if (event.type === "providerActions") {
-			// Panel owns the local action-menu state; opening it performs no I/O.
-		} else if (event.type === "providerAction") {
-			if (event.action.startsWith("login:")) {
-				const type = event.action.slice("login:".length);
-				if (type === "oauth" || type === "api_key")
-					await this.startProviderLogin(event.provider, type);
-			} else if (event.action === "logout") {
-				await this.removeProviderCredential(event.provider);
-			} else if (event.action === "edit") {
-				// Panel has already entered its local, secret-free editor.
-			} else if (event.action === "check-config") {
-				await this.runProviderProbe(event.provider.id, "check-config");
-			} else if (event.action === "test-connection") {
-				await this.runProviderProbe(event.provider.id, "test-connection");
-			} else {
-				await this.runProviderProbe(
-					event.provider.id,
-					"minimal-generation",
-					async () => event.costConfirmed === true,
-				);
-			}
-		} else if (event.type === "providerSave") {
+		} else if (event.type === 'providerManager') {
+			const action = event.action;
 			try {
-				if (!this.providerConfig || !this.providerCatalogHash)
-					throw new Error("Provider overlay service 未配置");
-				const saved = await this.providerConfig.saveProjectProvider(
-					event.provider.id,
-					event.value,
-					{
-						expectedHash: this.providerCatalogHash,
-					},
-				);
-				this.providerCatalogHash = saved.hash;
-				this.showNotice(
-					`Provider 配置已原子保存到 ${saved.path}；使用 /new 后按 Provider/model identity 重载`,
-					"success",
-				);
+				if (action.type === 'save') {
+					if (!this.backend.saveProviderGateway) throw new Error('当前后端不支持 Provider 配置');
+					await this.backend.saveProviderGateway(action.value, action.provider);
+					this.panels.finishProviderSave();
+					await this.refreshRuntimeCatalog();
+					this.showNotice('Provider 已测试并原子保存到 Core 配置', 'success');
+				} else if (action.type === 'login') await this.startProviderLogin(action.provider, action.credential);
+				else if (action.type === 'remove') await this.removeProviderCredential(action.provider);
+				else if (action.type === 'test') {
+					await this.runProviderProbe(action.provider.id, 'check-config');
+					await this.runProviderProbe(action.provider.id, 'test-connection');
+				} else if (action.type === 'local') {
+					if (!action.provider.localCredential || !this.backend.useLocalProviderCredential) throw new Error('本机凭据不可用');
+					await this.backend.useLocalProviderCredential(action.provider.localCredential.id);
+					await this.refreshRuntimeCatalog();
+					this.showNotice('已链接本机 CLI 凭据；未复制 Token', 'success');
+				}
 			} catch (error) {
-				this.showNotice(
-					`Provider 配置未保存：${error instanceof Error ? error.message : "未知错误"}`,
-					"error",
-				);
+				const message = error instanceof Error ? error.message : 'Provider 操作失败';
+				if (action.type === 'save') this.panels.finishProviderSave(message);
+				else this.showNotice(message, 'error');
 			}
+
 		} else if (event.type === "session") {
 			if (event.session.owner) {
 				try {
@@ -4028,7 +4005,7 @@ export class VspiApp implements Component, Focusable {
 			this.panels.open("providers");
 			this.panels.selectProvider(provider.id);
 			this.showNotice(
-				`${provider.label} 的已保存凭据已移除；环境变量和 models.json 未改变`,
+				`${provider.label} 的已保存凭据已移除；环境变量和外部 CLI 凭据未改变`,
 				"success",
 			);
 		} catch (error) {
@@ -5022,6 +4999,7 @@ export class VspiApp implements Component, Focusable {
 				mode,
 				confirmCost,
 			);
+			this.panels.recordProviderCheck(providerId, result.diagnostic);
 			this.showNotice(result.diagnostic, result.ok ? "success" : "error");
 		} catch (error) {
 			this.showNotice(

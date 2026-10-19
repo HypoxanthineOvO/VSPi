@@ -262,6 +262,8 @@ export interface ProviderOption {
 	authMethods?: ProviderAuthMethod[];
 	storedCredential?: "api_key" | "oauth";
 	models?: readonly string[];
+	authLabel?: string;
+	defaultModel?: string;
 	localCredential?: { id: string; name: string; account?: string; expiresAt?: string };
 }
 
