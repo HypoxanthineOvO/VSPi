@@ -148,7 +148,45 @@ VSPi 支持内置 Provider 和自定义兼容端点。首次使用运行 `vspi i
 
 已关联 Codex 后，再次运行 `vspi login openai-codex` 会进入独立授权流程，可用来更换账号或处理仍未过期但已被服务端拒绝的令牌。
 
-`/model` 在同一 Provider 内按模型家族排列，再按版本与价格排序。同一协议和地址下，指向相同实际模型 ID 的配置名、目录明确声明的别名会合并为一行；详情的 `Model ID` 列出所有已知标识，搜索任一标识均可找到。例如 `kimi-k3` 与 `k3` 显示为 `Model ID: kimi-k3, k3`，256K 变体单独成组。显示名称相同本身不作为合并依据，跨 Provider、协议或地址也不合并。当前会话已选择的配置名及其参数保持不变；Subagent 候选按家族靠拢，但保留独立配置名供分别管理。
+### Devin 登录
+
+运行 `vspi login devin`，或在 `vspi config` / `/providers` 中选择 Devin 的订阅登录。支持复用本机 Devin CLI 的 `~/.local/share/devin/credentials.toml`；没有可用凭据时通过浏览器授权，SSH 场景可手动粘贴最终回调 URL 或授权码。复用只关联本机凭据，不修改外部 CLI 文件；凭据缺失或过期时需重新登录，Devin 不提供 API Key 登录。
+
+登录后从账号动态获取可用模型目录；目录读取失败时保留 SWE 1.6 和 SWE 1.6 Fast 默认项。思考与上下文变体归并为模型组，Fusion 和路由条目不列入选择器。Devin 的 Gemini 工具定义兼容 nullable schema，Claude 思考内容以加密签名形式回放。Devin 官方账号请求使用 `vspi proxy` 配置的账号代理；浏览器仍使用自身网络。
+
+### 新的 /model 选择器
+
+`/model` 按“公司 → 模型 → 来源”展示，同一规范模型跨 Provider 合并为一行，展开后各来源的凭据、协议和地址仍独立。规范识别使用模型 ID、已知别名与目录元数据，不只看相同的显示名称；无法识别的模型进入“未归类”。Subagent 候选仍保留独立配置名。
+
+- `Enter` 暂选默认来源，再确认 Effort；`→` / `Tab` 展开来源，`↑↓` 选择后按 `Enter`。`←` / `Tab` 收起，`Esc` 返回，不改变当前绑定。
+- `Ctrl+P` 置顶或取消置顶当前模型（来源展开时操作当前来源）；`Ctrl+O` 在常用与全部模型间切换。
+- 搜索覆盖当前视图中的名称、ID、别名和公司；用 `@provider` 筛选来源，例如 `sonnet @devin`。找不到时先按 `Ctrl+O` 查看全部。
+
+确认 Effort 后记住每个规范模型的来源；未手选时按 Provider 优先级选择，跳过近期失败来源。来源详情显示最近请求的健康状态、价格、上下文与上次使用；健康不是额外的付费探测，过期记录不再当作失败。所有来源最近都失败时要求展开并再次确认警告。请求失败不会自动切到其他来源。
+
+可在 `vspi config path` 指向的 `config.toml` 手动指定规范身份，把已确认相同的模型归组；不要将不同能力或版本填成同一个 ID：
+
+```toml
+[models."example/YOUR_MODEL_ID".canonical]
+id = "anthropic/claude-sonnet-4.6"
+company = "Anthropic"
+display_name = "Claude Sonnet 4.6"
+
+[model_catalog]
+provider_priority = ["devin", "openai-codex", "github-copilot", "vsplab"]
+```
+
+示例假设 `example/YOUR_MODEL_ID` 已配置且实际对应 Sonnet 4.6；规范身份只影响归组，不改变发送给上游的模型 ID。Provider 优先级使用配置里的 Provider ID，手选来源优先于该顺序，近期失败的来源仍会被跳过。编辑后运行 `vspi config reload`，再检查实际模型目录。
+
+### Provider 管理
+
+`vspi config` 与 `/providers` 共用一个界面，一 Provider 一行，按“已连接 / 可添加”分组；详情展示认证、账号、到期时间、Endpoint、协议、最近请求状态与模型列表。
+
+- `L` 登录或切换认证方式，`T` 检查配置，`E` 编辑，`D` 确认移除 VSPi 凭据；不删除外部 CLI 文件。
+- `/` 搜索，`Tab` 聚焦模型列表后用 `↑↓` 滚动，`Enter` 查看详情，`Esc` 返回。
+- 检测到本机 Codex、Kimi、GitHub Copilot 或 Devin 凭据时，选中 Provider 按 `R` 一键复用，无需手工复制 Token。先验证可用性，再替换已有凭据；失败保留原配置。
+
+“添加自定义中转站”在单页填写名称、Endpoint、协议、API Key 和手动模型 ID。保存先读取模型列表；失败或超时可用手填 ID 继续。更改地址或协议必须重新提供 API Key，订阅账号凭据不会发送到自定义地址。保存前检查配置冲突，确认前取消不生效。`T` 只检查离线配置，不发送真实模型请求。
 
 运行 `vspi proxy` 可单独配置 OpenAI、Anthropic、Gemini 和 xAI 官方接口共用的代理。直接显示“请输入代理地址”，操作按钮统一为“确认／跳过／取消”：Enter 确认，Tab 切换，Esc 取消。格式错误会留在原输入框内提示；确认前取消不会保存或启动登录。
 
@@ -188,9 +226,9 @@ endpoint = "tech"
 
 [模型目录快照](../../../ops/vsplab/model-catalog.json)是可审阅的数据，而不是永不变化的能力保证。使用与模型匹配的协议和目录参数，不要随意填写上下文容量或价格。
 
-`/model` 默认只展示官方星标的常用精选，按 `Ctrl+O` 切换全部模型；搜索只作用于当前视图。星标不是个人收藏或稳定性评级，Preview 也可以入选。主模型列表不展示或编辑 Subagent 候选状态。
+`/model` 默认展示个人置顶、最近使用和官方常用模型，按 `Ctrl+O` 切换全部模型；搜索只作用于当前视图。官方常用推荐不是稳定性评级，Preview 也可以入选。主模型列表不展示或编辑 Subagent 候选状态。
 
-选择模型后会进入 Effort 确认页，预选该 Provider 与模型上次使用的档位；首次使用采用目录推荐档位。确认后模型与 Effort 一起生效；`Esc` 返回模型列表，不提前切换。当前生成请求不变，运行中切换用于后续模型调用。`/model` 和 `/effort` 不提供 Off 选项，没有可调档位的模型会提示确认固定配置。旧档位已不支持时提示重新确认；恢复已有会话不会被后来修改的全局默认覆盖。
+选择模型后会进入 Effort 确认页，档位按低到高排列，预选该 Provider 与模型上次使用的档位；首次使用采用目录推荐档位。确认后模型与 Effort 一起生效；`Esc` 返回模型列表，不提前切换。当前生成请求不变，运行中切换用于后续模型调用。`/model` 和 `/effort` 不提供 Off 选项，没有可调档位的模型会提示确认固定配置。旧档位已不支持时提示重新确认；恢复已有会话不会被后来修改的全局默认覆盖。
 
 档位记忆保存在 core 配置的 `[thinking.model_efforts]`，按实际模型 alias 区分，不覆盖其他 Thinking 设置。例如：
 

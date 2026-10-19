@@ -71,7 +71,7 @@ async function fixture(mode: 'normal' | 'http-retry' | 'stream-retry' | 'json-re
     await daemon.close();
     server.closeAllConnections();
     await new Promise<void>(resolve => { server.close(() => { resolve(); }); });
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   await connection.klient.global.config.replace({ domain: 'providers', value: { example: { type: 'openai', baseUrl: `http://127.0.0.1:${address.port}/v1`, apiKey: 'YOUR_API_KEY', modelSource: 'static' } } });
   await connection.klient.global.config.replace({ domain: 'models', value: Object.fromEntries(['one', 'two'].map(id => [`example/${id}`, { provider: 'example', model: id, maxContextSize: 65536, maxOutputSize: 1024, thinking: { availability: 'none', canDisable: false, controls: [] } }])) });

@@ -47,11 +47,12 @@
 - `packages/vsp-runtime/src/paths.ts`：`resolveVspHome`、`resolveRuntimePaths`
 - `packages/klient/src/transports/ipc/index.ts`
 - `packages/klient/src/transports/memory/index.ts`
+- `apps/vspi/test/runtime-recovery.test.ts`：`fixture`
 
 ## 测试
 
 - `pnpm --filter vspi test test/runtime-identity.test.ts`
-- `pnpm --filter vspi test test/runtime-recovery.test.ts`
+- `pnpm --filter vspi test test/runtime-recovery.test.ts`：真实运行时多客户端恢复回归；夹具退出后删除临时目录，对并发缓存落盘导致的目录非空最多重试 5 次，行为断言不变。
 - `pnpm --filter vspi test test/daemon-environment.test.ts`
 - `pnpm --filter vspi test test/desktop-discovery.test.ts`
 - `pnpm --filter @vsp/vsp-runtime test test/runtime.test.ts`

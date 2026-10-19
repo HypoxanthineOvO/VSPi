@@ -4,26 +4,27 @@
 
 ## 现在
 
-VSPi 2.9.0 准备发布。这一版包含：
+VSPi 2.9.0 已完成本地发布准备与 Linux 验收，尚未发布、推送或创建 tag。这一版包含：
 
-- Devin 作为订阅 Provider 接入：浏览器登录、复用本机 Devin 凭据、SWE-1.6 模型目录与思考档位。
-- 模型选择改为“公司 → 模型 → 来源”：同一模型的多来源合并展示，默认来源跳过最近失败的来源，手动选择的来源会被记住。
-- Provider 管理统一 `vspi config` 与 `/providers`：本机凭据一键复用，自定义中转站可自动发现模型或手填模型 ID。
+- Devin 订阅登录、本机凭据复用和账号动态模型目录。
+- “公司 → 模型 → 来源”的模型选择、逐模型来源记忆和来源健康显示；失败不自动切换来源。
+- `vspi config` 与 `/providers` 共用 Provider 管理，本机凭据一键复用，自定义中转站支持手填模型 ID。
+
+Linux 完整 `check:vspi` 通过 10,084 项、跳过 28 项；发布器 2 项和打包 daemon 7 项通过。同一 2.9.0 tarball 在 Node 22.19.0 与 24.15.0 下完成隔离安装、版本核对和 daemon 启停；版本包、兼容包及 `SHA256SUMS` 已生成。真实 API 验收与具体分包数字见 `apps/vspi/docs/releases.md`。
 
 ## 下一步
 
-- 在 Linux 工作机跑完整的 `pnpm check:vspi`、`package:pack`、`package:verify` 和打包 daemon 冒烟。
-- 按 `apps/vspi/docs/development.md` 的清单发布 2.9.0，并回读发布资产。
-- 按实际验收结果更新 `apps/vspi/docs/releases.md` 和发布说明。
+- 用户授权发布后，按开发指南用本次已验证资产创建 Release，再回读公开资产。
+- 补充 Windows 与 macOS 验收，本轮两者均未验收。
 
 ## 卡在哪
 
-尚无阻塞。
+`hw check` 仍有历史文档措辞与 `archive/` 地图路径告警；本次改动的需求关联已补齐。
 
 ## 等用户决定
 
-尚无。
+2.9.0 的 tag、推送与发布授权。
 
 ## 以后
 
-- 发布后补记 2.9.0 的验收范围。
+- 建立 Windows、macOS 常规验收流程。
