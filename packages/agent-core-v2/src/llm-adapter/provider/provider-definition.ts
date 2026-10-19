@@ -268,6 +268,11 @@ registerProviderDefinition({
 });
 
 registerProviderDefinition({
+  id: 'devin', baseProtocol: 'openai', modelSource: 'static',
+  endpoint: { defaultBaseUrl: 'https://server.codeium.com' },
+});
+
+registerProviderDefinition({
   id: 'deepseek', baseProtocol: 'openai', modelSource: 'static',
   endpoint: { apiKeyEnv: 'DEEPSEEK_API_KEY', defaultBaseUrl: 'https://api.deepseek.com' },
 });

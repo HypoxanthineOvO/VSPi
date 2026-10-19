@@ -240,6 +240,26 @@ describe("VSPi auth setup", () => {
     } finally { vi.unstubAllEnvs(); }
   });
 
+	it('offers Devin as an account-only provider', async () => {
+		const klient = { global: {
+			config: { inspect: async () => ({ userValue: {} }) },
+			kosong: {
+				listProviders: async () => [],
+				listBuiltinProviders: async () => [{ id: 'devin', type: 'devin', has_api_key: false, status: 'unconfigured', models: [] }],
+			},
+			auth: { listLoginProviders: async () => [{ id: 'devin', name: 'Devin' }] },
+		} } as unknown as Klient;
+		const app = new AuthSetupApp(new TuiMainScreen(new VirtualTerminal(80, 24)), createTheme(detectTerminalCapabilities(), 'Terminal'), klient, 'login', vi.fn(), true);
+		await app.load();
+		const menu = stripAnsi(app.render(80).join('\n'));
+		expect(menu).toContain('Devin');
+		expect(menu).toContain('订阅账号');
+		expect(menu).not.toContain('API Key');
+		const backend = new KlientChatBackend({ klient } as RuntimeConnection, '/project', 'new');
+		const options = await backend.getProviderOptions();
+		expect(options.find((option) => option.id === 'devin')?.authMethods?.map((method) => method.type)).toEqual(['oauth']);
+	});
+
 	it('groups configured and addable providers by section with readable names', async () => {
 		const klient = { global: {
 			config: { inspect: async () => ({ userValue: { anthropic: { type: 'anthropic', apiKey: 'YOUR_API_KEY' } } }) },

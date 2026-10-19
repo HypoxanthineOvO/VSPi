@@ -692,7 +692,7 @@ export class KlientChatBackend implements ChatBackend {
 				baseUrl: provider.base_url,
 				custom: true,
 				authMethods: [
-					{ type: "api_key" as const, label: "API Key" },
+					...provider.type === 'devin' || provider.id === 'devin' ? [] : [{ type: "api_key" as const, label: "API Key" }],
 					...loginProviders.some((login) => login.id === provider.type || login.id === provider.id)
 						? [{ type: "oauth" as const, label: "订阅账号" }] : [],
 				],
@@ -2702,6 +2702,7 @@ export function formatProviderDisplayName(providerId: string): string {
 	const known: Readonly<Record<string, string>> = {
 		anthropic: "Anthropic",
 		deepseek: "DeepSeek",
+		devin: "Devin",
 		"kimi-coding": "Kimi Coding",
 		"minimax-cn": "MiniMax CN",
 		moonshotai: "Moonshot AI",

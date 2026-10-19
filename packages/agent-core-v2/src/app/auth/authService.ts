@@ -320,8 +320,11 @@ export class OAuthService extends Disposable implements IOAuthService {
   }
 
   private async provisionPiModels(provider: string, type: string): Promise<void> {
+    const discovered = type === 'devin'
+      ? await (await import('#/llm-adapter/provider/devin/catalog')).fetchDevinModels((await this.pi.getCachedAccessToken(provider))!, provider)
+      : listPiModelRecords(type, provider);
     const current = this.config.inspect<Record<string, ModelRecord>>(MODELS_SECTION).userValue ?? {};
-    const records = Object.fromEntries(Object.entries(listPiModelRecords(type, provider)).map(([key, model]) => [
+    const records = Object.fromEntries(Object.entries(discovered).map(([key, model]) => [
       key, { ...model, baseUrl: undefined },
     ]));
     const merged = { ...records, ...current };

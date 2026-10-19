@@ -595,7 +595,7 @@ function entriesForProvider(
 			configured: configuredType === "oauth" && provider.status === "connected",
 		});
 	}
-	if (mode !== "logout" || config?.apiKey !== undefined || config?.apiKeyEnv !== undefined) {
+	if ((provider.type !== 'devin' && provider.id !== 'devin') && (mode !== "logout" || config?.apiKey !== undefined || config?.apiKeyEnv !== undefined)) {
 		entries.push({
 			providerId: provider.id,
 			providerName: displayName,

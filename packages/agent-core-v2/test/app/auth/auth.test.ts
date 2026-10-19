@@ -266,6 +266,68 @@ describe('OAuthService', () => {
     return { auth_mode: 'chatgpt', tokens: { access_token: access, refresh_token: 'example-refresh', account_id: accountId } };
   }
 
+  it('links Devin credentials without copying tokens, provisions models and rereads after auth failure', async () => {
+    const devin = await import('#/app/auth/devinCredential');
+    const { field, message } = await import('#/llm-adapter/provider/devin/protobuf');
+    const path = join(codexHome, 'credentials.toml');
+    vi.spyOn(devin, 'devinAuthPath').mockReturnValue(path);
+    const jwt = (exp: number) => `header.${Buffer.from(JSON.stringify({ exp })).toString('base64url')}.signature`;
+    const token = jwt(Math.floor(Date.now() / 1000) + 3600);
+    await writeFile(path, `windsurf_api_key = "${token}"`);
+    const fetchMock = vi.fn(async () => new Response(field(1, message(field(1, 'Example'), field(22, 'example-model')))));
+    vi.stubGlobal('fetch', fetchMock);
+    models['my-alias'] = { provider: 'devin', model: 'example-model', displayName: 'My label' };
+    defaultModel = 'my-alias';
+    const service = createService();
+    expect(await service.startLogin('devin')).toMatchObject({ status: 'authenticated' });
+    expect(documents.get('pi-ai/devin/devin')).toMatchObject({ devinAuthPath: path, access: '', refresh: '' });
+    expect(JSON.stringify([...documents.values()])).not.toContain(token);
+    expect(models['devin/example-model']).toMatchObject({ provider: 'devin', displayName: 'Example' });
+    expect(models['my-alias']).toMatchObject({ displayName: 'My label' });
+    expect(defaultModel).toBe('my-alias');
+    const updated = jwt(Math.floor(Date.now() / 1000) + 7200);
+    await writeFile(path, `windsurf_api_key = "${updated}"`);
+    expect(await service.resolveRequestAuth('devin', undefined, { force: true })).toMatchObject({ apiKey: updated });
+    await writeFile(path, `windsurf_api_key = "${jwt(1)}"`);
+    await expect(service.resolveRequestAuth('devin')).rejects.toThrow('re-login required');
+    expect(await service.getCachedAccessToken('devin')).toBeUndefined();
+    await service.logout('devin');
+    expect(await readFile(path, 'utf8')).toContain('windsurf_api_key');
+  });
+
+  it('supports Devin PKCE manual callbacks, exchanges JSON and rejects expired browser credentials', async () => {
+    const devin = await import('#/app/auth/devinCredential');
+    vi.spyOn(devin, 'devinAuthPath').mockReturnValue(join(codexHome, 'missing.toml'));
+    const token = `header.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString('base64url')}.signature`;
+    const { field, message } = await import('#/llm-adapter/provider/devin/protobuf');
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url === 'https://api.devin.ai/auth/cli/token') {
+        expect(typeof init?.body).toBe('string');
+        expect(JSON.parse(init?.body as string)).toMatchObject({ code: 'example-code', code_verifier: expect.any(String) });
+        return Response.json({ token });
+      }
+      return new Response(field(1, message(field(1, 'Example'), field(22, 'example-model'))));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const service = createService();
+    const started = await service.startLogin('devin');
+    expect(started.status).toBe('pending');
+    const flow = service.getFlow('devin')!;
+    const url = new URL(flow.auth_url!);
+    expect(url.origin + url.pathname).toBe('https://app.devin.ai/auth/cli/continue');
+    expect(url.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(url.searchParams.get('prompt')).toBe('select_account');
+    expect(url.searchParams.get('redirect_uri')).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback$/);
+    service.submitLogin('devin', flow.flow_id, flow.prompt!.id, `example-code#${url.searchParams.get('state')}`);
+    await vi.waitFor(() => expect(service.getFlow('devin')?.status).toBe('authenticated'));
+    expect(await service.resolveRequestAuth('devin')).toMatchObject({ apiKey: token });
+    await expect(service.resolveRequestAuth('devin', undefined, { force: true })).rejects.toThrow('re-login required');
+    expect(() => devin.devinCredential('header.eyJleHAiOjF9.signature')).toThrow('re-login required');
+    expect(() => devin.devinCallback('code#wrong-state', 'expected-state')).toThrow('state');
+    expect(() => devin.devinCallback('http://127.0.0.1/callback?code=example', 'expected-state')).toThrow('state');
+  });
+
   it('reuses Codex without a browser or copying tokens and follows same-account token updates', async () => {
     const path = join(codexHome, 'auth.json');
     const original = codexFile();

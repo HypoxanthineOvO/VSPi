@@ -68,6 +68,7 @@ export function listPiProviders() {
 }
 
 export function findPiModel(providerType: string | undefined, modelName: string, protocol?: Protocol, options: { allowFallback?: boolean } = {}): Model<Api> | undefined {
+  if (providerType === 'devin') return undefined;
   const provider = PROVIDER_ALIASES[providerType ?? ''] ?? providerType;
   const compatible = (model: Model<Api>) => model.id === modelName &&
     (protocol === undefined || piProtocolForApi(model.api) === protocol);
