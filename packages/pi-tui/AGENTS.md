@@ -1,21 +1,21 @@
-# pi-tui
+# pi-tui：给改这个包的 Agent 看
 
-Vendored fork of [`earendil-works/pi`](https://github.com/earendil-works/pi) `packages/tui`. Keep the fork small so upstream syncs stay cheap.
+这是 [`earendil-works/pi`](https://github.com/earendil-works/pi) `packages/tui` 的 vendored fork。fork 要尽量小，方便和上游同步。
 
-**Syncing from upstream, adding a local patch, or reviewing a pi-tui diff:** read [UPSTREAM.md](./UPSTREAM.md). The fork is the diff against the pinned upstream commit; that file records why those diffs exist.
+**同步上游、加本地补丁或审 diff 前先读 [UPSTREAM.md](./UPSTREAM.md)。** 这个 fork 就是相对固定上游提交的差异，UPSTREAM.md 记录每处差异为什么存在。
 
-## Changing this package
+## 改这里的前提
 
-Put TUI product behavior in `apps/kimi-code/src/tui` (composition, subclassing, existing host callbacks). Change this package only when the public API cannot express the behavior.
+产品行为放在 `apps/kimi-code/src/tui`（组合、子类化、已有宿主回调）。只有公共 API 表达不了时，才改这个包。
 
-A patch that lands here must:
+补丁必须满足：
 
-1. Be a library defect (crash, wrong render) or an extension point the app cannot reach (input state machine, render hot path, tokenizer).
-2. Be additive: optional argument, callback, or default-off switch. Defaults match upstream.
-3. Add an intent card in `UPSTREAM.md` and a test that fails without the change.
+1. 是库缺陷（崩溃、渲染错误），或者是应用够不到的扩展点（输入状态机、渲染热路径、tokenizer）。
+2. 是加法：可选参数、回调或默认关闭的开关；默认行为与上游一致。
+3. 在 `UPSTREAM.md` 增加说明卡，并补一个在没有该改动时会失败的测试。
 
-Skip step 3 and the change is not done. Do not rewrite a rendering strategy.
+第 3 条不做完，改动不算完成。不要重写渲染策略。
 
-## Tests
+## 测试
 
-This package runs `node --test` via `pnpm --filter @moonshot-ai/pi-tui test`. The repo-root vitest run does not execute these tests.
+这个包用 `node --test`：`pnpm --filter @moonshot-ai/pi-tui test`。仓库根的 vitest 不会跑这些测试。

@@ -1,328 +1,87 @@
-# Documentation Agent Guide
+# 文档站：给写 `docs/` 的 Agent 看
 
-This repository uses VitePress for the documentation site. Most user-facing pages under `docs/en/` and `docs/zh/` are fully written; New or updated content should keep both locales in sync.
+`docs/` 是 VitePress 用户文档站。`docs/en/` 和 `docs/zh/` 是镜像目录，路径、标题和章节结构保持一致；改一边要在同一次改动里改另一边。发布前确认两边都没有断链和术语错误。
 
-## Structure
+## 结构
 
-- Locales live under `docs/en/` and `docs/zh/` with mirrored paths and filenames.
-- Main sections (nav + sidebar) are:
-  - Guides: getting-started, migration, use-cases, interaction, sessions
-  - Customization: mcp, skills, plugins, datasource, agents, hooks
-  - Configuration: config-files, providers, overrides, env-vars, data-locations
-  - Reference: kimi-command, tools, slash-commands, keyboard
-  - Release notes: changelog
-- Navigation and sidebar are defined in `docs/.vitepress/config.ts`. Any new or renamed page must be wired there for both locales.
+- 语言目录：`docs/en/`、`docs/zh/`。
+- 导航和侧边栏定义在 `docs/.vitepress/config.ts`。新增或改名页面要在两种语言里都登记。
+- 栏目：指南（getting-started、migration、use-cases、interaction、sessions）、定制（mcp、skills、plugins、datasource、agents、hooks）、配置（config-files、providers、overrides、env-vars、data-locations）、参考（kimi-command、tools、slash-commands、keyboard）、版本记录。
+- 版本记录以英文页 `docs/en/release-notes/changelog.md` 为准，中文页从英文翻译；它由 `sync-changelog` 技能从 CLI 包的 `CHANGELOG.md` 同步。
+- 其他页面都是双语镜像。先用一种语言改写，再同步另一种。
 
-## Source of truth
+## 读者
 
-- **Changelog page**: The English version (`docs/en/release-notes/changelog.md`) is the source of truth; the Chinese changelog should be translated from it. The changelog is currently generated manually by a skill that syncs from the CLI package's `CHANGELOG.md` after each release.
-- **All other pages**: `docs/en/` and `docs/zh/` are mirrored pairs with the same paths, headings, and section structure. Edit whichever locale you are working in, and update the other locale in the same change.
+文档同时服务两类人，写作时两边都照顾：
 
-Keep both locales in sync before release. Machine-assisted translation is fine; review the locale you changed and its mirror for accuracy, terminology, and broken links.
+- 技术读者：熟悉终端、配置文件、API 密钥和环境变量。直接给命令和路径，不解释基础概念。
+- 非技术 AI 用户：产品经理、设计师、运营。他们通过 VS Code 或配置文件使用工具，不写脚本。目标是照着复制粘贴就能跑起来，并大致知道在做什么。
 
-## Authoring workflow
+术语第一次出现时用括号给一句白话解释，之后正常使用。例如 `stdin`（程序读取输入的通道）、`exit code`（程序结束时返回的状态数字，0 表示成功）。
 
-- Each page should keep the section ordering established by surrounding pages. Changelog is the exception because it is generated from release history.
-- For other pages: edit either locale, then update its mirror in the same change.
+目标：技术读者 5 分钟内完成任务；非技术读者能复制粘贴完成配置，不需要理解底层机制。
 
-Before rewriting a page, always: (1) understand why the original is structured the way it is, (2) identify what the reader genuinely needs to know, (3) sketch the section structure, then (4) fill in the content. Skip step 1–3 and you will lose content while rearranging format.
+## 命名与用词
 
-## Readers
+- 文件名用 kebab-case，中英镜像使用相同的 slug。
+- 章节标题和侧边栏文案保持一致。不要改一级标题和导航名称。
+- 英文二级及以下标题用 sentence case，专有名词除外；`Wire`、`Plan mode`、`Thinking mode`、`Always Ask`、`Ask When Needed`、`Never Ask` 按专有名词处理，`agent` 不算专有名词。
+- 中文标题里的英文词保持原词形；专有名词按下表保留。
+- 英文用 `API key`，中文用 `API 密钥`。`JSON`、`JSONL`、`OAuth`、`macOS`、`Node.js`、`npm`、`pnpm`、`TypeScript` 保持原样。
+- 中文引号内容用直角引号加空格：`「工具」`；普通引用用直双引号并和中文之间留空格：`"被引内容"`。
+- 中文优先用“终端”，不用“命令行”。用“工具调用” / `tool call`，不用“工具使用”。
+- 工具名用行内代码，例如 `Read`、`Grep`、`Bash`。
+- 专有名词：Agent（中文保留 Agent）、Shell（中文保留 Shell）、Plan 模式 / Plan mode、始终询问 / Always Ask、必要时询问 / Ask When Needed、完全自动 / Never Ask、Thinking 模式 / Thinking mode、MCP、Kimi Code CLI、Agent Skills、Skill、API 密钥、JSON、JSONL、OAuth、macOS、TypeScript、Node.js、npm、pnpm、kimi。
+- 中文正文用全角标点。中英文、数字、行内代码和链接之间加空格，全角标点前不加。
+- 快捷键用连字符：`Ctrl-C`、`Ctrl-D`、`Shift-Tab`、`Alt-V`。产品自己输出的提示保持原样。
+- 代码块必须写语言（`sh`、`toml`、`json`、`ts` 等）；用户提示这类自然语言示例可以省略。
+- 提示块用短分类标题：中文 `提示` / `注意` / `说明` / `警告`，英文不写标题或写 `Note`。详细内容放正文，标题只放分类。
+- 版本变更用 `::: info` 加分类标题（新增 / 变更 / 移除，或 Added / Changed / Removed），正文写完整句子。
+- 独立提示块用 `:::`；`::::` 只能作为嵌套的外层围栏，并且必须正确闭合。不需要嵌套时，次级说明用 `>` 引用块。
 
-Kimi Code documentation serves two overlapping audiences. Write for both simultaneously.
+## Kimi 平台
 
-**Technical users** — familiar with the terminal, config files, API keys, and environment variables. Give them commands and paths directly; do not explain basics.
+两个平台不能混：
 
-**Non-technical AI users** — product managers, designers, operators — who use AI tools but are unfamiliar with terms like "stdin", "exit code", or "regex". They primarily interact through VS Code or config files rather than writing scripts.
+| | Kimi Code 平台 | Kimi 开放平台 |
+| --- | --- | --- |
+| 用户 | 个人开发者，订阅制 | 企业 / 产品集成，按 token 计费 |
+| OpenAI 兼容地址 | `https://api.kimi.com/coding/v1` | `https://api.moonshot.cn/v1` |
+| Anthropic 兼容地址 | `https://api.kimi.com/coding/` | 不支持 |
+| API 密钥入口 | Kimi Code 控制台 | `platform.kimi.com` |
 
-Both groups share the same behavior: they arrive with a specific goal, scan headings and first sentences before reading further, execute steps in order, and copy-paste code blocks directly. They abandon pages when they hit unexplained jargon.
+写 Kimi Code CLI 或 VS Code 时只能用 `api.kimi.com/coding/…`，不能写 `api.moonshot.cn`。写开放平台集成时用 `api.moonshot.cn/v1`。产品全名是 **Kimi Code CLI** 和 **Kimi Code for VS Code**，不要缩写。
 
-**Writing targets:**
-- Technical users: complete a task in under 5 minutes, no filler.
-- Non-technical users: copy-paste their way to a working setup and roughly understand what it does, without needing to understand the underlying mechanics.
+## 写作
 
-**Jargon rule:** On first use, add a plain-English gloss in parentheses. Use the term normally afterwards.
+- 用自然叙述组织内容，带读者从概念走到操作。说明、动机和连续推理写成段落，不要拆成标题列表。
+- 每个段落只讲一件事，目标 3–4 句；超过 5 句就拆。
+- 每个页面和主要章节先用一句话说明这一节讲什么、和前面什么关系，再展开细节。
+- 并行内容才用列表或表格：每项“名称 + 一句话”用无序列表；多个维度（名称、类型、说明）用表格；每项超过两句用三级标题。
+- 步骤有先后顺序时用有序列表，不在步骤里嵌子列表。
+- 指南 → 定制 → 配置 → 参考，信息逐层加深。入门页只介绍核心概念，细节放到后面的页面。
+- 不要加“接下来”提示块；相关页面确实存在时，可以在末尾写 `Next steps` 或中文的“下一步”。
+- 跨页概念第一次出现就链接，优先链接到具体章节而不是页面顶部。不要只写“见相关文档”，也不要把链接都堆在页面末尾。
+- 页面结构：标题（名词短语，不加句号）→ 开头一两句 → 可选提示块 → 补充背景 → 可选图示 → 警告条（弃用、破坏性变更、安全提示，放在开头内容和第一个二级标题之间）→ 正文章节 → 可选下一步。
+- 改页面时默认保留全部原有内容。每个内容块都要有明确去向：保留，或说明为什么删。有效理由只有三类：纯实现细节、已被其他页面完整覆盖、内容可疑或过时（标出来而不是静默删掉）。“看起来不重要”“不确定”“页面太长”都不是删除理由。删了内容要在 PR 描述或提交信息里说明。
 
-> Example: `stdin` (the channel a program reads input from), `exit code` (the status number a program returns when it finishes; 0 means success).
+## 发布前检查
 
-## Naming conventions
+- `::::` 是否正确闭合，嵌套提示块是否改成引用块，警告条位置是否正确。
+- 步骤是否写成有序列表，多维对比是否写成表格。
+- 术语第一次出现是否有白话解释，跨页概念是否有链接，前后概念是否有回链。
+- 中英两边是否同步，代码块是否都有语言标记。
+- Kimi 平台地址、升级命令、模型 ID、登录命令、产品全名是否和全站一致。
 
-- Filenames are kebab-case and mirror across locales (same slug in `docs/en/` and `docs/zh/`).
-- Use consistent section labels that match the sidebar titles.
-- Use backticks for flags, commands, subcommands, command arguments, file paths, code identifiers, type names, field names, field values, and keyboard shortcuts.
+## 构建
 
-## Wording conventions
+在 `docs/` 下运行：
 
-- Do not change H1 titles or nav/sidebar labels.
-- English H2+ headings use sentence case (only the first word capitalized unless it is a proper noun). Treat "Wire", "Plan mode", "Thinking mode", and the permission mode names "Always Ask", "Ask When Needed", and "Never Ask" as proper nouns; do not treat "agent" as a proper noun.
-- Chinese H2+ headings keep English words in sentence case; preserve proper nouns listed in the term table below.
-- Use `API key` in English and `API 密钥` in Chinese; keep `JSON`, `JSONL`, `OAuth`, `macOS`, `Node.js`, `npm`, `pnpm`, and `TypeScript` as-is.
-- Use straight double quotes with spaces for quoted content: `"被引内容"` (not curly quotes). Add a space before and after the quoted text when adjacent to CJK characters. Use corner brackets `「」` for special terms (e.g., `「工具」`, `「会话」`).
-- Prefer "终端" over "命令行" in Chinese when both are applicable (e.g., "运行在终端中", "终端界面", "终端操作").
-- Use "工具调用" / "tool call", not "工具使用" / "tool use".
-- Use inline code for tool names (e.g., `Read`, `Grep`, `Bash`).
-
-Term mapping (Chinese <-> English, and proper noun handling):
-
-| Chinese | English | Proper noun (zh) | Proper noun (en) |
-| --- | --- | --- | --- |
-| Agent | agent | yes | no |
-| main agent | main agent | no | no |
-| subagent | subagent | no | no |
-| Shell | shell | yes | no |
-| Plan 模式 | Plan mode | yes | yes (Plan mode) |
-| 始终询问 | Always Ask | yes | yes |
-| 必要时询问 | Ask When Needed | yes | yes |
-| 完全自动 | Never Ask | yes | yes |
-| Thinking 模式 | Thinking mode | yes | yes (Thinking mode) |
-| MCP | MCP | yes | yes |
-| Kimi Code CLI | Kimi Code CLI | yes | yes |
-| Agent Skills | Agent Skills | yes | yes |
-| Skill | skill | yes | no |
-| 系统提示词 | system prompt | no | no |
-| 提示词 | prompt | no | no |
-| 会话 | session | no | no |
-| 上下文 | context | no | no |
-| API 密钥 | API key | yes | no |
-| JSON | JSON | yes | yes |
-| JSONL | JSONL | yes | yes |
-| OAuth | OAuth | yes | yes |
-| macOS | macOS | yes | yes |
-| TypeScript | TypeScript | yes | yes |
-| Node.js | Node.js | yes | yes |
-| npm | npm | yes | yes |
-| pnpm | pnpm | yes | yes |
-| kimi | kimi | yes | yes |
-| 审批请求 | approval request | no | no |
-| 斜杠命令 | slash command | no | no |
-| 工具调用 | tool call | no | no |
-| Frontmatter | frontmatter | yes | no |
-| User 消息 | user message | yes (User) | no |
-| Assistant 消息 | assistant message | yes (Assistant) | no |
-| Tool 消息 | tool message | yes (Tool) | no |
-| 轮次 | turn | no | no |
-| 供应商 | provider | no | no |
-| Prompt Flow | Prompt Flow | yes | yes |
-| Diff | diff | yes | no |
-
-### Kimi platform rules
-
-Two distinct platforms exist and must never be mixed:
-
-| | Kimi Code platform | Kimi Open Platform |
-|---|---|---|
-| Audience | Individual developers, subscription-based | Enterprise / product integration, pay-per-token |
-| OpenAI-compatible base URL | `https://api.kimi.com/coding/v1` | `https://api.moonshot.cn/v1` |
-| Anthropic-compatible base URL | `https://api.kimi.com/coding/` | Not supported |
-| API key entry | [Kimi Code console](https://www.kimi.com/code/console) | [platform.kimi.com](https://platform.kimi.com) |
-
-Rules:
-- When documenting Kimi Code CLI or VS Code: always use `api.kimi.com/coding/…`. Never write `api.moonshot.cn` in this context.
-- When documenting Open Platform integration: use `api.moonshot.cn/v1`.
-- Distinguish context explicitly: "in Kimi Code CLI / VS Code" vs "in third-party tools / your own product".
-- Product full names: **Kimi Code CLI** and **Kimi Code for VS Code**. Do not abbreviate to "Kimi CLI".
-
-## Typography
-
-- **Spacing around mixed content**: Add a space between Chinese characters and English words, numbers, inline code, or links. Exception: no space before full-width punctuation.
-  - ✓ 在 TypeScript 中使用 `class` 关键字
-  - ✗ 在TypeScript中使用`class`关键字
-  - ✓ 详见 [配置文件](./config.md)。
-  - ✗ 详见[配置文件](./config.md)。
-- **Full-width punctuation**: Use full-width punctuation in Chinese text: `，。；：？！（）` not `, . ; : ? ! ( )`.
-- **Keyboard shortcuts**: Use hyphen between modifier and key (`Ctrl-C`, `Ctrl-D`, `Shift-Tab`, `Alt-V`), not plus sign. Exception: literal application output (e.g., the `Press Ctrl+C again to exit` hint produced by the product itself) keeps its exact rendering.
-- **Code block language**: Always specify language for fenced code blocks (e.g., ` ```sh `, ` ```toml `, ` ```json `, ` ```ts `). Exception: natural language examples (user prompts) may omit the language.
-- **Callout titles**: Use short category titles for callout blocks (`::: tip`, `::: warning`, `::: info`, `::: danger`). Put the detailed description in the block content, not the title.
-  - Chinese: use `提示` for tip, `注意` for warning, `说明` for info, `警告` for danger.
-  - English: use no title or short words like `Note` for warning.
-  - ✓ `::: tip 提示` + content starting with the key point
-  - ✓ `::: warning 注意` + content `部分 \`.agents\` 资源不受 \`KIMI_CODE_HOME\` 影响。...`
-  - ✗ `::: warning 不影响 .agents` (title too long, should be in content)
-  - ✗ `::: tip .agents 路径独立于 KIMI_CODE_HOME` (title too long)
-- **Version info blocks**: For version change callouts, use `::: info` with a category title (Added/Changed/Removed in English; 新增/变更/移除 in Chinese). The content should be a complete sentence.
-  - ✓ `::: info 新增` + content `新增于 0.2.0。`
-  - ✗ `::: info 新增于 0.2.0` (title too long)
-  - ✓ `::: info Changed` + content `Renamed in 0.2.0. ...`
-  - ✗ `::: info Renamed in 0.2.0` (title too long)
-- **Callout syntax**: Use `:::` for standalone callouts. `::::` is valid only as the outer fence of a nested container and must be correctly closed; an unclosed or mismatched `::::` breaks page rendering. When nesting is not needed, use a `>` blockquote inside a callout for secondary notes instead.
-
-## Writing style
-
-- **Natural narrative**: Organize content like writing an article, guiding readers smoothly through the material.
-- **Avoid fragmentation**: Don't turn every point into a subheading; use paragraph transitions instead. This applies to narrative content — explanations, motivations, and sequential reasoning that flow as connected prose.
-- **Global perspective**: "Getting Started" introduces core concepts only; detailed usage belongs in later pages.
-- **Progressive depth**: Guides → Customization → Configuration → Reference, information deepens gradually.
-- **No nav tip blocks**: VitePress provides automatic prev/next navigation; don't add `::: tip 接下来` blocks at page end. A `## Next steps` section is appropriate when there are closely related follow-on pages — see [Page structure](#page-structure).
-- **One idea per paragraph**: Each paragraph makes one point. 3–4 sentences is the target; split when a paragraph exceeds 5 sentences.
-- **Map before detail**: Every page and every major section should open with one "map" sentence — what this section covers and how it relates to what came before — before expanding into details. Readers should know where they are before they dive in.
-
-  > ❌ Jump straight to detail: "Credential resolution has three steps: first read `api_key`…"
-  >
-  > ✓ Map then detail: "Provider credentials follow a separate resolution path from ordinary runtime parameters — the CLI reads only from `config.toml` and never falls back to shell environment variables. The priority order is:…"
-
-- **Parallel content needs formatting**: This is the counterpart to "avoid fragmentation" — the distinction is what kind of content you have. Multiple items of the same kind (file descriptions, config field explanations, caveats) written as separate paragraphs with no visual distinction force readers to parse shape instead of meaning. Fix:
-  - Each item is "name + one sentence": use an unordered list: `- **Name**: description`
-  - Multiple dimensions (name + type + description): use a table
-  - Each item is longer than two sentences: use a `###` subheading
-
-### Example: good vs bad
-
-Outline prompt:
-
-```
-* Install and upgrade
-  * System requirements: Node.js 24.15.0+, recommend pnpm
-  * Install, upgrade, uninstall steps
+```sh
+npm install
+npm run dev
+npm run build
+npm run preview
 ```
 
-**Bad** (mechanical conversion to headings):
-
-```markdown
-## Install and upgrade
-
-### System requirements
-
-- Node.js 24.15.0+
-- Recommend pnpm
-
-### Install
-
-...
-
-### Upgrade
-
-...
-```
-
-**Good** (natural narrative):
-
-```markdown
-## Install and upgrade
-
-Kimi Code CLI requires Node.js 24.15.0 or later. We recommend using pnpm for installation and management.
-
-If you haven't installed pnpm yet, please refer to the pnpm installation docs first. Install Kimi Code CLI:
-
-(code block)
-
-Verify the installation:
-
-(code block)
-
-Upgrade to the latest version:
-
-(code block)
-```
-
-## Format decisions
-
-Choose the format that matches the content's structure, not the one that looks most thorough.
-
-**Ordered list** — steps that must happen in sequence (installation, configuration, migration). Do not nest sub-lists inside steps.
-
-**Unordered list** — parallel items with no ordering dependency. Format: `- **Name**: one-sentence description`.
-
-**Table** — reference content with multiple dimensions to compare or look up (config fields with name + type + required + description; keyboard shortcuts; platform comparison). Avoid tables when cell content would need to wrap to be readable.
-
-**Prose** — explanations, motivations, caveats, anything that flows naturally as connected sentences. Do not convert prose into bullets just to add visual structure.
-
-## Cross-references
-
-Readers never read just one page. A complete understanding is usually spread across several pages. Add links wherever they help.
-
-**Always link when:**
-1. A concept mentioned on this page has a full explanation on another page — link to it on first mention, not the second or third. Prefer anchors (`#section`) over page-top links when the relevant content is in a specific section.
-2. This page gives a brief summary while another page has the full field reference or example — link the summary to the detail.
-3. A later section on this page depends on a concept defined earlier on this page — back-link with `[term](#anchor)` so readers don't have to scroll.
-
-**Do not write:**
-- "See related documentation" — which one? Readers skip this.
-- Link only in a "Next steps" list at the bottom — readers who hit a blocker mid-page won't scroll to the end to find the link.
-- First mention without a link, linked on second or third mention — the first mention is when the reader most wants to click.
-
-**Inline links vs "Next steps":** Inline links serve readers who need supplemental information mid-page. A closing "Next steps" section serves readers who finished the page and want natural follow-on reading. Both have a place; neither replaces the other.
-
-## Page structure
-
-```
-# Title (noun phrase, no period)
-
-Opening sentence or two + plain-English summary (only when the concept has a learning curve)
-
-> blockquote (optional: Beta notice, prerequisites)
-
-Supplementary context / use-case list (optional)
-
-Diagram (optional)
-
-::: warning Banner (deprecation, breaking change, security notice — after opening content, before first ##)
-
-## First section
-
-Body…
-
-## Next steps (optional, only when related pages exist)
-- [Page name](/path) — one sentence describing what the reader can do there
-```
-
-**Banner placement rule:** Banners must appear after all opening content (opening sentences, blockquote, diagram) and before the first `##`. A banner must never be the first thing on the page.
-
-## Content completeness
-
-**Default position: keep everything.** When editing a page, every block of original content needs an explicit destination — either retained or consciously removed with a stated reason.
-
-**Valid reasons to omit content:**
-- Too low-level / pure implementation detail that users never need to act on
-- Already covered more completely on another page that is linked from here
-- Content is ambiguous or suspected outdated — flag it rather than silently dropping it
-
-**Not valid reasons:**
-- "Seems unimportant" — that is a guess, not a reason
-- "I'm not sure about this" — research it rather than omitting it
-- "The page is getting long" — restructure, do not cut
-
-If content is omitted, note it explicitly in the PR description or commit message. Do not write omission notices inside the document itself.
-
-## Checklist
-
-Run through this before marking any doc change ready for review.
-
-### Format
-
-| Problem | Fix |
-|---|---|
-| `::::` unclosed or mismatched | Close the fence or replace with `:::` if nesting is not needed |
-| Nested callout containers | Change inner one to `>` blockquote |
-| Banner before first `##` but also before opening content | Move to after opening sentences / blockquote / diagram |
-| Steps written as unordered list | Change to ordered list |
-| Multi-dimension comparison written as prose | Convert to table |
-| Technical term used without explanation on first occurrence | Add plain-English gloss in parentheses |
-| Cross-reference written as "see …" with no link | Add inline link; prefer anchor to section, not just page top |
-| Concept depends on earlier definition but no back-link | Add `[term](#anchor)` |
-| Changed zh without changing en (or vice versa) | Update both locales |
-| Code block has no language tag | Add language (e.g., `sh`, `toml`, `json`); exception: natural-language prompt examples may omit the tag |
-
-### Kimi-specific consistency
-
-Before shipping, verify these values match the rest of the docs:
-
-- **Base URL**: matches the [Kimi platform rules](#kimi-platform-rules) table above
-- **Upgrade command**: matches `guides/getting-started.md`
-- **Model ID**: use `kimi-for-coding`, not a versioned model name
-- **Login command**: `/login`, not `/setup`
-- **Product full name**: **Kimi Code CLI** or **Kimi Code for VS Code** — never "Kimi CLI"
-- **Platform URLs**: `api.kimi.com/coding/…` for Kimi Code platform; `api.moonshot.cn/v1` for Open Platform — never mix the two
-
-## Build and preview
-
-- Docs are built with VitePress from `docs/`.
-- Common commands (run inside `docs/`):
-  - `npm install`
-  - `npm run dev`
-  - `npm run build`
-  - `npm run preview`
-- The build output is `docs/.vitepress/dist`.
-
-## Changelog syncing
-
-See `sync-changelog` skill for the changelog generation workflow.
+构建输出在 `docs/.vitepress/dist`。

@@ -18,7 +18,7 @@ VSPi 是基于 Kimi Code 引擎演进的终端编码助手。常驻进程（daem
 
 ### 新安装
 
-运行安装包需要 **Node.js ≥ 22.19.0**。**2.4.2 先面向 Linux 发布**；Windows 暂留 2.2.4，待本轮实机验收后再推进，macOS 本轮未做实机验证。
+运行安装包需要 **Node.js ≥ 22.19.0**。
 
 ```sh
 npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.4.2/vspi-2.4.2.tgz"

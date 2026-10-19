@@ -1,29 +1,35 @@
-# VSPi Agent Guide
+# VSPi：给改这个目录的 Agent 看
 
-VSPi is a separate product from Kimi Code. Treat `apps/vspi/src/v1` as the source of truth for its TUI, slash commands, transcript, panels, status footer, and Klient-backed behavior. Do not diagnose or fix a VSPi UI report in `apps/kimi-code` unless code evidence proves the defect is in a shared package.
+VSPi 和 Kimi Code 是两个产品。VSPi 的 TUI、斜杠命令、转写、面板、状态栏和 Klient 投影都以 `src/v1` 为准；VSPi 的界面问题不要先去 `apps/kimi-code` 修，除非代码证据表明缺陷在共享包。
 
-## Map
+## 目录
 
-- `src/main.ts`, `src/daemon`: process startup, daemon discovery, compatibility, and lifecycle.
-- `src/v1/app`: TUI coordination, input handling, session lifecycle, and command dispatch.
-- `src/v1/backend`: Klient event and service projection into the VSPi frontend contract.
-- `src/v1/ui`: transcript, panels, composer, layout, status, and themes.
-- `src/v1/domain/commands.ts`: the complete VSPi slash-command registry and aliases.
-- `test`: focused VSPi frontend and backend projection tests.
+- `src/main.ts`、`src/daemon-environment.ts`、`src/runtime-identity.ts`：进程启动、daemon 发现、版本兼容和生命周期。
+- `src/v1/app`：TUI 协调、输入、会话生命周期、命令分发；`auth-setup.ts` 是 `vspi config` / `login` / `logout` / `proxy` 的界面。
+- `src/v1/backend`：把 Klient 事件和服务投影成 VSPi 前端契约。
+- `src/v1/ui`：转写、面板、输入框、布局、状态栏、主题和选择器。
+- `src/v1/providers`：Provider 列表、登录、代理、模型发现和自定义中转站。
+- `src/v1/domain`：命令注册表、模型归并、展示规则等纯逻辑。
+- `test`：VSPi 前端、投影和终端行为测试。
 
-## Constraints
+## 不能坏
 
-- Preserve chronological transcript order. Updating a tool or task must update its existing node rather than move it to the tail. In regular (main-screen) mode, rows that scroll above the viewport are frozen into native scrollback and never rewritten; a tool finalized after its rows froze shows its completed summary at the top of the live region, and Inspect/history views render its final state in the original chronological position.
-- Regular mode never clears native scrollback or emits `ESC[2J`. After a resize settles, archive the already emitted live rows and open an append-only surface epoch at the bottom of the resized viewport. The new activity adapts to the new size; older output remains readable through native scrollback and is never replayed.
-- Native transcript layout processes bounded source batches into at most 200 transcript rows per frame; excess content is queued, never omitted. Frozen rows leave the layout cache. Streaming tables use fixed column widths, and unprinted messages must survive frontend retention until they have been emitted.
-- Busy-input behavior must distinguish a non-empty composer from an empty one: user text must not be discarded by an interrupt action.
-- `/agents` is the Subagent browser with one read-only chronological child process stream; its wide-list preview and detail view share the same commentary/tool/final projection and never render thinking. `/tasks` is a separate grouped background-work dashboard for Agent jobs, processes, and questions; Agent rows in `/tasks` never expose child conversation.
-- Live Subagent state belongs in the docked Agents surface and `/agents`, never in chronological transcript child cards.
-- Model context, price, usage, and cache labels must state one coherent metric and provenance. Do not present cumulative counters as current context.
-- Main-model stars are the official common-model selection, independent of Subagent membership. `/model` defaults to stars and offers all models; only `/subagent-model` edits user candidates in core `secondary_model`. Never generate that pool from stars or change the main model while editing it.
-- From 2.5.1, builtin model defaults ship with the product and user differences live only in VSPi home `config.toml`; never import `.pi` or old runtime-defaults. Remote catalogs must not overwrite builtin defaults or user fields. Preserve legacy `overrides` precedence and verify the resolved catalog, not just the source JSON.
-- `/model` stages the model until Effort confirmation, and Escape must leave the live binding unchanged. Hide Off in the pickers, remember efforts per model alias in core `thinking.modelEfforts`, and never overwrite a resumed session from global defaults.
-- Keep daemon/client compatibility explicit. A client must not silently attach to a daemon running a different build or unsupported Node version.
-- The backend permission mode is authoritative. Reflect permission events in the UI, and never reapply draft permission choices while restoring an existing session.
-- Nested `vspi` calls must use the daemon's own executable and default home rather than whichever unrelated installation appears first on the inherited PATH.
-- The published VSPi package supports Node.js >=22.19.0; the monorepo build baseline remains in the root guide. Keep the runtime guard, package engine, bundle targets, and minimum-version package verification aligned.
+- 转写保持时间顺序。更新工具或任务时改原节点，不移到末尾。常规模式下滚出视口的行已经冻结进原生滚动区，不再改写；冻结后才完成的工具在活动区顶部显示完成摘要，Inspect 和历史视图仍在原时间位置显示最终状态。
+- 常规模式不清空原生滚动区，不发送 `ESC[2J`。窗口尺寸稳定后，把已经输出的活动行归档，并在新视口底部开启只追加的新 surface；旧内容留在原生滚动区，不重放。
+- 转写排版每帧最多处理 200 行，超出部分排队，不能丢。冻结行离开排版缓存；流式表格使用固定列宽；尚未输出的消息在前端保留到真正输出。
+- 输入框非空和空的时候，忙碌状态的行为必须区分；中断操作不能丢掉用户已经输入的文本。
+- `/agents` 是只读的子 Agent 过程流，宽列表预览和详情共用同一套 commentary/tool/final 投影，不显示思考内容。`/tasks` 是后台任务的独立面板，Agent 行不暴露子对话。子 Agent 的实时状态放在 Agents 区域和 `/agents`，不要放进主转写的子卡片。
+- 模型上下文、价格、用量和缓存标签各自只说明一个指标及来源，累计计数不能当成当前上下文。
+- 主模型的星标是官方常用模型选择，和子 Agent 候选池无关。`/model` 默认显示星标并允许看全部模型；只有 `/subagent-model` 修改核心 `secondary_model` 里的用户候选。不能由星标生成候选池，也不能在编辑候选池时改主模型。
+- 从 2.5.1 起，内置模型默认值随产品发布，用户差异只写在 VSPi home 的 `config.toml`；不要导入 `.pi` 或旧 runtime 默认值。远程目录不能覆盖内置默认值和用户字段。保留旧 `overrides` 的优先级，并验证最终解析结果，不只看来源 JSON。
+- `/model` 先暂存模型，确认 Effort 后才生效；Esc 不能改变当前绑定。选择器不显示 Off，Effort 按模型别名保存在核心 `thinking.modelEfforts`，恢复会话时不能用全局默认值覆盖。
+- daemon 与客户端必须显式兼容。客户端不能静默接入不同构建或不支持 Node 版本的 daemon。
+- 后端权限模式是权威来源。UI 只反映权限事件；恢复已有会话时不要重新应用草稿里的权限选择。
+- 嵌套 `vspi` 调用使用 daemon 自己的可执行文件和默认 home，不用继承 PATH 上碰到的其他安装。
+- 发布包支持 Node.js `>=22.19.0`，monorepo 构建基线见根 `RULES.md`。运行时守卫、包 `engines`、bundle 目标和最低版本包校验要一起改。
+
+## 测试
+
+- `pnpm --filter vspi test`：VSPi 全部测试。
+- `pnpm --filter vspi typecheck`：类型检查。
+- 终端渲染和交互改动优先补 `test/tui-render.test.ts`；真实的 daemon 启停和兼容性改动补对应测试。
