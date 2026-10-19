@@ -2901,7 +2901,7 @@ function formatModelWord(word: string, index: number): string {
 	if (/^[a-z]\.[a-z](?:\.[a-z])*$/u.test(word)) return word;
 	if (/^k\d+(?:\.\d+)?$/iu.test(word)) return word.toUpperCase();
 	if (/^v\d+(?:\.\d+)?$/iu.test(word)) return `V${word.slice(1)}`;
-	if (/^\d+k$/iu.test(word)) return `${word.slice(0, -1)}K`;
+	if (/^\d+[kmbt]$/iu.test(word)) return word.toUpperCase();
 	if (index === 0 && /^[a-z]{2,4}$/u.test(word)) return word.toUpperCase();
 	return `${word.charAt(0).toUpperCase()}${word.slice(1).toLowerCase()}`;
 }

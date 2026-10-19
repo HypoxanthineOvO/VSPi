@@ -1324,6 +1324,15 @@ describe('canonical model identity', () => {
     if (id !== 'MODEL_PRIVATE_11') expect(resolveCanonicalModel(`devin/${id}`, { model: `devin/${id}` }, 'devin').id).toBe(canonical);
   });
 
+  it.each([
+    ['GLM 5.3 1M', 'GLM 5.3 1M'],
+    ['claude-sonnet-4-6-200k', 'Claude Sonnet 4.6 200K'],
+    ['kimi-k3-256k', 'Kimi K3 256K'],
+    ['qwen-3-235b', 'Qwen 3 235B'],
+  ])('preserves uppercase size tokens in %s', (model, displayName) => {
+    expect(resolveCanonicalModel('devin/alias', { model }, 'devin').displayName).toBe(displayName);
+  });
+
   it('groups Devin Opus with a gateway Claude namespace', () => {
     expect(resolveCanonicalModel('devin/claude-opus-5-5', { model: 'devin/claude-opus-5-5' }, 'devin').id)
       .toBe(resolveCanonicalModel('gateway/opus', { model: 'Claude/claude-opus-5-5' }, 'gateway').id);

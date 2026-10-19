@@ -54,7 +54,7 @@ function identify(value: string): CanonicalModel | undefined {
 function displayName(id: string): string {
   return id.split('-').map((part, index) => {
     if (index === 0) return ({ gpt: 'GPT', glm: 'GLM', mimo: 'MiMo', minimax: 'MiniMax', deepseek: 'DeepSeek', swe: 'SWE' } as Record<string, string>)[part] ?? part[0]!.toUpperCase() + part.slice(1);
-    if (/^(?:k|m|v)\d/u.test(part)) return part.toUpperCase();
+    if (/^(?:(?:k|m|v)\d|\d+[kmbt]$)/u.test(part)) return part.toUpperCase();
     return part[0]!.toUpperCase() + part.slice(1);
   }).join(' ');
 }

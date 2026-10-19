@@ -2990,6 +2990,9 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		expect(formatModelDisplayName("kimi-coding", "k3-256k")).toBe(
 			"Kimi K3 256K",
 		);
+		for (const suffix of ['1M', '200K', '235B', '1T']) {
+			expect(formatModelDisplayName('devin', 'glm-5.3', `GLM 5.3 ${suffix}`)).toBe(`GLM 5.3 ${suffix}`);
+		}
 		expect(formatProviderDisplayName("opencode-go")).toBe("OpenCode Go");
 	});
 
