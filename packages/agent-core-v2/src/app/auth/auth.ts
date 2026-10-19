@@ -41,7 +41,8 @@ export interface IOAuthService {
   startLogin(provider?: string, options?: OAuthLoginOptions): Promise<OAuthFlowStart>;
   listLoginProviders(): readonly { readonly id: string; readonly name: string }[];
   listLocalCredentials(): Promise<readonly import('./localCredentials').LocalCredentialInfo[]>;
-  useLocalCredential(id: string): Promise<void>;
+  useLocalCredential(id: string, operationId?: string): Promise<void>;
+  cancelLocalCredential(operationId: string): void;
   submitLogin(provider: string, flowId: string, promptId: string, input: string): void;
   getFlow(provider?: string): OAuthFlowSnapshot | undefined;
   cancelLogin(provider?: string): Promise<OAuthLoginCancelResponse>;

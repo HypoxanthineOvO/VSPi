@@ -219,10 +219,11 @@ export interface GatewayFormValue {
   baseUrl: string;
   protocol: string;
   apiKey: string;
+  modelIds?: string;
 }
 
 export class ProviderGatewayForm {
-  private readonly inputs = [new Input(), new Input(), new Input()];
+  private readonly inputs = [new Input(), new Input(), new Input(), new Input()];
   private field = 0;
   private protocolIndex = 0;
   private error = '';
@@ -236,6 +237,7 @@ export class ProviderGatewayForm {
     this.inputs[0]!.setValue(initial?.name ?? '');
     this.inputs[1]!.setValue(initial?.baseUrl ?? '');
     this.inputs[2]!.setValue(initial?.apiKey ?? '');
+    this.inputs[3]!.setValue(initial?.modelIds ?? '');
     this.protocolIndex = Math.max(0, PROVIDER_PROTOCOLS.findIndex(item => item.id === initial?.protocol));
   }
 
@@ -245,35 +247,33 @@ export class ProviderGatewayForm {
   handleInput(data: string): void {
     if (matchesKey(data, Key.escape)) { if (!this.busy) this.cancel(); return; }
     if (this.busy) return;
-    if (matchesKey(data, Key.tab) || matchesKey(data, Key.down)) this.field = (this.field + 1) % 5;
-    else if (matchesKey(data, Key.shift('tab')) || matchesKey(data, Key.up)) this.field = (this.field + 4) % 5;
+    if (matchesKey(data, Key.tab) || matchesKey(data, Key.down)) this.field = (this.field + 1) % 6;
+    else if (matchesKey(data, Key.shift('tab')) || matchesKey(data, Key.up)) this.field = (this.field + 5) % 6;
     else if (this.field === 2 && (matchesKey(data, Key.left) || matchesKey(data, Key.right))) {
       this.protocolIndex = (this.protocolIndex + (matchesKey(data, Key.left) ? PROVIDER_PROTOCOLS.length - 1 : 1)) % PROVIDER_PROTOCOLS.length;
-    } else if (matchesKey(data, Key.ctrl('s')) || (this.field === 4 && matchesKey(data, Key.enter))) {
+    } else if (matchesKey(data, Key.ctrl('s')) || (this.field === 5 && matchesKey(data, Key.enter))) {
       const name = this.inputs[0]!.getValue().trim();
       const baseUrl = this.inputs[1]!.getValue().trim();
       const apiKey = this.inputs[2]!.getValue();
+      const modelIds = this.inputs[3]!.getValue().trim() || undefined;
       if (!name || !baseUrl) { this.error = '名称和 Base URL 不能为空'; return; }
       try {
         const url = new URL(baseUrl);
         if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error();
       } catch { this.error = '请输入有效的 HTTP(S) Base URL，不包含账号、密码、查询或片段'; return; }
       this.error = '';
-      this.submit({ name, baseUrl, protocol: PROVIDER_PROTOCOLS[this.protocolIndex]!.id, apiKey });
-    } else if (matchesKey(data, Key.enter)) this.field = (this.field + 1) % 5;
-    else {
-      const input = this.inputs[this.field === 3 ? 2 : this.field];
-      if (this.field !== 2 && this.field !== 4) input?.handleInput(data);
-    }
+      this.submit({ name, baseUrl, protocol: PROVIDER_PROTOCOLS[this.protocolIndex]!.id, apiKey, modelIds });
+    } else if (matchesKey(data, Key.enter)) this.field = (this.field + 1) % 6;
+    else if (this.field !== 2 && this.field !== 5) this.inputs[this.field > 2 ? this.field - 1 : this.field]?.handleInput(data);
   }
 
   render(width: number, theme: VspiTheme): string[] {
-    const labels = ['名称', 'Base URL', '协议', 'API Key'];
-    const values = [this.inputs[0]!.getValue(), this.inputs[1]!.getValue(), PROVIDER_PROTOCOLS[this.protocolIndex]!.label, '•'.repeat(Math.min(32, this.inputs[2]!.getValue().length))];
+    const labels = ['名称', 'Base URL', '协议', 'API Key', '模型 ID（自动发现失败时填写，逗号或空格分隔）'];
+    const values = [this.inputs[0]!.getValue(), this.inputs[1]!.getValue(), PROVIDER_PROTOCOLS[this.protocolIndex]!.label, '•'.repeat(Math.min(32, this.inputs[2]!.getValue().length)), this.inputs[3]!.getValue()];
     return [theme.bold(theme.focus('自定义中转站')), '',
-      ...labels.flatMap((label, index) => [theme.muted(label),
-        padLine(truncateToWidth(`${index === this.field ? '› ' : '  '}${values[index] || theme.muted(index === 3 ? '留空保留现有凭据' : index === 1 ? 'https://gateway.example.com/v1' : '请输入')}${index === this.field ? theme.inverse(' ') : ''}${index === 2 ? theme.muted('  ← → 选择') : ''}`, width), width), '']),
-      this.busy ? theme.muted('正在测试并保存…') : this.field === 4 ? theme.selected('› 测试并保存') : '  测试并保存',
+      ...labels.flatMap((label, index) => [theme.muted(truncateToWidth(label, width)),
+        padLine(truncateToWidth(`${index === this.field ? '› ' : '  '}${values[index] || theme.muted(index === 4 ? '可选，例如 model-a, model-b' : index === 3 ? '留空保留现有凭据' : index === 1 ? 'https://gateway.example.com/v1' : '请输入')}${index === this.field ? theme.inverse(' ') : ''}${index === 2 ? theme.muted('  ← → 选择') : ''}`, width), width)]), '',
+      this.busy ? theme.muted('正在测试并保存…') : this.field === 5 ? theme.selected('› 测试并保存') : '  测试并保存',
       ...(this.error ? [theme.warning(truncateToWidth(this.error, width))] : []), '',
       truncateToWidth(theme.muted('Tab / Shift-Tab 切换字段 · Ctrl+S 测试并保存 · Esc 取消'), width)];
   }

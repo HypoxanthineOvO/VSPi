@@ -2,7 +2,7 @@ import type { Klient } from '@moonshot-ai/klient';
 import { builtinProviderProtocol } from '@vsp/vsp-runtime';
 import type { ProviderOption } from '../domain/types.js';
 import type { GatewayFormValue } from '../ui/provider-manager.js';
-import { customProviderId, fetchProviderModels, type CustomProviderProtocol } from './custom-provider.js';
+import { customProviderId, fetchProviderModels, modelsFromManualInput, type CustomProviderProtocol, type DiscoveredModel } from './custom-provider.js';
 
 export async function loadProviderOptions(klient: Klient, label: (id: string) => string): Promise<ProviderOption[]> {
   const [providers, builtins, logins, inspection, local, defaultModel, models] = await Promise.all([
@@ -45,7 +45,14 @@ export async function saveProviderGateway(klient: Klient, value: GatewayFormValu
   const key = value.apiKey.trim() || (typeof current?.apiKey === 'string' ? current.apiKey : '');
   const connectionChanged = value.baseUrl !== provider?.baseUrl || value.protocol !== provider?.protocol;
   if (!key && (value.apiKey || connectionChanged || !provider)) throw new Error('更改连接或添加中转站需要 API Key；账号凭据不能发送到自定义 Endpoint');
-  const models = key ? await fetchProviderModels(value.baseUrl, value.protocol as CustomProviderProtocol, key) : [];
+  let models: DiscoveredModel[] = [];
+  if (key) {
+    try { models = await fetchProviderModels(value.baseUrl, value.protocol as CustomProviderProtocol, key); }
+    catch (error) {
+      if (value.modelIds?.trim()) models = modelsFromManualInput(value.modelIds);
+      else if (connectionChanged || !provider?.models?.length) throw new Error(`请填写模型 ID 后重试：${error instanceof Error ? error.message : '自动发现失败'}`);
+    }
+  }
   const [latestProviders, latestModels, defaultModel] = await Promise.all([
     klient.global.config.inspect<Record<string, Record<string, unknown>>>('providers'),
     klient.global.config.inspect<Record<string, unknown>>('models'),

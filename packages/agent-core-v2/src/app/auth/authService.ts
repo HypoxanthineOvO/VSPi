@@ -304,27 +304,60 @@ export class OAuthService extends Disposable implements IOAuthService {
   }
 
   private readonly localCredentials = new LocalCredentialRegistry();
+  private readonly localLinks = new Map<string, AbortController>();
 
   listLocalCredentials() { return this.localCredentials.detect(); }
 
-  async useLocalCredential(id: string): Promise<void> {
-    const entry = (await this.localCredentials.detect()).find(item => item.id === id);
-    if (!entry) throw new AuthTokenMissingError(id);
-    if (id === 'codex-cli' || id === 'devin-cli') {
-      const flow = await this.pi.startLogin(entry.provider, 'local');
-      if (flow.status !== 'authenticated') throw new AuthTokenMissingError(entry.provider);
-      return;
+  cancelLocalCredential(operationId: string): void {
+    let controller = this.localLinks.get(operationId);
+    if (!controller) {
+      controller = new AbortController();
+      this.localLinks.set(operationId, controller);
+      const pending = controller;
+      setTimeout(() => { if (this.localLinks.get(operationId) === pending) this.localLinks.delete(operationId); }, 60_000).unref();
     }
-    const auth = await this.localCredentials.resolve(id, entry.provider);
-    if (!auth) throw new AuthTokenMissingError(entry.provider);
-    const current = this.providerService.get(entry.provider);
-    const type = id === 'kimi-cli' ? 'kimi-coding' : current?.type ?? entry.provider;
-    await this.provisionPiModels(entry.provider, type, {
-      ...current, type, baseUrl: auth.baseUrl ?? current?.baseUrl,
-      source: { ...current?.source, credential: 'local-cli' },
-      apiKey: undefined, apiKeyEnv: undefined,
-      oauth: { storage: 'file', key: `local-cli/${id}` },
-    }, auth);
+    controller.abort();
+  }
+
+  async useLocalCredential(id: string, operationId = randomUUID()): Promise<void> {
+    const controller = this.localLinks.get(operationId) ?? new AbortController();
+    this.localLinks.set(operationId, controller);
+    const signal = controller.signal;
+    try {
+      signal.throwIfAborted();
+      const entry = (await this.localCredentials.detect()).find(item => item.id === id);
+      signal.throwIfAborted();
+      if (!entry) throw new AuthTokenMissingError(id);
+      if (id === 'codex-cli' || id === 'devin-cli') {
+        const cancel = () => { this.pi.cancelLogin(entry.provider); };
+        signal.addEventListener('abort', cancel, { once: true });
+        try {
+          const flow = await this.pi.startLogin(entry.provider, 'local');
+          signal.throwIfAborted();
+          if (flow.status !== 'authenticated') throw new AuthTokenMissingError(entry.provider);
+        } finally { signal.removeEventListener('abort', cancel); }
+        return;
+      }
+      const auth = await this.localCredentials.resolve(id, entry.provider, { signal, fresh: true });
+      signal.throwIfAborted();
+      if (!auth) throw new AuthTokenMissingError(entry.provider);
+      if (id === 'kimi-cli') {
+        await withScopedProxy(accountProxyPreference(this.config.get<ProxyConfig>(PROXY_SECTION), this.config.get<OAuthNetworkConfig>(OAUTH_NETWORK_SECTION)) || undefined, async () => {
+          const response = await fetch(`${auth.baseUrl}/models`, { headers: { Authorization: `Bearer ${auth.apiKey}` }, redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]) });
+          if (!response.ok) throw new Error(`Local credential validation failed (HTTP ${response.status})`);
+          await response.body?.cancel();
+        });
+      }
+      signal.throwIfAborted();
+      const current = this.providerService.get(entry.provider);
+      const type = id === 'kimi-cli' ? 'kimi-coding' : current?.type ?? entry.provider;
+      await this.provisionPiModels(entry.provider, type, {
+        ...current, type, baseUrl: auth.baseUrl ?? current?.baseUrl,
+        source: { ...current?.source, credential: 'local-cli' },
+        apiKey: undefined, apiKeyEnv: undefined,
+        oauth: { storage: 'file', key: `local-cli/${id}` },
+      }, auth, signal);
+    } finally { this.localLinks.delete(operationId); }
   }
 
   private localCredentialId(provider: string, oauthRef?: OAuthRef): string | undefined {
@@ -377,7 +410,7 @@ export class OAuthService extends Disposable implements IOAuthService {
     const previousDefault = this.config.inspect<string>(DEFAULT_MODEL_SECTION).userValue;
     const discovered = type === 'devin'
       ? await withScopedProxy(accountProxyPreference(this.config.get<ProxyConfig>(PROXY_SECTION), this.config.get<OAuthNetworkConfig>(OAUTH_NETWORK_SECTION)) || undefined, async () =>
-          (await import('#/llm-adapter/provider/devin/catalog')).fetchDevinModels(auth.apiKey!, provider))
+          (await import('#/llm-adapter/provider/devin/catalog')).fetchDevinModels(auth.apiKey!, provider, undefined, signal))
       : listPiModelRecords(type, provider);
     const records = Object.fromEntries(Object.entries(discovered).map(([key, model]) => [key, { ...model, baseUrl: undefined }]));
     signal?.throwIfAborted();

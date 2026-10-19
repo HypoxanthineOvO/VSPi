@@ -52,13 +52,23 @@ export class LocalCredentialRegistry {
     return results.flat();
   }
 
-  async resolve(id: string, provider?: string): Promise<ProviderRequestAuth | undefined> {
+  async resolve(id: string, provider?: string, options?: { signal?: AbortSignal; fresh?: boolean }): Promise<ProviderRequestAuth | undefined> {
     const detector = this.detectors().find(item => item.id === id && (provider === undefined || item.provider === provider));
     if (!detector) return undefined;
     try {
       if (id !== 'github-copilot-cli') return await detector.resolve(this.context);
       const credential = await copilot(this.context);
       if (!credential) { this.copilotCache = undefined; return undefined; }
+      if (options?.fresh) {
+        const oauth = builtinProviders().find(item => item.id === 'github-copilot')?.auth.oauth;
+        if (!oauth) return undefined;
+        const timeout = AbortSignal.timeout(10_000);
+        const refreshed = await oauth.refresh(credential, options.signal ? AbortSignal.any([options.signal, timeout]) : timeout);
+        options.signal?.throwIfAborted();
+        const auth = await piAuth('github-copilot', refreshed);
+        if (auth) this.copilotCache = { token: credential.refresh, expires: refreshed.expires, auth };
+        return auth;
+      }
       if (this.copilotCache?.token === credential.refresh && this.copilotCache.expires > Date.now() + 60_000) return this.copilotCache.auth;
       if (this.copilotPending?.token === credential.refresh) return await this.copilotPending.promise;
       const promise = (async () => {

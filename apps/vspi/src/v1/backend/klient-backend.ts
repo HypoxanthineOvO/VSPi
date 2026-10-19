@@ -794,8 +794,8 @@ export class KlientChatBackend implements ChatBackend {
 		await configureProviderLogin(this.connection.klient, providerId, type, interaction);
 	}
 
-	async useLocalProviderCredential(id: string): Promise<void> {
-		await this.connection.klient.global.auth.useLocalCredential(id);
+	async useLocalProviderCredential(id: string, signal?: AbortSignal): Promise<void> {
+		await this.connection.klient.global.auth.useLocalCredential(id, signal);
 	}
 
 	async saveProviderGateway(value: GatewayFormValue, provider?: ProviderOption): Promise<void> {

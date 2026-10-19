@@ -976,6 +976,30 @@ export function defineKlientConformance(
         .rejects.toThrow();
     });
 
+    it('cancels local credential linking through the auth facade before committing', async () => {
+      const { registerLocalCredentialDetector } = await import('@moonshot-ai/agent-core-v2/app/auth/localCredentials');
+      const { OAuthService } = await import('@moonshot-ai/agent-core-v2/app/auth/authService');
+      const cancel = vi.spyOn(OAuthService.prototype, 'cancelLocalCredential');
+      let started!: () => void;
+      let release!: () => void;
+      const ready = new Promise<void>(resolve => { started = resolve; });
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const unregister = registerLocalCredentialDetector({ id: 'example-cancellable-cli', provider: 'anthropic', name: 'Example CLI', detect: async () => ({}), resolve: async () => { started(); await gate; return { apiKey: 'EXAMPLE_LOCAL_TOKEN' }; } });
+      const before = await target.klient.global.config.inspect('providers');
+      const controller = new AbortController();
+      try {
+        const pending = target.klient.global.auth.useLocalCredential('example-cancellable-cli', controller.signal);
+        const rejected = expect(pending).rejects.toThrow();
+        await ready;
+        controller.abort();
+        await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+        release();
+        await rejected;
+        expect(await target.klient.global.config.inspect('providers')).toEqual(before);
+        await expect(target.klient.global.auth.useLocalCredential('example-cancellable-cli', AbortSignal.abort())).rejects.toThrow();
+      } finally { release(); unregister(); cancel.mockRestore(); }
+    });
+
     it('rejects raw OAuth credential access outside the public auth contract', async () => {
       for (const method of ['getCachedAccessToken', 'resolveRequestAuth', 'resolveTokenProvider', 'toolkit', 'pi']) {
         await expect(target.rawCall('oauthService', method, ['anthropic']))

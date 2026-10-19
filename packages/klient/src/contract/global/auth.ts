@@ -104,7 +104,8 @@ export const authContract = {
     input: z.tuple([]),
     output: z.array(z.object({ id: z.string(), provider: z.string(), name: z.string(), account: z.string().optional(), expiresAt: z.string().optional() })),
   },
-  useLocalCredential: { input: z.tuple([z.string()]), output: noResult },
+  useLocalCredential: { input: z.tuple([z.string(), z.string().optional()]), output: noResult },
+  cancelLocalCredential: { input: z.tuple([z.string()]), output: noResult },
   listLoginProviders: {
     input: z.tuple([]),
     output: z.array(z.object({ id: z.string(), name: z.string() })),

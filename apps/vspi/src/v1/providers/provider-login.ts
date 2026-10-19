@@ -10,7 +10,7 @@ export async function loginProvider(klient: Klient, providerId: string, type: 'a
     const local = (await klient.global.auth.listLocalCredentials()).find(item => item.provider === providerId);
     if (local) {
       const method = await interaction.prompt({ type: 'select', message: '认证方式', options: [{ id: 'local', label: `复用本机 ${local.name} 凭据` }, { id: 'browser', label: '浏览器登录' }], signal: interaction.signal });
-      if (method === 'local') { await klient.global.auth.useLocalCredential(local.id); return; }
+      if (method === 'local') { await klient.global.auth.useLocalCredential(local.id, interaction.signal); return; }
       if (method !== 'browser') throw new Error('认证方式无效');
     }
     await ensureProviderProxy(klient, providerId, interaction);
@@ -26,12 +26,14 @@ export async function loginProvider(klient: Klient, providerId: string, type: 'a
   const baseUrl = typeof current?.baseUrl === 'string' ? current.baseUrl : builtin?.base_url;
   const providerType = typeof current?.type === 'string' ? current.type : builtin?.type;
   const protocol = providerType === undefined ? undefined : builtinProviderProtocol(providerType);
-  if (!baseUrl || !protocol) throw new Error('Provider 没有可验证的 Endpoint，请使用编辑配置连接');
-  const preference = await configuredProxy(klient);
-  const proxy = usesAccountProxy(providerId) ? preference : accountProxyForUrl(baseUrl, preference);
-  await withScopedProxy(proxy || undefined, () => fetchProviderModels(baseUrl, protocol as CustomProviderProtocol, apiKey));
+  if (!current) {
+    if (!baseUrl || !protocol) throw new Error('Provider 没有可验证的 Endpoint，请使用编辑配置连接');
+    const preference = await configuredProxy(klient);
+    const proxy = usesAccountProxy(providerId) ? preference : accountProxyForUrl(baseUrl, preference);
+    await withScopedProxy(proxy || undefined, () => fetchProviderModels(baseUrl, protocol as CustomProviderProtocol, apiKey));
+  }
   interaction.signal?.throwIfAborted();
   if (!current) await klient.global.kosong.configureBuiltinProvider(providerId, apiKey);
   else await klient.global.config.replace({ domain: 'providers', value: { ...inspection.userValue, [providerId]: { ...current, apiKey, apiKeyEnv: undefined, oauth: undefined, source: undefined } } });
-  interaction.notify({ type: 'info', message: 'API Key 已验证并保存到 VSPi Core 配置' });
+  interaction.notify({ type: 'info', message: current ? 'API Key 已保存；保留现有模型，未请求模型列表' : 'API Key 已验证并保存到 VSPi Core 配置' });
 }

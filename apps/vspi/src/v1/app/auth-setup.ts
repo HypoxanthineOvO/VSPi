@@ -122,7 +122,7 @@ export class AuthSetupApp implements Component, Focusable {
         const dialog = this.makeDialog(action.provider.label);
         if (action.type === 'local') {
           if (!action.provider.localCredential) throw new Error('本机凭据已失效');
-          await this.klient.global.auth.useLocalCredential(action.provider.localCredential.id);
+          await this.klient.global.auth.useLocalCredential(action.provider.localCredential.id, dialog.signal);
         } else if (action.type === 'login') await loginProvider(this.klient, action.provider.id, action.credential, dialog);
         dialog.signal.throwIfAborted();
         if (this.mode === 'config') await configureDefaultModel(this.klient, action.provider.id, dialog);

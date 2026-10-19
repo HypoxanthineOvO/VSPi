@@ -143,13 +143,82 @@ describe("VSPi auth setup", () => {
     expect(text()).toContain('记录已过期');
   });
 
-  it('does not replace an existing credential when API key verification fails', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })));
+  it('replaces an existing key without requiring model discovery or changing existing models', async () => {
+    const fetch = vi.fn(async () => new Response(null, { status: 404 }));
+    vi.stubGlobal('fetch', fetch);
     const replace = vi.fn();
-    const current = { type: 'anthropic', apiKey: 'EXAMPLE_OLD_KEY', baseUrl: 'https://api.example.test/v1' };
-    const klient = { global: { config: { get: async () => ({ url: '' }), inspect: async () => ({ userValue: { anthropic: current } }), replace }, kosong: { listBuiltinProviders: async () => [] } } } as unknown as Klient;
-    await expect(loginProvider(klient, 'anthropic', 'api_key', { prompt: async () => 'EXAMPLE_NEW_KEY', notify: vi.fn() })).rejects.toThrow('HTTP 401');
-    expect(replace).not.toHaveBeenCalled(); expect(current.apiKey).toBe('EXAMPLE_OLD_KEY');
+    const current = { type: 'openai', apiKey: 'EXAMPLE_OLD_KEY', baseUrl: 'https://api.example.test/v1' };
+    const klient = { global: { config: { get: async () => ({ url: '' }), inspect: async () => ({ userValue: { example: current } }), replace }, kosong: { listProviders: async () => [{ id: 'example', base_url: current.baseUrl }], listBuiltinProviders: async () => [] } } } as unknown as Klient;
+    await loginProvider(klient, 'example', 'api_key', { prompt: async () => 'EXAMPLE_NEW_KEY', notify: vi.fn() });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(replace).toHaveBeenCalledExactlyOnceWith({ domain: 'providers', value: { example: { ...current, apiKey: 'EXAMPLE_NEW_KEY', apiKeyEnv: undefined, oauth: undefined, source: undefined } } });
+  });
+
+  it.each([403, 404, 200])('accepts manual gateway models after discovery returns HTTP %s without usable models', async status => {
+    const { saveProviderGateway } = await import('../src/v1/providers/provider-management.js');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: [] }), { status })));
+    const sections: Record<string, unknown> = { providers: {}, models: { 'other/model': { provider: 'other', model: 'model' } } };
+    const replaceSections = vi.fn(async ({ sections: next }: { sections: Record<string, unknown> }) => { Object.assign(sections, next); });
+    const klient = { global: { config: { inspect: async (key: string) => ({ userValue: sections[key] }), get: async (key: string) => sections[key], replaceSections } } } as unknown as Klient;
+    const value = { name: 'Manual Gateway', baseUrl: 'https://gateway.example.test/v1', protocol: 'openai', apiKey: 'YOUR_API_KEY' };
+    await expect(saveProviderGateway(klient, value)).rejects.toThrow('请填写模型 ID');
+    expect(replaceSections).not.toHaveBeenCalled();
+    await saveProviderGateway(klient, { ...value, modelIds: 'model-a, model-b model-c,model-a' });
+    expect(replaceSections).toHaveBeenCalledOnce();
+    const id = Object.keys(sections.providers as object)[0];
+    expect(Object.keys(sections.models as object)).toEqual(['other/model', `${id}/model-a`, `${id}/model-b`, `${id}/model-c`]);
+    expect(sections.defaultModel).toBe(`${id}/model-a`);
+  });
+
+  it('forwards cancellation when the user selects a local credential', async () => {
+    const controller = new AbortController();
+    const useLocalCredential = vi.fn(async (_id: string, signal?: AbortSignal) => {
+      expect(signal).toBe(controller.signal);
+      controller.abort();
+      signal?.throwIfAborted();
+    });
+    const klient = { global: { auth: { listLocalCredentials: async () => [{ id: 'kimi-cli', provider: 'kimi-coding' }], useLocalCredential } } } as unknown as Klient;
+    await expect(loginProvider(klient, 'kimi-coding', 'oauth', { signal: controller.signal, prompt: async () => 'local', notify: vi.fn() })).rejects.toThrow();
+    expect(useLocalCredential).toHaveBeenCalledOnce();
+  });
+
+  it('aborts an in-flight config local link when Escape closes the dialog', async () => {
+    let signal: AbortSignal | undefined;
+    const useLocalCredential = vi.fn(async (_id: string, pendingSignal?: AbortSignal) => {
+      signal = pendingSignal;
+      await new Promise<void>((_resolve, reject) => pendingSignal?.addEventListener('abort', () => reject(pendingSignal.reason), { once: true }));
+    });
+    const replaceSections = vi.fn();
+    const klient = { global: {
+      config: { get: async () => undefined, inspect: async () => ({ userValue: {} }), replaceSections },
+      auth: { listLoginProviders: async () => [], listLocalCredentials: async () => [{ id: 'kimi-cli', provider: 'kimi-coding', name: 'Kimi CLI' }], useLocalCredential },
+      kosong: { listProviders: async () => [{ id: 'kimi-coding', type: 'kimi-coding', status: 'connected', models: [] }], listBuiltinProviders: async () => [], listModels: async () => [] },
+    } } as unknown as Klient;
+    const app = new AuthSetupApp(new TuiMainScreen(new VirtualTerminal(80, 24)), createTheme(detectTerminalCapabilities(), 'Terminal'), klient, 'config', vi.fn(), false);
+    await app.load();
+    app.handleInput('r');
+    await vi.waitFor(() => expect(useLocalCredential).toHaveBeenCalledOnce());
+    app.handleInput('\u001b');
+    expect(signal?.aborted).toBe(true);
+    await vi.waitFor(() => expect(stripAnsi(app.render(80).join('\n'))).toContain('管理连接'));
+    expect(replaceSections).not.toHaveBeenCalled();
+  });
+
+  it('keeps manual model IDs and masked credentials in the gateway form after a failed save', async () => {
+    const { ProviderManagerController } = await import('../src/v1/ui/provider-manager.js');
+    const manager = new ProviderManagerController();
+    manager.setProviders([]); manager.handleInput('\r');
+    manager.handleInput('Manual Gateway'); manager.handleInput('\t'); manager.handleInput('https://gateway.example.test/v1');
+    manager.handleInput('\t'); manager.handleInput('\t'); manager.handleInput('YOUR_API_KEY');
+    manager.handleInput('\u0013'); manager.finishSave('请填写模型 ID 后重试：HTTP 404');
+    manager.handleInput('\t'); manager.handleInput('model-a, model-b model-c');
+    const theme = createTheme(detectTerminalCapabilities(), 'Terminal');
+    const rows = manager.render(76, 20, theme);
+    expect(rows.length).toBeLessThanOrEqual(20);
+    expect(rows.every(row => visibleWidth(row) <= 76)).toBe(true);
+    expect(stripAnsi(rows.join('\n'))).toContain('model-a, model-b model-c');
+    expect(stripAnsi(rows.join('\n'))).not.toContain('YOUR_API_KEY');
+    expect(manager.handleInput('\u0013')).toMatchObject({ type: 'save', value: { apiKey: 'YOUR_API_KEY', modelIds: 'model-a, model-b model-c' } });
   });
 
   it.each([76, 116])('renders the shared provider manager within %s columns', async width => {

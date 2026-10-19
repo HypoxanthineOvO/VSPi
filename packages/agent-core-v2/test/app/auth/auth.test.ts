@@ -277,6 +277,76 @@ describe('OAuthService', () => {
     } finally { unregister(); }
   });
 
+  it.each([401, 403])('keeps the working provider when Kimi local credential validation returns HTTP %s', async status => {
+    const { LocalCredentialRegistry } = await import('#/app/auth/localCredentials');
+    vi.spyOn(LocalCredentialRegistry.prototype, 'detect').mockResolvedValue([{ id: 'kimi-cli', provider: 'kimi-coding', name: 'Kimi CLI' }]);
+    vi.spyOn(LocalCredentialRegistry.prototype, 'resolve').mockResolvedValue({ apiKey: 'EXAMPLE_REVOKED_TOKEN', baseUrl: 'https://api.example.test/coding' });
+    const request = vi.fn(async () => new Response(null, { status }));
+    vi.stubGlobal('fetch', request);
+    providers['kimi-coding'] = { type: 'kimi-coding', apiKey: 'EXAMPLE_WORKING_KEY' };
+    const before = structuredClone(providers);
+    await expect(createService().useLocalCredential('kimi-cli')).rejects.toThrow(`HTTP ${status}`);
+    expect(request).toHaveBeenCalledWith('https://api.example.test/coding/models', expect.objectContaining({ headers: { Authorization: 'Bearer EXAMPLE_REVOKED_TOKEN' }, redirect: 'error' }));
+    expect(providers).toEqual(before);
+    expect(documents.size).toBe(0);
+  });
+
+  it('does not commit a cancelled local credential after a successful delayed validation', async () => {
+    const { LocalCredentialRegistry } = await import('#/app/auth/localCredentials');
+    vi.spyOn(LocalCredentialRegistry.prototype, 'detect').mockResolvedValue([{ id: 'kimi-cli', provider: 'kimi-coding', name: 'Kimi CLI' }]);
+    vi.spyOn(LocalCredentialRegistry.prototype, 'resolve').mockResolvedValue({ apiKey: 'EXAMPLE_NEW_TOKEN', baseUrl: 'https://api.example.test/coding' });
+    let release!: () => void;
+    const request = vi.fn(async () => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return new Response('{}', { status: 200 });
+    });
+    vi.stubGlobal('fetch', request);
+    providers['kimi-coding'] = { type: 'kimi-coding', apiKey: 'EXAMPLE_WORKING_KEY' };
+    const before = structuredClone(providers);
+    const service = createService();
+    const pending = service.useLocalCredential('kimi-cli', 'example-cancel-operation');
+    const rejected = expect(pending).rejects.toThrow();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    service.cancelLocalCredential('example-cancel-operation');
+    expect((request.mock.calls[0] as unknown as [string, RequestInit])[1].signal?.aborted).toBe(true);
+    release();
+    await rejected;
+    expect(providers).toEqual(before);
+    expect(models).toEqual({});
+    expect(documents.size).toBe(0);
+  });
+
+  it('validates a Kimi local candidate before publishing only its reference', async () => {
+    const { LocalCredentialRegistry } = await import('#/app/auth/localCredentials');
+    vi.spyOn(LocalCredentialRegistry.prototype, 'detect').mockResolvedValue([{ id: 'kimi-cli', provider: 'kimi-coding', name: 'Kimi CLI' }]);
+    vi.spyOn(LocalCredentialRegistry.prototype, 'resolve').mockResolvedValue({ apiKey: 'EXAMPLE_VALID_TOKEN', baseUrl: 'https://api.example.test/coding' });
+    providers['kimi-coding'] = { type: 'kimi-coding', apiKey: 'EXAMPLE_WORKING_KEY' };
+    const request = vi.fn(async () => {
+      expect(providers['kimi-coding']?.apiKey).toBe('EXAMPLE_WORKING_KEY');
+      return new Response('{}', { status: 200 });
+    });
+    vi.stubGlobal('fetch', request);
+    await createService().useLocalCredential('kimi-cli');
+    expect(providers['kimi-coding']?.oauth).toEqual({ storage: 'file', key: 'local-cli/kimi-cli' });
+    expect(Object.keys(models).some(key => key.startsWith('kimi-coding/'))).toBe(true);
+    expect(JSON.stringify(providers)).not.toContain('EXAMPLE_VALID_TOKEN');
+  });
+
+  it('keeps a working Copilot provider when a fresh local token exchange is rejected', async () => {
+    vi.stubEnv('XDG_CONFIG_HOME', codexHome);
+    await mkdir(join(codexHome, 'github-copilot'), { recursive: true });
+    await writeFile(join(codexHome, 'github-copilot', 'hosts.json'), JSON.stringify({ 'github.com': { oauth_token: 'EXAMPLE_REVOKED_TOKEN' } }));
+    piMocks.provider = 'github-copilot';
+    const refresh = vi.fn(async () => { throw new Error('Rejected token'); });
+    piMocks.oauth = { name: 'Example Copilot', login: vi.fn(), refresh, toAuth: vi.fn() };
+    providers['github-copilot'] = { type: 'github-copilot', apiKey: 'EXAMPLE_WORKING_KEY' };
+    const before = structuredClone(providers);
+    await expect(createService().useLocalCredential('github-copilot-cli')).rejects.toThrow();
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(providers).toEqual(before);
+    expect(documents.size).toBe(0);
+  });
+
   it('uses browser login even when valid Codex CLI credentials are available', async () => {
     await writeFile(join(codexHome, 'auth.json'), JSON.stringify(codexFile()));
     piMocks.provider = 'openai-codex';
@@ -302,6 +372,37 @@ describe('OAuthService', () => {
     expect(providers).toEqual(previous);
     expect([...documents.entries()]).toEqual(previousDocuments);
     expect(await service.getCachedAccessToken('anthropic')).toBe('EXAMPLE_OLD_TOKEN');
+  });
+
+  it.each(['rejected', 'cancelled'])('keeps the working Devin config when a local link is %s', async failure => {
+    const { LocalCredentialRegistry } = await import('#/app/auth/localCredentials');
+    const devin = await import('#/app/auth/devinCredential');
+    const catalog = await import('#/llm-adapter/provider/devin/catalog');
+    vi.spyOn(LocalCredentialRegistry.prototype, 'detect').mockResolvedValue([{ id: 'devin-cli', provider: 'devin', name: 'Devin CLI' }]);
+    const path = join(codexHome, 'local-devin.toml');
+    vi.spyOn(devin, 'devinAuthPath').mockReturnValue(path);
+    await writeFile(path, `windsurf_api_key = "header.${Buffer.from(JSON.stringify({ session_id: 'example-session' })).toString('base64url')}.signature"`);
+    let release!: () => void;
+    const discovery = vi.spyOn(catalog, 'fetchDevinModels').mockImplementation(async () => {
+      if (failure === 'rejected') throw new Error('HTTP 401');
+      await new Promise<void>(resolve => { release = resolve; });
+      return { 'devin/example': { provider: 'devin', model: 'example' } };
+    });
+    providers['devin'] = { type: 'devin', apiKey: 'EXAMPLE_WORKING_KEY' };
+    const before = structuredClone(providers);
+    const service = createService();
+    const pending = service.useLocalCredential('devin-cli', 'example-devin-operation');
+    const rejected = expect(pending).rejects.toThrow();
+    await vi.waitFor(() => expect(discovery).toHaveBeenCalledOnce());
+    if (failure === 'cancelled') {
+      service.cancelLocalCredential('example-devin-operation');
+      expect(discovery.mock.calls[0]?.[3]?.aborted).toBe(true);
+      release();
+    }
+    await rejected;
+    expect(providers).toEqual(before);
+    expect(models['devin/example']).toBeUndefined();
+    expect(documents.size).toBe(0);
   });
 
   it('does not publish a cancelled Devin candidate after model discovery finishes', async () => {
@@ -2565,6 +2666,9 @@ describe('Local CLI credential discovery', () => {
       await writeSource('EXAMPLE_SECOND');
       expect(await registry.resolve('github-copilot-cli')).toMatchObject({ apiKey: 'EXAMPLE_SESSION_EXAMPLE_SECOND' });
       expect(refresh).toHaveBeenCalledTimes(3);
+      refresh.mockRejectedValueOnce(new Error('Revoked token'));
+      expect(await registry.resolve('github-copilot-cli', 'github-copilot', { fresh: true })).toBeUndefined();
+      expect(refresh).toHaveBeenCalledTimes(4);
       expect(await readFile(path, 'utf8')).not.toContain('EXAMPLE_SESSION');
     } finally { clock.mockRestore(); piMocks.oauth = undefined; piMocks.provider = 'anthropic'; await rm(home, { recursive: true, force: true }); }
   });

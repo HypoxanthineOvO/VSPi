@@ -3530,10 +3530,7 @@ export class VspiApp implements Component, Focusable {
 					await this.runProviderProbe(action.provider.id, 'check-config');
 					await this.runProviderProbe(action.provider.id, 'test-connection');
 				} else if (action.type === 'local') {
-					if (!action.provider.localCredential || !this.backend.useLocalProviderCredential) throw new Error('本机凭据不可用');
-					await this.backend.useLocalProviderCredential(action.provider.localCredential.id);
-					await this.refreshRuntimeCatalog();
-					this.showNotice('已链接本机 CLI 凭据；未复制 Token', 'success');
+					await this.startProviderLogin(action.provider, 'oauth', true);
 				}
 			} catch (error) {
 				const message = error instanceof Error ? error.message : 'Provider 操作失败';
@@ -3944,8 +3941,9 @@ export class VspiApp implements Component, Focusable {
 	private async startProviderLogin(
 		provider: ProviderOption,
 		type: "api_key" | "oauth",
+		local = false,
 	): Promise<void> {
-		if (!this.backend.loginProvider) {
+		if (local ? !this.backend.useLocalProviderCredential || !provider.localCredential : !this.backend.loginProvider) {
 			this.showNotice("当前后端不支持 Provider 登录", "error");
 			return;
 		}
@@ -3963,7 +3961,8 @@ export class VspiApp implements Component, Focusable {
 		this.authDialog = dialog;
 		this.requestRender();
 		try {
-			await this.backend.loginProvider(provider.id, type, dialog);
+			if (local) await this.backend.useLocalProviderCredential!(provider.localCredential!.id, dialog.signal);
+			else await this.backend.loginProvider!(provider.id, type, dialog);
 			if (cancelled || dialog.signal.aborted) return;
 			this.authDialog = undefined;
 			await this.refreshRuntimeCatalog();
