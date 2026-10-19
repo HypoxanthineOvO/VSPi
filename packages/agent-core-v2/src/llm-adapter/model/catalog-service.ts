@@ -223,6 +223,7 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
   async listBuiltinProviders(): Promise<readonly ProviderCatalogItem[]> {
     const relayBaseUrl = getProviderDefinition('vsplab')?.endpoint?.defaultBaseUrl;
     return [
+      { id: 'devin', type: 'devin', base_url: 'https://server.codeium.com', has_api_key: false, status: 'unconfigured' as const, models: ['devin/swe-1-6', 'devin/swe-1-6-fast'] },
       ...(relayBaseUrl === undefined
         ? []
         : [

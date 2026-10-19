@@ -35,6 +35,7 @@ import type {
 
 import { Disposable } from '#/_base/di/lifecycle';
 import { accountProxyPreference, usesAccountProxy } from './proxy';
+import { withScopedProxy } from '#/_base/utils/scopedProxy';
 import { LifecycleScope } from '#/app/scopes';
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
 import { Error2, ErrorCodes } from '#/errors';
@@ -360,8 +361,12 @@ export class OAuthService extends Disposable implements IOAuthService {
   }
 
   private async provisionPiModels(provider: string, type: string): Promise<void> {
+    const discovered = type === 'devin'
+      ? await withScopedProxy(accountProxyPreference(this.config.get<ProxyConfig>(PROXY_SECTION), this.config.get<OAuthNetworkConfig>(OAUTH_NETWORK_SECTION)) || undefined, async () =>
+          (await import('#/llm-adapter/provider/devin/catalog')).fetchDevinModels((await this.pi.getCachedAccessToken(provider))!, provider))
+      : listPiModelRecords(type, provider);
     const current = this.config.inspect<Record<string, ModelRecord>>(MODELS_SECTION).userValue ?? {};
-    const records = Object.fromEntries(Object.entries(listPiModelRecords(type, provider)).map(([key, model]) => [
+    const records = Object.fromEntries(Object.entries(discovered).map(([key, model]) => [
       key, { ...model, baseUrl: undefined },
     ]));
     const merged = { ...records, ...current };

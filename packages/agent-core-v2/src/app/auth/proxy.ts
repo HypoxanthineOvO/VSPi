@@ -2,7 +2,7 @@ import { normalizeProxyAddress } from '#/_base/utils/proxyAddress';
 import type { OAuthNetworkConfig, ProxyConfig } from './configSection';
 
 export function usesAccountProxy(provider: string): boolean {
-  return ['openai', 'openai_responses', 'openai-codex', 'anthropic', 'google', 'google-genai', 'google-vertex', 'xai'].includes(provider);
+  return ['openai', 'openai_responses', 'openai-codex', 'anthropic', 'google', 'google-genai', 'google-vertex', 'xai', 'devin'].includes(provider);
 }
 
 export function accountProxyPreference(config: ProxyConfig | undefined, legacy: OAuthNetworkConfig | undefined): string | undefined {
@@ -16,7 +16,7 @@ export function accountProxyForUrl(url: string | undefined, preference: string |
   try {
     const target = new URL(url);
     if (target.protocol !== 'https:') return undefined;
-    const official = ['api.openai.com', 'chatgpt.com', 'api.anthropic.com', 'generativelanguage.googleapis.com', 'aiplatform.googleapis.com', 'api.x.ai'];
+    const official = ['api.openai.com', 'chatgpt.com', 'api.anthropic.com', 'generativelanguage.googleapis.com', 'aiplatform.googleapis.com', 'api.x.ai', 'api.devin.ai', 'app.devin.ai', 'server.codeium.com'];
     return official.includes(target.hostname) || /^[a-z0-9-]+-aiplatform\.googleapis\.com$/u.test(target.hostname) ? preference : undefined;
   } catch { return undefined; }
 }

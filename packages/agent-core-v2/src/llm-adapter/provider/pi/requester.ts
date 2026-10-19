@@ -54,11 +54,13 @@ export class PiLlmRequester implements LlmRequester {
       providerOptions: this.model.providerOptions,
     };
     const native = new NativeChatProvider(this.fallback, config);
-    const pi = new PiChatProvider(
-      adapter,
-      findPiModel(adapter.providerType, adapter.modelName, adapter.protocol),
-      native,
-    );
+    const pi: ChatProvider = adapter.providerType === 'devin'
+      ? new (await import('../devin/chatProvider')).DevinChatProvider(adapter)
+      : new PiChatProvider(
+          adapter,
+          findPiModel(adapter.providerType, adapter.modelName, adapter.protocol),
+          native,
+        );
     const proxy = this.proxyForUrl(config.model.baseUrl, config.model.proxyUrl);
     try {
       await withScopedProxy(proxy, async () => {

@@ -9,6 +9,7 @@ import type { IProviderService, OAuthRef, ProvidersChangedEvent } from '#/llm-ad
 import type { ProviderRequestAuth } from '#/llm-adapter/contract/provider';
 import { AuthErrors } from './errors';
 import { codexAuthPath, readCodexCredential } from './codexCredential';
+import { devinAuthPath, devinOAuth, readDevinCredential } from './devinCredential';
 import { withScopedProxy } from '#/_base/utils/scopedProxy';
 import type {
   OAuthFlowSnapshot,
@@ -58,8 +59,8 @@ export class PiOAuthAdapter {
   ) {}
 
   list(): readonly { id: string; name: string }[] {
-    return builtinProviders().filter((provider) => provider.auth.oauth !== undefined)
-      .map(({ id, name }) => ({ id, name }));
+    return [{ id: 'devin', name: 'Devin' }, ...builtinProviders().filter((provider) => provider.auth.oauth !== undefined)
+      .map(({ id, name }) => ({ id, name }))];
   }
 
   handles(provider: string, ref?: OAuthRef): boolean {
@@ -155,6 +156,9 @@ export class PiOAuthAdapter {
     const definition = this.definition(provider, ref);
     if (definition === undefined) return undefined;
     const credentials = await this.docs.get<OAuthCredential>(this.scope, this.credentialKey(provider, ref));
+    if (definition.id === 'devin' && typeof credentials?.['devinAuthPath'] === 'string') {
+      return (await readDevinCredential(credentials['devinAuthPath']))?.access;
+    }
     if (typeof credentials?.['codexAuthPath'] === 'string') {
       const current = await readCodexCredential(credentials['codexAuthPath']);
       return current?.accountId === credentials['accountId'] ? current?.access : undefined;
@@ -185,6 +189,7 @@ export class PiOAuthAdapter {
     const key = (ref ?? config?.oauth)?.key;
     if (key !== undefined && !key.startsWith('pi-ai/')) return undefined;
     const id = key?.startsWith('pi-ai/') ? key.split('/')[1] : undefined;
+    if ((id ?? config?.type ?? provider) === 'devin') return { id: 'devin', name: 'Devin', oauth: devinOAuth };
     const definition = builtinProviders().find((candidate) => candidate.id === (id ?? config?.type ?? provider));
     const oauth = definition?.auth.oauth;
     return definition === undefined || oauth === undefined ? undefined : { id: definition.id, name: definition.name, oauth };
@@ -214,8 +219,13 @@ export class PiOAuthAdapter {
       const previous = await this.docs.get<OAuthCredential>(this.scope, this.credentialKey(provider));
       const codex = definition.id === 'openai-codex' && previous?.['codexAuthPath'] === undefined
         ? await readCodexCredential(path) : undefined;
+      const devinPath = devinAuthPath();
+      const devin = definition.id === 'devin' && previous?.['devinAuthPath'] === undefined
+        ? await readDevinCredential(devinPath) : undefined;
       const credentials: OAuthCredential = codex
         ? { type: 'oauth', access: '', refresh: '', expires: 0, codexAuthPath: path, accountId: codex.accountId }
+        : devin
+        ? { type: 'oauth', access: '', refresh: '', expires: 0, devinAuthPath: devinPath }
         : await withScopedProxy(this.proxyForProvider(definition.id), () => definition.oauth.login({
         signal: flow.controller.signal,
         notify: (event) => {
@@ -335,7 +345,15 @@ export class PiOAuthAdapter {
         throw authError('OAuth credentials are missing; please log in.');
       }
       const usesCodexFile = typeof credentials['codexAuthPath'] === 'string';
-      if (typeof credentials['codexAuthPath'] === 'string') {
+      if (definition.id === 'devin') {
+        if (typeof credentials['devinAuthPath'] === 'string') {
+          const current = await readDevinCredential(credentials['devinAuthPath']);
+          if (!current) throw authError('Devin CLI login is unavailable or expired; re-login required. Refresh Devin on the backend machine, or log in again in VSPi.');
+          credentials = current;
+        } else if (force || credentials.expires <= Date.now() + 30_000) {
+          throw authError('Devin login expired or was rejected; re-login required.');
+        }
+      } else if (typeof credentials['codexAuthPath'] === 'string') {
         const current = await readCodexCredential(credentials['codexAuthPath']);
         if (definition.id !== 'openai-codex' || !current || current.accountId !== credentials['accountId']) {
           throw authError('Codex login is unavailable, expired or belongs to another account. Refresh Codex on the backend machine, or log in again using device code.');
