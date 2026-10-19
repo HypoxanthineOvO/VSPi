@@ -122,6 +122,23 @@ function draftBackendFixture(
 	return { backend, connection, create, remove, restore, agent, reset, start, listeners, getConfig, policies, connectionStates, questions, disconnect: () => connectionError?.(new Error("ipc closed")), emitError: (error: Error) => connectionError?.(error) };
 }
 
+describe('canonical source priority', () => {
+  it.each([undefined, ['example', 'devin', 'openai-codex']])('prefers connected accounts unless the user sets %j', async override => {
+    const providers = [provider('example'), { ...provider('devin'), has_api_key: false }, { ...provider('openai-codex'), has_api_key: false }];
+    const connection = { klient: { global: {
+      config: { get: async () => override === undefined ? undefined : { providerPriority: override } },
+      kosong: {
+        listProviders: async () => providers,
+        listModels: async () => providers.map(item => model(item.id, 'claude-opus-5-5')),
+        queryAvailableModels: async () => ({ modelIds: ['example/claude-opus-5-5'] }),
+      },
+    } } } as unknown as RuntimeConnection;
+    const options = await new KlientChatBackend(connection, '/workspace', 'new').getModelOptions();
+    const ordered = [...options].sort((left, right) => left.sourcePriority! - right.sourcePriority!).map(item => item.provider);
+    expect(ordered).toEqual(override ?? ['devin', 'openai-codex', 'example']);
+  });
+});
+
 describe('model retry projection', () => {
 	it('keeps an admitted steer queued while the previous model call is still streaming', async () => {
 		const fixture = draftBackendFixture();

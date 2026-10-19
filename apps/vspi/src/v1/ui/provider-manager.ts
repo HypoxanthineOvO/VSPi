@@ -1,5 +1,6 @@
 import { Input, Key, matchesKey } from '@moonshot-ai/pi-tui';
 import type { ProviderOption } from '../domain/types.js';
+import { sourceHealthLabel } from '../domain/canonical-models.js';
 import { padLine, truncateToWidth } from './ansi.js';
 import type { VspiTheme } from './theme.js';
 
@@ -79,13 +80,17 @@ export function renderProviderManager(
   const detailRows: string[] = [];
   if (selected) {
     const field = (label: string, value: string) => `${padLine(theme.muted(label), 12)}${value}`;
+    const latest = selected.modelHealth;
+    const checkedAt = latest ? Math.max(latest.health.lastSuccess ?? 0, latest.health.lastFailure?.at ?? 0) : 0;
     detailRows.push(theme.bold(theme.focus(selected.label)), '', theme.bold('认证与连接'),
       field('认证方式', detail?.authLabel ?? (selected.storedCredential === 'oauth' ? '订阅账号' : selected.storedCredential === 'api_key' ? 'API Key' : '未连接')),
       field('账号', detail?.account ?? '未提供'),
       field('凭据到期', detail?.expiresAt ?? '未提供'), '',
       field('Endpoint', selected.baseUrl ?? '由 Provider 管理'),
       field('协议', providerProtocolLabel(selected.protocol)),
-      field('上次检查', detail?.lastCheck ?? '尚未测试'), '',
+      field('上次检查', latest && checkedAt > 0 ? sourceHealthLabel(latest) : '尚未测试'),
+      ...latest && checkedAt > 0 ? [field('模型请求', latest.model), field('检查时间', new Date(checkedAt).toLocaleString())] : [],
+      ...detail?.lastCheck ? [field('配置检查', detail.lastCheck)] : [], '',
       field('默认模型', detail?.defaultModel ?? '未设置'), '',
       theme.bold(`${state.modelFocus ? '› ' : ''}模型 · ${detail?.models?.length ?? 0}`));
     const modelRows = Math.max(1, available - detailRows.length - 1);

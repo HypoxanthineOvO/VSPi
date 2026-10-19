@@ -268,6 +268,7 @@ export interface ProviderOption {
 	models?: readonly string[];
 	authLabel?: string;
 	defaultModel?: string;
+	modelHealth?: { model: string; health: NonNullable<ModelOption['health']> };
 	localCredential?: { id: string; name: string; account?: string; expiresAt?: string };
 }
 

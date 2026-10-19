@@ -1,7 +1,17 @@
 import { groupModelAliases, modelIdentityKey } from './model-presentation.js';
 import type { ModelOption } from './types.js';
 
-export const DEFAULT_SOURCE_PRIORITY = ['anthropic', 'openai', 'deepseek', 'kimi-coding', 'moonshotai', 'moonshotai-cn', 'moonshot', 'google', 'zai', 'zhipu', 'minimax', 'xiaomi', 'devin', 'opencode-go', 'vsplab'];
+export const DEFAULT_SOURCE_PRIORITY = ['devin', 'openai-codex', 'github-copilot', 'anthropic', 'kimi-coding', 'opencode-go', 'openai', 'deepseek', 'moonshotai', 'moonshotai-cn', 'moonshot', 'google', 'zai', 'zhipu', 'minimax', 'xiaomi', 'vsplab'];
+
+export function defaultProviderPriority(providers: readonly { id: string; status: string; has_api_key: boolean }[]): string[] {
+  const rank = (id: string) => {
+    const index = DEFAULT_SOURCE_PRIORITY.indexOf(id);
+    return index < 0 ? DEFAULT_SOURCE_PRIORITY.length : index;
+  };
+  return [...providers].filter(provider => provider.status === 'connected')
+    .sort((left, right) => Number(left.has_api_key) - Number(right.has_api_key) || rank(left.id) - rank(right.id) || left.id.localeCompare(right.id))
+    .map(provider => provider.id);
+}
 export const COMPANY_ORDER = ['Anthropic', 'OpenAI', 'DeepSeek', 'Google', 'Moonshot', 'Zhipu', 'MiniMax', 'Xiaomi', 'Cognition', 'Alibaba', 'xAI', 'Tencent', '未归类'];
 
 export interface CanonicalModelGroup {
@@ -12,12 +22,12 @@ export interface CanonicalModelGroup {
   defaultSource?: ModelOption;
 }
 
-export function sourceUnhealthy(model: ModelOption, now = Date.now()): boolean {
+export function sourceUnhealthy(model: Pick<ModelOption, 'health'>, now = Date.now()): boolean {
   const health = model.health;
   return health !== undefined && health.expiresAt > now && health.lastFailure !== undefined && health.lastFailure.at > (health.lastSuccess ?? 0);
 }
 
-export function sourceHealthLabel(model: ModelOption, now = Date.now()): string {
+export function sourceHealthLabel(model: Pick<ModelOption, 'health'>, now = Date.now()): string {
   if (!model.health) return '未测试';
   if (model.health.expiresAt <= now) return '记录已过期';
   if (!sourceUnhealthy(model, now)) return '✓ 最近成功';

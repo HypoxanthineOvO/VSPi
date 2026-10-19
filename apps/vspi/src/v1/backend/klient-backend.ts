@@ -21,6 +21,7 @@ import type { AgentSnapshot } from "../agents/types.js";
 import type { CompactOptions } from "../continuity/compaction-profiles.js";
 import type { CronTask } from "../cron/types.js";
 import { DEFAULT_USAGE } from "../domain/defaults.js";
+import { defaultProviderPriority } from '../domain/canonical-models.js';
 import {
 	catalogEffortCapability,
 	normalizeEffortLevel,
@@ -557,7 +558,7 @@ export class KlientChatBackend implements ChatBackend {
 			this.connection.klient.global.kosong.listProviders(),
 			this.connection.klient.global.config.get<{ providerPriority?: string[] } | undefined>('modelCatalog'),
 		]);
-		const providerPriority = catalogConfig?.providerPriority;
+		const providerPriority = catalogConfig?.providerPriority ?? defaultProviderPriority(providers);
 		await Promise.all(
 			providers
 				.filter(

@@ -1309,6 +1309,34 @@ describe('canonical model identity', () => {
     expect(resolveCanonicalModel('left', { model: left }).id).not.toBe(resolveCanonicalModel('right', { model: right }).id);
   });
 
+  it.each([
+    ['Claude Opus 5.5', 'claude-opus-5-5', 'anthropic/claude-opus-5.5', 'Anthropic'],
+    ['GPT 6.1 Sol', 'gpt-6-1-sol', 'openai/gpt-6.1-sol', 'OpenAI'],
+    ['Gemini 3.5 Flash', 'gemini-3-5-flash', 'google/gemini-3.5-flash', 'Google'],
+    ['DeepSeek V4.1 Flash', 'deepseek-v4-1-flash', 'deepseek/deepseek-v4.1-flash', 'DeepSeek'],
+    ['Kimi K3', 'kimi-k3', 'moonshot/kimi-k3', 'Moonshot'],
+    ['GLM 5.3 1M', 'glm-5-3-1m', 'zhipu/glm-5.3-1m', 'Zhipu'],
+    ['SWE 1.6 Fast', 'swe-1-6-fast', 'cognition/swe-1.6-fast', 'Cognition'],
+    ['Claude Haiku 4.5', 'MODEL_PRIVATE_11', 'anthropic/claude-haiku-4.5', 'Anthropic'],
+  ])('groups Devin %s labels and IDs with other sources', (label, id, canonical, company) => {
+    expect(resolveCanonicalModel(`devin/${id}`, { model: `devin/${id}`, displayName: label }, 'devin')).toMatchObject({ id: canonical, company });
+    expect(resolveCanonicalModel(`devin/${id}`, { model: 'MODEL_PRIVATE_11', displayName: label }, 'devin').id).toBe(canonical);
+    if (id !== 'MODEL_PRIVATE_11') expect(resolveCanonicalModel(`devin/${id}`, { model: `devin/${id}` }, 'devin').id).toBe(canonical);
+  });
+
+  it('groups Devin Opus with a gateway Claude namespace', () => {
+    expect(resolveCanonicalModel('devin/claude-opus-5-5', { model: 'devin/claude-opus-5-5' }, 'devin').id)
+      .toBe(resolveCanonicalModel('gateway/opus', { model: 'Claude/claude-opus-5-5' }, 'gateway').id);
+  });
+
+  it.each(['Fast', '1M', 'Mini', 'Codex', 'Lightning', 'Luna', 'Sol', 'Terra', 'Astra'])('preserves the Devin %s variant', variant => {
+    const base = resolveCanonicalModel('devin/gpt', { model: 'GPT 6.1' }, 'devin').id;
+    const label = resolveCanonicalModel('devin/variant', { model: `GPT 6.1 ${variant}` }, 'devin').id;
+    const id = resolveCanonicalModel('devin/variant', { model: `devin/gpt-6-1-${variant.toLowerCase()}` }, 'devin').id;
+    expect(label).toBe(id);
+    expect(label).not.toBe(base);
+  });
+
   it('uses a recognizable display label for opaque vendor UIDs', () => {
     expect(resolveCanonicalModel('gateway/uid', { model: 'uid-a1', displayName: 'Claude Opus 5.5' })).toEqual({
       id: 'anthropic/claude-opus-5.5', company: 'Anthropic', displayName: 'Claude Opus 5.5',

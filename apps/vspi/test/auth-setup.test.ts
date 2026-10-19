@@ -110,6 +110,39 @@ describe("VSPi auth setup", () => {
     expect(stripAnsi(fresh.render(116, 28, theme).join('\n'))).toContain('尚未测试');
   });
 
+  it('loads the latest provider model health and retains it in a fresh manager', async () => {
+    const { loadProviderOptions } = await import('../src/v1/providers/provider-management.js');
+    const { ProviderManagerController } = await import('../src/v1/ui/provider-manager.js');
+    const now = Date.now();
+    const health = { lastSuccess: now - 10_000, lastFailure: { at: now - 1000, category: 'auth' as const }, expiresAt: now + 60_000 };
+    const klient = { global: {
+      config: { get: async () => undefined, inspect: async () => ({ userValue: {} }) },
+      auth: { listLocalCredentials: async () => [], listLoginProviders: async () => [] },
+      kosong: {
+        listProviders: async () => [{ id: 'devin', type: 'devin', has_api_key: false, status: 'connected', models: ['devin/opus', 'devin/haiku'] }],
+        listBuiltinProviders: async () => [],
+        listModels: async () => [
+          { provider: 'other', model: 'other/newer', health: { lastSuccess: now, expiresAt: now + 60_000 } },
+          { provider: 'devin', model: 'devin/opus', health },
+          { provider: 'devin', model: 'devin/haiku', health: { lastSuccess: now - 5000, expiresAt: now + 60_000 } },
+        ],
+      },
+    } } as unknown as Klient;
+    const options = await loadProviderOptions(klient, id => id);
+    expect(options[0]?.modelHealth).toEqual({ model: 'devin/opus', health });
+    const theme = createTheme(detectTerminalCapabilities(), 'Terminal');
+    const fresh = new ProviderManagerController(); fresh.setProviders(options);
+    const text = () => stripAnsi(fresh.render(156, 30, theme).join('\n'));
+    expect(text()).toContain('凭据被拒绝 (401/403)');
+    expect(text()).toContain('devin/opus');
+    expect(text()).not.toContain('尚未测试');
+    fresh.recordCheck('devin', '离线检查：配置完整');
+    expect(text()).toContain('凭据被拒绝 (401/403)');
+    expect(text()).toContain('离线检查');
+    fresh.setProviders([{ ...options[0]!, modelHealth: { model: 'devin/opus', health: { ...health, expiresAt: now - 1 } } }]);
+    expect(text()).toContain('记录已过期');
+  });
+
   it('does not replace an existing credential when API key verification fails', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })));
     const replace = vi.fn();

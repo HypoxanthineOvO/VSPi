@@ -29,7 +29,7 @@ const FAMILIES: ReadonlyArray<readonly [RegExp, string, string]> = [
   [/^step-\d/u, 'stepfun', 'StepFun'],
 ];
 
-const VENDOR_PREFIX = /^(?:anthropic|openai|moonshotai|moonshot|google|deepseek|zhipu|z-ai|minimax|xiaomi|cognition|alibaba|qwen|x-ai|xai|tencent)\//u;
+const VENDOR_PREFIX = /^(?:devin|claude|anthropic|openai|moonshotai|moonshot|google|deepseek|zhipu|z-ai|minimax|xiaomi|cognition|alibaba|qwen|x-ai|xai|tencent)\//u;
 const REVIEWED_ALIASES: Readonly<Record<string, string>> = { 'deepseek-flash': 'deepseek-v4.1-flash' };
 
 function normalizeIdentity(value: string): string {
