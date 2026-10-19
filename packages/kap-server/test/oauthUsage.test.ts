@@ -49,6 +49,8 @@ describe('server-v2 GET /api/v1/oauth/usage', () => {
   function oauthStub(getManagedUsage: IOAuthServiceType['getManagedUsage']): IOAuthServiceType {
     return {
       listLoginProviders: () => [],
+      listLocalCredentials: async () => [],
+      useLocalCredential: async () => { throw new Error('unused'); },
       submitLogin: () => { throw new Error('unused'); },
       resolveRequestAuth: async () => { throw new Error('unused'); },
       _serviceBrand: undefined,
@@ -175,6 +177,8 @@ describe('server-v2 GET /api/v1/oauth/userinfo', () => {
   function oauthStub(getManagedUserInfo: IOAuthServiceType['getManagedUserInfo']): IOAuthServiceType {
     return {
       listLoginProviders: () => [],
+      listLocalCredentials: async () => [],
+      useLocalCredential: async () => { throw new Error('unused'); },
       submitLogin: () => { throw new Error('unused'); },
       resolveRequestAuth: async () => { throw new Error('unused'); },
       _serviceBrand: undefined,

@@ -333,6 +333,8 @@ describe('server-v2 /api/v1 model/provider catalog', () => {
   ): IOAuthServiceType {
     return {
       listLoginProviders: () => [],
+      listLocalCredentials: async () => [],
+      useLocalCredential: async () => { throw new Error('unused'); },
       submitLogin: () => { throw new Error('unused'); },
       resolveRequestAuth: async () => { throw new Error('unused'); },
       _serviceBrand: undefined,

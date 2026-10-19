@@ -219,6 +219,8 @@ export interface GlobalAuthFacade {
   ensureReady(modelOverride?: string): Promise<void>;
   startLogin(provider?: string, options?: OAuthLoginOptions): Promise<OAuthFlowStart>;
   listLoginProviders(): Promise<readonly { readonly id: string; readonly name: string }[]>;
+  listLocalCredentials(): ReturnType<IOAuthService['listLocalCredentials']>;
+  useLocalCredential(id: string): Promise<void>;
   submitLogin(provider: string, flowId: string, promptId: string, input: string): Promise<void>;
   flow(provider?: string): Promise<OAuthFlowSnapshot | undefined>;
   cancelLogin(provider?: string): Promise<OAuthLoginCancelResponse>;
@@ -547,6 +549,8 @@ export function createGlobalFacade(scoped: ScopedCaller, scopedStream: ScopedStr
     },
 
     auth: {
+      listLocalCredentials: () => call('oauthService', 'listLocalCredentials', []) as ReturnType<IOAuthService['listLocalCredentials']>,
+      useLocalCredential: id => call('oauthService', 'useLocalCredential', [id]) as Promise<void>,
       listLoginProviders: () => call('oauthService', 'listLoginProviders', []) as Promise<readonly { readonly id: string; readonly name: string }[]>,
       submitLogin: (provider, flowId, promptId, input) =>
         call('oauthService', 'submitLogin', [provider, flowId, promptId, input]) as Promise<void>,

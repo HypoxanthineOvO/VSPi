@@ -654,6 +654,8 @@ describe('server-v2 /api/v1/sessions', () => {
 
     const oauth: IOAuthServiceType = {
       listLoginProviders: () => [],
+      listLocalCredentials: async () => [],
+      useLocalCredential: async () => { throw new Error('unused'); },
       submitLogin: () => {},
       resolveRequestAuth: async () => ({ apiKey: 'test-token' }),
       _serviceBrand: undefined,

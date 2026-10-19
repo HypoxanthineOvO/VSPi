@@ -99,6 +99,11 @@ export const oAuthLoginOptionsSchema = z.object({
 });
 
 export const authContract = {
+  listLocalCredentials: {
+    input: z.tuple([]),
+    output: z.array(z.object({ id: z.string(), provider: z.string(), name: z.string(), account: z.string().optional(), expiresAt: z.string().optional() })),
+  },
+  useLocalCredential: { input: z.tuple([z.string()]), output: noResult },
   listLoginProviders: {
     input: z.tuple([]),
     output: z.array(z.object({ id: z.string(), name: z.string() })),

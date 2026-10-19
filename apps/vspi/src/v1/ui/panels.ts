@@ -1,4 +1,5 @@
 import { Input, Key, matchesKey } from "@moonshot-ai/pi-tui";
+import { renderProviderManager } from './provider-manager.js';
 import type { AgentRunSnapshot, AgentSnapshot } from "../agents/types.js";
 import type {
 	AgentConversationActivity,
@@ -464,14 +465,6 @@ function panelKey(
 	return data === key || matchesKey(data, key);
 }
 
-function statusStyle(status: ProviderOption["status"], theme: VspiTheme) {
-	if (status === "已验证") return theme.success;
-	if (status === "异常") return theme.error;
-	if (status === "检测中") return theme.warning;
-	if (status === "已配置") return theme.blue;
-	return theme.muted;
-}
-
 function workingStyleLabel(style: AppSettings["workingStyle"]): string {
 	if (style === 1) return "1 · 小方块";
 	if (style === 2) return "2 · 大圆";
@@ -700,6 +693,12 @@ export class PanelController {
 	private skillAddMode: "source" | "agent" = "source";
 	private skillAddText = "";
 	private skillScope: SkillScope = "user";
+	private providerQuery = '';
+	private providerSearching = false;
+	private providerDetail = false;
+	private providerModelFocus = false;
+	private providerModelOffset = 0;
+	private allProviders: ProviderOption[] = [];
 	private providerEditing = false;
 	private providerActionMenu = false;
 	private activeProviderId: string | undefined;
@@ -1103,11 +1102,11 @@ export class PanelController {
 	}
 
 	setProviders(providers: ProviderOption[]): void {
-		this.providers = structuredClone(providers).toSorted(
-			(left, right) =>
-				providerPriorityIndex(left.id) - providerPriorityIndex(right.id) ||
-				left.label.localeCompare(right.label),
+		this.allProviders = structuredClone(providers).toSorted(
+			(left, right) => Number(right.status !== '未配置') - Number(left.status !== '未配置') ||
+				providerPriorityIndex(left.id) - providerPriorityIndex(right.id) || left.label.localeCompare(right.label),
 		);
+		this.providers = this.allProviders.filter(provider => `${provider.label} ${provider.id}`.toLowerCase().includes(this.providerQuery.toLowerCase()));
 		this.providerActionMenu = false;
 		this.providerEditing = false;
 		clampSelection(this.state, this.providers.length);
@@ -1378,6 +1377,10 @@ export class PanelController {
 			if (this.kind === "prompt" && this.promptImportEditing) {
 				this.promptImportEditing = false;
 				this.promptImportPath = "";
+				return;
+			}
+			if (this.kind === 'providers' && (this.providerSearching || this.providerDetail || this.providerModelFocus)) {
+				this.providerSearching = false; this.providerDetail = false; this.providerModelFocus = false;
 				return;
 			}
 			if (this.providerEditing) {
@@ -1753,6 +1756,7 @@ export class PanelController {
 
 	renderHint(width: number, theme: VspiTheme): string {
 		this.lastBodyWidth = Math.max(1, width - 2);
+		if (this.kind === 'providers' && !this.providerActionMenu && !this.providerEditing) return '';
 		if (this.kind === "subagentModels") return theme.muted(padLine(this.subagentModelsPanel.hint(), width));
 		const hint = renderInteractionHint(
 			"panel",
@@ -2013,6 +2017,36 @@ export class PanelController {
 	}
 
 	private handleProviders(data: string): PanelEvent | undefined {
+		if (!this.providerEditing && !this.providerActionMenu) {
+			if (!this.providerSearching && this.lastBodyWidth < 96 && matchesKey(data, Key.enter)) { this.providerDetail = true; return; }
+			if (data === '/') { this.providerSearching = true; return; }
+			if (this.providerSearching) {
+				if (matchesKey(data, Key.enter)) { this.providerSearching = false; return; }
+				this.providerQuery = this.editSharedTextField('provider-search', this.providerQuery, data, 200);
+				this.providers = this.allProviders.filter(provider => `${provider.label} ${provider.id}`.toLowerCase().includes(this.providerQuery.toLowerCase()));
+				this.state.selected = 0;
+				return;
+			}
+			if (matchesKey(data, Key.tab)) { this.providerModelFocus = !this.providerModelFocus; return; }
+			if (this.providerModelFocus && (matchesKey(data, Key.up) || matchesKey(data, Key.down))) {
+				this.providerModelOffset = Math.max(0, Math.min((this.providers[this.state.selected]?.models?.length ?? 1) - 1, this.providerModelOffset + (matchesKey(data, Key.up) ? -1 : 1)));
+				return;
+			}
+			const provider = this.providers[this.state.selected];
+			if (provider && /^[lLtTdDeE]$/.test(data)) {
+				this.activeProviderId = provider.id;
+				this.providerDraft = { label: provider.label, baseUrl: provider.baseUrl ?? 'https://', protocol: provider.protocol };
+				if (data.toLowerCase() === 'e') {
+					this.providerEditing = true; this.providerField = 0; this.state.selected = 0; return;
+				}
+				this.providerActions = data.toLowerCase() === 't' ? ['check-config', 'test-connection', 'minimal-generation']
+					: data.toLowerCase() === 'd' ? provider.storedCredential ? ['logout'] : []
+					: (provider.authMethods ?? []).map(method => `login:${method.type}`);
+				this.providerActionMenu = true;
+				this.state.selected = 0;
+				return { type: 'providerActions', provider, actions: [...this.providerActions] };
+			}
+		}
 		if (this.providerEditing) {
 			if (this.move(data, 3)) {
 				this.providerField = this.state.selected;
@@ -3260,58 +3294,10 @@ export class PanelController {
 		}
 		if (this.providers.length === 0)
 			return [theme.muted(padLine("没有可用 Provider", width))];
-		if (width >= MODEL_WIDE_MIN_BODY_WIDTH) {
-			const rowCount = Math.max(1, bodyRows);
-			const leftWidth = Math.max(20, Math.floor((width - 1) * 0.4));
-			const rightWidth = width - leftWidth - 1;
-			const list = this.providerListRows(rowCount, leftWidth, theme);
-			const provider = this.providers[this.state.selected];
-			const details = provider
-				? [
-						theme.bold(theme.focus(provider.label)),
-						`${theme.muted("Provider ID  ")}${provider.id}`,
-						`${theme.muted("协议  ")}${provider.protocol}`,
-						`${theme.muted("状态  ")}${provider.status}`,
-						`${theme.muted("来源  ")}${provider.detail}`,
-					]
-				: [theme.muted("没有可用 Provider")];
-			return Array.from(
-				{ length: rowCount },
-				(_, index) =>
-					`${list[index] ?? padLine("", leftWidth)}${theme.border("│")}${padLine(details[index] ?? "", rightWidth)}`,
-			);
-		}
-		return this.providerListRows(this.providers.length, width, theme);
-	}
-
-	private providerListRows(
-		rowCount: number,
-		width: number,
-		theme: VspiTheme,
-	): string[] {
-		const start = Math.max(
-			0,
-			Math.min(
-				this.state.selected - Math.floor(rowCount / 2),
-				Math.max(0, this.providers.length - rowCount),
-			),
-		);
-		return Array.from({ length: rowCount }, (_, row) => {
-			const index = start + row;
-			const provider = this.providers[index];
-			if (!provider) return padLine("", width);
-			const status = statusStyle(provider.status, theme)(provider.status);
-			return selectedLine(
-				alignRight(
-					`${provider.label}  ${theme.muted(provider.protocol)}`,
-					status,
-					Math.max(1, width - 2),
-				),
-				index === this.state.selected,
-				width,
-				theme,
-			);
-		});
+		return renderProviderManager(this.providers, {
+			selected: this.state.selected, query: this.providerQuery, searching: this.providerSearching, detail: this.providerDetail,
+			modelFocus: this.providerModelFocus, modelOffset: this.providerModelOffset,
+		}, width, bodyRows, theme);
 	}
 
 	private renderSessions(width: number, theme: VspiTheme): string[] {

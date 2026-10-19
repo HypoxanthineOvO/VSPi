@@ -248,6 +248,34 @@ describe('OAuthService', () => {
     return ix.get(IOAuthService);
   }
 
+  it('persists a local credential reference without copying tokens and removes only that reference', async () => {
+    const { registerLocalCredentialDetector } = await import('#/app/auth/localCredentials');
+    const unregister = registerLocalCredentialDetector({ id: 'example-local', provider: 'anthropic', name: 'Example CLI', detect: async () => ({}), resolve: async () => ({ apiKey: 'EXAMPLE_LOCAL_TOKEN' }) });
+    try {
+      const service = createService();
+      await service.useLocalCredential('example-local');
+      expect(providers['anthropic']?.oauth).toEqual({ storage: 'file', key: 'local-cli/example-local' });
+      expect(JSON.stringify(providers)).not.toContain('EXAMPLE_LOCAL_TOKEN');
+      expect(documents.size).toBe(0);
+      expect(await service.resolveRequestAuth('anthropic')).toEqual({ apiKey: 'EXAMPLE_LOCAL_TOKEN' });
+      await service.logout('anthropic');
+      expect(providers['anthropic']?.oauth).toBeUndefined();
+      expect(await service.listLocalCredentials()).toContainEqual(expect.objectContaining({ id: 'example-local' }));
+    } finally { unregister(); }
+  });
+
+  it('keeps the previous provider connection when local validation fails', async () => {
+    const { registerLocalCredentialDetector } = await import('#/app/auth/localCredentials');
+    providers['anthropic'] = { type: 'anthropic', apiKey: 'EXAMPLE_EXISTING_KEY' };
+    const unregister = registerLocalCredentialDetector({ id: 'example-invalid', provider: 'anthropic', name: 'Example CLI', detect: async () => ({}), resolve: async () => undefined });
+    try {
+      await expect(createService().useLocalCredential('example-invalid')).rejects.toThrow();
+      expect(providers['anthropic']).toEqual({ type: 'anthropic', apiKey: 'EXAMPLE_EXISTING_KEY' });
+      expect(providerSet).not.toHaveBeenCalled();
+      expect(documents.size).toBe(0);
+    } finally { unregister(); }
+  });
+
   function registerPi(login: OAuthAuth['login'], refreshToken?: OAuthAuth['refresh']): void {
     piMocks.oauth = {
           name: 'Example OAuth', login,
@@ -2348,6 +2376,49 @@ describe('AuthLegacyService', () => {
     defaultModel = 'k2';
     await expect(svc.get()).resolves.toMatchObject({ models_ready: true });
     expect(configReload).not.toHaveBeenCalled();
+  });
+});
+
+describe('Local CLI credential discovery', () => {
+  it('detects only parseable credentials, exposes metadata and rereads by reference', async () => {
+    const { LocalCredentialRegistry } = await import('#/app/auth/localCredentials');
+    const home = await mkdtemp(join(tmpdir(), 'local-credential-test-'));
+    try {
+      const registry = new LocalCredentialRegistry({ home, env: {} });
+      expect(await registry.detect()).toEqual([]);
+      await mkdir(join(home, '.kimi', 'credentials'), { recursive: true });
+      const path = join(home, '.kimi', 'credentials', 'kimi-code.json');
+      await writeFile(path, '{bad json');
+      expect(await registry.detect()).toEqual([]);
+      await writeFile(path, JSON.stringify({ access_token: 'EXAMPLE_ACCESS_TOKEN', expires_at: Date.now() / 1000 + 3600 }));
+      const entries = await registry.detect();
+      expect(entries).toEqual([expect.objectContaining({ id: 'kimi-cli', provider: 'kimi', name: 'Kimi CLI' })]);
+      expect(JSON.stringify(entries)).not.toContain('EXAMPLE_ACCESS_TOKEN');
+      const before = await readFile(path, 'utf8');
+      expect(await registry.resolve('kimi-cli')).toEqual({ apiKey: 'EXAMPLE_ACCESS_TOKEN' });
+      expect(await readFile(path, 'utf8')).toBe(before);
+      await writeFile(path, JSON.stringify({ access_token: 'EXAMPLE_NEW_TOKEN', expires_at: Date.now() / 1000 + 3600 }));
+      expect(await registry.resolve('kimi-cli')).toEqual({ apiKey: 'EXAMPLE_NEW_TOKEN' });
+      await rm(path);
+      expect(await registry.resolve('kimi-cli')).toBeUndefined();
+      expect(await registry.detect()).toEqual([]);
+      expect(await registry.resolve('unknown')).toBeUndefined();
+    } finally { await rm(home, { recursive: true, force: true }); }
+  });
+
+  it('supports a pluggable detector without exposing extra fields', async () => {
+    const { LocalCredentialRegistry, registerLocalCredentialDetector } = await import('#/app/auth/localCredentials');
+    const unregister = registerLocalCredentialDetector({
+      id: 'example-cli', provider: 'example', name: 'Example CLI',
+      detect: async () => ({ account: 'developer@example.test', unexpected: 'EXAMPLE_SECRET' }),
+      resolve: async () => ({ apiKey: 'EXAMPLE_SECRET' }),
+    });
+    try {
+      const registry = new LocalCredentialRegistry({ home: '/nonexistent', env: {} });
+      expect(await registry.detect()).toEqual([{ id: 'example-cli', provider: 'example', name: 'Example CLI', account: 'developer@example.test', expiresAt: undefined }]);
+      expect(await registry.resolve('example-cli')).toEqual({ apiKey: 'EXAMPLE_SECRET' });
+    } finally { unregister(); }
+    expect(await new LocalCredentialRegistry({ home: '/nonexistent', env: {} }).detect()).toEqual([]);
   });
 });
 

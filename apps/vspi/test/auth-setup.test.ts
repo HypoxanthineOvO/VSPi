@@ -29,6 +29,38 @@ function fakeConnection() {
 }
 
 describe("VSPi auth setup", () => {
+  it.each([76, 116])('renders the shared provider manager within %s columns', async width => {
+    const { renderProviderManager } = await import('../src/v1/ui/provider-manager.js');
+    const theme = createTheme(detectTerminalCapabilities(), 'Terminal');
+    const rows = renderProviderManager([{ id: 'example', label: 'Example', protocol: 'openai_responses', status: '已配置', detail: '2 个模型', storedCredential: 'api_key', models: ['Model A', 'Model B'] }],
+      { selected: 0, query: '', searching: false, detail: false, modelFocus: false, modelOffset: 0 }, width, 20, theme);
+    expect(rows.length).toBeLessThanOrEqual(20);
+    expect(rows.every(row => visibleWidth(row) <= width)).toBe(true);
+    const text = stripAnsi(rows.join('\n'));
+    expect(text).toContain('已连接');
+    expect(text).toContain('Example  ✓ 可用');
+    expect(text.includes('Endpoint')).toBe(width >= 96);
+    expect(text).not.toContain('来源');
+  });
+
+  it('keeps gateway fields on validation failure and never renders its secret', async () => {
+    const { ProviderGatewayForm } = await import('../src/v1/ui/provider-manager.js');
+    const submit = vi.fn();
+    const cancel = vi.fn();
+    const form = new ProviderGatewayForm(submit, cancel);
+    form.handleInput('Example Gateway'); form.handleInput('\t');
+    form.handleInput('ftp://example.test'); form.handleInput('\u0013');
+    expect(submit).not.toHaveBeenCalled();
+    const theme = createTheme(detectTerminalCapabilities(), 'Terminal');
+    expect(stripAnsi(form.render(76, theme).join('\n'))).toContain('Example Gateway');
+    form.handleInput('\u0015'); form.handleInput('https://example.test/v1');
+    form.handleInput('\t'); form.handleInput('\u001b[C'); form.handleInput('\t');
+    form.handleInput('YOUR_API_KEY');
+    expect(stripAnsi(form.render(76, theme).join('\n'))).not.toContain('YOUR_API_KEY');
+    form.handleInput('\u0013');
+    expect(submit).toHaveBeenCalledWith({ name: 'Example Gateway', baseUrl: 'https://example.test/v1', protocol: 'openai_responses', apiKey: 'YOUR_API_KEY' });
+    form.handleInput('\u001b'); expect(cancel).toHaveBeenCalledOnce();
+  });
 	it('defaults SSH login to device code and explains that no localhost callback is needed', async () => {
 		vi.stubEnv('SSH_CONNECTION', '192.0.2.1 12345 192.0.2.2 22');
 		try {
@@ -256,7 +288,7 @@ describe("VSPi auth setup", () => {
 		const app = new AuthSetupApp(new TuiMainScreen(new VirtualTerminal(80, 24)), createTheme(detectTerminalCapabilities(), 'Terminal'), klient, 'config', vi.fn(), true);
 		await app.load();
 		const menu = stripAnsi(app.render(80).join('\n'));
-		expect(menu).toContain('已配置');
+		expect(menu).toContain('已连接');
 		expect(menu).toContain('可添加');
 		expect(menu).toContain('Anthropic');
 		expect(menu).toContain('DeepSeek');
@@ -503,7 +535,7 @@ describe("VSPi auth setup", () => {
 		} as unknown as Klient;
 		const prompt = vi.fn().mockResolvedValueOnce("example/model").mockResolvedValueOnce("high");
 		await configureDefaultModel(klient, "example", { prompt, notify: vi.fn() });
-		expect(prompt.mock.calls[1]?.[0].options).toEqual([{ id: "high", label: "High" }, { id: "low", label: "Low" }]);
+		expect(prompt.mock.calls[1]?.[0].options).toEqual([{ id: 'low', label: 'Low · 快速响应，适合简单任务' }, { id: 'high', label: 'High · 深入推理，适合复杂任务' }]);
 		expect(setDefaultModel).toHaveBeenCalledWith("example/model");
 		expect(set).toHaveBeenCalledWith({ domain: "thinking", patch: { enabled: true, effort: "high" } });
 	});

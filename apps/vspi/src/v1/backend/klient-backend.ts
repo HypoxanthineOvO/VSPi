@@ -670,11 +670,12 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	async getProviderOptions(): Promise<ProviderOption[]> {
-		const [providers, builtins, loginProviders, configured] = await Promise.all([
+		const [providers, builtins, loginProviders, configured, localCredentials] = await Promise.all([
 			this.connection.klient.global.kosong.listProviders(),
 			this.connection.klient.global.kosong.listBuiltinProviders(),
 			this.connection.klient.global.auth.listLoginProviders(),
 			this.connection.klient.global.config.inspect<Record<string, Record<string, unknown>>>("providers"),
+			this.connection.klient.global.auth.listLocalCredentials?.() ?? [],
 		]);
 		return [...new Map([...builtins, ...providers].map((provider) => [provider.id, provider])).values()]
 			.filter((provider) => !hiddenLegacyProvider(provider.id))
@@ -688,13 +689,15 @@ export class KlientChatBackend implements ChatBackend {
 						: provider.status === "error"
 							? "异常"
 							: "未配置",
-				detail: `${String(provider.models?.length ?? 0)} models`,
+				detail: `${String(provider.models?.length ?? 0)} 个模型`,
+				models: provider.models,
+				localCredential: localCredentials.find(item => item.provider === provider.id),
 				baseUrl: provider.base_url,
 				custom: true,
 				authMethods: [
 					{ type: "api_key" as const, label: "API Key" },
-					...loginProviders.some((login) => login.id === provider.type || login.id === provider.id)
-						? [{ type: "oauth" as const, label: "订阅账号" }] : [],
+					...(localCredentials.some(item => item.provider === provider.id) || loginProviders.some((login) => login.id === provider.type || login.id === provider.id))
+						? [{ type: "oauth" as const, label: "本机凭据 / 订阅账号" }] : [],
 				],
 				storedCredential: configured.userValue?.[provider.id]?.["oauth"] !== undefined
 					? "oauth" : provider.has_api_key || configured.userValue?.[provider.id]?.["apiKeyEnv"] !== undefined ? "api_key" : undefined,
@@ -846,6 +849,18 @@ export class KlientChatBackend implements ChatBackend {
 				message: "API Key 已保存到 VSPi Core 配置",
 			});
 			return;
+		}
+		const local = (await this.connection.klient.global.auth.listLocalCredentials?.() ?? []).find(item => item.provider === providerId);
+		if (local) {
+			const loginProviders = await this.connection.klient.global.auth.listLoginProviders();
+			if (!loginProviders.some(provider => provider.id === providerId)) {
+				await this.connection.klient.global.auth.useLocalCredential(local.id);
+				return;
+			}
+			const method = await interaction.prompt({ type: 'select', message: '认证方式', options: [
+				{ id: 'local', label: `复用本机 ${local.name} 凭据` }, { id: 'browser', label: '浏览器登录 / 订阅账号' },
+			], signal: interaction.signal });
+			if (method === 'local') { await this.connection.klient.global.auth.useLocalCredential(local.id); return; }
 		}
 		await loginWithOAuth(this.connection.klient.global.auth, providerId, interaction);
 	}

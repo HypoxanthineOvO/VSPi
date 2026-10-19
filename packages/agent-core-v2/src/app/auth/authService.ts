@@ -68,6 +68,7 @@ import { isOAuthCatalogVendor } from '#/llm-adapter/provider/provider-definition
 import { ITelemetryService } from '#/app/telemetry/telemetry';
 import { IAtomicDocumentStore } from '#/persistence/interface/atomicDocumentStore';
 import { PiOAuthAdapter } from './piOAuthAdapter';
+import { LocalCredentialRegistry } from './localCredentials';
 import { OAUTH_NETWORK_SECTION, PROXY_SECTION, type OAuthNetworkConfig, type ProxyConfig } from './configSection';
 import { listPiModelRecords } from '#/llm-adapter/provider/pi/catalog';
 import type { ProviderRequestAuth } from '#/llm-adapter/contract/provider';
@@ -264,6 +265,11 @@ export class OAuthService extends Disposable implements IOAuthService {
   }
 
   async logout(provider = KIMI_CODE_PROVIDER_NAME): Promise<OAuthLogoutResponse> {
+    if (this.localCredentialId(provider) !== undefined) {
+      const current = this.providerService.get(provider);
+      if (current) await this.providerService.set(provider, { ...current, oauth: undefined });
+      return { logged_out: true, provider };
+    }
     if (provider !== KIMI_CODE_PROVIDER_NAME && this.pi.handles(provider)) {
       await this.pi.logout(provider);
       return { logged_out: true, provider };
@@ -294,17 +300,51 @@ export class OAuthService extends Disposable implements IOAuthService {
     }
   }
 
+  private readonly localCredentials = new LocalCredentialRegistry();
+
+  listLocalCredentials() { return this.localCredentials.detect(); }
+
+  async useLocalCredential(id: string): Promise<void> {
+    const entry = (await this.localCredentials.detect()).find(item => item.id === id);
+    if (!entry || !await this.localCredentials.resolve(id)) throw new AuthTokenMissingError(entry?.provider ?? id);
+    const current = this.providerService.get(entry.provider);
+    await this.provisionPiModels(entry.provider, entry.provider);
+    await this.providerService.set(entry.provider, {
+      ...current, type: current?.type ?? entry.provider,
+      apiKey: undefined, apiKeyEnv: undefined,
+      oauth: { storage: 'file', key: `local-cli/${id}` },
+    });
+  }
+
+  private localCredentialId(provider: string, oauthRef?: OAuthRef): string | undefined {
+    const key = (oauthRef ?? this.providerService.get(provider)?.oauth)?.key;
+    return key?.startsWith('local-cli/') ? key.slice('local-cli/'.length) : undefined;
+  }
+
   resolveTokenProvider(provider: string, oauthRef?: OAuthRef): BearerTokenProvider | undefined {
+    if (this.localCredentialId(provider, oauthRef) !== undefined) return { getAccessToken: async () => {
+      const auth = await this.resolveRequestAuth(provider, oauthRef);
+      if (!auth.apiKey) throw new AuthTokenMissingError(provider);
+      return auth.apiKey;
+    } };
     if (this.pi.handles(provider, oauthRef)) return this.pi.tokenProvider(provider, oauthRef);
     return this.toolkit.tokenProvider(provider, this.resolveRuntimeOAuthRef(provider, oauthRef));
   }
 
-  getCachedAccessToken(provider: string, oauthRef?: OAuthRef): Promise<string | undefined> {
+  async getCachedAccessToken(provider: string, oauthRef?: OAuthRef): Promise<string | undefined> {
+    const local = this.localCredentialId(provider, oauthRef);
+    if (local !== undefined) return (await this.localCredentials.resolve(local, provider))?.apiKey;
     if (this.pi.handles(provider, oauthRef)) return this.pi.getCachedAccessToken(provider, oauthRef);
     return this.toolkit.getCachedAccessToken(provider, this.resolveRuntimeOAuthRef(provider, oauthRef));
   }
 
   async resolveRequestAuth(provider: string, oauthRef?: OAuthRef, options?: { readonly force?: boolean }): Promise<ProviderRequestAuth> {
+    const local = this.localCredentialId(provider, oauthRef);
+    if (local !== undefined) {
+      const auth = await this.localCredentials.resolve(local, provider);
+      if (!auth) throw new AuthTokenMissingError(provider);
+      return auth;
+    }
     if (this.pi.handles(provider, oauthRef)) return this.pi.getRequestAuth(provider, oauthRef, options?.force);
     const tokenProvider = this.resolveTokenProvider(provider, oauthRef);
     if (tokenProvider === undefined) throw new AuthTokenMissingError(provider);
