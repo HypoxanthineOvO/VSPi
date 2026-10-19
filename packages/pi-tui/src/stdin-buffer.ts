@@ -247,9 +247,13 @@ function extractCompleteSequences(buffer: string): { sequences: string[]; remain
 				return { sequences, remainder: remaining };
 			}
 		} else {
-			// Not an escape sequence - take a single character
-			sequences.push(remaining[0]!);
-			pos++;
+			const first = remaining.charCodeAt(0);
+			if (remaining.length === 1 && first >= 0xd800 && first <= 0xdbff) {
+				return { sequences, remainder: remaining };
+			}
+			const length = remaining.codePointAt(0)! > 0xffff ? 2 : 1;
+			sequences.push(remaining.slice(0, length));
+			pos += length;
 		}
 	}
 
@@ -397,7 +401,8 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	}
 
 	private emitDataSequence(sequence: string): void {
-		const rawCodepoint = sequence.length === 1 ? sequence.codePointAt(0) : undefined;
+		const codepoint = sequence.codePointAt(0);
+		const rawCodepoint = codepoint !== undefined && sequence.length === (codepoint > 0xffff ? 2 : 1) ? codepoint : undefined;
 		if (rawCodepoint !== undefined && rawCodepoint === this.pendingKittyPrintableCodepoint) {
 			this.pendingKittyPrintableCodepoint = undefined;
 			return;

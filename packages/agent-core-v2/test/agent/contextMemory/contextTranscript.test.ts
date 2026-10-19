@@ -29,6 +29,34 @@ function userMessage(text: string, origin?: PromptOrigin): ContextMessage {
 }
 
 describe('bounded transcript projection', () => {
+  it('retains source metadata outside model messages and bounds deleted or unknown ordinals', () => {
+    const reducer = createContextTranscriptReducer({ maxContentChars: 4, tailContentLimit: 1 });
+    reducer.add(appendMessage(userMessage('request', { kind: 'user' })));
+    reducer.add(loopEvent({ type: 'step.begin', uuid: 'first-step', turnId: '7', step: 1 }));
+    reducer.add(loopEvent({ type: 'content.part', stepUuid: 'first-step', part: { type: 'text', text: 'same response' } }));
+    reducer.add(loopEvent({ type: 'step.end', uuid: 'first-step' }));
+    reducer.add(loopEvent({ type: 'step.begin', uuid: 'second-step', turnId: '8', step: 1 }));
+    reducer.add(loopEvent({ type: 'content.part', stepUuid: 'second-step', part: { type: 'text', text: 'same response' } }));
+    reducer.add(loopEvent({ type: 'step.end', uuid: 'second-step' }));
+    expect(reducer.sourceAt(1)).toEqual({ stepId: 'first-step', turnId: 7, step: 1 });
+    expect(reducer.sourceAt(2)).toEqual({ stepId: 'second-step', turnId: 8, step: 1 });
+    expect(reducer.result().entries[1]?.content).toEqual([]);
+    expect(reducer.result().entries[2]).not.toHaveProperty('source');
+    for (const ordinal of [-1, 0.5, 999, Number.NaN]) expect(reducer.sourceAt(ordinal)).toBeUndefined();
+    reducer.add(undo(1));
+    expect(reducer.sourceAt(1)).toBeUndefined();
+    expect(reducer.sourceAt(2)).toBeUndefined();
+    reducer.add(loopEvent({ type: 'step.begin', uuid: 'empty-step', turnId: '9', step: 1 }));
+    reducer.add(loopEvent({ type: 'step.end', uuid: 'empty-step' }));
+    expect(reducer.sourceAt(3)).toBeUndefined();
+    reducer.add(appendMessage(userMessage('later', { kind: 'user' })));
+    for (const record of assistantStep('later-step', 'kept')) reducer.add(record);
+    const ordinal = reducer.positions().at(-1)!;
+    reducer.add({ type: 'context.clear' });
+    reducer.add(compaction('summary', 1));
+    expect(reducer.sourceAt(ordinal)?.stepId).toBe('later-step');
+  });
+
   it('keeps content only in the requested history window without losing its positions', () => {
     const reducer = createContextTranscriptReducer({ maxContentChars: 10, contentOrdinals: new Set([2, 3]) });
     for (let index = 0; index < 8; index++) reducer.add(appendMessage(userMessage(`text-${index}`, { kind: 'user' })));

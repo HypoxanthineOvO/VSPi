@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { isDeepStrictEqual } from "node:util";
 import type {
 	AgentCronTask,
 	AgentHandle,
@@ -79,6 +80,14 @@ interface TurnState {
 	readonly segment: number;
 	readonly assistantId: string;
 	readonly thinkingId: string;
+}
+
+type HistoryPage = Awaited<ReturnType<AgentHandle['getHistory']>>;
+
+interface TaskOutputRequest {
+	agent: AgentHandle;
+	task: Extract<AgentTaskInfo, { kind: "agent" }>;
+	generation: number;
 }
 
 interface PendingPrompt {
@@ -195,6 +204,15 @@ export class KlientChatBackend implements ChatBackend {
 	private turnEndWaiters = new Map<number, Set<() => void>>();
 	private tasks = new Map<string, AgentTaskInfo>();
 	private taskOutputs = new Map<string, string>();
+	private readonly taskOutputRequests = new Map<string, TaskOutputRequest>();
+	private readonly taskOutputRetryAt = new Map<string, { task: TaskOutputRequest["task"]; at: number }>();
+	private taskOutputQueue: TaskOutputRequest[] = [];
+	private taskOutputActive = 0;
+	private taskGeneration = 0;
+	private lastAgentSnapshot: AgentSnapshot | undefined;
+	private lastTaskSnapshot: TaskDashboardSnapshot | undefined;
+	private lastTowerMissions: readonly TowerMissionProjection[] | undefined;
+	private lastPublishedPlanItems: PlanItem[] | undefined;
 	private childProgress = new Map<string, string>();
 	private childProgressSubscriptions = new Map<string, BackendSubscription>();
 	private parentTaskSummaries = new Map<string, string>();
@@ -203,7 +221,7 @@ export class KlientChatBackend implements ChatBackend {
 	private towerPlanActive = false;
 	private toolNames = new Map<string, string>();
 	private toolStartedAt = new Map<string, number>();
-	private parentAgentRuns = new Map<string, string>();
+	private parentAgentRuns = new Map<string, AgentToolRun[]>();
 	private pendingNotifications = new Map<string, string>();
 	private cronTasks: CronTask[] = [];
 	private runtimeGoalRevision = 0;
@@ -243,6 +261,14 @@ export class KlientChatBackend implements ChatBackend {
 	private historyOverflow = false;
 	private historyEventBytes = 0;
 	private historyEvents: Array<{ revision?: number; apply: () => void }> = [];
+	private readonly sourceMessageIds = new Map<string, { text?: string; thinking?: string; legacy?: boolean }>();
+	private readonly publishedMessageIds = new Set<string>();
+	private readonly promptMessageIds = new Map<string, string>();
+	private readonly incompleteStreamIds = new Set<string>();
+	private readonly interruptedPromptIds = new Set<string>();
+	private readonly mergedPromptMessageIds = new Set<string>();
+	private liveStepId: string | undefined;
+	private reconcilingHistory = false;
 
 	constructor(
 		connection: RuntimeConnection,
@@ -277,7 +303,11 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	async start(events: ChatBackendEvents): Promise<void> {
-		this.events = events;
+		this.events = { ...events,
+			onMessage: message => { this.publishedMessageIds.add(message.id); events.onMessage(message); },
+			onHistory: events.onHistory ? (messages, prepend) => { for (const message of messages) this.publishedMessageIds.add(message.id); events.onHistory?.(messages, prepend); } : undefined,
+			onHistoryReconcile: events.onHistoryReconcile ? (messages, metadata) => { for (const message of messages) this.publishedMessageIds.add(message.id); events.onHistoryReconcile?.(messages, metadata); } : undefined,
+		};
 		this.subscribeGlobalCatalog();
 		void this.refreshRelayCatalogs();
 		void this.connection.klient.global.config.get<{ timeoutMs?: number } | undefined>("subagent")
@@ -335,8 +365,8 @@ export class KlientChatBackend implements ChatBackend {
 		this.effort = preferredVisibleEffort(previousEffort, capability);
 		if (previousEffort !== undefined && previousEffort !== this.effort) this.events?.onNotice(`旧默认 Effort ${previousEffort} 不受当前模型支持，已预选 ${this.effort}；可通过 /model 重新确认`, "warning");
 		this.events?.onSessionReset?.({ id: `draft-${randomUUID()}`, reason, effort: this.effort });
-		this.events?.onPlanItems?.([]);
-		this.events?.onUsage({ ...DEFAULT_USAGE, contextWindow: selected?.max_context_size ?? 0 });
+		this.publishPlanItems([]);
+		this.publishUsageSnapshot({ ...DEFAULT_USAGE, contextWindow: selected?.max_context_size ?? 0 });
 	}
 
 	private async refreshRelayCatalogs(): Promise<void> {
@@ -518,6 +548,10 @@ export class KlientChatBackend implements ChatBackend {
 	}
 
 	async switchSession(id: string): Promise<void> {
+		await this.restoreSession(id, false);
+	}
+
+	private async restoreSession(id: string, reconcile: boolean): Promise<void> {
 		const handle = this.connection.klient.session(id);
 		const restored = await withTimeout(
 			handle.restore(),
@@ -526,7 +560,7 @@ export class KlientChatBackend implements ChatBackend {
 		);
 		if (!restored) throw new Error(`Session ${id} 不存在`);
 		const meta = await withTimeout(handle.get(), 10_000, "读取会话信息超时");
-		await this.bindSession(meta, "resume");
+		await this.bindSession(meta, "resume", reconcile);
 		this.events?.onSessionReady?.();
 	}
 
@@ -1115,8 +1149,11 @@ export class KlientChatBackend implements ChatBackend {
 	private async bindSession(
 		meta: SessionMeta,
 		reason: "startup" | "new" | "resume" | "fork" | "created",
+		reconcile = false,
 	): Promise<void> {
-		this.clearBindings();
+		const preserving = reconcile && this.meta?.id === meta.id && this.events?.onHistoryReconcile !== undefined;
+		this.clearBindings(preserving);
+		this.reconcilingHistory = preserving;
 		const draftPermission = reason === "created" ? this.draftPermission : undefined;
 		this.draftPermission = undefined;
 		this.policyRevision += 1;
@@ -1183,7 +1220,7 @@ export class KlientChatBackend implements ChatBackend {
 			this.currentProvider = "";
 			this.supportsVision = false;
 		}
-		this.events?.onSessionReset?.({ id: meta.id, reason, effort: this.effort });
+		if (!preserving) this.events?.onSessionReset?.({ id: meta.id, reason, effort: this.effort });
 		this.hydrating = reason !== 'created';
 		this.subscribe();
 		await this.refreshPolicy(this.agent);
@@ -1295,6 +1332,7 @@ export class KlientChatBackend implements ChatBackend {
 		if (this.connectionFailed) return;
 		this.connectionFailed = true;
 		this.turn = undefined;
+		for (const id of [...this.pendingPrompts.keys(), ...this.queuedPrompts.keys()]) this.interruptedPromptIds.add(id);
 		for (const pending of this.pendingPrompts.values()) pending.reject(error);
 		this.pendingPrompts.clear();
 		for (const id of this.queuedPrompts.keys()) this.setPromptPhase(id, "failed");
@@ -1326,7 +1364,7 @@ export class KlientChatBackend implements ChatBackend {
 					}
 					for (const subscription of this.globalSubscriptions) subscription.dispose();
 					this.globalSubscriptions = [];
-					this.clearBindings();
+					this.clearBindings(true);
 					await this.connection.close().catch(() => {});
 					if (this.disposed) {
 						await connection.close().catch(() => {});
@@ -1338,7 +1376,7 @@ export class KlientChatBackend implements ChatBackend {
 					this.submissionEpoch += 1;
 					this.subscribeGlobalCatalog();
 					void this.refreshRelayCatalogs();
-					if (this.meta) await this.switchSession(this.meta.id);
+					if (this.meta) await this.restoreSession(this.meta.id, true);
 					else await this.prepareDraft("startup");
 					if (this.disposed) {
 						this.clearBindings();
@@ -1491,6 +1529,7 @@ export class KlientChatBackend implements ChatBackend {
 				this.appendStream(id, event.delta, "thinking");
 			}),
 			events.on("turn.step.started", (event) => {
+				this.liveStepId = event.stepId;
 				for (const [promptId, turnId] of this.steeredPrompts) {
 					if (turnId !== event.turnId) continue;
 					this.consumeQueuedPrompt(promptId);
@@ -1559,7 +1598,7 @@ export class KlientChatBackend implements ChatBackend {
 				this.pendingTodoUpdates.delete(event.toolCallId);
 				if (!event.isError && todoItems !== undefined) {
 					this.lastTodoItems = structuredClone(todoItems);
-					if (!this.towerPlanActive) this.events?.onPlanItems?.(todoItems);
+					if (!this.towerPlanActive) this.publishPlanItems(todoItems);
 				}
 				this.events?.onMessageUpdate(event.toolCallId, {
 					status: event.isError ? "error" : "success",
@@ -1610,6 +1649,8 @@ export class KlientChatBackend implements ChatBackend {
 				const userSubmitted =
 					this.pendingPrompts.has(event.promptId) ||
 					this.queuedPrompts.has(event.promptId);
+				if (userSubmitted) this.promptMessageIds.set(event.userMessageId, event.promptId);
+				this.publishedMessageIds.add(this.promptMessageIds.get(event.userMessageId) ?? event.userMessageId);
 				if (event.status === "running")
 					this.consumeQueuedPrompt(event.promptId);
 				if (userSubmitted) return;
@@ -1628,6 +1669,12 @@ export class KlientChatBackend implements ChatBackend {
 			events.on("turn.steer", (event) => {
 				for (const promptId of event.promptIds ?? []) {
 					if (this.turn) this.steeredPrompts.set(promptId, this.turn.id);
+				}
+			}),
+			events.on('prompt.steered', event => {
+				if (event.messageId && event.promptIds.length > 1 && event.promptIds.every(id => this.publishedMessageIds.has(id) || this.pendingPrompts.has(id) || this.queuedPrompts.has(id))) {
+					this.mergedPromptMessageIds.add(event.messageId);
+					this.publishedMessageIds.add(event.messageId);
 				}
 			}),
 			events.on("goal.updated", (event) => {
@@ -1688,20 +1735,66 @@ export class KlientChatBackend implements ChatBackend {
 			this.historyOverflow = false;
 			const page = await agent.getHistory({ limit: 100 });
 			if (this.agent !== agent) return;
+			let items = [...page.items];
+			let sources = page.sources;
+			let before = page.before;
+			let truncated = page.truncated;
+			while (this.reconcilingHistory && sources !== undefined && before !== undefined && !this.historyOverlaps(items, sources)) {
+				const older = await agent.getHistory({ before, limit: 100 });
+				if (this.agent !== agent) return;
+				if (older.before !== undefined && older.before >= before) throw new Error('历史分页没有向前推进');
+				items = [...older.items, ...items];
+				sources = { ...older.sources, ...sources };
+				truncated ||= older.truncated;
+				before = older.before;
+			}
 			if (this.historyOverflow) { this.historyEventBytes = 0; continue; }
-			this.historyBefore = page.before;
+			this.historyBefore = before;
 			this.historyRevision = page.revision;
-			this.projectHistory(page.items, false);
+			if (this.reconcilingHistory && (sources === undefined || items.some(raw => {
+				const message = record(raw);
+				const id = typeof message['id'] === 'string' ? message['id'] : '';
+				const content = Array.isArray(message['content']) ? message['content'] : [];
+				return message['role'] === 'assistant' && !sources?.[id] && (contentText(content).length > 0 || contentThinking(content).length > 0);
+			}))) {
+				this.events?.onNotice('当前运行时的历史缺少稳定来源标识，将按兼容方式重新恢复会话历史。', 'warning');
+				this.reconcilingHistory = false;
+				this.sourceMessageIds.clear();
+				this.promptMessageIds.clear();
+				this.publishedMessageIds.clear();
+				if (this.meta) this.events?.onSessionReset?.({ id: this.meta.id, reason: 'resume', effort: this.effort });
+			}
+			const projected = this.projectHistory(items, false, sources, this.reconcilingHistory, new Set(page.activity.turn?.activeToolCalls.map(tool => tool.toolCallId)), truncated);
+			if (this.reconcilingHistory || page.live?.stepId) {
+				const live = page.live;
+				const aliases = live?.stepId ? this.sourceMessageIds.get(live.stepId) : undefined;
+				const fallback = live ? turnState(live.turnId, live.segment) : undefined;
+				for (const message of projected) {
+					if (message.kind !== 'text' && message.kind !== 'thinking') continue;
+					if (!live || message.id !== (aliases?.text ?? fallback?.assistantId) && message.id !== (aliases?.thinking ?? fallback?.thinkingId)) continue;
+					if (truncated && message.text.endsWith('[display truncated]')) {
+						this.incompleteStreamIds.add(message.id);
+						this.events?.onNotice('已保留当前已显示的内容；历史快照存在缺口，本窗口暂停显示该段增量，完整回答仍保存在会话持久记录中。', 'warning');
+					} else this.streamMessages.set(message.id, { ...message, streaming: true });
+				}
+				for (const id of this.streamMessages.keys()) {
+					if (live && (id === (aliases?.text ?? fallback?.assistantId) || id === (aliases?.thinking ?? fallback?.thinkingId))) continue;
+					this.events?.onMessageUpdate(id, { streaming: false });
+					this.streamMessages.delete(id);
+				}
+			}
 			this.effort = normalizeEffortLevel(page.effort);
 			await this.refreshModelBinding(agent);
 			this.applyActivity(page.activity);
 			if (page.live) {
 				this.turn = { ...turnState(page.live.turnId, page.live.segment), effort: this.effort };
-				if (page.live.text) this.appendStream(this.turn.assistantId, page.live.text, 'text');
-				if (page.live.thinking) this.appendStream(this.turn.thinkingId, page.live.thinking, 'thinking');
+				this.liveStepId = page.live.stepId;
+				if (page.live.text) this.restoreLiveStream(this.turn.assistantId, page.live.text, 'text');
+				if (page.live.thinking) this.restoreLiveStream(this.turn.thinkingId, page.live.thinking, 'thinking');
 			}
 			for (const tool of page.activity.turn?.activeToolCalls ?? []) this.events?.onMessageUpdate(tool.toolCallId, { status: 'running' });
 			this.hydrating = false;
+			this.reconcilingHistory = false;
 			const buffered = this.historyEvents;
 			this.historyEvents = []; this.historyEventBytes = 0;
 			for (const event of buffered) if (event.revision === undefined || event.revision > page.revision) event.apply();
@@ -1712,6 +1805,18 @@ export class KlientChatBackend implements ChatBackend {
 		throw new Error('历史同步期间事件过多，请等待当前步骤完成后重新接入');
 	}
 
+	private historyOverlaps(items: readonly unknown[], sources: NonNullable<HistoryPage['sources']>): boolean {
+		return items.some(raw => {
+			const message = record(raw);
+			const id = typeof message['id'] === 'string' ? message['id'] : '';
+			const aliases = sources[id] ? this.sourceMessageIds.get(sources[id]!.stepId) : undefined;
+			if (message['role'] === 'assistant' && sources[id]) return Boolean(aliases && (aliases.text !== undefined && this.publishedMessageIds.has(aliases.text) || aliases.thinking !== undefined && this.publishedMessageIds.has(aliases.thinking)));
+			if (!id.startsWith('history:') && this.publishedMessageIds.has(this.promptMessageIds.get(id) ?? id)) return true;
+			if (typeof message['toolCallId'] === 'string' && this.publishedMessageIds.has(message['toolCallId'])) return true;
+			return Array.isArray(message['toolCalls']) && message['toolCalls'].some(call => typeof record(call)['id'] === 'string' && this.publishedMessageIds.has(record(call)['id'] as string));
+		});
+	}
+
 	private async restoreHistory(): Promise<void> {
 		const agent = this.requireAgent();
 		this.hydrating = true;
@@ -1719,6 +1824,7 @@ export class KlientChatBackend implements ChatBackend {
 		catch (error) {
 			if (this.agent !== agent) return;
 			this.hydrating = false;
+			this.reconcilingHistory = false;
 			const events = this.historyEvents;
 			this.historyEvents = []; this.historyEventBytes = 0; this.historyOverflow = false;
 			for (const event of events) event.apply();
@@ -1739,7 +1845,7 @@ export class KlientChatBackend implements ChatBackend {
 		this.projectHistory(page.items, true);
 	}
 
-	private projectHistory(history: readonly unknown[], prepend: boolean): void {
+	private projectHistory(history: readonly unknown[], prepend: boolean, sources?: HistoryPage['sources'], reconcile = false, activeToolIds?: ReadonlySet<string>, truncated = false): TranscriptMessage[] {
 		const messages: TranscriptMessage[] = [];
 		const emit = (message: TranscriptMessage) => { messages.push(message); };
 		const update = (id: string, patch: Partial<TranscriptMessage>) => {
@@ -1754,17 +1860,24 @@ export class KlientChatBackend implements ChatBackend {
 		for (const [index, raw] of history.entries()) {
 			const message = record(raw);
 			const role = message["role"];
-			const messageId =
+			const persistedId =
 				typeof message["id"] === "string"
 					? message["id"]
 					: `history:${String(index)}`;
+			const messageId = reconcile ? this.promptMessageIds.get(persistedId) ?? persistedId : persistedId;
 			const content = Array.isArray(message["content"])
 				? message["content"]
 				: [];
 			if (role === "user") {
+				if (reconcile && this.mergedPromptMessageIds.has(persistedId)) continue;
 				const origin = record(message["origin"]);
 				const text = contentText(content);
 				if (origin["kind"] === "user" && text.length > 0) {
+					if (reconcile && (this.promptPhases.get(messageId) === 'queued' || this.interruptedPromptIds.has(messageId))) {
+						this.promptPhases.delete(messageId);
+						this.interruptedPromptIds.delete(messageId);
+						this.setPromptPhase(messageId, 'started');
+					}
 					emit({
 						id: messageId,
 						role: "user",
@@ -1788,10 +1901,15 @@ export class KlientChatBackend implements ChatBackend {
 				continue;
 			}
 			if (role === "assistant") {
-				const thinking = contentThinking(content);
+				const source = sources?.[persistedId];
+				const aliases = source ? this.sourceMessageIds.get(source.stepId) : undefined;
+				const textId = reconcile && source ? aliases?.text ?? `assistant-step:${source.stepId}` : messageId;
+				const thinkingId = reconcile && source ? aliases?.thinking ?? `thinking-step:${source.stepId}` : `${messageId}:thinking`;
+				const verbatim = reconcile && aliases?.legacy !== true;
+				const thinking = contentThinking(content, verbatim);
 				if (thinking.length > 0) {
 					emit({
-						id: `${messageId}:thinking`,
+						id: thinkingId,
 						role: "assistant",
 						kind: "thinking",
 						effort: this.effort,
@@ -1800,16 +1918,17 @@ export class KlientChatBackend implements ChatBackend {
 						streaming: false,
 					});
 				}
-				const text = contentText(content);
+				const text = contentText(content, verbatim);
 				if (text.length > 0) {
 					emit({
-						id: messageId,
+						id: textId,
 						role: "assistant",
 						kind: "text",
 						text,
 						streaming: false,
 					});
 				}
+				if (source) this.sourceMessageIds.set(source.stepId, { text: text.length > 0 ? textId : aliases?.text, thinking: thinking.length > 0 ? thinkingId : aliases?.thinking, legacy: aliases?.legacy ?? !reconcile });
 				const toolCalls = Array.isArray(message["toolCalls"])
 					? message["toolCalls"]
 					: [];
@@ -1863,12 +1982,15 @@ export class KlientChatBackend implements ChatBackend {
 					update(toolCallId, { kind: "text", text: notification, streaming: false, presentation: "intermediate" });
 			}
 		}
-		if (this.events?.onHistory) this.events.onHistory(messages, prepend);
+		for (const message of messages) if (message.kind === 'tool' && activeToolIds?.has(message.id)) message.status = 'running';
+		if (reconcile && this.events?.onHistoryReconcile) this.events.onHistoryReconcile(messages, { truncated });
+		else if (this.events?.onHistory) this.events.onHistory(messages, prepend);
 		else for (const message of messages) this.events?.onMessage(message);
 		if (!prepend && latestTodoItems !== undefined) {
 			this.lastTodoItems = structuredClone(latestTodoItems);
-			if (!this.towerPlanActive) this.events?.onPlanItems?.(latestTodoItems);
+			if (!this.towerPlanActive) this.publishPlanItems(latestTodoItems);
 		}
+		return messages;
 	}
 
 	private appendStream(
@@ -1876,8 +1998,9 @@ export class KlientChatBackend implements ChatBackend {
 		delta: string,
 		kind: "text" | "thinking",
 	): void {
-		const bounded = (text: string) => text.length > 262144 ? `[显示已截取末尾；完整内容保存在会话记录中]\n${text.slice(-262144)}` : text;
-		delta = bounded(delta);
+		if (delta.length === 0) return;
+		id = this.sourceStreamId(id, kind);
+		if (this.incompleteStreamIds.has(id)) return;
 		const existing = this.streamMessages.get(id);
 		if (existing === undefined) {
 			const message: TranscriptMessage =
@@ -1902,15 +2025,35 @@ export class KlientChatBackend implements ChatBackend {
 			this.events?.onMessage(message);
 			return;
 		}
-		if (existing.kind === "text") {
-			const next = bounded(`${existing.text}${delta}`);
-			existing.text = next;
-			this.events?.onMessageUpdate(id, { text: next });
-		} else if (existing.kind === "thinking") {
-			const next = bounded(`${existing.text}${delta}`);
-			existing.text = next;
+		if (existing.kind === "text" || existing.kind === "thinking") {
+			const next = `${existing.text}${delta}`;
+			this.streamMessages.set(id, { ...existing, text: next });
 			this.events?.onMessageUpdate(id, { text: next });
 		}
+	}
+
+	private sourceStreamId(id: string, kind: 'text' | 'thinking'): string {
+		if (!this.liveStepId) return id;
+		const aliases = this.sourceMessageIds.get(this.liveStepId) ?? {};
+		const resolved = aliases[kind] ?? id;
+		this.sourceMessageIds.set(this.liveStepId, { ...aliases, [kind]: resolved });
+		if (this.turn) this.turn = { ...this.turn, [kind === 'text' ? 'assistantId' : 'thinkingId']: resolved };
+		return resolved;
+	}
+
+	private restoreLiveStream(id: string, text: string, kind: 'text' | 'thinking'): void {
+		id = this.sourceStreamId(id, kind);
+		const previous = this.streamMessages.get(id);
+		if (this.reconcilingHistory && previous && (previous.kind === 'text' || previous.kind === 'thinking') && text.length >= 262144) {
+			this.incompleteStreamIds.add(id);
+			this.events?.onNotice('已保留重连前显示的内容；实时快照存在缺口，本窗口暂停显示该段增量，完整回答仍保存在会话持久记录中。', 'warning');
+			return;
+		}
+		if (this.reconcilingHistory && this.publishedMessageIds.has(id)) {
+			const message: TranscriptMessage = kind === 'text' ? { id, role: 'assistant', kind, text, streaming: true } : { id, role: 'assistant', kind, text, streaming: true, collapsed: true, effort: this.effort };
+			this.streamMessages.set(id, message);
+			this.events?.onMessageUpdate(id, { text, streaming: true });
+		} else this.appendStream(id, text, kind);
 	}
 
 	private readonly streamMessages = new Map<string, TranscriptMessage>();
@@ -2032,7 +2175,7 @@ export class KlientChatBackend implements ChatBackend {
           pending.delete(event.toolCallId);
           if (!text || event.isError || summarizeOutput(event.output) !== 'Update shown to the user.') return;
           this.childProgress.set(task.taskId, text.replace(/^\*\*进度(?: · )?/, '').replace('**\n\n', ' · '));
-          this.events?.onAgentSnapshot?.(this.getAgentSnapshot());
+          this.publishAgentSnapshot();
         }),
       ];
       this.childProgressSubscriptions.set(task.taskId, { dispose: () => { for (const subscription of subscriptions) subscription.dispose(); } });
@@ -2045,6 +2188,7 @@ export class KlientChatBackend implements ChatBackend {
 
 	private async readTasks(strict: boolean): Promise<void> {
 		const agent = this.agent;
+		const generation = this.taskGeneration;
 		if (agent === undefined) return;
 		let tasks: readonly AgentTaskInfo[];
 		try {
@@ -2053,7 +2197,7 @@ export class KlientChatBackend implements ChatBackend {
 			if (strict) throw error;
 			return;
 		}
-		if (this.agent !== agent) return;
+		if (this.agent !== agent || this.taskGeneration !== generation) return;
 		const previous = this.tasks;
 		const listedTaskIds = new Set(tasks.map((task) => task.taskId));
 		const missingRunningAgents = [...previous.values()].filter(
@@ -2075,34 +2219,82 @@ export class KlientChatBackend implements ChatBackend {
 			...tasks,
 			...rechecked.flatMap(({ task }) => (task === undefined ? [] : [task])),
 		];
-		if (this.agent !== agent) return;
+		if (this.agent !== agent || this.taskGeneration !== generation) return;
 		this.tasks = reconcileTaskSnapshot(previous, mergedTasks, Date.now());
 		this.watchChildProgress();
-		for (const id of this.taskOutputs.keys()) if (!this.tasks.has(id)) this.taskOutputs.delete(id);
+		for (const id of this.taskOutputs.keys()) {
+			const task = this.tasks.get(id);
+			const old = previous.get(id);
+			if (!task || task.status === "running" || old && !sameTaskOutputRun(old, task)) this.taskOutputs.delete(id);
+		}
+		for (const [id, retry] of this.taskOutputRetryAt) {
+			const task = this.tasks.get(id);
+			if (!task || !sameTaskOutputRun(task, retry.task)) this.taskOutputRetryAt.delete(id);
+		}
 		const retainedParents = new Set([...this.tasks.values()].flatMap(task => task.kind === 'agent' && task.parentToolCallId ? [task.parentToolCallId] : []));
 		for (const id of this.parentTaskSummaries.keys()) if (!retainedParents.has(id)) this.parentTaskSummaries.delete(id);
-		const outputs = mergedTasks
-				.filter(
-					(task) =>
-						task.kind === "agent" &&
-						task.status !== "running" &&
-						previous.get(task.taskId)?.status !== task.status,
-				);
-		for (let offset = 0; offset < outputs.length; offset += 4) {
-			await Promise.all(outputs.slice(offset, offset + 4).map(async (task) => {
-					try {
-						const output = await agent.getTaskOutput({ taskId: task.taskId, tail: 200 });
-						if (this.agent === agent && this.tasks.has(task.taskId)) this.taskOutputs.set(task.taskId, output);
-					} catch {
-						if (this.agent === agent) this.taskOutputs.delete(task.taskId);
-					}
-			}));
-			if (this.agent !== agent) return;
+		for (const id of this.parentAgentRuns.keys()) if (!retainedParents.has(id)) this.parentAgentRuns.delete(id);
+		this.publishTaskViews();
+		for (const task of this.tasks.values()) {
+			if (task.kind !== "agent" || task.status === "running" || task.status === "lost" || this.taskOutputs.has(task.taskId)) continue;
+			if ((this.taskOutputRetryAt.get(task.taskId)?.at ?? 0) > Date.now()) continue;
+			const pending = this.taskOutputRequests.get(task.taskId);
+			if (pending && pending.generation === generation && sameTaskOutputRun(pending.task, task)) continue;
+			const request = { agent, task, generation };
+			this.taskOutputRequests.set(task.taskId, request);
+			this.taskOutputQueue.push(request);
 		}
-		if (this.agent !== agent) return;
+		this.drainTaskOutputs();
+	}
+
+	private publishTaskViews(): void {
 		this.publishParentTaskSummaries();
-		this.events?.onAgentSnapshot?.(this.getAgentSnapshot());
-		this.events?.onTaskSnapshot?.(this.getTaskSnapshot());
+		this.publishAgentSnapshot();
+		const snapshot = this.getTaskSnapshot();
+		if (isDeepStrictEqual(this.lastTaskSnapshot, snapshot)) return;
+		this.lastTaskSnapshot = snapshot;
+		this.events?.onTaskSnapshot?.(snapshot);
+	}
+
+	private publishAgentSnapshot(): void {
+		const snapshot = this.getAgentSnapshot();
+		if (isDeepStrictEqual(this.lastAgentSnapshot, snapshot)) return;
+		this.lastAgentSnapshot = snapshot;
+		this.events?.onAgentSnapshot?.(snapshot);
+	}
+
+	private taskOutputCurrent(request: TaskOutputRequest): boolean {
+		const current = this.tasks.get(request.task.taskId);
+		return !this.disposed && this.agent === request.agent && this.taskGeneration === request.generation &&
+			this.taskOutputRequests.get(request.task.taskId) === request && current !== undefined && sameTaskOutputRun(current, request.task);
+	}
+
+	private drainTaskOutputs(): void {
+		while (this.taskOutputActive < 4 && this.taskOutputQueue.length > 0) {
+			const request = this.taskOutputQueue.shift()!;
+			if (!this.taskOutputCurrent(request)) {
+				if (this.taskOutputRequests.get(request.task.taskId) === request) this.taskOutputRequests.delete(request.task.taskId);
+				continue;
+			}
+			this.taskOutputActive += 1;
+			void this.readTaskOutput(request).finally(() => {
+				if (request.generation === this.taskGeneration) this.taskOutputActive -= 1;
+				if (this.taskOutputRequests.get(request.task.taskId) === request) this.taskOutputRequests.delete(request.task.taskId);
+				this.drainTaskOutputs();
+			});
+		}
+	}
+
+	private async readTaskOutput(request: TaskOutputRequest): Promise<void> {
+		try {
+			const output = await request.agent.getTaskOutput({ taskId: request.task.taskId, tail: 200 });
+			if (!this.taskOutputCurrent(request)) return;
+			this.taskOutputs.set(request.task.taskId, output);
+			this.taskOutputRetryAt.delete(request.task.taskId);
+			this.publishTaskViews();
+		} catch {
+			if (this.taskOutputCurrent(request)) this.taskOutputRetryAt.set(request.task.taskId, { task: request.task, at: Date.now() + 5_000 });
+		}
 	}
 
 	private refreshTowerMissions(): Promise<void> {
@@ -2111,22 +2303,33 @@ export class KlientChatBackend implements ChatBackend {
 
 	private async readTowerMissions(): Promise<void> {
 		const agent = this.agent;
+		const generation = this.taskGeneration;
 		if (agent === undefined) return;
 		try {
 			const active = await agent.isTowerActive();
-			if (this.agent !== agent) return;
+			if (this.agent !== agent || this.taskGeneration !== generation) return;
 			if (active) {
 				this.towerPlanActive = true;
 				const missions = await agent.getTowerMissions();
-				if (this.agent !== agent) return;
-				this.events?.onTowerMissions?.([...missions]);
-				this.events?.onPlanItems?.(projectTowerMissionPlanItems(missions));
+				if (this.agent !== agent || this.taskGeneration !== generation) return;
+				if (!isDeepStrictEqual(this.lastTowerMissions, missions)) {
+					this.lastTowerMissions = structuredClone(missions);
+					this.events?.onTowerMissions?.([...missions]);
+				}
+				this.publishPlanItems(projectTowerMissionPlanItems(missions));
 			} else if (this.towerPlanActive) {
 				this.towerPlanActive = false;
+				this.lastTowerMissions = [];
 				this.events?.onTowerMissions?.([]);
-				this.events?.onPlanItems?.(this.lastTodoItems);
+				this.publishPlanItems(this.lastTodoItems);
 			}
 		} catch {}
+	}
+
+	private publishPlanItems(items: PlanItem[]): void {
+		if (isDeepStrictEqual(this.lastPublishedPlanItems, items)) return;
+		this.lastPublishedPlanItems = structuredClone(items);
+		this.events?.onPlanItems?.(items);
 	}
 
 	private publishParentTaskSummaries(): void {
@@ -2160,11 +2363,8 @@ export class KlientChatBackend implements ChatBackend {
 						: undefined,
 				result: this.taskOutputs.get(task.taskId),
 			}));
-			const signature = JSON.stringify(
-				agentRuns.map((run) => [run.name, run.status, run.finishedAt, run.result]),
-			);
-			if (this.parentAgentRuns.get(toolCallId) === signature) continue;
-			this.parentAgentRuns.set(toolCallId, signature);
+			if (isDeepStrictEqual(this.parentAgentRuns.get(toolCallId), agentRuns)) continue;
+			this.parentAgentRuns.set(toolCallId, agentRuns);
 			this.events?.onMessageUpdate(toolCallId, { agentRuns });
 		}
 	}
@@ -2224,10 +2424,11 @@ export class KlientChatBackend implements ChatBackend {
 
 	private async readUsage(finishTurn: boolean): Promise<void> {
 		const agent = this.agent;
+		const generation = this.taskGeneration;
 		if (!agent) return;
 		try {
 			const usage = await agent.getUsage();
-			if (this.agent !== agent) return;
+			if (this.agent !== agent || this.taskGeneration !== generation) return;
 			const total = usage.total;
 			const currentTurn = usage.currentTurn;
 			const speed = finishTurn
@@ -2237,7 +2438,7 @@ export class KlientChatBackend implements ChatBackend {
 				(total?.inputCacheRead ?? 0) + (total?.inputCacheCreation ?? 0) > 0;
 			const contextTokens = await agent.getContextTokenCount();
 			const modelOptions = await this.getModelOptions();
-			if (this.agent !== agent) return;
+			if (this.agent !== agent || this.taskGeneration !== generation) return;
 			const cost = calculateUsageCost(usage.byModel, modelOptions);
 			const snapshot: UsageSnapshot = {
 				...DEFAULT_USAGE,
@@ -2277,9 +2478,14 @@ export class KlientChatBackend implements ChatBackend {
 							((snapshot.contextTokens ?? 0) / snapshot.contextWindow) * 100,
 						)
 					: 0;
-			this.lastUsageSnapshot = snapshot;
-			this.events?.onUsage(snapshot);
+			this.publishUsageSnapshot(snapshot);
 		} catch {}
+	}
+
+	private publishUsageSnapshot(snapshot: UsageSnapshot): void {
+		if (isDeepStrictEqual(this.lastUsageSnapshot, snapshot)) return;
+		this.lastUsageSnapshot = snapshot;
+		this.events?.onUsage(snapshot);
 	}
 
 	private publishSpeed(speed: {
@@ -2292,8 +2498,7 @@ export class KlientChatBackend implements ChatBackend {
 			throughputNow: speed.now,
 			throughputAverage: speed.average,
 		};
-		this.lastUsageSnapshot = snapshot;
-		this.events?.onUsage(snapshot);
+		this.publishUsageSnapshot(snapshot);
 	}
 
 	private setBusy(busy: boolean): void {
@@ -2426,7 +2631,10 @@ export class KlientChatBackend implements ChatBackend {
 		this.effort = normalizeEffortLevel(await this.requireAgent().getThinking(), resolved);
 	}
 
-	private clearBindings(): void {
+	private clearBindings(preserveTranscript = false): void {
+		if (!preserveTranscript) { this.sourceMessageIds.clear(); this.publishedMessageIds.clear(); this.promptMessageIds.clear(); this.incompleteStreamIds.clear(); this.interruptedPromptIds.clear(); this.mergedPromptMessageIds.clear(); }
+		this.liveStepId = undefined;
+		this.reconcilingHistory = false;
 		for (const subscription of this.childProgressSubscriptions.values()) subscription.dispose();
 		this.childProgressSubscriptions.clear();
 		this.childProgress.clear();
@@ -2458,15 +2666,24 @@ export class KlientChatBackend implements ChatBackend {
 			pending.reject(new Error("Session changed"));
 		this.pendingPrompts.clear();
 		this.queuedPrompts.clear();
-		this.promptPhases.clear();
+		if (!preserveTranscript) this.promptPhases.clear();
 		this.promptTurns.clear();
 		for (const waiters of this.turnEndWaiters.values()) {
 			for (const resolve of waiters) resolve();
 		}
 		this.turnEndWaiters.clear();
-		this.streamMessages.clear();
+		if (!preserveTranscript) this.streamMessages.clear();
 		this.parentTaskSummaries.clear();
 		this.taskOutputs.clear();
+		this.taskGeneration += 1;
+		this.taskOutputActive = 0;
+		this.taskOutputRequests.clear();
+		this.taskOutputRetryAt.clear();
+		this.taskOutputQueue = [];
+		this.lastAgentSnapshot = undefined;
+		this.lastTaskSnapshot = undefined;
+		this.lastTowerMissions = undefined;
+		this.lastPublishedPlanItems = undefined;
 		this.pendingTodoUpdates.clear();
 		this.lastTodoItems = [];
 		this.towerPlanActive = false;
@@ -2481,7 +2698,7 @@ export class KlientChatBackend implements ChatBackend {
 		this.cacheTelemetryObserved = false;
 		this.tasks.clear();
 		this.turn = undefined;
-		this.busy = false;
+		if (!preserveTranscript) this.busy = false;
 	}
 
 	private requireSession(): SessionHandle {
@@ -2802,26 +3019,24 @@ function positiveInteger(value: unknown): number {
 	return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : 1;
 }
 
-function contentText(content: readonly unknown[]): string {
-	return content
+function contentText(content: readonly unknown[], verbatim = false): string {
+	const parts = content
 		.map(record)
 		.filter(
 			(part) => part["type"] === "text" && typeof part["text"] === "string",
 		)
-		.map((part) => part["text"] as string)
-		.join("\n\n")
-		.trim();
+		.map((part) => part["text"] as string);
+	return verbatim ? parts.join('') : parts.join('\n\n').trim();
 }
 
-function contentThinking(content: readonly unknown[]): string {
-	return content
+function contentThinking(content: readonly unknown[], verbatim = false): string {
+	const parts = content
 		.map(record)
 		.filter(
 			(part) => part["type"] === "think" && typeof part["think"] === "string",
 		)
-		.map((part) => part["think"] as string)
-		.join("\n\n")
-		.trim();
+		.map((part) => part["think"] as string);
+	return verbatim ? parts.join('') : parts.join('\n\n').trim();
 }
 
 function summarizeOutput(value: unknown): string {
@@ -3208,6 +3423,12 @@ export function reconcileTaskSnapshot(
 		.toSorted((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt));
 	for (const task of finished.slice(100)) current.delete(task.taskId);
 	return current;
+}
+
+function sameTaskOutputRun(left: AgentTaskInfo, right: AgentTaskInfo): boolean {
+	return left.kind === "agent" && right.kind === "agent" && left.taskId === right.taskId &&
+		left.status === right.status && left.startedAt === right.startedAt && left.endedAt === right.endedAt &&
+		left.agentId === right.agentId;
 }
 
 function taskStatus(

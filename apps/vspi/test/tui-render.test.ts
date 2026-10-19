@@ -15,7 +15,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { VirtualTerminal } from "../../../packages/pi-tui/test/virtual-terminal.js";
 import { AttachmentService } from "../src/v1/attachments/service.js";
-import type { ChatBackend, ChatBackendEvents, TaskDashboardSnapshot } from "../src/v1/backend/types.js";
+import type { AgentConversationActivity, ChatBackend, ChatBackendEvents, TaskDashboardSnapshot } from "../src/v1/backend/types.js";
 import { ScrollbackTUI, adaptInteractiveTerminalOutput } from "../src/v1/ui/scrollback-terminal.js";
 import type { PolicyLevel, PolicySnapshot } from "../src/v1/policy/execution-policy.js";
 import type {
@@ -210,8 +210,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		}
 	});
 
-	function renderFixture(home?: string) {
-		const terminal = new VirtualTerminal(80, 24);
+	function renderFixture(home?: string, terminal = new VirtualTerminal(80, 24)) {
 		const tui = new ScrollbackTUI(terminal);
 		let events: ChatBackendEvents;
 		const setPolicy = vi.fn(async (policy: PolicyLevel): Promise<PolicySnapshot> => ({
@@ -265,6 +264,63 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		const frame = "\u001b[?2026h\u001b[3Jcontent\u001b[?2026l";
 		expect(adaptInteractiveTerminalOutput(frame, {})).toBe("\u001b[?2026hcontent\u001b[?2026l");
 		expect(adaptInteractiveTerminalOutput(frame, { VSPI_TUI_SYNC_OUTPUT: "0" })).toBe("content");
+	});
+
+	it("drops a pending resize offset before starting a restored session epoch", async () => {
+		const terminal = new VirtualTerminal(80, 24);
+		const tui = new ScrollbackTUI(terminal);
+		let blocked = false;
+		Object.assign(terminal, { deferRender() { return blocked; } });
+		const component = { lines: ["BEFORE_SESSION_EPOCH"], render() { return this.lines; }, invalidate() {} };
+		tui.addChild(component);
+		tui.start();
+		try {
+			tui.renderNow();
+			await terminal.flush();
+			blocked = true;
+			tui.reflowViewport(16);
+			component.lines = Array.from({ length: 10 }, (_, index) => `RESTORED_EPOCH_${index}`);
+			tui.beginSurfaceEpoch();
+			blocked = false;
+			tui.renderNow();
+			await terminal.flush();
+			const buffer = terminal.getScrollBuffer();
+			for (const marker of component.lines) expect(buffer.filter(line => line.includes(marker))).toHaveLength(1);
+		} finally { tui.stop(); }
+	});
+
+	it("settles again when geometry changes before an opaque resize epoch's first frame", async () => {
+		const terminal = new VirtualTerminal(80, 24);
+		const tui = new ScrollbackTUI(terminal);
+		let blocked = false;
+		let prefix = 0;
+		const tail = ["OPAQUE_FIRST_CONTENT", "OPAQUE_SECOND_CONTENT", "OPAQUE_COMPOSER", "OPAQUE_FOOTER"];
+		Object.assign(terminal, { deferRender() { return blocked; } });
+		const write = vi.spyOn(terminal, "write");
+		tui.addChild({ render: () => [...Array.from({ length: prefix }, () => ""), ...tail], invalidate() {} });
+		tui.onRebuildSettled = () => {
+			prefix = Math.max(0, terminal.rows - tail.length);
+			tui.reflowViewport(prefix);
+		};
+		tui.start();
+		try {
+			tui.renderNow();
+			await terminal.flush();
+			blocked = true;
+			prefix = 16;
+			tui.reflowViewport(prefix);
+			terminal.resize(50, 12);
+			write.mockClear();
+			blocked = false;
+			tui.renderNow();
+			expect(write.mock.calls.map(([chunk]) => chunk).join("")).not.toContain("OPAQUE_FIRST_CONTENT");
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getViewport()[8]).toContain("OPAQUE_FIRST_CONTENT");
+				expect(terminal.getViewport()[11]).toContain("OPAQUE_FOOTER");
+			});
+			expect(write.mock.calls.map(([chunk]) => chunk).join("")).not.toMatch(/\u001B\[(?:2|3)J/u);
+		} finally { tui.stop(); }
 	});
 
 	it("coalesces continuous terminal input without dropping characters", async () => {
@@ -420,6 +476,329 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			const output = write.mock.calls.map(([chunk]) => chunk).join("");
 			expect(output).not.toContain("HISTORY_LINE_0");
 			expect(output).not.toContain("\u001b[2J");
+		} finally {
+			tui.stop();
+			await app.dispose();
+			await rm(home, { recursive: true, force: true });
+		}
+	});
+
+	it("ignores hidden child thinking without scheduling layout and still refreshes terminal history", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-hidden-child-thinking-"));
+		const { app, backend, events } = renderFixture(home);
+		const run: AgentRunSnapshot = { ...panelsFailedAgentRun(), status: "running", error: undefined, finishedAt: undefined };
+		let receive!: (activity: AgentConversationActivity) => void;
+		const getConversation = vi.fn(async () => ({ runId: run.id, agentId: run.agentId, blocks: [], tokenCount: 0 }));
+		Object.assign(backend, { getAgentConversation: getConversation, subscribeAgentConversation: (_runId: string, listener: (activity: AgentConversationActivity) => void) => { receive = listener; return { dispose() {} }; } });
+		const state = app as unknown as { panels: PanelController; openAgentConversation(runId: string): Promise<void>; requestRender(force?: boolean, scope?: "all" | "dock"): void };
+		try {
+			await app.start();
+			events().onAgentSnapshot?.(panelsAgentSnapshot(run));
+			state.panels.open("agents");
+			await state.openAgentConversation(run.id);
+			const render = vi.spyOn(state, "requestRender");
+			const activity = vi.spyOn(state.panels, "appendAgentActivity");
+			for (let index = 0; index < 1_000; index++) receive({ kind: "thinking", turnId: 7, delta: "HIDDEN_CHILD_THINKING" });
+			expect(render).not.toHaveBeenCalled();
+			expect(activity).not.toHaveBeenCalled();
+			expect(getConversation).toHaveBeenCalledOnce();
+			receive({ kind: "assistant", turnId: 7, delta: "VISIBLE_CHILD_UPDATE" });
+			expect(render).toHaveBeenCalledOnce();
+			expect(activity).toHaveBeenCalledWith({ kind: "assistant", turnId: 7, delta: "VISIBLE_CHILD_UPDATE" });
+			receive({ kind: "turn", turnId: 7, state: "completed" });
+			await vi.waitFor(() => { expect(getConversation).toHaveBeenCalledTimes(2); });
+		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("reconciles new history objects without replaying frozen rows or resetting tool preferences", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-native-history-reconcile-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		const state = app as unknown as { committedMessageCount: number; messages: TranscriptMessage[] };
+		const write = vi.spyOn(terminal, "write");
+		const expanded: Extract<TranscriptMessage, { kind: "tool" }> = { id: "history-expanded", groupId: "shared-history-group", role: "assistant", kind: "tool", name: "Shell", summary: "Expanded choice", status: "success", expanded: true, output: "RECONCILE_ORIGINAL_TOOL", durationMs: 1_200 };
+		const collapsed: Extract<TranscriptMessage, { kind: "tool" }> = { id: "history-collapsed", groupId: "shared-history-group", role: "assistant", kind: "tool", name: "Read", summary: "Collapsed choice", status: "success", expanded: false, durationMs: 875 };
+		const agent: Extract<TranscriptMessage, { kind: "tool" }> = { id: "history-agent", groupId: "shared-history-group", role: "assistant", kind: "tool", name: "Agent", summary: "Completed child", status: "success", expanded: false, durationMs: 4_250, agentRuns: [{ name: "Worker", task: "Reconciled child", status: "success", result: "RECONCILE_AGENT_EXISTING_RESULT" }] };
+		const thinking: Extract<TranscriptMessage, { kind: "thinking" }> = { id: "history-thinking", role: "assistant", kind: "thinking", effort: "medium", text: "完整思考内容应保留，历史快照只包含较短前缀时不能覆盖。", collapsed: true, durationMs: 900, translatedText: "PRESERVED_THINKING_TRANSLATION", translationStatus: "translated" };
+		const rows = Array.from({ length: 160 }, (_, index) => `RECONCILE_BODY_${String(index).padStart(3, "0")}`);
+		const body: Extract<TranscriptMessage, { kind: "text" }> = { id: "history-current-answer", role: "assistant", kind: "text", text: rows.join("\n\n"), streaming: true };
+		try {
+			await app.start();
+			tui.start();
+			for (const message of [expanded, collapsed, agent, thinking, body]) events().onMessage(message);
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getScrollBuffer().join("\n")).toContain("RECONCILE_BODY_159");
+				expect(state.committedMessageCount).toBeGreaterThanOrEqual(4);
+			});
+			write.mockClear();
+			const history: TranscriptMessage[] = [
+				{ id: expanded.id, role: "assistant", kind: "tool", name: expanded.name, summary: expanded.summary, status: "success", expanded: false, output: `${expanded.output}\nRECONCILE_EXPANDED_LATE` },
+				{ id: collapsed.id, role: "assistant", kind: "tool", name: collapsed.name, summary: collapsed.summary, status: "success", expanded: true, output: "RECONCILE_COLLAPSED_LATE" },
+				{ id: agent.id, role: "assistant", kind: "tool", name: agent.name, summary: agent.summary, status: "success", expanded: false },
+				{ id: thinking.id, role: "assistant", kind: "thinking", effort: "medium", text: thinking.text, collapsed: false },
+				{ ...body, streaming: false, text: `${body.text}\n\nRECONCILE_BODY_COMPLETED` },
+				{ id: "history-new-answer", role: "assistant", kind: "text", text: "RECONCILE_NEW_MESSAGE" },
+			];
+			events().onHistoryReconcile?.(structuredClone(history));
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				const buffer = terminal.getScrollBuffer().join("\n");
+				for (const marker of ["RECONCILE_EXPANDED_LATE", "RECONCILE_COLLAPSED_LATE", "RECONCILE_BODY_COMPLETED", "RECONCILE_NEW_MESSAGE"]) expect(buffer).toContain(marker);
+			});
+			const truncated = structuredClone(history).map(message => {
+				if (message.id === expanded.id && message.kind === "tool") return { ...message, output: "RECONCILE_ORIGINAL[display truncated]" };
+				if (message.id === collapsed.id && message.kind === "tool") return { ...message, output: undefined };
+				if (message.id === body.id && message.kind === "text") return { ...message, text: `${body.text.slice(0, 240)}[display truncated]` };
+				if (message.id === thinking.id && message.kind === "thinking") return { ...message, text: "完整思考内容" };
+				return message;
+			});
+			events().onHistoryReconcile?.(truncated, { truncated: true });
+			expect(state.messages.find(message => message.id === body.id)).toMatchObject({ text: `${body.text}\n\nRECONCILE_BODY_COMPLETED` });
+			expect(state.messages.find(message => message.id === thinking.id)).toMatchObject({ text: thinking.text, collapsed: true, durationMs: 900, translatedText: thinking.translatedText, translationStatus: "translated" });
+			for (let index = 0; index < 5; index++) events().onHistoryReconcile?.(structuredClone(history));
+			events().onMessageUpdate(agent.id, { agentRuns: structuredClone(agent.agentRuns) });
+			tui.renderNow();
+			await terminal.flush();
+			const buffer = terminal.getScrollBuffer();
+			for (const marker of [...rows, "RECONCILE_ORIGINAL_TOOL", "RECONCILE_AGENT_EXISTING_RESULT", "RECONCILE_EXPANDED_LATE", "RECONCILE_COLLAPSED_LATE", "RECONCILE_BODY_COMPLETED", "RECONCILE_NEW_MESSAGE"]) expect(buffer.filter(line => line.includes(marker)), marker).toHaveLength(1);
+			expect(state.messages.find(message => message.id === expanded.id)).toMatchObject({ expanded: true, groupId: expanded.groupId, durationMs: expanded.durationMs, output: `${expanded.output}\nRECONCILE_EXPANDED_LATE` });
+			expect(state.messages.find(message => message.id === collapsed.id)).toMatchObject({ expanded: false, groupId: collapsed.groupId, durationMs: collapsed.durationMs, output: "RECONCILE_COLLAPSED_LATE" });
+			expect(state.messages.find(message => message.id === agent.id)).toMatchObject({ groupId: agent.groupId, agentRuns: agent.agentRuns, durationMs: agent.durationMs });
+			const appended = write.mock.calls.map(([chunk]) => chunk).join("");
+			expect(appended).not.toContain("RECONCILE_BODY_000");
+			expect(appended).not.toContain("RECONCILE_ORIGINAL_TOOL");
+			expect(appended).not.toMatch(/\u001B\[(?:2|3)J/u);
+		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("prints only new suffixes and one replacement when an archived final answer is reconciled", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-archived-text-reconcile-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		const state = app as unknown as { committedMessageCount: number; messages: TranscriptMessage[] };
+		const rows = Array.from({ length: 160 }, (_, index) => `ARCHIVED_TEXT_${String(index).padStart(3, "0")}`);
+		const original: Extract<TranscriptMessage, { kind: "text" }> = { id: "archived-final-answer", role: "assistant", kind: "text", text: rows.join("\n\n"), streaming: false };
+		const padding: TranscriptMessage = { id: "archived-text-padding", role: "assistant", kind: "text", text: Array.from({ length: 60 }, (_, index) => `TEXT_ARCHIVE_PADDING_${index}`).join("\n\n") };
+		const write = vi.spyOn(terminal, "write");
+		try {
+			await app.start();
+			tui.start();
+			events().onMessage(original);
+			events().onMessage(padding);
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getScrollBuffer().join("\n")).toContain("TEXT_ARCHIVE_PADDING_59");
+				expect(state.committedMessageCount).toBeGreaterThan(0);
+			});
+			write.mockClear();
+			const first = `${original.text}\n\nARCHIVED_FIRST_SUFFIX`;
+			const history: TranscriptMessage[] = [{ ...original, text: first }, padding];
+			events().onHistoryReconcile?.(structuredClone(history));
+			await vi.waitFor(async () => { await terminal.flush(); expect(terminal.getScrollBuffer().join("\n")).toContain("ARCHIVED_FIRST_SUFFIX"); });
+			for (let index = 0; index < 5; index++) events().onHistoryReconcile?.(structuredClone(history));
+			const second = `${first}\n\nARCHIVED_SECOND_SUFFIX`;
+			events().onMessageUpdate(original.id, { text: second });
+			await vi.waitFor(async () => { await terminal.flush(); expect(terminal.getScrollBuffer().join("\n")).toContain("ARCHIVED_SECOND_SUFFIX"); });
+			const replacement = "ARCHIVED_TEXT_REPLACEMENT\n\nREPLACEMENT_COMPLETE_BODY";
+			events().onHistoryReconcile?.([{ ...original, text: replacement }, structuredClone(padding)]);
+			await vi.waitFor(async () => { await terminal.flush(); expect(terminal.getScrollBuffer().join("\n")).toContain("REPLACEMENT_COMPLETE_BODY"); });
+			for (let index = 0; index < 5; index++) events().onHistoryReconcile?.([{ ...original, text: replacement }, structuredClone(padding)]);
+			tui.renderNow();
+			await terminal.flush();
+			const buffer = terminal.getScrollBuffer();
+			for (const marker of [...rows, "ARCHIVED_FIRST_SUFFIX", "ARCHIVED_SECOND_SUFFIX", "ARCHIVED_TEXT_REPLACEMENT", "REPLACEMENT_COMPLETE_BODY", "TEXT_ARCHIVE_PADDING_59"]) expect(buffer.filter(line => line.includes(marker)), marker).toHaveLength(1);
+			expect(state.messages.find(message => message.id === original.id)).toMatchObject({ text: replacement });
+			const appended = write.mock.calls.map(([chunk]) => chunk).join("");
+			expect(appended).not.toContain("ARCHIVED_TEXT_000");
+			expect(appended).not.toMatch(/\u001B\[(?:2|3)J/u);
+		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("does not replay retained-out history records while reconciling genuinely new content", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-history-retention-reconcile-"));
+		const { app, tui, terminal, events } = renderFixture(home, new VirtualTerminal(80, 24, 10_000));
+		const state = app as unknown as { messages: TranscriptMessage[]; pendingLiveOutput: boolean; archivedMessageIds: Set<string> };
+		const history: TranscriptMessage[] = Array.from({ length: 1_100 }, (_, index) => ({ id: `retained-history-${index}`, role: "assistant", kind: "text", text: `RETENTION_TEXT_${String(index).padStart(4, "0")}` }));
+		const write = vi.spyOn(terminal, "write");
+		try {
+			await app.start();
+			tui.start();
+			for (const message of history) events().onMessage(message);
+			await vi.waitFor(async () => {
+				tui.renderNow();
+				await terminal.flush();
+				expect(terminal.getScrollBuffer().join("\n")).toContain("RETENTION_TEXT_1099");
+				expect(state.pendingLiveOutput).toBe(false);
+				expect(state.messages.length).toBeLessThanOrEqual(1_000);
+				expect(state.messages.some(message => message.id === history[0]!.id)).toBe(false);
+			}, { timeout: 10_000 });
+			write.mockClear();
+			const updated: TranscriptMessage[] = [...history, { id: "retention-new-content", role: "assistant", kind: "text", text: "RETENTION_NEW_CONTENT" }];
+			events().onHistoryReconcile?.(structuredClone(updated));
+			await vi.waitFor(async () => { await terminal.flush(); expect(terminal.getScrollBuffer().join("\n")).toContain("RETENTION_NEW_CONTENT"); });
+			for (let index = 0; index < 5; index++) events().onHistoryReconcile?.(structuredClone(updated));
+			tui.renderNow();
+			await terminal.flush();
+			const buffer = terminal.getScrollBuffer();
+			for (const message of updated) if (message.kind === "text") expect(buffer.filter(line => line.includes(message.text)), message.id).toHaveLength(1);
+			expect(write.mock.calls.map(([chunk]) => chunk).join("")).not.toContain("RETENTION_TEXT_0000");
+			expect(state.messages.length).toBeLessThanOrEqual(1_000);
+			expect(state.archivedMessageIds.size).toBeGreaterThan(0);
+			events().onSessionReset?.({ id: "layout-test", reason: "new", effort: "high" });
+			expect(state.archivedMessageIds.size).toBe(0);
+		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	}, 15_000);
+
+	it("restores identical Agent and Tasks snapshots after reconnecting the same session", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-reconnect-snapshots-"));
+		const { app, backend, events } = renderFixture(home);
+		const run: AgentRunSnapshot = { ...panelsFailedAgentRun(), codename: "RESTORED_WORKER", status: "running", error: undefined, finishedAt: undefined };
+		const agents = panelsAgentSnapshot(run);
+		const tasks: TaskDashboardSnapshot = { agents: [{ taskId: run.id, kind: "agent", description: "Restored task", status: "running", startedAt: 1_000, endedAt: null }], processes: [], questions: [] };
+		Object.assign(backend, { getAgentSnapshot: () => ({ ...agents, active: [], recent: [] }), getTaskSnapshot: () => ({ agents: [], processes: [], questions: [] }) });
+		try {
+			await app.start();
+			events().onAgentSnapshot?.(agents);
+			events().onTaskSnapshot?.(tasks);
+			expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("RESTORED_WORKER");
+			events().onSessionReset?.({ id: "layout-test", reason: "resume", effort: "high" });
+			events().onAgentSnapshot?.(structuredClone(agents));
+			events().onTaskSnapshot?.(structuredClone(tasks));
+			const state = app as unknown as { agentsDock: AgentsDock; taskSnapshot: TaskDashboardSnapshot };
+			expect(state.agentsDock.hasActive()).toBe(true);
+			expect(state.taskSnapshot).toEqual(tasks);
+			expect(app.render(160).map(stripTerminalSequences).join("\n")).toContain("RESTORED_WORKER");
+		} finally { await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it.each([false, true].flatMap(reducedMotion => (["stable", "failed", "cancelled"] as const).map(phase => ({ phase, reducedMotion }))))("settles queue-only $phase activity and OS progress with reducedMotion=$reducedMotion", async ({ phase, reducedMotion }) => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-queue-only-clock-"));
+		const { app, terminal, events } = renderFixture(home);
+		const state = app as unknown as {
+			queuedMessages: Map<string, TranscriptMessage>;
+			queuedPresentations: Map<string, { phase: string }>;
+			activityPresentationActive: boolean;
+			workingStartedAt?: number;
+			workingTimer?: NodeJS.Timeout;
+			options: { settings: { reducedMotion: boolean } };
+			queueMessagePresentation(id: string): void;
+			activityActive(): boolean;
+		};
+		try {
+			await app.start();
+			state.options.settings.reducedMotion = reducedMotion;
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"] });
+			const progress = vi.spyOn(terminal, "setProgress");
+			state.queuedMessages.set("queued-only", { id: "queued-only", role: "user", kind: "text", text: "PRESERVE_QUEUED_INPUT", delivery: "steer", deliveryState: "queued" });
+			state.queueMessagePresentation("queued-only");
+			expect(state.activityActive()).toBe(true);
+			expect(progress).toHaveBeenLastCalledWith(true);
+			if (phase === "stable") vi.advanceTimersByTime(241);
+			else events().onPromptLifecycle?.("queued-only", phase);
+			expect(state.activityActive()).toBe(false);
+			expect(state.activityPresentationActive).toBe(false);
+			expect(state.workingStartedAt).toBeUndefined();
+			expect(state.workingTimer).toBeUndefined();
+			expect(progress).toHaveBeenLastCalledWith(false);
+			expect(state.queuedMessages.get("queued-only")?.kind).toBe("text");
+			expect(state.queuedMessages.get("queued-only")).toMatchObject({ text: "PRESERVE_QUEUED_INPUT" });
+			if (phase === "stable") expect(state.queuedPresentations.get("queued-only")?.phase).toBe("stable");
+			else expect(state.queuedPresentations.has("queued-only")).toBe(false);
+		} finally { vi.useRealTimers(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("keeps fixed-size Agent polls, usage, clocks, and ordinary input out of body layout", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-steady-body-cache-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		const state = app as unknown as {
+			buildRenderBody(width: number, dock: unknown): string[];
+			pendingLiveOutput: boolean;
+			regularBodyRevision: number;
+			regularBodyCache?: { revision: number };
+		};
+		const layout = vi.spyOn(state, "buildRenderBody");
+		const write = vi.spyOn(terminal, "write");
+		try {
+			await app.start();
+			tui.start();
+			const base = panelsFailedAgentRun();
+			const active = Array.from({ length: 4 }, (_, index): AgentRunSnapshot => ({ ...base, id: `active-${index}`, agentId: `child-${index}`, codename: `Worker ${index}`, status: "running", error: undefined, startedAt: new Date(Date.now() - 30_000).toISOString(), finishedAt: undefined }));
+			const agents = { ...panelsAgentSnapshot(active[0]!), active, recent: [] };
+			const tasks: TaskDashboardSnapshot = { agents: active.map(run => ({ taskId: run.id, kind: "agent", description: run.task, status: "running", startedAt: Date.parse(run.startedAt!), endedAt: null })), processes: [], questions: [] };
+			events().onAgentSnapshot?.(agents);
+			events().onTaskSnapshot?.(tasks);
+			events().onBusy(true);
+			events().onMessage({ id: "long-cache-answer", kind: "text", role: "assistant", streaming: false, text: Array.from({ length: 160 }, (_, index) => `CACHE_BODY_${String(index).padStart(3, "0")}`).join("\n\n") });
+			await vi.waitFor(async () => {
+				tui.renderNow();
+				await terminal.flush();
+				expect(terminal.getScrollBuffer().join("\n")).toContain("CACHE_BODY_159");
+				expect(state.pendingLiveOutput).toBe(false);
+				expect(state.regularBodyCache?.revision).toBe(state.regularBodyRevision);
+			});
+			layout.mockClear();
+			write.mockClear();
+			for (let index = 0; index < 20; index++) {
+				events().onAgentSnapshot?.(structuredClone(agents));
+				events().onTaskSnapshot?.(structuredClone(tasks));
+				events().onUsage({ ...DEFAULT_USAGE, inputTokens: index, outputTokens: index, recentCacheHitPercent: index });
+				terminal.sendInput("x");
+				tui.renderNow();
+				await terminal.flush();
+			}
+			await new Promise(resolve => setTimeout(resolve, 1_100));
+			await terminal.flush();
+			expect(layout).not.toHaveBeenCalled();
+			expect(app.composer.getText()).toBe("x".repeat(20));
+			const output = write.mock.calls.map(([chunk]) => chunk).join("");
+			expect(output).not.toContain("CACHE_BODY_000");
+			expect(output).not.toContain("\u001B[2J");
+			expect(terminal.getScrollBuffer().filter(line => line.includes("CACHE_BODY_000"))).toHaveLength(1);
+			expect(terminal.getScrollBuffer().filter(line => line.includes("CACHE_BODY_159"))).toHaveLength(1);
+		} finally {
+			tui.stop();
+			await app.dispose();
+			await rm(home, { recursive: true, force: true });
+		}
+	});
+
+	it("invalidates fixed-size body layout for dock height, command panels, and new content", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-body-cache-invalidation-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		const state = app as unknown as { buildRenderBody(width: number, dock: unknown): string[]; panels: PanelController };
+		const layout = vi.spyOn(state, "buildRenderBody");
+		try {
+			await app.start();
+			tui.start();
+			events().onMessage({ id: "short-body", kind: "text", role: "assistant", text: "BODY_CACHE_BASE" });
+			await vi.waitFor(async () => { await terminal.flush(); expect(terminal.getViewport().join("\n")).toContain("BODY_CACHE_BASE"); });
+			layout.mockClear();
+			terminal.sendInput("ordinary text");
+			tui.renderNow();
+			await terminal.flush();
+			expect(layout).not.toHaveBeenCalled();
+			app.composer.setText(Array.from({ length: 8 }, (_, index) => `DRAFT_ROW_${index}`).join("\n"));
+			tui.renderNow();
+			await terminal.flush();
+			expect(layout).toHaveBeenCalled();
+			expect(terminal.getViewport().join("\n")).toContain("DRAFT_ROW_7");
+			app.composer.setText("");
+			tui.renderNow();
+			layout.mockClear();
+			state.panels.open("commands");
+			app.composer.setText("/tas");
+			tui.renderNow();
+			await terminal.flush();
+			expect(layout).toHaveBeenCalled();
+			expect(terminal.getViewport().join("\n")).toContain("/tasks");
+			state.panels.close();
+			app.composer.setText("");
+			tui.renderNow();
+			layout.mockClear();
+			events().onMessage({ id: "new-body", kind: "text", role: "assistant", text: "BODY_CACHE_NEW_CONTENT" });
+			tui.renderNow();
+			await terminal.flush();
+			expect(layout).toHaveBeenCalled();
+			expect(terminal.getScrollBuffer().join("\n")).toContain("BODY_CACHE_NEW_CONTENT");
 		} finally {
 			tui.stop();
 			await app.dispose();
@@ -635,6 +1014,69 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 				.filter(({ line }) => line.includes("DONE_MARKER"));
 			expect(doneLines).toHaveLength(1);
 			expect(doneLines[0]!.index).toBeGreaterThan(rebuilt.findIndex((line) => line.includes("PAD_20")));
+		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("prints complete late output from an archived expanded tool without replaying its prefix", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-archived-tool-output-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		const state = app as unknown as { committedMessageCount: number; messages: TranscriptMessage[] };
+		const write = vi.spyOn(terminal, "write");
+		try {
+			await app.start();
+			tui.start();
+			const original = Array.from({ length: 20 }, (_, index) => `ARCHIVED_OLD_${String(index).padStart(3, "0")}`);
+			events().onMessage({ id: "archived-tool", role: "assistant", kind: "tool", name: "Shell", summary: "Archived expanded output", status: "success", expanded: true, output: original.join("\n") });
+			events().onMessage({ id: "tool-padding", role: "assistant", kind: "text", text: Array.from({ length: 100 }, (_, index) => `ARCHIVE_PADDING_${index}`).join("\n\n") });
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getScrollBuffer().join("\n")).toContain("ARCHIVE_PADDING_99");
+				expect(state.committedMessageCount).toBeGreaterThan(0);
+			});
+			write.mockClear();
+			const appended = Array.from({ length: 600 }, (_, index) => `ARCHIVED_LATE_${String(index).padStart(3, "0")}`);
+			const output = [...original, ...appended].join("\n");
+			events().onMessageUpdate("archived-tool", { output });
+			await vi.waitFor(async () => { await terminal.flush(); expect(terminal.getScrollBuffer().join("\n")).toContain("ARCHIVED_LATE_599"); });
+			for (let index = 0; index < 10; index++) events().onMessageUpdate("archived-tool", { output });
+			tui.renderNow();
+			await terminal.flush();
+			const history = terminal.getScrollBuffer();
+			for (const marker of [...original, ...appended]) expect(history.filter(line => line.includes(marker))).toHaveLength(1);
+			expect(write.mock.calls.map(([chunk]) => chunk).join("")).not.toContain("ARCHIVED_OLD_000");
+			expect(state.messages.find(message => message.id === "archived-tool")).toMatchObject({ output });
+		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("shows each archived Agent result once when several children finish in one snapshot", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-archived-agent-results-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		const state = app as unknown as { committedMessageCount: number; messages: TranscriptMessage[] };
+		try {
+			await app.start();
+			tui.start();
+			const running = [{ name: "Worker A", task: "First task", status: "background" as const }, { name: "Worker B", task: "Second task", status: "background" as const }];
+			events().onMessage({ id: "archived-agent", role: "assistant", kind: "tool", name: "Agent", summary: "Two background workers", status: "success", expanded: false, agentRuns: running });
+			events().onMessage({ id: "agent-padding", role: "assistant", kind: "text", text: Array.from({ length: 100 }, (_, index) => `AGENT_ARCHIVE_PADDING_${index}`).join("\n\n") });
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getScrollBuffer().join("\n")).toContain("AGENT_ARCHIVE_PADDING_99");
+				expect(state.committedMessageCount).toBeGreaterThan(0);
+			});
+			const completed = running.map((run, index) => ({ ...run, status: "success" as const, result: `ARCHIVED_AGENT_RESULT_${index}\nComplete retained result ${index}` }));
+			events().onMessageUpdate("archived-agent", { agentRuns: completed });
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				const history = terminal.getScrollBuffer().join("\n");
+				expect(history).toContain("ARCHIVED_AGENT_RESULT_0");
+				expect(history).toContain("ARCHIVED_AGENT_RESULT_1");
+			});
+			for (let index = 0; index < 10; index++) events().onMessageUpdate("archived-agent", { agentRuns: structuredClone(completed) });
+			tui.renderNow();
+			await terminal.flush();
+			const history = terminal.getScrollBuffer();
+			for (let index = 0; index < 2; index++) expect(history.filter(line => line.includes(`ARCHIVED_AGENT_RESULT_${index}`))).toHaveLength(1);
+			expect(state.messages.find(message => message.id === "archived-agent")).toMatchObject({ agentRuns: completed });
 		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
 	});
 
@@ -1413,10 +1855,13 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 				workingTimerInterval: undefined,
 				workingFrame: 0,
 				queuedAnimationTick: 0,
+				panels: { kind: "plan" },
+				agentsDock: { hasActive: () => false },
+				taskSnapshot: { agents: [], processes: [], questions: [] },
 				options: { settings: { reducedMotion: true, workingStyle: 1 } },
 				renderReady: false,
 				requestRender,
-				tui: { mode: "fullscreen" },
+				tui: { mode: "fullscreen", terminal: { setProgress: vi.fn() } },
 			}) as {
 				compaction: unknown;
 				workingTimer: NodeJS.Timeout | undefined;
@@ -1440,6 +1885,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 	it("clears compaction state during session reset", () => {
 		const app = Object.assign(Object.create(VspiApp.prototype), {
 			imagePathPaste: { reset: vi.fn() },
+			archivedMessageIds: new Set(),
 			sessionEpoch: 0,
 			compaction: {
 				status: "blocked",
@@ -3319,6 +3765,107 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(lines[0]).toContain("Speed ~42.8 tok/s");
 		expect(lines[0]?.endsWith("Context 61K / 128K 48%")).toBe(true);
 		expect(lines[1]).not.toContain("—");
+	});
+
+	function liveAgentPanelFixture() {
+		const run: AgentRunSnapshot = { ...panelsFailedAgentRun(), status: "running", error: undefined, finishedAt: undefined };
+		const snapshot = panelsAgentSnapshot(run);
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.setAgentSnapshot(snapshot);
+		panels.open("agents");
+		panels.handleInput("\r");
+		panels.setAgentConversation({ runId: run.id, agentId: run.agentId, blocks: [], tokenCount: 0 });
+		const state = panels as unknown as {
+			agentActivity: AgentConversationActivity[];
+			agentProcessRevision: number;
+			agentProcessCache: unknown;
+			agentSnapshot: AgentSnapshot;
+			taskSnapshot: TaskDashboardSnapshot;
+			agentToolActivity: Map<string, number>;
+			agentDetailFollowTail: boolean;
+			state: { selected: number; scroll: number };
+			renderAgentProcess(width: number, theme: ReturnType<typeof createTheme>): string[];
+		};
+		return { panels, run, snapshot, state };
+	}
+
+	it("preserves all Agent deltas in one stable text block beyond 100 events", () => {
+		const { panels, state } = liveAgentPanelFixture();
+		const chunks = Array.from({ length: 1_000 }, (_, index) => `DELTA_${index}_中 `);
+		for (const delta of chunks) panels.appendAgentActivity({ kind: "assistant", turnId: 7, delta });
+		expect(state.agentActivity).toHaveLength(1);
+		expect(state.agentActivity[0]).toEqual({ kind: "assistant", turnId: 7, delta: chunks.join("") });
+		const output = state.renderAgentProcess(120, theme).map(stripTerminalSequences).join("\n");
+		expect(output).toContain("DELTA_0_中");
+		expect(output.match(/● Commentary/gu)).toHaveLength(1);
+	});
+
+	it("keeps Agent commentary and tools chronological while merging progress updates", () => {
+		const { panels, state } = liveAgentPanelFixture();
+		panels.appendAgentActivity({ kind: "assistant", turnId: 7, delta: "COMMENTARY_BEFORE" });
+		panels.appendAgentActivity({ kind: "tool", turnId: 7, state: "started", toolCallId: "read-1", toolName: "Read", text: "Starting" });
+		for (let index = 0; index < 500; index++) panels.appendAgentActivity({ kind: "tool", turnId: 7, state: "progress", toolCallId: "read-1", text: `PROGRESS_${index}` });
+		panels.appendAgentActivity({ kind: "tool", turnId: 7, state: "completed", toolCallId: "read-1", text: "TOOL_COMPLETE" });
+		panels.appendAgentActivity({ kind: "assistant", turnId: 7, delta: "COMMENTARY_AFTER" });
+		expect(state.agentActivity).toHaveLength(3);
+		expect(state.agentActivity[1]).toMatchObject({ kind: "tool", toolName: "Read", state: "completed", text: "TOOL_COMPLETE" });
+		const output = state.renderAgentProcess(120, theme).map(stripTerminalSequences).join("\n");
+		expect(output.indexOf("COMMENTARY_BEFORE")).toBeLessThan(output.indexOf("◇ Read"));
+		expect(output.indexOf("◇ Read")).toBeLessThan(output.indexOf("COMMENTARY_AFTER"));
+		expect(output.match(/◇ Read/gu)).toHaveLength(1);
+		expect(output).toContain("TOOL_COMPLETE");
+		expect(output).not.toContain("PROGRESS_499");
+	});
+
+	it("reuses Agent process layout across snapshots, hidden thinking, and duplicate progress", () => {
+		const { panels, snapshot, state } = liveAgentPanelFixture();
+		panels.appendAgentActivity({ kind: "assistant", turnId: 7, delta: "CACHED_COMMENTARY" });
+		panels.appendAgentActivity({ kind: "tool", turnId: 7, state: "started", toolCallId: "read-1", toolName: "Read", text: "UNCHANGED_PROGRESS" });
+		const first = state.renderAgentProcess(120, theme);
+		const revision = state.agentProcessRevision;
+		const agents = state.agentSnapshot;
+		const tasks: TaskDashboardSnapshot = { agents: [], processes: [{ taskId: "process-1", kind: "process", description: "Check", status: "running", command: "example-command", pid: 42, exitCode: null, startedAt: 1_000, endedAt: null }], questions: [] };
+		panels.setTaskSnapshot(tasks);
+		const taskState = state.taskSnapshot;
+		for (let index = 0; index < 20; index++) {
+			panels.setAgentSnapshot(structuredClone(snapshot));
+			panels.setTaskSnapshot(structuredClone(tasks));
+			panels.appendAgentActivity({ kind: "thinking", turnId: 7, delta: "HIDDEN_THINKING" });
+			panels.appendAgentActivity({ kind: "tool", turnId: 7, state: "started", toolCallId: "read-1", toolName: "Read", text: "UNCHANGED_PROGRESS" });
+			expect(state.renderAgentProcess(120, theme)).toBe(first);
+		}
+		expect(state.agentSnapshot).toBe(agents);
+		expect(state.taskSnapshot).toBe(taskState);
+		expect(state.agentProcessRevision).toBe(revision);
+		expect(state.agentActivity.some(activity => activity.kind === "thinking")).toBe(false);
+		panels.appendAgentActivity({ kind: "assistant", turnId: 7, delta: "NEW_COMMENTARY" });
+		expect(state.renderAgentProcess(120, theme)).not.toBe(first);
+		const changed = state.renderAgentProcess(120, theme);
+		expect(state.renderAgentProcess(60, theme)).not.toBe(changed);
+		panels.setAgentConversation({ runId: snapshot.active[0]!.id, agentId: snapshot.active[0]!.agentId, tokenCount: 1, blocks: [{ id: "history-1", kind: "final", sourceRole: "assistant", text: "NEW_HISTORY_PAGE", injected: false }] });
+		expect(state.renderAgentProcess(120, theme).map(stripTerminalSequences).join("\n")).toContain("NEW_HISTORY_PAGE");
+		panels.prependAgentConversation({ runId: snapshot.active[0]!.id, agentId: snapshot.active[0]!.agentId, tokenCount: 2, blocks: [{ id: "history-0", kind: "commentary", sourceRole: "assistant", text: "OLDER_HISTORY_PAGE", injected: false }] });
+		expect(state.renderAgentProcess(120, theme).map(stripTerminalSequences).join("\n")).toContain("OLDER_HISTORY_PAGE");
+	});
+
+	it("clears aggregated Agent blocks and process caches when switching child runs", () => {
+		const { panels, run, snapshot, state } = liveAgentPanelFixture();
+		panels.setAgentSnapshot({ ...snapshot, active: [run, { ...run, id: "second-run" }] });
+		panels.appendAgentActivity({ kind: "assistant", turnId: 7, delta: "OLD_CHILD_TEXT" });
+		panels.appendAgentActivity({ kind: "tool", turnId: 7, state: "started", toolCallId: "read-1", toolName: "Read", text: "OLD_CHILD_TOOL" });
+		state.renderAgentProcess(120, theme);
+		state.agentDetailFollowTail = false;
+		state.state.scroll = 10;
+		expect(panels.handleInput("\u001B[C")).toEqual({ type: "agentOpen", runId: "second-run" });
+		expect(state.agentActivity).toEqual([]);
+		expect(state.agentToolActivity.size).toBe(0);
+		expect(state.agentProcessCache).toBeUndefined();
+		expect(state.agentDetailFollowTail).toBe(true);
+		expect(state.state.scroll).toBe(0);
+		panels.appendAgentActivity({ kind: "assistant", turnId: 7, delta: "NEW_CHILD_TEXT" });
+		const output = state.renderAgentProcess(120, theme).map(stripTerminalSequences).join("\n");
+		expect(output).toContain("NEW_CHILD_TEXT");
+		expect(output).not.toContain("OLD_CHILD");
 	});
 
 	it("isolates Agent conversation pages by run id when child ids repeat", () => {

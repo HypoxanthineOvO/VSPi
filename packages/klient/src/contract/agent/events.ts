@@ -186,6 +186,7 @@ export const promptSteeredEventSchema = z.object({
   promptIds: z.array(z.string()),
   content: z.array(z.unknown()),
   steeredAt: z.string(),
+  messageId: z.string().optional(),
 });
 
 export const turnSteerEventSchema = z.object({

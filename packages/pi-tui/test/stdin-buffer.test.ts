@@ -49,6 +49,19 @@ describe("StdinBuffer", () => {
 			processInput("hello 世界");
 			assert.deepStrictEqual(emittedSequences, ["h", "e", "l", "l", "o", " ", "世", "界"]);
 		});
+
+		it("emits supplementary characters as complete code points between controls", () => {
+			processInput("字🙂\x1b[A👨‍👩‍👧‍👦\r");
+			assert.deepStrictEqual(emittedSequences, ["字", "🙂", "\x1b[A", "👨", "‍", "👩", "‍", "👧", "‍", "👦", "\r"]);
+		});
+
+		it("reassembles a supplementary character split across string chunks", () => {
+			processInput("字\ud83d");
+			assert.deepStrictEqual(emittedSequences, ["字"]);
+			processInput("\ude42\x1b[A");
+			assert.deepStrictEqual(emittedSequences, ["字", "🙂", "\x1b[A"]);
+			assert.strictEqual(buffer.getBuffer(), "");
+		});
 	});
 
 	describe("Complete Escape Sequences", () => {
@@ -290,6 +303,12 @@ describe("StdinBuffer", () => {
 			processInput("\x1b[64u");
 			processInput("@");
 			assert.deepStrictEqual(emittedSequences, ["\x1b[64u"]);
+		});
+
+		it("drops a supplementary duplicate after a Kitty code point across chunks", () => {
+			processInput("\x1b[128578u\ud83d");
+			processInput("\ude42x");
+			assert.deepStrictEqual(emittedSequences, ["\x1b[128578u", "x"]);
 		});
 
 		it("should keep non-matching plain character after Kitty printable sequence", () => {

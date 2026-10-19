@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { createInterface } from 'node:readline/promises';
+import { EnvHttpProxyAgent } from 'undici';
 
 import { parseReleaseChecksums, releaseVersionFromLatestRedirect } from "./release-contract.mjs";
 import { experimentalEnabled } from '../../experimental.js';
@@ -19,7 +20,16 @@ const RELEASE_ASSET_ORIGINS = new Set([
 ]);
 const MAX_PACKAGE_BYTES = 64 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
+const METADATA_TIMEOUT_MS = 15_000;
+const PACKAGE_TIMEOUT_MS = 5 * 60_000;
+const DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 export const LATEST_RELEASE_URL = "https://github.com/HypoxanthineOvO/VSPi/releases/latest";
+
+export interface SelfUpdateProgress {
+  stage: 'metadata' | 'checksums' | 'package' | 'verify' | 'install';
+  bytes: number;
+  totalBytes?: number;
+}
 
 export interface SelfUpdateResult {
   status: "up-to-date" | "updated";
@@ -34,7 +44,32 @@ export interface SelfUpdateOptions {
   fetch?: typeof globalThis.fetch;
   installPackage?: (tarballPath: string) => Promise<void>;
   latestReleaseUrl?: string;
+  onProgress?: (progress: SelfUpdateProgress) => void;
+  signal?: AbortSignal;
   temporaryRoot?: string;
+}
+
+export function createUpdateTransport(environment: NodeJS.ProcessEnv = process.env): {
+  fetch: typeof globalThis.fetch;
+  close: () => Promise<void>;
+} {
+  let dispatcher: EnvHttpProxyAgent;
+  try {
+    dispatcher = new EnvHttpProxyAgent({
+      httpProxy: environment.http_proxy ?? environment.HTTP_PROXY ?? '',
+      httpsProxy: environment.https_proxy ?? environment.HTTPS_PROXY ?? environment.http_proxy ?? environment.HTTP_PROXY ?? '',
+      noProxy: environment.no_proxy ?? environment.NO_PROXY ?? '',
+    });
+  } catch {
+    throw new Error('更新代理配置无效，请检查 HTTP_PROXY、HTTPS_PROXY 和 NO_PROXY');
+  }
+  return {
+    fetch: (input, init) => {
+      const request: RequestInit & { dispatcher: EnvHttpProxyAgent } = { ...init, dispatcher };
+      return globalThis.fetch(input, request);
+    },
+    close: async () => { await dispatcher.destroy(); },
+  };
 }
 
 export async function confirmUpdateStop(activity: RuntimeActivity): Promise<boolean> {
@@ -121,29 +156,30 @@ function trustedRedirectUrl(value: string): URL {
   return url;
 }
 
-function githubReleaseError(response: Response, url: URL): Error {
+function githubReleaseError(response: Response): Error {
   if (response.status === 404) return new Error("GitHub 上未找到 VSPi Release");
   const retryAfter = response.headers.get("retry-after");
-  if (response.status === 429 && retryAfter) {
+  if (response.status === 429 && retryAfter && /^\d+$/u.test(retryAfter)) {
     return new Error(`GitHub Release 请求频率受限，请在 ${retryAfter} 秒后重试`);
   }
-  return new Error(`请求 ${url.href} 失败：HTTP ${response.status}`);
+  return new Error(`GitHub Release 请求失败：HTTP ${response.status}`);
 }
 
 async function fetchLatestVersion(fetchImpl: typeof globalThis.fetch, value: string): Promise<string> {
   const url = trustedLatestReleaseUrl(value);
   const response = await fetchImpl(url, {
     headers: { "User-Agent": "VSPi-Updater" },
-    signal: AbortSignal.timeout(15_000),
     redirect: "manual",
   });
-  if (response.status < 300 || response.status >= 400) {
-    if (!response.ok) throw githubReleaseError(response, url);
-    throw new Error("GitHub latest Release 缺少版本重定向");
-  }
-  const location = response.headers.get("location");
-  if (!location) throw new Error("GitHub latest Release 重定向缺少 Location");
-  return releaseVersionFromLatestRedirect(new URL(location, url).href);
+  try {
+    if (response.status < 300 || response.status >= 400) {
+      if (!response.ok) throw githubReleaseError(response);
+      throw new Error("GitHub latest Release 缺少版本重定向");
+    }
+    const location = response.headers.get("location");
+    if (!location) throw new Error("GitHub latest Release 重定向缺少 Location");
+    return releaseVersionFromLatestRedirect(new URL(location, url).href);
+  } finally { await response.body?.cancel().catch(() => {}); }
 }
 
 function githubReleaseAssetUrl(version: string, filename: string): string {
@@ -153,12 +189,16 @@ function githubReleaseAssetUrl(version: string, filename: string): string {
 async function fetchPackage(fetchImpl: typeof globalThis.fetch, value: string): Promise<Response> {
   let url = trustedDownloadUrl(value);
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
-    const response = await fetchImpl(url, { signal: AbortSignal.timeout(60_000), redirect: "manual" });
+    const response = await fetchImpl(url, { redirect: "manual" });
     if (response.status < 300 || response.status >= 400) {
-      if (!response.ok) throw new Error(`请求 ${url.href} 失败：HTTP ${response.status}`);
-      if (response.url && response.url !== url.href) throw new Error("VSPi 更新最终地址不受信任");
+      if (!response.ok || response.url && response.url !== url.href) {
+        await response.body?.cancel().catch(() => {});
+        if (!response.ok) throw githubReleaseError(response);
+        throw new Error("VSPi 更新最终地址不受信任");
+      }
       return response;
     }
+    await response.body?.cancel().catch(() => {});
     const location = response.headers.get("location");
     if (!location) throw new Error("VSPi 更新重定向缺少 Location");
     if (redirects === MAX_REDIRECTS) throw new Error("VSPi 更新重定向次数过多");
@@ -265,58 +305,59 @@ export async function installVspiPackage(
 
 export async function updateVspi(currentVersion: string, options: SelfUpdateOptions = {}): Promise<SelfUpdateResult> {
   parseVersion(currentVersion);
-  if (options.distribution || experimentalEnabled('distribution')) return updateFromDistribution(currentVersion, options);
-  const fetchImpl = options.fetch ?? globalThis.fetch;
-  if (!fetchImpl) throw new Error("当前 Node.js 不支持 fetch，无法检查更新");
+  options.signal?.throwIfAborted();
+  const transport = options.fetch ? undefined : createUpdateTransport();
+  const networkOptions = { ...options, fetch: options.fetch ?? transport!.fetch };
+  try {
+    if (options.distribution || experimentalEnabled('distribution')) return await updateFromDistribution(currentVersion, networkOptions);
+    return await updateFromGithub(currentVersion, networkOptions);
+  } finally { await transport?.close(); }
+}
 
-  const latestVersion = await fetchLatestVersion(fetchImpl, options.latestReleaseUrl ?? LATEST_RELEASE_URL);
+async function updateFromGithub(currentVersion: string, options: SelfUpdateOptions & { fetch: typeof globalThis.fetch }): Promise<SelfUpdateResult> {
+  const latestVersion = await transferRelease('metadata', options, METADATA_TIMEOUT_MS, async transfer =>
+    fetchLatestVersion(transfer.fetch, options.latestReleaseUrl ?? LATEST_RELEASE_URL));
   if (compareVersions(latestVersion, currentVersion) <= 0) {
-    return { status: "up-to-date", currentVersion, latestVersion };
+    return { status: 'up-to-date', currentVersion, latestVersion };
   }
   const filename = `vspi-${latestVersion}.tgz`;
-  const checksumsResponse = await fetchPackage(
-    fetchImpl,
-    githubReleaseAssetUrl(latestVersion, "SHA256SUMS"),
-  );
-  const checksumBytes = await readLimitedResponse(checksumsResponse, 64 * 1024);
-  const expectedChecksum = parseReleaseChecksums(checksumBytes.toString("utf8"), latestVersion);
-
-  const directory = await mkdtemp(join(options.temporaryRoot ?? tmpdir(), "vspi-update-"));
+  const expectedChecksum = await transferRelease('checksums', options, 30_000, async transfer => {
+    const response = await fetchPackage(transfer.fetch, githubReleaseAssetUrl(latestVersion, 'SHA256SUMS'));
+    return parseReleaseChecksums((await transfer.read(response, 64 * 1024)).toString('utf8'), latestVersion);
+  });
+  const directory = await mkdtemp(join(options.temporaryRoot ?? tmpdir(), 'vspi-update-'));
   const tarballPath = join(directory, filename);
   try {
-    const packageResponse = await fetchPackage(
-      fetchImpl,
-      githubReleaseAssetUrl(latestVersion, filename),
-    );
-    const declaredSize = Number(packageResponse.headers.get("content-length"));
-    if (Number.isFinite(declaredSize) && declaredSize > MAX_PACKAGE_BYTES)
-      throw new Error("VSPi 更新包超过 64 MiB 上限");
-    const packageBytes = await readLimitedResponse(packageResponse, MAX_PACKAGE_BYTES);
+    const packageBytes = await transferRelease('package', options, PACKAGE_TIMEOUT_MS, async transfer => {
+      const response = await fetchPackage(transfer.fetch, githubReleaseAssetUrl(latestVersion, filename));
+      return transfer.read(response, MAX_PACKAGE_BYTES);
+    });
+    options.signal?.throwIfAborted();
+    options.onProgress?.({ stage: 'verify', bytes: packageBytes.length, totalBytes: packageBytes.length });
+    const actualChecksum = createHash('sha256').update(packageBytes).digest('hex');
+    if (actualChecksum !== expectedChecksum) throw new Error(`校验更新包失败（已下载 ${packageBytes.length} 字节）：SHA-256 校验失败；未安装任何文件，可重新运行 vspi update`);
     await writeFile(tarballPath, packageBytes, { mode: 0o600 });
-    const actualChecksum = createHash("sha256")
-      .update(packageBytes)
-      .digest("hex");
-    if (actualChecksum !== expectedChecksum) throw new Error("VSPi 更新包 SHA-256 校验失败");
+    options.signal?.throwIfAborted();
+    options.onProgress?.({ stage: 'install', bytes: packageBytes.length, totalBytes: packageBytes.length });
     if (options.installPackage) {
       await options.installPackage(tarballPath);
       return { status: 'updated', currentVersion, latestVersion };
     }
     const runtimeRestarted = await installVspiUpdate(tarballPath, latestVersion, { confirmStop: options.confirmStop });
-    return { status: "updated", currentVersion, latestVersion, runtimeRestarted };
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
+    return { status: 'updated', currentVersion, latestVersion, runtimeRestarted };
+  } finally { await rm(directory, { recursive: true, force: true }); }
 }
 
 async function updateFromDistribution(currentVersion: string, options: SelfUpdateOptions): Promise<SelfUpdateResult> {
   const update = async (trust: DistributionTrust, minimumVersion: string, remember: (version: string) => Promise<void>): Promise<SelfUpdateResult> => {
-    const release = await selectDistributionRelease(trust, { source: options.distribution?.source, minimumVersion, fetch: options.fetch });
+    const release = await selectDistributionRelease(trust, { source: options.distribution?.source, minimumVersion, fetch: options.fetch, signal: options.signal });
     await remember(release.manifest.version);
     if (compareVersions(release.manifest.version, currentVersion) <= 0) return { status: 'up-to-date', currentVersion, latestVersion: release.manifest.version };
     const directory = await mkdtemp(join(options.temporaryRoot ?? tmpdir(), 'vspi-distribution-'));
     try {
       const path = join(directory, `vspi-${release.manifest.version}.tgz`);
-      await writeFile(path, await downloadDistributionRelease(release, { source: options.distribution?.source, fetch: options.fetch }), { mode: 0o600 });
+      await writeFile(path, await downloadDistributionRelease(release, { source: options.distribution?.source, fetch: options.fetch, signal: options.signal }), { mode: 0o600 });
+      options.signal?.throwIfAborted();
       if (options.installPackage) { await options.installPackage(path); return { status: 'updated', currentVersion, latestVersion: release.manifest.version }; }
       const runtimeRestarted = await installVspiUpdate(path, release.manifest.version, { confirmStop: options.confirmStop });
       return { status: 'updated', currentVersion, latestVersion: release.manifest.version, runtimeRestarted };
@@ -326,21 +367,80 @@ async function updateFromDistribution(currentVersion: string, options: SelfUpdat
   return withDistributionTrust(currentVersion, update, options.distribution?.home);
 }
 
-async function readLimitedResponse(response: Response, limit: number): Promise<Buffer> {
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error('更新下载没有响应体');
-  let total = 0;
-  const chunks: Uint8Array[] = [];
+interface ReleaseTransfer {
+  fetch: typeof globalThis.fetch;
+  read(response: Response, limit: number): Promise<Buffer>;
+}
+
+async function transferRelease<T>(
+  stage: 'metadata' | 'checksums' | 'package',
+  options: SelfUpdateOptions & { fetch: typeof globalThis.fetch },
+  timeoutMs: number,
+  run: (transfer: ReleaseTransfer) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+  const totalTimer = setTimeout(() => { controller.abort(new Error('超过总下载时限')); }, timeoutMs);
+  totalTimer.unref();
+  let idleTimer: NodeJS.Timeout | undefined;
+  let bytes = 0;
+  let totalBytes: number | undefined;
+  const report = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => { controller.abort(new Error('连续 30 秒没有下载进展')); }, DOWNLOAD_IDLE_TIMEOUT_MS);
+    idleTimer.unref();
+    options.onProgress?.({ stage, bytes, totalBytes });
+  };
+  const wait = <R>(promise: Promise<R>): Promise<R> => new Promise((resolve, reject) => {
+    const abort = () => { reject(signal.reason); };
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(resolve, reject).finally(() => { signal.removeEventListener('abort', abort); });
+    if (signal.aborted) abort();
+  });
   try {
-    for (;;) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      total += chunk.value.byteLength;
-      if (total > limit) throw new Error(`VSPi 下载超过 ${limit >= 1024 * 1024 ? `${limit / (1024 * 1024)} MiB` : `${limit / 1024} KiB`} 上限`);
-      chunks.push(chunk.value);
-    }
-    return Buffer.concat(chunks, total);
-  } finally { await reader.cancel(); }
+    report();
+    return await wait(run({
+      fetch: async (input, init) => {
+        try { return await wait(options.fetch(input, { ...init, signal })); }
+        catch { signal.throwIfAborted(); throw new Error('网络连接失败，请检查代理或稍后重试'); }
+      },
+      read: async (response, limit) => {
+        const declaredSize = Number(response.headers.get('content-length'));
+        totalBytes = Number.isSafeInteger(declaredSize) && declaredSize > 0 ? declaredSize : undefined;
+        if (totalBytes !== undefined && totalBytes > limit) {
+          await response.body?.cancel().catch(() => {});
+          throw new Error(`VSPi 下载超过 ${limit >= 1024 * 1024 ? `${limit / (1024 * 1024)} MiB` : `${limit / 1024} KiB`} 上限`);
+        }
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error('更新下载没有响应体');
+        const chunks: Uint8Array[] = [];
+        try {
+          for (;;) {
+            const chunk = await wait(reader.read());
+            if (chunk.done) break;
+            if (chunk.value.byteLength === 0) continue;
+            bytes += chunk.value.byteLength;
+            if (bytes > limit) throw new Error(`VSPi 下载超过 ${limit >= 1024 * 1024 ? `${limit / (1024 * 1024)} MiB` : `${limit / 1024} KiB`} 上限`);
+            chunks.push(chunk.value);
+            report();
+          }
+          return Buffer.concat(chunks, bytes);
+        } catch (error) {
+          signal.throwIfAborted();
+          if (bytes > limit) throw error;
+          // Network errors may contain signed asset URLs or proxy credentials.
+          // oxlint-disable-next-line preserve-caught-error
+          throw new Error('下载响应中断，请检查网络或稍后重试');
+        } finally { void reader.cancel().catch(() => {}); reader.releaseLock(); }
+      },
+    }));
+  } catch (error) {
+    const label = stage === 'metadata' ? '检查最新版本' : stage === 'checksums' ? '下载校验清单' : '下载更新包';
+    const detail = options.signal?.aborted ? '更新已取消' : controller.signal.aborted ? (controller.signal.reason as Error).message : error instanceof Error ? error.message : '请求失败';
+    // Avoid retaining transport credentials in an error cause or diagnostic stack.
+    // oxlint-disable-next-line preserve-caught-error
+    throw new Error(`${label}失败（已下载 ${bytes} 字节）：${detail}；未安装任何文件，可重新运行 vspi update`);
+  } finally { clearTimeout(totalTimer); if (idleTimer) clearTimeout(idleTimer); }
 }
 
 function execute(command: string, args: string[], env: NodeJS.ProcessEnv): Promise<string> {

@@ -1211,6 +1211,27 @@ describe("host-controlled redraws", () => {
 
 
 describe("legacy viewport-only resize compatibility", () => {
+	it("lets an append-only host adopt existing viewport rows without repainting them", async () => {
+		class PreservingTui extends TuiMainScreen {
+			protected override initialRenderRow(): number { return 3; }
+		}
+		const terminal = new LoggingVirtualTerminal(80, 8);
+		terminal.write("KEEP_FIRST\r\nKEEP_SECOND\r\nKEEP_THIRD");
+		await terminal.flush();
+		const tui = new PreservingTui(terminal);
+		const component = new TestComponent();
+		component.lines = ["", "", "", "New footer", "New composer"];
+		tui.addChild(component); tui.start();
+		try {
+			terminal.clearWrites(); tui.renderNow(); await terminal.flush();
+			assert.equal(terminal.getViewport()[0], "KEEP_FIRST");
+			assert.equal(terminal.getViewport()[2], "KEEP_THIRD");
+			assert.equal(terminal.getViewport()[3], "New footer");
+			assert.ok(!terminal.getWrites().includes("KEEP_FIRST"));
+			assert.ok(!terminal.getWrites().includes("\x1b[2J"));
+		} finally { tui.stop(); }
+	});
+
 	it("preserves the opt-in resize limit and complete content revisions", async () => {
 		const terminal = new LoggingVirtualTerminal(80, 12);
 		const tui = new TuiMainScreen(terminal);

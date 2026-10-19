@@ -116,6 +116,8 @@ export function recordFrameRenderMs(ms: number): void {
 export class ScrollbackTUI extends TuiMainScreen {
   private framePacer: TuiFramePacer | undefined;
   private clearingDeferred = false;
+  private firstRenderOffset = 0;
+  private epochGeometry: { width: number; height: number } | undefined;
   /** Runs synchronously after every rendered frame so the host can freeze scrolled-off rows. */
   onFrameRendered: (() => void) | undefined;
   /** Runs after resize or a clearing fallback settles; the host preserves the old frame. */
@@ -154,6 +156,10 @@ export class ScrollbackTUI extends TuiMainScreen {
     return true;
   }
 
+  protected override initialRenderRow(): number {
+    return this.firstRenderOffset;
+  }
+
   protected override requestResizeRender(): void {
     // Resize drags report a stream of sizes; rebuild once after the size settles.
     this.armRebuildSettle("resize", true);
@@ -166,7 +172,8 @@ export class ScrollbackTUI extends TuiMainScreen {
   protected override doRender(): void {
     if ((this.terminal as Partial<ScrollbackProcessTerminal>).deferRender?.(() => this.requestRender())) return;
     const previous = this.captureRenderState();
-    if (previous.previousWidth > 0 && (previous.previousWidth !== this.terminal.columns || previous.previousHeight !== this.terminal.rows)) {
+    const geometry = previous.previousWidth > 0 ? { width: previous.previousWidth, height: previous.previousHeight } : this.epochGeometry;
+    if (geometry && (geometry.width !== this.terminal.columns || geometry.height !== this.terminal.rows)) {
       this.deferClearingRedraw("resize");
       return;
     }
@@ -177,7 +184,11 @@ export class ScrollbackTUI extends TuiMainScreen {
     this.clearingDeferred = false;
     super.doRender();
     if (FRAME_STATS_PATH) recordFrameRenderMs(performance.now() - started);
-    if (!this.clearingDeferred) this.onFrameRendered?.();
+    if (!this.clearingDeferred) {
+      this.firstRenderOffset = 0;
+      this.epochGeometry = undefined;
+      this.onFrameRendered?.();
+    }
   }
 
   override renderNow(force = false): void {
@@ -235,17 +246,23 @@ export class ScrollbackTUI extends TuiMainScreen {
   }
 
 
-  preserveViewportEpoch(): void {
-    this.terminal.write(`${BEGIN_SYNC}\u001b[${Math.max(1, this.terminal.rows)};1H\r\n${END_SYNC}`);
+  preserveViewportEpoch(preservedRows = 0): void {
+    const height = Math.max(1, this.terminal.rows);
+    this.epochGeometry = { width: this.terminal.columns, height };
+    this.firstRenderOffset = Math.max(0, Math.min(height - 1, preservedRows));
+    const scroll = preservedRows > 0 ? height - this.firstRenderOffset : 1;
+    this.terminal.write(`${BEGIN_SYNC}\u001b[${height};1H${"\r\n".repeat(scroll)}${END_SYNC}`);
     this.resetScrollbackRenderState();
   }
 
-  reflowViewport(): void {
-    this.preserveViewportEpoch();
+  reflowViewport(preservedRows = 0): void {
+    this.preserveViewportEpoch(preservedRows);
   }
 
 
   beginSurfaceEpoch(): void {
+    this.firstRenderOffset = 0;
+    this.epochGeometry = undefined;
     const state = this.captureRenderState();
     const finalRow = Math.max(0, state.previousLines.length - 1);
     const lineOffset = finalRow - state.hardwareCursorRow;

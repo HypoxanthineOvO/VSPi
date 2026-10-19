@@ -284,6 +284,7 @@ export type CompactionActivity =
 export interface ChatBackendEvents {
   onRetryNotice?: (message: string | undefined) => void;
   onHistory?: (messages: TranscriptMessage[], prepend: boolean) => void;
+  onHistoryReconcile?: (messages: TranscriptMessage[], metadata?: { truncated: boolean }) => void;
   onModelChanged?: (effort: EffortLevel) => void;
 	onModelSwitchPending?: (change: { from: string; to: string } | undefined) => void;
 	onMessage: (message: TranscriptMessage) => void;

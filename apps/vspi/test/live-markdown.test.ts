@@ -1,0 +1,82 @@
+import { describe, expect, it } from 'vitest';
+import type { TranscriptMessage } from '../src/v1/domain/types.js';
+import { stripAnsi } from '../src/v1/ui/ansi.js';
+import { detectTerminalCapabilities } from '../src/v1/ui/capabilities.js';
+import { LiveMarkdown } from '../src/v1/ui/live-markdown.js';
+import { createTheme } from '../src/v1/ui/theme.js';
+
+const theme = createTheme(detectTerminalCapabilities({ TERM: 'xterm-256color', LANG: 'zh_CN.UTF-8' }), 'VSPi Dark');
+type Message = Extract<TranscriptMessage, { kind: 'text' }>;
+
+function drain(layout: LiveMarkdown, message: Message, width = 80): string[] {
+  const output: string[] = [];
+  for (let frame = 0; frame < 1000; frame++) {
+    const rows = layout.render(message, width, theme, { wrapCode: true }, 200, 4);
+    output.push(...rows);
+    layout.freeze(rows.length);
+    if (!layout.pending) return output;
+  }
+  throw new Error('Markdown layout did not finish draining');
+}
+
+function content(lines: string[]): string {
+  return lines.map(line => stripAnsi(line).replace(/^[•·✦] /u, '').replace(/^  /u, '').replaceAll(/[│┌┐└┘├┤┬┴─┼]/gu, '')).join('').replaceAll(/\s+/gu, '');
+}
+
+describe('native Markdown table continuations', () => {
+  it.each(['Column', 'Col\\|umn'])('preserves every cell after an oversized row under %s', header => {
+    const layout = new LiveMarkdown();
+    const values = Array.from({ length: 1800 }, (_, index) => `TOKEN${String(index).padStart(4, '0')}`);
+    const text = `| ${header} | Value |\n| --- | --- |\n| FIRST_CELL | ${values.join(' ')} |\n| LAST_ROW | LAST_VALUE |`;
+    const message: Message = { id: 'table', role: 'assistant', kind: 'text', text, streaming: false };
+    const rendered = content(drain(layout, message));
+    for (const value of values) expect(rendered.split(value)).toHaveLength(2);
+    expect(rendered.split('LAST_ROW')).toHaveLength(2);
+    expect(rendered.split('LAST_VALUE')).toHaveLength(2);
+    expect(message.text).toBe(text);
+  });
+
+  it('keeps an escaped pipe split across streaming updates after its cell has scrolled away', () => {
+    const layout = new LiveMarkdown();
+    const prefix = '| Column | Value |\n| --- | --- |\n| FIRST_CELL | ' + 'long cell '.repeat(100) + '\\';
+    const message: Message = { id: 'stream', role: 'assistant', kind: 'text', text: prefix, streaming: true };
+    const printed = drain(layout, message);
+    layout.beginViewport();
+    printed.push(...drain(layout, { ...message, text: prefix + '|ESCAPED_MARKER |\n| NEXT_ROW | NEXT_VALUE |', streaming: false }, 60));
+    const rendered = content(printed);
+    expect(rendered.split('ESCAPED_MARKER')).toHaveLength(2);
+    expect(rendered.split('NEXT_ROW')).toHaveLength(2);
+    expect(rendered.split('NEXT_VALUE')).toHaveLength(2);
+  });
+
+  it('recovers normal Markdown parsing after a long table ends', () => {
+    const layout = new LiveMarkdown();
+    const text = '| Key | Value |\n| --- | --- |\n| FIRST | ' + 'source '.repeat(1000) + ' |\n\n| Small | Table |\n| --- | --- |\n| SMALL_ROW | SMALL_VALUE |';
+    const rows = drain(layout, { id: 'next-table', role: 'assistant', kind: 'text', text, streaming: false }).map(stripAnsi);
+    expect(rows.some(row => row.includes('│ SMALL_ROW') && row.includes('SMALL_VALUE'))).toBe(true);
+  });
+});
+
+
+describe('native Markdown code headers', () => {
+  it.each([{ fence: '```', streaming: false }, { fence: '~~~', streaming: true }])('removes $fence from the language label while streaming=$streaming', ({ fence, streaming }) => {
+    const layout = new LiveMarkdown();
+    const text = `${fence}typescript\nconst value = 1;${streaming ? '' : `\n${fence}`}`;
+    const rows = drain(layout, { id: 'fence', role: 'assistant', kind: 'text', text, streaming }).map(stripAnsi);
+    const header = rows.find(row => row.includes('typescript'));
+    expect(header).toBeDefined();
+    expect(header).not.toContain(fence);
+  });
+});
+
+describe('native Markdown streaming cursor', () => {
+  it.each(['x'.repeat(77) + 'Z', '中'.repeat(38) + 'AZ'])('keeps the last source character on a full-width row after it freezes', text => {
+    const layout = new LiveMarkdown();
+    const message: Message = { id: 'full-row', role: 'assistant', kind: 'text', text, streaming: true };
+    const printed = drain(layout, message);
+    layout.beginViewport();
+    printed.push(...drain(layout, { ...message, streaming: false }, 60));
+    expect(content(printed).split('Z')).toHaveLength(2);
+    expect(content(printed)).toContain(text);
+  });
+});

@@ -3199,21 +3199,17 @@ describe('concurrent state writes', () => {
     const secondGate = new Promise<void>((resolve) => {
       releaseSecond = resolve;
     });
+    let markSecondEntered!: () => void;
+    const secondEntered = new Promise<void>((resolve) => {
+      markSecondEntered = resolve;
+    });
     const secondRun = drive(second, async () => {
+      markSecondEntered();
       await secondGate;
     });
 
-    let heldContent = '';
-    for (;;) {
-      try {
-        heldContent = await readFile(lockPath, 'utf8');
-        break;
-      } catch {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 10);
-        });
-      }
-    }
+    await secondEntered;
+    const heldContent = await readFile(lockPath, 'utf8');
     expect(heldContent).toMatch(/pid=\d+ since=\S+ token=[0-9a-f-]+/);
 
     openGate();

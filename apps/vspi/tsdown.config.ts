@@ -35,6 +35,7 @@ const main = defineConfig({
       'jimp',
       'marked',
       'smol-toml',
+      'undici',
       'xstate',
       'yaml',
     ],
@@ -61,7 +62,7 @@ function worker(name: string, entry: string) {
     silent: true,
     deps: {
       onlyBundle: false,
-      alwaysBundle: [/^@moonshot-ai\//, /^@vsp\//, /^@earendil-works\//],
+      alwaysBundle: [/^@moonshot-ai\//, /^@vsp\//, /^@earendil-works\//, 'undici'],
     },
     outputOptions: {
       codeSplitting: false,

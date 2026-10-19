@@ -152,6 +152,7 @@ import {
 	isTranscriptSectionVisible,
 	renderTranscript,
 	renderTranscriptSections,
+	LiveToolGroup,
 	retainTranscript,
 	selectTranscriptWindow,
 	type TranscriptNode,
@@ -353,7 +354,7 @@ const STARTUP_SURFACE_NODE_ID = "startup:surface";
 interface LiveTranscriptSection {
 	origins?: { row: number; column: number }[];
 	layoutWidth?: number;
-	layout?: LiveMarkdown;
+	layout?: LiveMarkdown | LiveToolGroup;
 	layoutVersion?: number;
 	auxiliary?: boolean;
 	references?: readonly TranscriptMessage[];
@@ -389,7 +390,8 @@ export class VspiApp implements Component, Focusable {
 	/** Canonical row positions already frozen into native scrollback, per live node. */
 	private readonly frozenNodeRows = new Map<string, FrozenTranscriptRows>();
 	private readonly committedNodeIds = new Set<string>();
-	private readonly liveMarkdown = new Map<string, LiveMarkdown>();
+	private readonly archivedMessageIds = new Set<string>();
+	private readonly liveLayouts = new Map<string, LiveMarkdown | LiveToolGroup>();
 	private pendingLiveOutput = false;
 	private liveSections: LiveTranscriptSection[] = [];
 	private liveSectionsBase = 0;
@@ -397,6 +399,9 @@ export class VspiApp implements Component, Focusable {
 	private lastNativeFrame: { sections: LiveTranscriptSection[]; base: number; rows: number } | undefined;
 	/** Rows at the top of the last committed frame owned by splash + transcript. */
 	private liveTranscriptRows = 0;
+	private preservedNativeRows = 0;
+	private regularBodyRevision = 0;
+	private regularBodyCache: { revision: number; width: number; height: number; dockHeight: number; surface: string; lines: string[] } | undefined;
 	private startupSurfaceShown = false;
 	private activityPresentationActive = false;
 	private readonly panels: PanelController;
@@ -422,7 +427,7 @@ export class VspiApp implements Component, Focusable {
 	private clearingQueue = false;
 	private queuedPresentations = new Map<
 		string,
-		{ phase: QueuedMessagePresentation["phase"]; startedTick: number }
+		{ phase: QueuedMessagePresentation["phase"]; startedAt: number }
 	>();
 	private queuedMessages = new Map<
 		string,
@@ -433,7 +438,10 @@ export class VspiApp implements Component, Focusable {
 	private workingStartedAt: number | undefined;
 	private workingTimer: NodeJS.Timeout | undefined;
 	private workingTimerInterval: number | undefined;
-	private agentDockTimer: NodeJS.Timeout | undefined;
+	private displaySecond = -1;
+	private displayAnimation = -1;
+	private agentSnapshotSignature: string | undefined;
+	private taskSnapshotSignature: string | undefined;
 	private agentConversationSubscription: BackendSubscription | undefined;
 	private agentConversationLoadId = 0;
 	private workspaceFocus: "composer" | "transcript" | "plan" = "composer";
@@ -513,7 +521,7 @@ export class VspiApp implements Component, Focusable {
 	private readonly fullscreenLayout: VStack;
 	private fullscreenRenderRevision = 0;
 	private fullscreenBodyCache:
-		| { revision: number; width: number; lines: string[] }
+		| { revision: number; width: number; height: number; dockHeight: number; surface: string; lines: string[] }
 		| undefined;
 	private fullscreenDockCache:
 		| { revision: number; width: number; dock: AppRenderDock }
@@ -552,7 +560,7 @@ export class VspiApp implements Component, Focusable {
 		this.composer = new Composer(renderingTui, theme, options.cwd);
 		this.imagePathPaste = new ImagePathPasteHandler({ cwd: options.cwd,
 			attach: (path, signal) => options.attachments.importPath(path, signal),
-			insert: data => { this.composer.handleInput(data); this.requestRender(); },
+			insert: data => { this.composer.handleInput(data); this.requestRender(false, "dock"); },
 			replay: data => { this.handleInput(data); },
 			notice: message => { this.showNotice(message, 'warning'); },
 		});
@@ -608,7 +616,7 @@ export class VspiApp implements Component, Focusable {
 		this.composer.onSubmit = (text) => void this.submit(text);
 		this.composer.onChange = (text) => {
 			this.panels.setCommandQuery(text);
-			this.requestRender();
+			this.requestRender(false, this.panels.kind === "commands" ? "all" : "dock");
 		};
 		this.composer.onAttachmentRemove = (attachment) =>
 			void this.removeAttachment(attachment.id);
@@ -629,6 +637,7 @@ export class VspiApp implements Component, Focusable {
 					this.transcriptRenderCache.clear();
 					this.requestRender();
 				},
+				onHistoryReconcile: (messages, metadata) => this.reconcileTranscriptHistory(messages, metadata),
 				onMessage: (message) => {
 					if (this.sessionTransition && !this.sessionResetObserved) return;
 					const index = this.messages.findIndex(item => item.id === message.id);
@@ -641,9 +650,15 @@ export class VspiApp implements Component, Focusable {
 					if (this.sessionTransition && !this.sessionResetObserved) return;
 					const index = this.messages.findIndex((message) => message.id === id);
 					const current = this.messages[index];
+					if (current && Object.entries(patch).every(([key, value]) => Object.is((current as unknown as Record<string, unknown>)[key], value))) return;
 					if (index >= 0 && current) {
 						const next = { ...current, ...patch } as TranscriptMessage;
 						this.messages[index] = next;
+						if (this.tui.mode === "regular" && current.kind === "tool" && next.kind === "tool") {
+							const node = index < this.committedMessageCount ? undefined : buildTranscriptNodes(this.messages).find(item => item.messageIndexes.includes(index));
+							if (index < this.committedMessageCount || (node && this.committedNodeIds.has(node.id))) this.appendArchivedToolUpdate(current, next);
+						}
+						if (this.tui.mode === "regular" && current.kind === "text" && next.kind === "text" && (index < this.committedMessageCount || this.committedNodeIds.has(current.id))) this.appendArchivedTextUpdate(current, next);
 						if (
 							next.kind === "tool" &&
 							next.status !== "queued" &&
@@ -680,7 +695,7 @@ export class VspiApp implements Component, Focusable {
 				onUsage: (usage) => {
 					if (this.sessionTransition && !this.sessionResetObserved) return;
 					this.usage = usage;
-					this.requestRender();
+					this.requestRender(false, this.panels.kind === "usage" ? "all" : "dock");
 				},
 				onCompactionActivity: (activity) => {
 					if (this.sessionTransition) return;
@@ -747,15 +762,22 @@ export class VspiApp implements Component, Focusable {
 					this.requestRender();
 				},
 				onAgentSnapshot: (snapshot) => {
+					const signature = JSON.stringify(snapshot);
+					if (signature === this.agentSnapshotSignature) return;
+					this.agentSnapshotSignature = signature;
 					this.panels.setAgentSnapshot(snapshot);
 					this.agentsDock.setSnapshot(snapshot);
 					this.syncAgentDockTimer();
-					this.requestRender();
+					this.requestRender(false, this.panels.kind === "agents" ? "all" : "dock");
 				},
 				onTaskSnapshot: (snapshot) => {
+					const signature = JSON.stringify(snapshot);
+					if (signature === this.taskSnapshotSignature) return;
+					this.taskSnapshotSignature = signature;
 					this.taskSnapshot = structuredClone(snapshot);
 					this.panels.setTaskSnapshot(snapshot);
-					this.requestRender();
+					this.syncAgentDockTimer();
+					this.requestRender(false, this.panels.kind === "tasks" ? "all" : "dock");
 				},
 				onCronSnapshot: (tasks) => {
 					this.scheduledCount = tasks.length;
@@ -869,6 +891,8 @@ export class VspiApp implements Component, Focusable {
 					this.sessionHandoffRelay = undefined;
 					this.attachmentSessionId = session.id;
 					this.effort = session.effort;
+					this.agentSnapshotSignature = undefined;
+					this.taskSnapshotSignature = undefined;
 					this.agentsDock.reset();
 					this.syncAgentDockTimer();
 					this.disposeAgentConversation();
@@ -1033,7 +1057,6 @@ export class VspiApp implements Component, Focusable {
 		if (this.workingTimer) clearInterval(this.workingTimer);
 		this.queuedPresentations.clear();
 		this.queuedAnimationTick = 0;
-		if (this.agentDockTimer) clearInterval(this.agentDockTimer);
 		this.disposeAgentConversation();
 		this.thinkingTranslationRevision += 1;
 		this.thinkingTranslationAbort?.abort();
@@ -1082,17 +1105,100 @@ export class VspiApp implements Component, Focusable {
 			this.tui.mode === "regular" ? (_message, index) => index < this.committedMessageCount || this.committedNodeIds.has(nodeIds.get(index) ?? "") : undefined,
 		);
 		if (retained.messages === this.messages) return;
+		const retainedIds = new Set(retained.messages.map(message => message.id));
+		for (const message of this.messages) if (!retainedIds.has(message.id)) this.archivedMessageIds.add(message.id);
 		this.messages = retained.messages;
 		this.committedMessageCount = retained.committedCount;
 		this.inspectIndex = undefined;
 		const indexes = new Map(this.messages.map((message, index) => [message.id, index]));
 		const retainedNodeIds = new Set(buildTranscriptNodes(this.messages).map(node => node.id));
-		for (const id of this.liveMarkdown.keys()) if (!indexes.has(id)) this.liveMarkdown.delete(id);
+		for (const id of this.liveLayouts.keys()) if (!retainedNodeIds.has(id)) this.liveLayouts.delete(id);
 		for (const id of this.frozenNodeRows.keys()) if (!retainedNodeIds.has(id)) this.frozenNodeRows.delete(id);
 		for (const id of this.committedNodeIds) if (!retainedNodeIds.has(id)) this.committedNodeIds.delete(id);
 		for (const section of this.liveSections) section.messageIndexes = section.references?.flatMap(message => indexes.has(message.id) ? [indexes.get(message.id)!] : []) ?? section.messageIndexes;
 		this.liveSectionsBase = 0;
 		this.transcriptRenderCache.clear();
+		this.regularBodyRevision++;
+	}
+
+	private reconcileTranscriptHistory(history: TranscriptMessage[], metadata?: { truncated: boolean }): void {
+		const indexes = new Map(this.messages.map((message, index) => [message.id, index]));
+		const retainKnownContent = (previous: string, incoming: string, truncated = metadata?.truncated): string => {
+			if (!truncated) return incoming;
+			const marker = incoming.indexOf("[display truncated]");
+			const prefix = marker < 0 ? incoming : incoming.slice(0, marker);
+			return previous.length > prefix.length && previous.startsWith(prefix) ? previous : incoming;
+		};
+		for (const incoming of history) {
+			const index = indexes.get(incoming.id);
+			if (index === undefined && this.archivedMessageIds.has(incoming.id)) continue;
+			const current = index === undefined ? undefined : this.messages[index];
+			const next = this.withThinkingDisplayDefault(incoming);
+			if (current?.kind === "tool" && next.kind === "tool") {
+				next.expanded = current.expanded;
+				next.groupId = current.groupId ?? next.groupId;
+				next.agentRuns ??= current.agentRuns;
+				next.durationMs ??= current.durationMs;
+				next.output ??= current.output;
+				if (current.output !== undefined && next.output !== undefined) next.output = retainKnownContent(current.output, next.output);
+			}
+			if (current?.kind === "thinking" && next.kind === "thinking") {
+				next.text = retainKnownContent(current.text, next.text, true);
+				next.collapsed = current.collapsed;
+				next.durationMs ??= current.durationMs;
+				if (next.text === current.text) {
+					next.translatedText ??= current.translatedText;
+					next.translationStatus ??= current.translationStatus;
+				}
+			}
+			if (current?.kind === "text" && next.kind === "text") {
+				next.text = retainKnownContent(current.text, next.text);
+				if (!next.attachments) next.attachments = current.attachments;
+			}
+			if (index === undefined || !current) {
+				indexes.set(next.id, this.messages.length);
+				this.messages.push(next);
+				continue;
+			}
+			if (Object.entries(next).every(([key, value]) => Object.is((current as unknown as Record<string, unknown>)[key], value))) continue;
+			this.messages[index] = next;
+			if (this.tui.mode === "regular" && current.kind === "text" && next.kind === "text" && (index < this.committedMessageCount || this.committedNodeIds.has(current.id))) this.appendArchivedTextUpdate(current, next);
+			if (this.tui.mode === "regular" && current.kind === "tool" && next.kind === "tool") {
+				const node = index < this.committedMessageCount ? undefined : buildTranscriptNodes(this.messages).find(item => item.messageIndexes.includes(index));
+				if (index < this.committedMessageCount || node && this.committedNodeIds.has(node.id)) this.appendArchivedToolUpdate(current, next);
+			}
+		}
+		this.pruneTranscript();
+		this.queueVisibleThinkingTranslations();
+		this.requestRender();
+	}
+
+	private appendArchivedTextUpdate(previous: Extract<TranscriptMessage, { kind: "text" }>, next: Extract<TranscriptMessage, { kind: "text" }>): void {
+		if (next.role !== "assistant" || next.text === previous.text || next.text.trim() === previous.text.trim()) return;
+		const appended = next.text.startsWith(previous.text) ? next.text.slice(previous.text.length) : `↳ 内容已更新\n\n${next.text}`;
+		this.messages.push({ ...next, id: `native-text-update:${randomUUID()}`, text: appended, streaming: false });
+	}
+
+	private appendArchivedToolUpdate(previous: Extract<TranscriptMessage, { kind: "tool" }>, next: Extract<TranscriptMessage, { kind: "tool" }>): void {
+		const terminal = (status: string) => !["running", "queued", "background", "detached", "stopping"].includes(status);
+		const fresh = (next.agentRuns ?? []).filter(run => {
+			const old = previous.agentRuns?.find(item => item.name === run.name && item.task === run.task);
+			return terminal(run.status) && (!old || !terminal(old.status) || old.status !== run.status || old.result !== run.result);
+		});
+		const outputChanged = next.output !== previous.output && Boolean(next.output);
+		const statusChanged = previous.status !== next.status && terminal(next.status);
+		if (!outputChanged && !statusChanged && fresh.length === 0) return;
+		if (outputChanged && next.expanded) {
+			const id = `native-tool-update:${randomUUID()}`;
+			const appended = next.output?.startsWith(previous.output ?? "") ? next.output.slice(previous.output?.length ?? 0) : next.output;
+			this.messages.push({ ...next, id, groupId: id, summary: `输出已更新 · ${next.summary}`, output: appended });
+			return;
+		}
+		const notices = fresh.length > 0 ? fresh.map(run => ({ name: run.name, status: run.status, detail: run.result ?? run.task ?? next.summary })) : [{ name: next.name, status: next.status, detail: (outputChanged ? next.output : undefined) ?? next.summary }];
+		for (const notice of notices) {
+			const detail = notice.detail.slice(0, 500).match(/\S[^\r\n]*/u)?.[0] ?? "";
+			this.messages.push({ id: `native-tool-update:${randomUUID()}`, role: "assistant", kind: "session", text: `${notice.status === "success" ? "✓" : "↳"} ${notice.name.slice(0, 100)} · ${detail}` });
+		}
 	}
 
 	private bindTui(tui: TUI): void {
@@ -1192,6 +1298,7 @@ export class VspiApp implements Component, Focusable {
 			(this.notice.tone === "warning" || this.notice.tone === "error")
 		) {
 			this.notice = undefined;
+			this.regularBodyRevision++;
 		}
 		if (this.sessionHandoffPending) {
 			this.showNotice("Session 正在移交；请在新终端继续", "info");
@@ -1463,6 +1570,7 @@ export class VspiApp implements Component, Focusable {
 		this.startupSurface = this.panels.kind === "sessions" ? [] : [...lines];
 		if (this.startupSurface.length > 0) this.startupSurfaceShown = true;
 		this.fullscreenRenderRevision += 1;
+		this.regularBodyRevision++;
 	}
 
 	render(width: number): string[] {
@@ -1486,14 +1594,16 @@ export class VspiApp implements Component, Focusable {
 		}
 		pending.bodyRendered = true;
 		let cached = this.fullscreenBodyCache;
+		const height = this.tui.terminal.rows;
+		const surface = `${this.workspaceFocus}:${this.panelFocused}:${this.panels.kind}`;
 		if (
 			!cached ||
-			cached.revision !== this.fullscreenRenderRevision ||
-			cached.width !== width
+			cached.revision !== this.regularBodyRevision ||
+			cached.width !== width || cached.height !== height || cached.dockHeight !== pending.dock.lines.length || cached.surface !== surface
 		) {
 			cached = {
-				revision: this.fullscreenRenderRevision,
-				width,
+				revision: this.regularBodyRevision,
+				width, height, dockHeight: pending.dock.lines.length, surface,
 				lines: this.buildRenderBody(width, pending.dock),
 			};
 			this.fullscreenBodyCache = cached;
@@ -1545,7 +1655,22 @@ export class VspiApp implements Component, Focusable {
 
 	private buildRenderSections(width: number): AppRenderSections {
 		const dock = this.buildRenderDock(width);
-		return { body: this.buildRenderBody(width, dock), dock: dock.lines };
+		if (this.tui.mode !== "regular") return { body: this.buildRenderBody(width, dock), dock: dock.lines };
+		const height = this.tui.terminal.rows;
+		const surface = `${this.workspaceFocus}:${this.panelFocused}:${this.panels.kind}`;
+		let cached = this.regularBodyCache;
+		if (!cached || cached.revision !== this.regularBodyRevision || cached.width !== width || cached.height !== height || cached.dockHeight !== dock.lines.length || cached.surface !== surface || this.pendingLiveOutput) {
+			let lines = this.buildRenderBody(width, dock);
+			if (this.preservedNativeRows > 0) {
+				const offset = this.preservedNativeRows;
+				lines = [...new Array<string>(offset).fill(""), ...lines];
+				for (const section of this.liveSections) { section.start += offset; section.end += offset; }
+				this.liveTranscriptRows += offset;
+			}
+			cached = { revision: this.regularBodyRevision, width, height, dockHeight: dock.lines.length, surface, lines };
+			this.regularBodyCache = cached;
+		}
+		return { body: cached.lines, dock: dock.lines };
 	}
 
 	private buildRenderDock(width: number): AppRenderDock {
@@ -1827,7 +1952,7 @@ export class VspiApp implements Component, Focusable {
 		previewRows = 8,
 	): string[] {
 		this.pendingLiveOutput = false;
-		for (const message of this.messages) if (message.kind === "thinking" && (message.collapsed || options.thinkingDisplay === "hidden")) this.liveMarkdown.delete(message.id);
+		for (const message of this.messages) if (message.kind === "thinking" && (message.collapsed || options.thinkingDisplay === "hidden")) this.liveLayouts.delete(message.id);
 		const liveOptions: TranscriptRenderOptions = { ...options, live: {
 			maxRows: LIVE_TRANSCRIPT_MAX_ROWS,
 			deadline: performance.now() + 8,
@@ -1842,14 +1967,21 @@ export class VspiApp implements Component, Focusable {
 			width: id => this.frozenNodeRows.get(id)?.width,
 			committed: this.committedNodeIds,
 			renderText: (message, maxRows) => {
-				let layout = this.liveMarkdown.get(message.id);
-				if (!layout) { layout = new LiveMarkdown(); this.liveMarkdown.set(message.id, layout); }
+				let layout = this.liveLayouts.get(message.id);
+				if (!(layout instanceof LiveMarkdown)) { layout = new LiveMarkdown(); this.liveLayouts.set(message.id, layout); }
 				const lines = layout.render(message, width, this.theme, options, maxRows, previewRows);
 				if (layout.pending) this.pendingLiveOutput = true;
 				return lines;
 			},
-			pending: id => this.liveMarkdown.get(id)?.pending ?? false,
-			beginText: (id, gap) => this.liveMarkdown.get(id)?.beginSection(gap) ?? false,
+			renderTools: (id, messages, maxRows) => {
+				let layout = this.liveLayouts.get(id);
+				if (!(layout instanceof LiveToolGroup)) { layout = new LiveToolGroup(); this.liveLayouts.set(id, layout); }
+				const lines = layout.render(messages, width, this.theme, options, maxRows, previewRows);
+				if (layout.pending) this.pendingLiveOutput = true;
+				return lines;
+			},
+			pending: id => this.liveLayouts.get(id)?.pending ?? false,
+			beginText: (id, gap) => this.liveLayouts.get(id)?.beginSection(gap) ?? false,
 			defer: () => { this.pendingLiveOutput = true; },
 		} };
 		const base = this.committedMessageCount;
@@ -1902,8 +2034,8 @@ export class VspiApp implements Component, Focusable {
 				nodeId: section.nodeId,
 				origins: emitted.origins,
 				layoutWidth: section.layoutWidth,
-				layout: this.liveMarkdown.get(section.nodeId),
-				layoutVersion: this.liveMarkdown.get(section.nodeId)?.version,
+				layout: this.liveLayouts.get(section.nodeId),
+				layoutVersion: this.liveLayouts.get(section.nodeId)?.version,
 				references: section.references,
 				kind: section.kind,
 				thinking: section.thinking,
@@ -1929,7 +2061,7 @@ export class VspiApp implements Component, Focusable {
 		more?: boolean;
 		origins?: { row: number; column: number }[];
 	} {
-		if (this.liveMarkdown.has(section.nodeId)) return { lines: section.lines, start: 0 };
+		if (this.liveLayouts.has(section.nodeId)) return { lines: section.lines, start: 0 };
 		const frozen = this.frozenNodeRows.get(section.nodeId);
 		const start = Math.min(frozen?.count ?? 0, section.lines.length);
 		const lines = section.lines.slice(start);
@@ -1984,6 +2116,7 @@ export class VspiApp implements Component, Focusable {
 		if (!state || !commitStatic) return;
 		const m = Math.min(state.previousViewportTop, this.liveTranscriptRows);
 		const base = this.liveSectionsBase;
+		const previousCommitted = this.committedMessageCount;
 		const frozenRows = m > 0 && commitStatic.call(this.tui, state.previousLines.slice(0, m)) ? m : 0;
 		if (frozenRows) this.freezeLivePrefix(frozenRows);
 		// Nodes whose emitted remainder collapsed to zero rows are entirely in
@@ -1996,6 +2129,7 @@ export class VspiApp implements Component, Focusable {
 		this.advanceCommittedPrefix(base);
 		this.rebaseLiveSections(frozenRows);
 		this.pruneTranscript();
+		if (frozenRows > 0 || previousCommitted !== this.committedMessageCount) this.regularBodyRevision++;
 		if (this.pendingLiveOutput) this.requestRender();
 	}
 
@@ -2004,7 +2138,7 @@ export class VspiApp implements Component, Focusable {
 			if (section.start >= rows) break;
 			const count = Math.max(0, Math.min(section.end, rows) - section.start);
 			if (count) {
-				const layout = this.liveMarkdown.get(section.nodeId);
+				const layout = this.liveLayouts.get(section.nodeId);
 				if (layout && section.layout === layout && section.layoutVersion === layout.version) layout.freeze(count);
 				else if (!section.layout) {
 					const entry = this.frozenNodeRows.get(section.nodeId) ?? { count: 0 };
@@ -2019,16 +2153,17 @@ export class VspiApp implements Component, Focusable {
 					this.frozenNodeRows.set(section.nodeId, entry);
 				}
 			}
-			if (section.final && section.end <= rows && (!section.layout || section.layout === this.liveMarkdown.get(section.nodeId) && section.layoutVersion === section.layout.version)) this.commitLiveSection(section);
+			if (section.final && section.end <= rows && (!section.layout || section.layout === this.liveLayouts.get(section.nodeId) && section.layoutVersion === section.layout.version)) this.commitLiveSection(section);
 		}
 	}
 
 	private rebaseLiveSections(rows: number): void {
+		this.preservedNativeRows = Math.max(0, this.preservedNativeRows - rows);
 		for (const section of this.liveSections) {
 			const removed = Math.max(0, Math.min(section.end, rows) - section.start);
 			section.emitted = section.emitted.slice(removed);
 			section.origins = section.origins?.slice(removed);
-			section.emittedStart = this.liveMarkdown.has(section.nodeId) ? 0 : section.emittedStart + removed;
+			section.emittedStart = this.liveLayouts.has(section.nodeId) ? 0 : section.emittedStart + removed;
 			section.start = Math.max(0, section.start - rows);
 			section.end = Math.max(0, section.end - rows);
 		}
@@ -2056,14 +2191,14 @@ export class VspiApp implements Component, Focusable {
 				);
 			this.committedNodeIds.delete(section.nodeId);
 			this.frozenNodeRows.delete(section.nodeId);
-			this.liveMarkdown.delete(section.nodeId);
+			this.liveLayouts.delete(section.nodeId);
 		}
 	}
 
 	/** Archive the already emitted live rows; native resize reflow owns their history. */
 	private reflowTranscriptViewport(): void {
 		if (this.tui.mode !== "regular") return;
-		const tui = this.tui as TUI & { reflowViewport?: () => void };
+		const tui = this.tui as TUI & { reflowViewport?: (preservedRows: number) => void };
 		const frame = this.lastNativeFrame;
 		this.liveSections = frame?.sections.map(section => ({ ...section, emitted: [...section.emitted] })) ?? [];
 		this.liveSectionsBase = frame?.base ?? this.committedMessageCount;
@@ -2071,21 +2206,28 @@ export class VspiApp implements Component, Focusable {
 		this.freezeLivePrefix(this.liveTranscriptRows);
 		this.advanceCommittedPrefix(this.liveSectionsBase);
 		this.rebaseLiveSections(this.liveTranscriptRows);
-		for (const layout of this.liveMarkdown.values()) layout.beginViewport();
-		if (tui.reflowViewport) tui.reflowViewport();
+		for (const layout of this.liveLayouts.values()) layout.beginViewport();
+		const height = Math.max(1, this.tui.terminal.rows);
+		const dock = this.buildRenderDock(Math.max(1, this.tui.terminal.columns));
+		this.preservedNativeRows = Math.max(0, height - dock.lines.length);
+		this.regularBodyRevision++;
+		if (tui.reflowViewport) tui.reflowViewport(this.preservedNativeRows);
 		else this.beginTuiSurfaceEpoch();
 	}
 
 	private resetTranscriptSurfaceState(): void {
 		this.committedMessageCount = 0;
 		this.lastNativeFrame = undefined;
-		this.liveMarkdown?.clear();
+		this.liveLayouts?.clear();
 		this.pendingLiveOutput = false;
 		this.frozenNodeRows.clear();
 		this.committedNodeIds.clear();
 		this.liveSections = [];
 		this.liveSectionsBase = 0;
 		this.liveTranscriptRows = 0;
+		this.preservedNativeRows = 0;
+		this.regularBodyRevision++;
+		this.regularBodyCache = undefined;
 	}
 
 	/** Start one append-only surface epoch after all restored Session state has hydrated. */
@@ -2211,6 +2353,7 @@ export class VspiApp implements Component, Focusable {
 	invalidate(): void {
 		this.composer.invalidate();
 		this.fullscreenRenderRevision += 1;
+		this.regularBodyRevision++;
 	}
 
 	private renderPanelHint(width: number): string | undefined {
@@ -2714,7 +2857,7 @@ export class VspiApp implements Component, Focusable {
 		if (this.queuedPresentations.has(messageId)) return;
 		this.queuedPresentations.set(messageId, {
 			phase: "entering",
-			startedTick: this.queuedAnimationTick,
+			startedAt: performance.now(),
 		});
 		this.syncActivityPresentation();
 	}
@@ -2754,6 +2897,7 @@ export class VspiApp implements Component, Focusable {
 		message.deliveryState = phase;
 		if (queued !== undefined && (phase === "cancelled" || phase === "failed")) {
 			this.queuedPresentations.delete(messageId);
+			this.syncActivityPresentation();
 			this.requestRender();
 			return;
 		}
@@ -2765,15 +2909,18 @@ export class VspiApp implements Component, Focusable {
 		this.requestRender();
 	}
 
-	private advanceQueuedPresentations(): void {
+	private advanceQueuedPresentations(): boolean {
+		let changed = false;
 		for (const [messageId, state] of this.queuedPresentations) {
-			const elapsed = this.queuedAnimationTick - state.startedTick;
-			if (state.phase === "entering" && elapsed >= 1)
+			if (state.phase === "entering" && performance.now() - state.startedAt >= 240) {
 				this.queuedPresentations.set(messageId, {
 					phase: "stable",
-					startedTick: this.queuedAnimationTick,
+					startedAt: performance.now(),
 				});
+				changed = true;
+			}
 		}
+		return changed;
 	}
 
 	private activityReducedMotion(): boolean {
@@ -2811,53 +2958,57 @@ export class VspiApp implements Component, Focusable {
 		const active = this.activityActive();
 		const completedActivity = this.activityPresentationActive && !active;
 		this.activityPresentationActive = active;
-		const reducedMotion = this.activityReducedMotion();
-		const timerInterval = reducedMotion ? 1_000 : 240;
 		const workingActive = this.workingActive();
 		if (workingActive && this.workingStartedAt === undefined)
 			this.workingStartedAt = Date.now();
 		else if (!workingActive) this.workingStartedAt = undefined;
-		if (
-			active &&
-			timerInterval !== undefined &&
-			(!this.workingTimer || this.workingTimerInterval !== timerInterval)
-		) {
-			if (this.workingTimer) clearInterval(this.workingTimer);
-			this.workingTimerInterval = timerInterval;
-			this.workingTimer = setInterval(() => {
-				if (!this.activityReducedMotion()) {
-					this.workingFrame = (this.workingFrame + 1) % 24;
-					this.queuedAnimationTick += 1;
-					this.advanceQueuedPresentations();
-					this.syncActivityPresentation();
-				}
-				this.requestRender();
-			}, timerInterval);
-			this.workingTimer.unref();
-		} else if ((!active || timerInterval === undefined) && this.workingTimer) {
-			clearInterval(this.workingTimer);
-			this.workingTimer = undefined;
-			this.workingTimerInterval = undefined;
-		}
 		if (!active) {
 			this.workingStartedAt = undefined;
 			this.workingFrame = 0;
 		}
-		if (completedActivity) this.requestRender();
+		if (completedActivity) this.regularBodyRevision++;
+		this.syncDisplayClock();
 		if (this.renderReady) this.tui.terminal.setProgress(active);
-		this.requestRender();
+		this.requestRender(false, "dock");
 	}
 
 	private syncAgentDockTimer(): void {
-		if (this.agentsDock.hasActive()) {
-			if (this.agentDockTimer) return;
-			this.agentDockTimer = setInterval(() => this.requestRender(), 1_000);
-			this.agentDockTimer.unref();
+		this.syncDisplayClock();
+	}
+
+	private syncDisplayClock(): void {
+		if (this.disposing || this.shutdownRequested) {
+			if (this.workingTimer) clearInterval(this.workingTimer);
+			this.workingTimer = undefined;
+			this.workingTimerInterval = undefined;
 			return;
 		}
-		if (!this.agentDockTimer) return;
-		clearInterval(this.agentDockTimer);
-		this.agentDockTimer = undefined;
+		const taskClock = this.panels.kind === "tasks" && [...this.taskSnapshot.agents, ...this.taskSnapshot.processes].some(task => task.status === "running");
+		const active = this.activityActive();
+		const entering = [...this.queuedPresentations.values()].some(state => state.phase === "entering");
+		const animation = active && !this.activityReducedMotion();
+		const needed = active || entering || this.agentsDock.hasActive() || taskClock;
+		const interval = animation || entering ? 240 : needed ? 1_000 : undefined;
+		if (this.workingTimer && this.workingTimerInterval === interval) return;
+		if (this.workingTimer) clearInterval(this.workingTimer);
+		this.workingTimer = undefined;
+		this.workingTimerInterval = interval;
+		if (interval === undefined) return;
+		this.workingTimer = setInterval(() => {
+			const tick = Math.floor(performance.now() / 240);
+			const second = Math.floor(Date.now() / 1_000);
+			const animated = this.activityActive() && !this.activityReducedMotion() && tick !== this.displayAnimation;
+			const secondsChanged = second !== this.displaySecond;
+			const queueChanged = this.advanceQueuedPresentations();
+			if (queueChanged) this.syncActivityPresentation();
+			this.displaySecond = second;
+			this.displayAnimation = tick;
+			if (animated) { this.workingFrame = tick % 24; this.queuedAnimationTick = tick; }
+			if (secondsChanged && this.activityActive()) this.tui.terminal.setProgress(true);
+			if (animated || secondsChanged || queueChanged) this.requestRender(false, this.panels.kind === "tasks" || this.panels.kind === "agents" ? "all" : "dock");
+			this.syncDisplayClock();
+		}, interval);
+		this.workingTimer.unref();
 	}
 
 	private async openAgentConversation(runId: string): Promise<void> {
@@ -2873,6 +3024,7 @@ export class VspiApp implements Component, Focusable {
 			this.agentConversationSubscription =
 				this.backend.subscribeAgentConversation(runId, (activity) => {
 					if (loadId !== this.agentConversationLoadId) return;
+					if (activity.kind === "thinking") return;
 					this.panels.appendAgentActivity(activity);
 					this.requestRender();
 					if (activity.kind === "turn" && activity.state !== "started")
@@ -5563,7 +5715,7 @@ export class VspiApp implements Component, Focusable {
 	private withThinkingDisplayDefault(
 		message: TranscriptMessage,
 	): TranscriptMessage {
-		if (message.kind !== "thinking") return message;
+		if (message.kind !== "thinking") return { ...message };
 		return {
 			...message,
 			collapsed: this.options.settings.thinkingDisplay !== "expanded",
@@ -5757,6 +5909,9 @@ export class VspiApp implements Component, Focusable {
 	}
 
 	private resetSessionState(): number {
+		this.archivedMessageIds.clear();
+		this.agentSnapshotSignature = undefined;
+		this.taskSnapshotSignature = undefined;
 		this.imagePathPaste.reset();
 		this.sessionEpoch += 1;
 		this.pendingModelSelection = undefined;
@@ -6047,8 +6202,10 @@ export class VspiApp implements Component, Focusable {
 		}
 	}
 
-	private requestRender(force = false): void {
+	private requestRender(force = false, scope: "all" | "dock" = "all"): void {
 		this.fullscreenRenderRevision += 1;
+		if (scope === "all") this.regularBodyRevision++;
+		if (this.renderReady) this.syncDisplayClock();
 		if (
 			!this.shutdownRequested &&
 			this.renderReady &&

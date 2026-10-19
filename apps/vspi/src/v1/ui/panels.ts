@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { Input, Key, matchesKey } from "@moonshot-ai/pi-tui";
 import { ProviderManagerController, type ProviderManagerAction } from './provider-manager.js';
 import type { AgentRunSnapshot, AgentSnapshot } from "../agents/types.js";
@@ -395,24 +396,17 @@ function liveAgentProcessBlocks(
 		),
 	);
 	const blocks: AgentConversationBlock[] = [];
-	const assistantByTurn = new Map<number, AgentConversationBlock>();
 	const toolByCall = new Map<string, AgentConversationBlock>();
-	for (const activity of activities) {
+	for (const [index, activity] of activities.entries()) {
 		if (activity.kind === "assistant") {
-			let block = assistantByTurn.get(activity.turnId);
-			if (block === undefined) {
-				block = {
-					id: `live:assistant:${String(activity.turnId)}`,
-					kind: "commentary",
-					sourceRole: "assistant",
-					text: "",
-					injected: false,
-					presentation: "message",
-				};
-				assistantByTurn.set(activity.turnId, block);
-				blocks.push(block);
-			}
-			block.text += activity.delta;
+			blocks.push({
+				id: `live:assistant:${String(activity.turnId)}:${String(index)}`,
+				kind: "commentary",
+				sourceRole: "assistant",
+				text: activity.delta,
+				injected: false,
+				presentation: "message",
+			});
 		} else if (
 			activity.kind === "tool" &&
 			!historyToolCalls.has(activity.toolCallId)
@@ -774,6 +768,10 @@ export class PanelController {
 	private agentConversationLoading = false;
 	private agentConversationError: string | undefined;
 	private agentActivity: AgentConversationActivity[] = [];
+	private agentActiveText: number | undefined;
+	private readonly agentToolActivity = new Map<string, number>();
+	private agentProcessRevision = 0;
+	private agentProcessCache: { revision: number; width: number; theme: VspiTheme; lines: string[] } | undefined;
 	private agentDetailFollowTail = true;
 	private agentDetailResumeFollow = false;
 	private agentDetailRenderedRows = 0;
@@ -1174,6 +1172,7 @@ export class PanelController {
 	}
 
 	setAgentSnapshot(snapshot: AgentSnapshot): void {
+		if (isDeepStrictEqual(this.agentSnapshot, snapshot)) return;
 		const selected =
 			this.kind === "agents"
 				? this.selectedAgentRun()?.id
@@ -1204,6 +1203,7 @@ export class PanelController {
 	}
 
 	setTaskSnapshot(snapshot: TaskDashboardSnapshot): void {
+		if (isDeepStrictEqual(this.taskSnapshot, snapshot)) return;
 		const selected = this.kind === "tasks" ? this.taskItems()[this.state.selected] : undefined;
 		this.taskSnapshot = structuredClone(snapshot);
 		if (this.kind !== "tasks") return;
@@ -1223,6 +1223,7 @@ export class PanelController {
 		this.agentConversation = page ? structuredClone(page) : undefined;
 		this.agentConversationLoading = false;
 		this.agentConversationError = undefined;
+		this.agentProcessRevision += 1;
 	}
 
 	prependAgentConversation(page: AgentConversationPage): void {
@@ -1246,6 +1247,7 @@ export class PanelController {
 			tokenCount: page.tokenCount,
 			totalBlocks: page.totalBlocks,
 		};
+		this.agentProcessRevision += 1;
 	}
 
 	setAgentConversationLoading(): void {
@@ -1255,12 +1257,36 @@ export class PanelController {
 	setAgentConversationError(error: string): void {
 		this.agentConversationLoading = false;
 		this.agentConversationError = error;
+		this.agentProcessRevision += 1;
 	}
 
 	appendAgentActivity(activity: AgentConversationActivity): void {
-		this.agentActivity.push(structuredClone(activity));
-		if (this.agentActivity.length > 100)
-			this.agentActivity.splice(0, this.agentActivity.length - 100);
+		if (activity.kind === "thinking") return;
+		if (activity.kind === "assistant") {
+			if (activity.delta.length === 0) return;
+			const current = this.agentActiveText === undefined ? undefined : this.agentActivity[this.agentActiveText];
+			if (current?.kind === "assistant" && current.turnId === activity.turnId) current.delta += activity.delta;
+			else {
+				this.agentActiveText = this.agentActivity.length;
+				this.agentActivity.push({ ...activity });
+			}
+		} else if (activity.kind === "tool") {
+			if (activity.state === "started") this.agentActiveText = undefined;
+			const index = this.agentToolActivity.get(activity.toolCallId);
+			const current = index === undefined ? undefined : this.agentActivity[index];
+			if (current?.kind === "tool") {
+				const next = { ...current, ...activity, toolName: activity.toolName ?? current.toolName };
+				if (isDeepStrictEqual(current, next)) return;
+				this.agentActivity[index!] = next;
+			} else {
+				this.agentToolActivity.set(activity.toolCallId, this.agentActivity.length);
+				this.agentActivity.push({ ...activity });
+			}
+		} else {
+			this.agentActiveText = undefined;
+			return;
+		}
+		this.agentProcessRevision += 1;
 	}
 
 	clearAgentConversation(): void {
@@ -1272,6 +1298,10 @@ export class PanelController {
 		this.agentConversationLoading = loading;
 		this.agentConversationError = undefined;
 		this.agentActivity = [];
+		this.agentActiveText = undefined;
+		this.agentToolActivity.clear();
+		this.agentProcessRevision += 1;
+		this.agentProcessCache = undefined;
 		this.agentDetailFollowTail = true;
 		this.agentDetailResumeFollow = false;
 		this.agentDetailRenderedRows = 0;
@@ -4176,6 +4206,8 @@ export class PanelController {
 	}
 
 	private renderAgentProcess(width: number, theme: VspiTheme): string[] {
+		const cached = this.agentProcessCache;
+		if (cached?.revision === this.agentProcessRevision && cached.width === width && cached.theme === theme) return cached.lines;
 		const history = this.agentConversation?.blocks ?? [];
 		const blocks = [
 			...visibleAgentHistoryBlocks(history),
@@ -4215,12 +4247,15 @@ export class PanelController {
 				);
 			}
 		}
-		if (lines.length > 0) return lines;
-		if (this.agentConversationLoading)
-			return [theme.muted("Loading conversation...")];
-		if (this.agentConversationError)
-			return [theme.error(this.agentConversationError)];
-		return [theme.muted("No process captured")];
+		if (lines.length === 0) {
+			lines.push(this.agentConversationLoading
+				? theme.muted("Loading conversation...")
+				: this.agentConversationError
+					? theme.error(this.agentConversationError)
+					: theme.muted("No process captured"));
+		}
+		this.agentProcessCache = { revision: this.agentProcessRevision, width, theme, lines };
+		return lines;
 	}
 
 	private renderAgentColumns(
