@@ -5,6 +5,8 @@ import { IAgentHistoryService, type AgentHistoryPage } from '#/agent/history/his
 import { AgentHistoryService } from '#/agent/history/historyService';
 import { AssistantDelta, TurnStarted, TurnStepStarted } from '#/agent/loop/turnEvents';
 import { TurnStepRetrying } from '#/agent/loop/turnEvents';
+import { ToolCallStarted } from '#/agent/toolExecutor/toolExecutorEvents';
+import { PromptSteered } from '#/agent/prompt/promptEvents';
 import { IEventDispatcher } from '#/state/eventDispatcher';
 import { ContextUndo, ContextApplyCompaction } from '#/agent/contextMemory/contextEvents';
 import { agentServices, createTestAgent, type TestAgentContext } from '../../harness';
@@ -98,12 +100,21 @@ describe('agent history view', () => {
     const dispatcher = context.get(IEventDispatcher);
     await dispatcher.dispatch(new TurnStarted({ agentId: 'main', turnId: 7, origin: { kind: 'user' } }));
     context.context.appendLoopEvent({ type: 'step.begin', uuid: 'step-1', turnId: '7', step: 1 });
-    await dispatcher.dispatch(new TurnStepStarted({ agentId: 'main', turnId: 7, step: 1 }));
+    await dispatcher.dispatch(new TurnStepStarted({ agentId: 'main', turnId: 7, step: 1, stepId: 'step-1' }));
     await dispatcher.dispatch(new AssistantDelta({ agentId: 'main', turnId: 7, delta: 'committed reply' }));
     context.context.appendLoopEvent({ type: 'content.part', stepUuid: 'step-1', turnId: '7', step: 1, part: { type: 'text', text: 'committed reply' } });
     const page = await history.page();
     expect(page.items.flatMap(item => item.content)).toContainEqual({ type: 'text', text: 'committed reply' });
     expect(page.live?.text).toBe('');
+    expect(page.live?.stepId).toBe('step-1');
+    const assistant = page.items.find(item => item.role === 'assistant')!;
+    expect(page.sources?.[assistant.id!]).toEqual({ stepId: 'step-1', turnId: 7, step: 1 });
+    await dispatcher.dispatch(new TurnStepRetrying({ agentId: 'main', turnId: 7, step: 1, failedAttempt: 1, nextAttempt: 2, maxAttempts: 3, delayMs: 1, errorName: 'NetworkError', errorMessage: 'temporary' }));
+    expect((await history.page()).live?.stepId).toBe('step-1');
+    await dispatcher.dispatch(new ToolCallStarted({ agentId: 'main', turnId: 7, toolCallId: 'example-tool', name: 'Shell', args: {} }));
+    expect((await history.page()).live?.stepId).toBe('step-1');
+    await dispatcher.dispatch(new PromptSteered({ agentId: 'main', activePromptId: 'active', promptIds: ['queued'], content: [], steeredAt: '2026-01-01T00:00:00.000Z' }));
+    expect((await history.page()).live?.stepId).toBe('step-1');
   });
 
   it('starts a watch with a snapshot then streams live events in order', async () => {

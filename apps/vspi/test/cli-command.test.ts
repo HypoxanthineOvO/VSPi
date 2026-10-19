@@ -45,6 +45,44 @@ describe("VSPi CLI command dispatch", () => {
 		expect(messages.join("")).toContain("重启");
 	});
 
+  it('shows update stages and throttles download progress instead of writing every chunk', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const messages: string[] = [];
+    try {
+      await dispatchCliCommand(['update'], {
+        write: message => messages.push(message),
+        update: async (currentVersion, options) => {
+          options?.onProgress?.({ stage: 'metadata', bytes: 0 });
+          options?.onProgress?.({ stage: 'checksums', bytes: 0 });
+          options?.onProgress?.({ stage: 'package', bytes: 0 });
+          for (let index = 1; index <= 200; index++) {
+            vi.advanceTimersByTime(50);
+            options?.onProgress?.({ stage: 'package', bytes: index * 100_000, totalBytes: 20_000_000 });
+          }
+          options?.onProgress?.({ stage: 'verify', bytes: 20_000_000 });
+          options?.onProgress?.({ stage: 'install', bytes: 20_000_000 });
+          return { status: 'updated', currentVersion, latestVersion: '2.1.0' };
+        },
+      });
+      expect(messages).toHaveLength(8);
+      expect(messages.join('')).toContain('检查最新版本');
+      expect(messages.join('')).toContain('下载更新包 9.5 MiB / 19.1 MiB');
+      expect(messages.join('')).toContain('下载完成 19.1 MiB，校验 SHA-256');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('propagates an update failure without claiming installation or starting a runtime', async () => {
+    const connect = vi.fn();
+    const write = vi.fn();
+    await expect(dispatchCliCommand(['update'], { connect, write, update: async (_currentVersion, options) => {
+      options?.onProgress?.({ stage: 'package', bytes: 0 });
+      throw new Error('下载更新包失败（已下载 4096 字节）：没有下载进展；可重新运行 vspi update');
+    } })).rejects.toThrow('4096 字节');
+    expect(connect).not.toHaveBeenCalled();
+    expect(write.mock.calls.join('')).not.toContain('已安装');
+  });
+
 	it("reports an up-to-date install and leaves runtime commands undispatched", async () => {
 		const messages: string[] = [];
 		await expect(

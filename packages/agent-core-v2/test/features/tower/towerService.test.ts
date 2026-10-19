@@ -946,16 +946,31 @@ describe('AgentTowerService', () => {
       expect(activityLog).not.toContain(' revived ');
 
       const skips = infos.filter((entry) => entry.msg.includes('skipping'));
-      expect(skips.map((entry) => entry.msg)).toEqual([
+      expect(skips).toHaveLength(2);
+      expect(skips.map((entry) => entry.msg).sort()).toEqual([
         'tower: skipping roster agent death mark — tower store is owned by another session',
         'tower: skipping roster agent death clear — tower store is owned by another session',
-      ]);
-      expect(skips[0]?.payload).toMatchObject({
-        event: 'TaskTerminatedNotice',
-        agentId: 'agent-w1',
-        sessionId: 'session-main',
-        owner: 'session-other',
-        pid: process.pid,
+      ].sort());
+      const skippedByEvent = new Map(skips.map((entry) => [(entry.payload as { event: string }).event, entry]));
+      expect(skippedByEvent.get('TaskTerminatedNotice')).toMatchObject({
+        msg: 'tower: skipping roster agent death mark — tower store is owned by another session',
+        payload: {
+          event: 'TaskTerminatedNotice',
+          agentId: 'agent-w1',
+          sessionId: 'session-main',
+          owner: 'session-other',
+          pid: process.pid,
+        },
+      });
+      expect(skippedByEvent.get('SubagentStarted')).toMatchObject({
+        msg: 'tower: skipping roster agent death clear — tower store is owned by another session',
+        payload: {
+          event: 'SubagentStarted',
+          agentId: 'agent-w2',
+          sessionId: 'session-main',
+          owner: 'session-other',
+          pid: process.pid,
+        },
       });
     } finally {
       await rm(repo, { recursive: true, force: true });

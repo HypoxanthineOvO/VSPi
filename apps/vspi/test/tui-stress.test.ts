@@ -12,6 +12,7 @@ import { ScrollbackTUI } from '../src/v1/ui/scrollback-terminal.js';
 import { detectTerminalCapabilities } from '../src/v1/ui/capabilities.js';
 import { createTheme } from '../src/v1/ui/theme.js';
 import { LIVE_TRANSCRIPT_MAX_ROWS } from '../src/v1/ui/live-markdown.js';
+import { LiveTool } from '../src/v1/ui/live-tool.js';
 
 class MeasuredTUI extends ScrollbackTUI {
   readonly times: number[] = [];
@@ -289,6 +290,222 @@ describe('bounded native transcript pressure', () => {
       expect(f.terminal.getScrollBuffer().filter(row => row.includes('FALLBACK_CONTENT'))).toHaveLength(1);
       f.terminal.sendInput('continued');
       await flushUntil(f.terminal, () => expect(f.terminal.getViewport().join('\n')).toContain('continued'));
+    } finally { await f.close(); }
+  });
+
+  it('incrementally lays out 12000 Chinese tool rows and bounds metadata inspection', async () => {
+    const f = await fixture(40000);
+    const output = Array.from({ length: 12000 }, (_, index) => `CNTOOL_${String(index).padStart(5, '0')} ${'中文日志'.repeat(10)}`).join('\n');
+    const originalRender = LiveTool.prototype.render;
+    const chunks: number[] = [];
+    const advances: number[] = [];
+    const headers: number[] = [];
+    const renders = vi.spyOn(LiveTool.prototype, 'render').mockImplementation(function (this: LiveTool, message, width, theme, maxRows, previewRows, header, format) {
+      const before = (this as unknown as { offset: number }).offset;
+      headers.push(header.join('').length);
+      const result = originalRender.call(this, message, width, theme, maxRows, previewRows, header, (text, position) => { chunks.push(text.length); return format(text, position); });
+      advances.push((this as unknown as { offset: number }).offset - before);
+      return result;
+    });
+    const originalMatch = String.prototype.match;
+    const scans: number[] = [];
+    const matches = vi.spyOn(String.prototype, 'match').mockImplementation(function (this: string, pattern: Parameters<typeof originalMatch>[0]) { scans.push(this.length); return originalMatch.call(this, pattern); });
+    try {
+      const previousFrames = f.tui.times.length;
+      f.events.onMessage({ id: 'chinese-tool', role: 'assistant', kind: 'tool', name: 'Shell', summary: '长标题'.repeat(100000), agentRuns: [{ name: '长名字'.repeat(100000), task: '长任务'.repeat(100000), result: '长结果'.repeat(100000), status: 'success' }], expanded: true, status: 'running', output });
+      f.tui.renderNow();
+      const firstFrameMs = f.tui.times[previousFrames];
+      await f.terminal.flush();
+      expect(Math.max(...advances)).toBeLessThanOrEqual(8192);
+      expect(Math.max(...chunks)).toBeLessThanOrEqual(4096);
+      expect(Math.max(...headers)).toBeLessThan(2048);
+      expect(Math.max(...scans)).toBeLessThanOrEqual(8192);
+      matches.mockRestore();
+      await flushUntil(f.terminal, () => expect(f.terminal.getScrollBuffer().join('\n')).toContain('CNTOOL_11999'), 15000);
+      const found = counts(f.terminal, /CNTOOL_\d{5}/g);
+      expect(found.size).toBe(12000);
+      expect([...found.values()].every(count => count === 1)).toBe(true);
+      expect(Math.max(...advances)).toBeLessThanOrEqual(8192);
+      expect(Math.max(...chunks)).toBeLessThanOrEqual(4096);
+      expect(Math.max(...f.heights)).toBeLessThanOrEqual(LIVE_TRANSCRIPT_MAX_ROWS + 40);
+      expect((f.app as unknown as { messages: { id: string; output?: string }[] }).messages.find(message => message.id === 'chinese-tool')?.output).toBe(output);
+      await report('12000-Chinese-tool-rows', { rows: found.size, maximumSourceAdvance: Math.max(...advances), maximumFormatterCharacters: Math.max(...chunks), maximumHeaderCharacters: Math.max(...headers), firstFrameMs });
+    } finally { matches.mockRestore(); renders.mockRestore(); await f.close(); }
+  }, 30000);
+
+  it('prints a complete replacement of a frozen running tool once without replaying old rows', async () => {
+    const f = await fixture();
+    try {
+      const oldOutput = Array.from({ length: 300 }, (_, index) => `OLD_TOOL_${String(index).padStart(3, '0')} original`).join('\n');
+      const newOutput = Array.from({ length: 300 }, (_, index) => `NEW_TOOL_${String(index).padStart(3, '0')} replacement`).join('\n');
+      f.events.onMessage({ id: 'replacement-tool', role: 'assistant', kind: 'tool', name: 'Shell', summary: 'Running', expanded: true, status: 'running', output: oldOutput });
+      await flushUntil(f.terminal, () => expect(f.terminal.getScrollBuffer().join('\n')).toContain('OLD_TOOL_299'));
+      const frozenOldRows = new Set(f.terminal.getScrollBuffer().slice(0, -f.terminal.rows).flatMap(row => Array.from(row.matchAll(/OLD_TOOL_\d{3}/g), match => match[0])));
+      f.events.onMessageUpdate('replacement-tool', { output: newOutput });
+      await flushUntil(f.terminal, () => expect(f.terminal.getScrollBuffer().join('\n')).toContain('NEW_TOOL_299'));
+      for (const prefix of ['OLD_TOOL', 'NEW_TOOL']) {
+        const found = counts(f.terminal, new RegExp(`${prefix}_\\d{3}`, 'g'));
+        if (prefix === 'NEW_TOOL') expect(found.size).toBe(300);
+        else for (const marker of frozenOldRows) expect(found.has(marker), marker).toBe(true);
+        expect([...found.values()].every(count => count === 1), prefix).toBe(true);
+      }
+      expect(f.terminal.getScrollBuffer().filter(row => row.includes('输出已更新'))).toHaveLength(1);
+      expect((f.app as unknown as { messages: { id: string; output?: string }[] }).messages.find(message => message.id === 'replacement-tool')?.output).toBe(newOutput);
+    } finally { await f.close(); }
+  });
+
+  it('drains grouped tools, newly appended group members and completion notices without starvation', async () => {
+    const f = await fixture();
+    try {
+      const toolOutput = (tool: number, rows: number) => Array.from({ length: rows }, (_, index) => `GROUP${tool}_${String(index).padStart(3, '0')}`).join('\n');
+      for (let tool = 0; tool < 2; tool++) f.events.onMessage({ id: `grouped-${tool}`, role: 'assistant', kind: 'tool', name: 'Shell', groupId: 'shared-group', summary: `Running ${tool}`, expanded: true, status: 'running', output: toolOutput(tool, 200) });
+      await flushUntil(f.terminal, () => expect(f.terminal.getScrollBuffer().join('\n')).toContain('GROUP1_199'));
+      f.events.onMessage({ id: 'grouped-2', role: 'assistant', kind: 'tool', name: 'Shell', groupId: 'shared-group', summary: 'Running 2', expanded: true, status: 'running', output: toolOutput(2, 120) });
+      f.events.onMessage({ id: 'after-group', role: 'assistant', kind: 'text', text: 'AFTER_GROUP_READY\n\n' + Array.from({ length: 40 }, (_, index) => `AFTER_GROUP_${String(index).padStart(3, '0')}`).join('\n\n'), streaming: false });
+      await flushUntil(f.terminal, () => expect(f.terminal.getScrollBuffer().join('\n')).toContain('AFTER_GROUP_039'));
+      for (const tool of [1, 2, 0]) {
+        f.events.onMessageUpdate(`grouped-${tool}`, { status: 'success', summary: `FINISHED_GROUP_${tool}` });
+        await flushUntil(f.terminal, () => expect(f.terminal.getScrollBuffer().join('\n')).toContain(`FINISHED_GROUP_${tool}`));
+      }
+      for (let tool = 0; tool < 3; tool++) {
+        const found = counts(f.terminal, new RegExp(`GROUP${tool}_\\d{3}`, 'g'));
+        expect(found.size).toBe(tool === 2 ? 120 : 200);
+        expect([...found.values()].every(count => count === 1)).toBe(true);
+        expect(f.terminal.getScrollBuffer().filter(row => row.includes(`FINISHED_GROUP_${tool}`))).toHaveLength(1);
+      }
+    } finally { await f.close(); }
+  });
+
+  it('keeps short answer text on screen after one resize and appends new text without replay', async () => {
+    const f = await fixture();
+    try {
+      f.events.onMessage({ id: 'short-answer', role: 'assistant', kind: 'text', text: Array.from({ length: 10 }, (_, index) => `SHORT_ANSWER_${index}`).join('\n\n'), streaming: false });
+      await flushUntil(f.terminal, () => expect(f.terminal.getViewport().join('\n')).toContain('SHORT_ANSWER_9'));
+      f.terminal.resize(100, 36);
+      await new Promise(resolve => { setTimeout(resolve, 450); });
+      await f.terminal.flush();
+      expect(f.terminal.getViewport().join('\n')).toMatch(/SHORT_ANSWER_\d/u);
+      f.events.onMessage({ id: 'next-answer', role: 'assistant', kind: 'text', text: 'NEXT_ANSWER_AFTER_RESIZE', streaming: false });
+      f.terminal.sendInput('继续语音🙂');
+      await flushUntil(f.terminal, () => expect(f.terminal.getViewport().join('\n')).toContain('NEXT_ANSWER_AFTER_RESIZE'));
+      const found = counts(f.terminal, /SHORT_ANSWER_\d/g);
+      expect(found.size).toBe(10);
+      expect([...found.values()].every(count => count === 1)).toBe(true);
+      expect(f.app.composer.getText()).toBe('继续语音🙂');
+    } finally { await f.close(); }
+  });
+
+  it('preserves long table cell markers and escaped pipes across chunk boundaries and one resize', async () => {
+    const f = await fixture(40000);
+    try {
+      let text = '| Item | Details |\n| --- | --- |\n';
+      f.events.onMessage({ id: 'long-table', role: 'assistant', kind: 'text', text, streaming: true });
+      for (let index = 0; index < 3; index++) {
+        text += `| LONG_${index} | LEFT_${index} ${'中文'.repeat(1300)} escaped\\|pipe MIDDLE_${index} ${'原文'.repeat(1300)} RIGHT_${index} |\n`;
+        f.events.onMessageUpdate('long-table', { text });
+        await flushUntil(f.terminal, () => expect(f.terminal.getScrollBuffer().join('\n')).toContain(`RIGHT_${index}`), 10000);
+        if (index === 0) {
+          f.terminal.resize(60, 30);
+          await new Promise(resolve => { setTimeout(resolve, 450); });
+        }
+      }
+      f.events.onMessageUpdate('long-table', { streaming: false });
+      await new Promise(resolve => { setTimeout(resolve, 100); }); await f.terminal.flush();
+      const found = counts(f.terminal, /(?:LONG|LEFT|MIDDLE|RIGHT)_\d/g);
+      expect(found.size).toBe(12);
+      expect([...found.values()].every(count => count === 1), JSON.stringify([...found])).toBe(true);
+      expect((f.app as unknown as { messages: { id: string; text?: string }[] }).messages.find(message => message.id === 'long-table')?.text).toBe(text);
+    } finally { await f.close(); }
+  }, 20000);
+
+  it('waits for a trailing high surrogate without spinning frames and completes both text and tool emoji', async () => {
+    const f = await fixture();
+    try {
+      f.events.onMessage({ id: 'emoji-text', role: 'assistant', kind: 'text', text: 'TEXT_EMOJI \ud83d', streaming: true });
+      f.events.onMessage({ id: 'emoji-tool', role: 'assistant', kind: 'tool', name: 'Shell', summary: 'Emoji', expanded: true, status: 'running', output: 'TOOL_EMOJI \ud83d' });
+      await new Promise(resolve => { setTimeout(resolve, 100); }); await f.terminal.flush();
+      const frames = f.heights.length;
+      await new Promise(resolve => { setTimeout(resolve, 200); });
+      expect(f.heights.length).toBe(frames);
+      f.events.onMessageUpdate('emoji-text', { text: 'TEXT_EMOJI 🙂', streaming: false });
+      f.events.onMessageUpdate('emoji-tool', { output: 'TOOL_EMOJI 🙂', status: 'success' });
+      await flushUntil(f.terminal, () => expect(f.terminal.getScrollBuffer().join('\n')).toContain('TOOL_EMOJI 🙂'));
+      const history = f.terminal.getScrollBuffer().join('\n');
+      expect(history).toContain('TEXT_EMOJI 🙂');
+      expect(history).not.toContain('�');
+    } finally { await f.close(); }
+  });
+
+  it('keeps native diff line numbers across source batches, repeated previews and grouped tools', async () => {
+    const f = await fixture();
+    try {
+      let output = '@@ -700,400 +900,400 @@\n+PREVIEW_';
+      f.events.onMessage({ id: 'diff-first', role: 'assistant', kind: 'tool', name: 'edit', groupId: 'diff-group', summary: 'Editing', expanded: true, status: 'running', output });
+      await flushUntil(f.terminal, () => expect(f.terminal.getScrollBuffer().join('\n')).toContain('PREVIEW_'));
+      for (const suffix of ['STABLE_', 'TEXT']) {
+        output += suffix;
+        f.events.onMessageUpdate('diff-first', { output });
+        await flushUntil(f.terminal, () => expect(f.terminal.getScrollBuffer().join('\n')).toContain(`PREVIEW_${suffix === 'TEXT' ? 'STABLE_TEXT' : suffix}`));
+      }
+      const expected = new Map<string, { oldLine?: number; newLine?: number; marker: string }>();
+      let oldLine = 700;
+      let newLine = 901;
+      output += '\n';
+      for (let index = 0; index < 400; index++) {
+        if (index === 200) { output += '@@ -1700,200 +1900,200 @@\n'; oldLine = 1700; newLine = 1900; }
+        const marker = `DIFF_${String(index).padStart(3, '0')}`;
+        const prefix = index % 3 === 0 ? ' ' : index % 3 === 1 ? '-' : '+';
+        expected.set(marker, { oldLine: prefix === '+' ? undefined : oldLine++, newLine: prefix === '-' ? undefined : newLine++, marker: prefix });
+        output += `${prefix}${marker} content\n`;
+      }
+      f.events.onMessageUpdate('diff-first', { output });
+      f.events.onMessage({ id: 'diff-second', role: 'assistant', kind: 'tool', name: 'edit', groupId: 'diff-group', summary: 'Other edit', expanded: true, status: 'running', output: '@@ -30,1 +50,1 @@\n+OTHER_DIFF_TOOL\n' });
+      await flushUntil(f.terminal, () => expect(f.terminal.getScrollBuffer().join('\n')).toContain('OTHER_DIFF_TOOL'));
+      const rows = f.terminal.getScrollBuffer();
+      const preview = rows.find(row => row.includes('PREVIEW_STABLE_TEXT'));
+      expect(preview).toMatch(/\b900\s+\+\s+PREVIEW_STABLE_TEXT/u);
+      for (const [marker, counters] of expected) {
+        const row = rows.find(row => row.includes(marker));
+        expect(row, marker).toBeDefined();
+        const gutter = `${counters.oldLine?.toString().padStart(4) ?? '    '} ${counters.newLine?.toString().padStart(4) ?? '    '} ${counters.marker} `;
+        expect(row, marker).toContain(`${gutter}${marker}`);
+      }
+      expect(rows.find(row => row.includes('OTHER_DIFF_TOOL'))).toMatch(/\b50\s+\+\s+OTHER_DIFF_TOOL/u);
+      expect([...counts(f.terminal, /DIFF_\d{3}/g).values()].every(count => count === 1)).toBe(true);
+    } finally { await f.close(); }
+  });
+
+  it('keeps diff continuation prefixes literal and resets counters for a complete source replacement', async () => {
+    const f = await fixture();
+    try {
+      const prefix = '+LONG_DIFF_START ';
+      const longLine = `${prefix}${'x'.repeat(4096 - prefix.length)}+KEEP_LITERAL_PLUS ${'y'.repeat(1600)} LONG_DIFF_END`;
+      const output = `@@ -10,2 +20,2 @@\n${longLine}\n+NEXT_DIFF_LINE\n`;
+      f.events.onMessage({ id: 'long-diff', role: 'assistant', kind: 'tool', name: 'edit', summary: 'Long diff', expanded: true, status: 'running', output });
+      await flushUntil(f.terminal, () => expect(f.terminal.getScrollBuffer().join('\n')).toContain('NEXT_DIFF_LINE'));
+      const before = f.terminal.getScrollBuffer();
+      expect(before.join('\n')).toContain('+KEEP_LITERAL_PLUS');
+      expect(before.find(row => row.includes('NEXT_DIFF_LINE'))).toMatch(/\b21\s+\+\s+NEXT_DIFF_LINE/u);
+      const replacement = '@@ -30,2 +40,2 @@\n+REPLACED_DIFF_ADD\n-REPLACED_DIFF_REMOVE\n';
+      f.events.onMessageUpdate('long-diff', { output: replacement });
+      await flushUntil(f.terminal, () => expect(f.terminal.getScrollBuffer().join('\n')).toContain('REPLACED_DIFF_REMOVE'));
+      const rows = f.terminal.getScrollBuffer();
+      expect(rows.find(row => row.includes('REPLACED_DIFF_ADD'))).toMatch(/\b40\s+\+\s+REPLACED_DIFF_ADD/u);
+      expect(rows.find(row => row.includes('REPLACED_DIFF_REMOVE'))).toMatch(/\b30\s+-\s+REPLACED_DIFF_REMOVE/u);
+      expect(rows.filter(row => row.includes('输出已更新'))).toHaveLength(1);
+    } finally { await f.close(); }
+  });
+
+  it('keeps an ANSI escape split at the 4094 boundary from leaking visible control fragments', async () => {
+    const f = await fixture();
+    try {
+      const output = `${'x'.repeat(4094)}\u001B[31mANSI_BOUNDARY_MARKER\u001B[0m\nANSI_AFTER_MARKER`;
+      f.events.onMessage({ id: 'ansi-tool', role: 'assistant', kind: 'tool', name: 'Shell', summary: 'ANSI output', expanded: true, status: 'running', output });
+      await flushUntil(f.terminal, () => expect(f.terminal.getScrollBuffer().join('\n')).toContain('ANSI_AFTER_MARKER'));
+      const rows = f.terminal.getScrollBuffer();
+      expect(rows.filter(row => row.includes('ANSI_BOUNDARY_MARKER'))).toHaveLength(1);
+      expect(rows.join('\n')).not.toMatch(/(?:\[31m|31mANSI_BOUNDARY|\[0m)/u);
+      expect((f.app as unknown as { messages: { id: string; output?: string }[] }).messages.find(message => message.id === 'ansi-tool')?.output).toBe(output);
     } finally { await f.close(); }
   });
 });

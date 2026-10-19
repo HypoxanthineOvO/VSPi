@@ -22,6 +22,13 @@ export interface ContextTranscriptReducer {
   result(): ContextTranscript;
   positions(): readonly number[];
   hasContent(ordinal: number): boolean;
+  sourceAt(ordinal: number): ContextTranscriptSource | undefined;
+}
+
+export interface ContextTranscriptSource {
+  readonly stepId: string;
+  readonly turnId?: number;
+  readonly step?: number;
 }
 
 interface MutableMessage {
@@ -42,6 +49,7 @@ interface MutableEntry {
   time?: number;
   omitContent?: boolean;
   ordinal?: number;
+  source?: ContextTranscriptSource;
 }
 
 export function reduceContextTranscript(records: Iterable<WireRecord>): ContextTranscript {
@@ -56,6 +64,8 @@ export function createContextTranscriptReducer(options: { maxContentChars?: numb
   let clearFloor = 0;
   let openEntry: MutableEntry | undefined;
   let nextOrdinal = 0;
+  let source: ContextTranscriptSource | undefined;
+  const sources = new Map<number, ContextTranscriptSource>();
   const contentTail: MutableEntry[] = [];
   const availableContent = new Set<number>();
 
@@ -69,6 +79,7 @@ export function createContextTranscriptReducer(options: { maxContentChars?: numb
   const push = (...entries: MutableEntry[]): void => {
     for (const entry of entries) {
       entry.ordinal = nextOrdinal++;
+      if (entry.source) sources.set(entry.ordinal, entry.source);
       availableContent.add(entry.ordinal);
       if (options.contentOrdinals !== undefined && !options.contentOrdinals.has(entry.ordinal)) { omit(entry); continue; }
       if (options.maxContentChars === undefined) continue;
@@ -90,7 +101,7 @@ export function createContextTranscriptReducer(options: { maxContentChars?: numb
 
   const fold = createLoopEventFold({
     openAssistant: (time) => {
-      openEntry = { message: { role: 'assistant', content: [], toolCalls: [] }, time };
+      openEntry = { message: { role: 'assistant', content: [], toolCalls: [] }, time, source };
       push(openEntry);
     },
     appendOpenContent: (part) => {
@@ -106,6 +117,7 @@ export function createContextTranscriptReducer(options: { maxContentChars?: numb
     dropOpenAssistant: () => {
       if (openEntry === undefined) return;
       const index = transcript.indexOf(openEntry);
+      if (openEntry.ordinal !== undefined) sources.delete(openEntry.ordinal);
       openEntry = undefined;
       if (index === -1) return;
       transcript.splice(index, 1);
@@ -142,6 +154,7 @@ export function createContextTranscriptReducer(options: { maxContentChars?: numb
       const message = transcript[i]!.message;
       if (message.origin?.kind === 'injection') continue;
       if (message.origin?.kind === 'compaction_summary') break;
+      if (transcript[i]!.ordinal !== undefined) sources.delete(transcript[i]!.ordinal!);
       transcript.splice(i, 1);
       foldedLength = Math.max(0, foldedLength - 1);
       if (isUndoAnchor(message)) {
@@ -150,6 +163,7 @@ export function createContextTranscriptReducer(options: { maxContentChars?: numb
           i > clearFloor &&
           isPromptOwnedInjection(transcript[i - 1]!.message, message)
         ) {
+          if (transcript[i - 1]!.ordinal !== undefined) sources.delete(transcript[i - 1]!.ordinal!);
           transcript.splice(i - 1, 1);
           i--;
           foldedLength = Math.max(0, foldedLength - 1);
@@ -167,7 +181,12 @@ export function createContextTranscriptReducer(options: { maxContentChars?: numb
         break;
       }
       case 'context.append_loop_event': {
-        fold.loopEvent(record['event'] as LoopRecordedEvent, record.time);
+        const event = record['event'] as LoopRecordedEvent;
+        if (event.type === 'step.begin') {
+          const turnId = event.turnId === undefined ? undefined : Number(event.turnId);
+          source = typeof event.uuid === 'string' && event.uuid.length > 0 ? { stepId: event.uuid, turnId: turnId !== undefined && Number.isFinite(turnId) ? turnId : undefined, step: event.step } : undefined;
+        }
+        fold.loopEvent(event, record.time);
         break;
       }
       case 'context.apply_compaction': {
@@ -205,6 +224,7 @@ export function createContextTranscriptReducer(options: { maxContentChars?: numb
   return {
     add,
     hasContent: ordinal => availableContent.has(ordinal),
+    sourceAt: ordinal => sources.get(ordinal),
     positions: () => transcript.map(entry => entry.ordinal!),
     result: () => ({
       entries: transcript.map((e) => e.message),

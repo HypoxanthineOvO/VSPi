@@ -13,6 +13,13 @@ export interface LiveHistorySegment {
   readonly segment: number;
   readonly text: string;
   readonly thinking: string;
+  readonly stepId?: string;
+}
+
+export interface HistoryMessageSource {
+  readonly stepId: string;
+  readonly turnId?: number;
+  readonly step?: number;
 }
 
 export interface AgentHistoryPage {
@@ -25,6 +32,7 @@ export interface AgentHistoryPage {
   readonly model?: string;
   readonly effort: string;
   readonly live?: LiveHistorySegment;
+  readonly sources?: Readonly<Record<string, HistoryMessageSource>>;
 }
 
 export interface HistoryCursor {

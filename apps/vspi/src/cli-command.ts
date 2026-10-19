@@ -3,14 +3,14 @@ import { connectRuntime, resolveRuntimePaths, type RuntimeConnection } from "@vs
 import type { AppSettings } from "./v1/domain/types.js";
 import { loadSettings } from "./v1/config/settings.js";
 import { runAuthSetup, type AuthSetupOptions } from "./v1/app/auth-setup.js";
-import { confirmUpdateStop, updateVspi, type SelfUpdateResult } from "./v1/update/self-update.js";
+import { confirmUpdateStop, updateVspi, type SelfUpdateOptions, type SelfUpdateProgress, type SelfUpdateResult } from "./v1/update/self-update.js";
 import { VSPI_VERSION } from "./v1/version.js";
 import { dispatchFeedback } from './v1/feedback/cli.js';
 import { requireExperimental } from './experimental.js';
 import type { DistributionSource } from './v1/update/distribution.js';
 
 export interface CliCommandDependencies {
-	readonly update?: (currentVersion: string) => Promise<SelfUpdateResult>;
+	readonly update?: (currentVersion: string, options?: SelfUpdateOptions) => Promise<SelfUpdateResult>;
 	readonly write?: (message: string) => void;
 	readonly connect?: () => Promise<RuntimeConnection>;
 	readonly connectReadOnly?: () => Promise<RuntimeConnection>;
@@ -96,7 +96,11 @@ export async function dispatchCliCommand(
 			requireExperimental('distribution');
 			source = args[2] as DistributionSource;
 		}
-		const result = await (dependencies.update ?? (version => updateVspi(version, { confirmStop: confirmUpdateStop, distribution: source ? { source } : undefined })))(VSPI_VERSION);
+		const result = await (dependencies.update ?? updateVspi)(VSPI_VERSION, {
+			confirmStop: confirmUpdateStop,
+			distribution: source ? { source } : undefined,
+			onProgress: updateProgressWriter(write),
+		});
 		write(
 			result.status === "updated"
 				? `VSPi 已安装 ${result.latestVersion}。${result.runtimeRestarted ? 'Daemon 已完成安全切换。' : '没有启动或替换运行中的 Daemon。'}请重启客户端。\n`
@@ -153,6 +157,24 @@ export async function dispatchCliCommand(
 		await connection.close();
 	}
 	return true;
+}
+
+function updateProgressWriter(write: (message: string) => void): (progress: SelfUpdateProgress) => void {
+	let stage: SelfUpdateProgress['stage'] | undefined;
+	let lastProgressAt = 0;
+	return progress => {
+		const now = Date.now();
+		const size = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+		if (progress.stage !== stage) {
+			stage = progress.stage;
+			lastProgressAt = now;
+			const label = stage === 'metadata' ? '检查最新版本…' : stage === 'checksums' ? '下载校验清单…' : stage === 'package' ? '下载更新包…' : stage === 'verify' ? `下载完成 ${size(progress.bytes)}，校验 SHA-256…` : '准备安装更新…';
+			write(`${label}\n`);
+		} else if (stage === 'package' && now - lastProgressAt >= 5_000) {
+			lastProgressAt = now;
+			write(`下载更新包 ${size(progress.bytes)}${progress.totalBytes === undefined ? '' : ` / ${size(progress.totalBytes)}`}\n`);
+		}
+	};
 }
 
 async function dispatchNonInteractiveConfig(

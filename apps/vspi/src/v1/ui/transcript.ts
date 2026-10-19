@@ -10,6 +10,7 @@ import {
 	wrapTextWithAnsi,
 } from "./ansi.js";
 import { AssistantMessageComponent } from "./assistant-message.js";
+import { LiveTool, type ToolOutputPosition } from "./live-tool.js";
 import { type DiffLine, renderDiff } from "./diff.js";
 import {
 	createVspiMarkdownTransformer,
@@ -59,6 +60,7 @@ export interface TranscriptRenderOptions {
 		width: (id: string) => number | undefined;
 		committed: ReadonlySet<string>;
 		renderText: (message: Extract<TranscriptMessage, { kind: "text" | "thinking" }>, maxRows: number) => string[];
+		renderTools: (id: string, messages: Extract<TranscriptMessage, { kind: "tool" }>[], maxRows: number) => string[];
 		pending: (id: string) => boolean;
 		beginText: (id: string, gap: boolean) => boolean;
 		defer: () => void;
@@ -1008,30 +1010,51 @@ function toolLabel(name: string): string {
 	return `${name.slice(0, 1).toUpperCase()}${name.slice(1)}`;
 }
 
+interface DiffCursor {
+	oldLine: number;
+	newLine: number;
+}
+
+function parseDiffLine(text: string, cursor: DiffCursor): DiffLine {
+	const header = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(text);
+	if (header) {
+		cursor.oldLine = Number(header[1]);
+		cursor.newLine = Number(header[2]);
+		return { kind: "meta", text };
+	}
+	if (text.startsWith("+")) return { kind: "add", newLine: cursor.newLine++, text: text.slice(1) };
+	if (text.startsWith("-")) return { kind: "remove", oldLine: cursor.oldLine++, text: text.slice(1) };
+	return { kind: "context", oldLine: cursor.oldLine++, newLine: cursor.newLine++, text: text.replace(/^ /, "") };
+}
+
 function parseDiff(value: string): DiffLine[] {
-	let oldLine = 0;
-	let newLine = 0;
-	return value.split("\n").map((text) => {
-		const header = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(text);
-		if (header) {
-			oldLine = Number(header[1]);
-			newLine = Number(header[2]);
-			return { kind: "meta", text };
+	const cursor = { oldLine: 0, newLine: 0 };
+	return value.split("\n").map(text => parseDiffLine(text, cursor));
+}
+
+class NativeDiff {
+	private revision = -1;
+	private line = -1;
+	private before: DiffCursor = { oldLine: 0, newLine: 0 };
+	private after: DiffCursor = { oldLine: 0, newLine: 0 };
+	private previous: DiffLine | undefined;
+
+	parse(text: string, position: ToolOutputPosition): DiffLine {
+		if (position.revision !== this.revision) {
+			this.revision = position.revision;
+			this.line = -1;
+			this.after = { oldLine: 0, newLine: 0 };
 		}
-		if (text.startsWith("+"))
-			return { kind: "add", newLine: newLine++, text: text.slice(1) };
-		if (text.startsWith("-"))
-			return { kind: "remove", oldLine: oldLine++, text: text.slice(1) };
-		const result: DiffLine = {
-			kind: "context",
-			oldLine,
-			newLine,
-			text: text.replace(/^ /, ""),
-		};
-		oldLine += 1;
-		newLine += 1;
-		return result;
-	});
+		if (position.line !== this.line) {
+			this.line = position.line;
+			this.before = { ...this.after };
+			this.previous = undefined;
+		}
+		if (position.continuation && this.previous) return { ...this.previous, text };
+		this.after = { ...this.before };
+		this.previous = parseDiffLine(text, this.after);
+		return this.previous;
+	}
 }
 
 export interface TranscriptSection {
@@ -1067,6 +1090,76 @@ function isSettledTranscriptMessage(message: TranscriptMessage): boolean {
 	)
 		return false;
 	return !("streaming" in message && message.streaming === true);
+}
+
+export class LiveToolGroup {
+	private tools = new Map<string, { layout: LiveTool; diff: NativeDiff; message: Extract<TranscriptMessage, { kind: "tool" }>; empty: boolean }>();
+	private frame: { layout: LiveTool; rows: number }[] = [];
+	private leading: string[] = [];
+	private separatorSet = false;
+	pending = false;
+	version = 0;
+
+	render(messages: Extract<TranscriptMessage, { kind: "tool" }>[], width: number, theme: VspiTheme, options: TranscriptRenderOptions, maxRows: number, previewRows: number): string[] {
+		const lines = [...this.leading];
+		this.frame = [];
+		this.pending = false;
+		const collapsed = options.collapseCompletedTools && allToolsTerminal(messages) && !messages.some(message => message.expanded);
+		const labelWidth = Math.min(Math.max(4, Math.floor(width / 4)), Math.max(...messages.map(message => visibleWidth(toolLabel(message.name)))));
+		const deadline = performance.now() + 8;
+		for (const [index, message] of messages.entries()) {
+			const cached = this.tools.get(message.id);
+			if (cached?.message === message && cached.empty && !cached.layout.pending) continue;
+			if (lines.length >= maxRows || (this.frame.length > 0 && performance.now() >= deadline)) { this.pending = true; break; }
+			const layout = cached?.layout ?? new LiveTool();
+			const diff = cached?.diff ?? new NativeDiff();
+			const header = index === 0 ? [fitLine(theme.muted(`◇  工具调用 · ${messages.length} 项 · ${toolGroupStatus(messages)}`), width)] : [];
+			if (!collapsed) {
+				const limit = Math.max(256, width * 4);
+				const firstLine = message.expanded ? undefined : message.output?.slice(0, limit)?.match(/\S[^\r\n]*/u)?.[0]?.trim();
+				const metadata = { ...message, summary: message.summary.slice(0, limit), output: firstLine, agentRuns: message.agentRuns?.map(run => ({ ...run, name: run.name.slice(0, limit), task: run.task?.slice(0, limit), result: run.result?.slice(0, limit).match(/\S[^\r\n]*/u)?.[0] })) };
+				header.push(...renderToolEntry(metadata, index === messages.length - 1, labelWidth, width, theme, options));
+			}
+			const before = layout.version;
+			const chunk = layout.render(message, width, theme, maxRows - lines.length, previewRows, header, (text, position) => {
+				const prefix = index === messages.length - 1 ? "   " : theme.muted(theme.capabilities.unicode ? "│  " : "|  ");
+				const output = message.name === "edit" && message.output?.startsWith("@@")
+					? renderDiff([diff.parse(text, position)], Math.max(1, width - 6), theme)
+					: wrapTextWithAnsi(text, Math.max(1, width - 6));
+				return output.map(line => fitLine(`${prefix}   ${line}`, width));
+			});
+			if (layout.version !== before) this.version++;
+			this.tools.set(message.id, { layout, diff, message, empty: chunk.length === 0 });
+			this.frame.push({ layout, rows: chunk.length });
+			lines.push(...chunk);
+			if (layout.pending) { this.pending = true; break; }
+		}
+		return lines;
+	}
+
+	beginSection(gap: boolean): boolean {
+		if (this.separatorSet) return false;
+		this.separatorSet = true;
+		if (gap) this.leading = [""];
+		return gap;
+	}
+
+	freeze(count: number): void {
+		const leading = Math.min(count, this.leading.length);
+		this.leading.splice(0, leading);
+		count -= leading;
+		for (const entry of this.frame) {
+			if (count <= 0) break;
+			const rows = Math.min(count, entry.rows);
+			entry.layout.freeze(rows);
+			entry.rows -= rows;
+			count -= rows;
+		}
+	}
+
+	beginViewport(): void {
+		for (const { layout } of this.tools.values()) layout.beginViewport();
+	}
 }
 
 export function renderTranscriptSections(
@@ -1130,12 +1223,13 @@ export function renderTranscriptSections(
 				messageIndexes: groupIndexes,
 				final: group.every(isSettledTranscriptMessage),
 				thinking: false,
-				lines: skipped ? [] : [
+				lines: skipped ? [] : options.live ? options.live.renderTools(key, group, Math.max(1, options.live.maxRows - renderedRows - 1)) : [
 					...(options.cache?.render(key, group, state, () =>
 						renderToolGroup(group, renderWidth, theme, options),
 					) ?? renderToolGroup(group, renderWidth, theme, options)),
 				],
 			};
+			section.final = group.every(isSettledTranscriptMessage) && !options.live?.pending(key);
 			index = cursor;
 		} else {
 			const key = `message:${message.id}`;
@@ -1179,8 +1273,8 @@ export function renderTranscriptSections(
 			message.kind === "text" && message.role === "user";
 		const gap = (previous !== undefined || previousMessage !== undefined) && !previousEndsBlank && !startsWithPad;
 		if (!skipped) {
-			if (options.live && nativeText) {
-				if (options.live.beginText(message.id, gap)) section.lines.unshift("");
+			if (options.live && (nativeText || message.kind === "tool")) {
+				if (options.live.beginText(nodeId, gap)) section.lines.unshift("");
 			} else if (gap) section.lines.unshift("");
 		}
 		section.layoutWidth = renderWidth;
@@ -1191,6 +1285,7 @@ export function renderTranscriptSections(
 		}
 		renderedRows += section.lines.length;
 		sections.push(section);
+		if (!skipped && options.live?.pending(nodeId)) break;
 	}
 	options.cache?.retain(retainedCacheKeys, visible.map((entry) => entry.message));
 	return sections;

@@ -100,7 +100,8 @@ export const agentContextMemoryContract = {
 export const agentHistoryPageSchema = z.object({
   items: z.array(z.unknown()), before: z.number().optional(), total: z.number(), revision: z.number(), truncated: z.boolean(),
   activity: agentActivityStateSchema, model: z.string().optional(), effort: z.string(),
-  live: z.object({ turnId: z.number(), segment: z.number(), text: z.string(), thinking: z.string() }).optional(),
+  live: z.object({ turnId: z.number(), segment: z.number(), text: z.string(), thinking: z.string(), stepId: z.string().optional() }).optional(),
+  sources: z.record(z.string(), z.object({ stepId: z.string(), turnId: z.number().optional(), step: z.number().optional() })).optional(),
 });
 export const agentActivityContract = {
   state: { input: z.tuple([]), output: agentActivityStateSchema },

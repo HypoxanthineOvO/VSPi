@@ -4,9 +4,10 @@
  * Wiring: edge translators and focused Klient-shaped backend fixtures.
  * Run: pnpm -C apps/vspi test
  */
-import type { AgentHandle, AgentTaskInfo, QuestionRequest } from "@moonshot-ai/klient";
+import type { AgentHandle, AgentTaskInfo, QuestionRequest, TowerMissionProjection } from "@moonshot-ai/klient";
 import { KlientValidationError } from "@moonshot-ai/klient";
 import type { ChatBackendEvents } from '../src/v1/backend/types.js';
+import type { TranscriptMessage } from '../src/v1/domain/types.js';
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +31,7 @@ import {
 	turnState,
 } from "../src/v1/backend/klient-backend.js";
 import type { RuntimeModelOption } from "../src/v1/backend/types.js";
+import { DEFAULT_USAGE } from "../src/v1/domain/defaults.js";
 import {
 	catalogEffortCapability,
 	effortLabel,
@@ -122,6 +124,22 @@ function draftBackendFixture(
 	return { backend, connection, create, remove, restore, agent, reset, start, listeners, getConfig, policies, connectionStates, questions, disconnect: () => connectionError?.(new Error("ipc closed")), emitError: (error: Error) => connectionError?.(error) };
 }
 
+function taskBackendFixture(tasks: AgentTaskInfo[]) {
+	const agent = {
+		getTasks: vi.fn(async () => tasks),
+		getTaskOutput: vi.fn<AgentHandle["getTaskOutput"]>(async () => "final output"),
+	};
+	const events = { onAgentSnapshot: vi.fn(), onTaskSnapshot: vi.fn(), onMessageUpdate: vi.fn() };
+	const backend = new KlientChatBackend({} as RuntimeConnection, "/workspace", "new");
+	Object.assign(backend, {
+		session: { agent: () => ({ events: { on: () => ({ dispose() {} }) } }) },
+		agent,
+		events,
+	});
+	const refresh = () => (backend as unknown as { refreshTasks(): Promise<void> }).refreshTasks();
+	return { backend, agent, events, refresh };
+}
+
 describe('model retry projection', () => {
 	it('keeps an admitted steer queued while the previous model call is still streaming', async () => {
 		const fixture = draftBackendFixture();
@@ -201,8 +219,9 @@ describe('model retry projection', () => {
       await fixture.start({ onUsage });
       await fixture.backend.switchSession('old-session');
       onUsage.mockClear();
+      usage.total.inputOther = 120;
       fixture.listeners.get('agent.status.updated')?.({ usage });
-      await vi.waitFor(() => { expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 100, outputTokens: 10 })); });
+      await vi.waitFor(() => { expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 120, outputTokens: 10 })); });
     } finally { await fixture.backend.dispose(); }
   });
 
@@ -584,6 +603,260 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			await fixture.backend.dispose();
 			await replacement.backend.dispose();
 		}
+	});
+
+	it('reconciles completed identical replies by stable step identity while preserving live IDs', async () => {
+		const replacement = draftBackendFixture();
+		const fixture = draftBackendFixture(async () => replacement.connection, [0]);
+		const onHistory = vi.fn();
+		const onHistoryReconcile = vi.fn();
+		const onBusy = vi.fn();
+		replacement.agent.getHistory.mockResolvedValue({ items: [
+			{ id: 'history:1', role: 'assistant', content: [{ type: 'think', think: 'same thought' }, { type: 'text', text: 'sa' }, { type: 'text', text: 'me' }], toolCalls: [{ id: 'stable-tool', name: 'Shell', arguments: '{}' }] },
+			{ id: 'history:2', role: 'tool', toolCallId: 'stable-tool', content: [{ type: 'text', text: 'completed offline' }] },
+			{ id: 'history:3', role: 'assistant', content: [{ type: 'think', think: 'same thought' }, { type: 'text', text: 'same completed offline' }] },
+			{ id: 'history:4', role: 'assistant', content: [{ type: 'text', text: 'same' }] },
+		], sources: { 'history:1': { stepId: 'step-a', turnId: 7, step: 1 }, 'history:3': { stepId: 'step-b', turnId: 7, step: 2 }, 'history:4': { stepId: 'step-c', turnId: 8, step: 1 } }, total: 4, revision: 20, truncated: false, activity: { lifecycle: 'ready', background: [] }, model: 'example/code', effort: 'off' } as never);
+		try {
+			await fixture.start({ onHistory, onHistoryReconcile, onBusy });
+			await fixture.backend.switchSession('old-session');
+			fixture.listeners.get('turn.started')?.({ turnId: 7 });
+			fixture.listeners.get('turn.step.started')?.({ turnId: 7, step: 1, stepId: 'step-a' });
+			fixture.listeners.get('thinking.delta')?.({ turnId: 7, delta: 'same thought', viewSegment: 0 });
+			fixture.listeners.get('assistant.delta')?.({ turnId: 7, delta: 'same', viewSegment: 0 });
+			fixture.listeners.get('tool.call.started')?.({ turnId: 7, toolCallId: 'stable-tool', name: 'Shell', args: {} });
+			fixture.listeners.get('turn.step.started')?.({ turnId: 7, step: 2, stepId: 'step-b' });
+			fixture.listeners.get('thinking.delta')?.({ turnId: 7, delta: 'same thought', viewSegment: 1 });
+			fixture.listeners.get('assistant.delta')?.({ turnId: 7, delta: 'same', viewSegment: 1 });
+			fixture.reset.mockClear(); onHistory.mockClear(); onBusy.mockClear();
+			fixture.disconnect();
+			await vi.waitFor(() => { expect(fixture.connectionStates.at(-1)?.state).toBe('reconnected'); });
+			expect(fixture.reset).not.toHaveBeenCalled();
+			expect(onHistory).not.toHaveBeenCalled();
+			expect(onHistoryReconcile).toHaveBeenCalledOnce();
+			const messages = onHistoryReconcile.mock.calls[0]![0] as TranscriptMessage[];
+			expect(messages.map(message => message.id)).toEqual(['thinking:7', 'assistant:7', 'stable-tool', 'thinking:7:1', 'assistant:7:1', 'assistant-step:step-c']);
+			expect(messages.find(message => message.id === 'assistant:7:1')).toMatchObject({ text: 'same completed offline', streaming: false });
+			expect(messages.find(message => message.id === 'assistant:7')).toMatchObject({ text: 'same' });
+			expect(messages.find(message => message.id === 'stable-tool')).toMatchObject({ status: 'success', output: 'completed offline' });
+			expect(onBusy).toHaveBeenCalledWith(false);
+		} finally { await fixture.backend.dispose(); await replacement.backend.dispose(); }
+	});
+
+	it('restores an active stream prefix once and applies only post-snapshot buffered deltas', async () => {
+		const replacement = draftBackendFixture();
+		const fixture = draftBackendFixture(async () => replacement.connection, [0]);
+		const onMessage = vi.fn(); const onMessageUpdate = vi.fn(); const onHistoryReconcile = vi.fn();
+		replacement.agent.getHistory.mockImplementation(async () => {
+			replacement.listeners.get('assistant.delta')?.({ turnId: 7, delta: ' ignored', viewSegment: 0, viewRevision: 19 });
+			replacement.listeners.get('assistant.delta')?.({ turnId: 7, delta: ' tail', viewSegment: 0, viewRevision: 21 });
+			return { items: [], sources: {}, total: 0, revision: 20, truncated: false, activity: { lifecycle: 'ready', background: [] }, model: 'example/code', effort: 'off', live: { turnId: 7, segment: 0, stepId: 'active-step', text: 'before offline', thinking: '' } } as never;
+		});
+		try {
+			await fixture.start({ onMessage, onMessageUpdate, onHistoryReconcile });
+			await fixture.backend.switchSession('old-session');
+			fixture.listeners.get('turn.started')?.({ turnId: 7 });
+			fixture.listeners.get('turn.step.started')?.({ turnId: 7, step: 1, stepId: 'active-step' });
+			fixture.listeners.get('assistant.delta')?.({ turnId: 7, delta: 'before', viewSegment: 0 });
+			onMessage.mockClear(); onMessageUpdate.mockClear();
+			fixture.disconnect();
+			await vi.waitFor(() => { expect(fixture.connectionStates.at(-1)?.state).toBe('reconnected'); });
+			expect(onMessage.mock.calls.filter(([message]) => message.id === 'assistant:7')).toHaveLength(0);
+			expect(onMessageUpdate).toHaveBeenCalledWith('assistant:7', { text: 'before offline', streaming: true });
+			expect(onMessageUpdate).toHaveBeenLastCalledWith('assistant:7', { text: 'before offline tail' });
+		} finally { await fixture.backend.dispose(); await replacement.backend.dispose(); }
+	});
+
+	it('paginates recovery to the last observed stable source instead of omitting more than 100 offline messages', async () => {
+		const replacement = draftBackendFixture();
+		const fixture = draftBackendFixture(async () => replacement.connection, [0]);
+		const onHistoryReconcile = vi.fn();
+		const item = (index: number) => ({ id: `history:${index}`, role: 'assistant', content: [{ type: 'text', text: `Offline ${index}` }] });
+		const sources = Object.fromEntries(Array.from({ length: 151 }, (_, index) => [`history:${index}`, { stepId: `step-${index}` }]));
+		replacement.agent.getHistory.mockImplementation(async (...args: unknown[]) => {
+			const before = (args[0] as { before?: number } | undefined)?.before;
+			return { items: Array.from({ length: before === undefined ? 100 : 51 }, (_, index) => item(index + (before === undefined ? 51 : 0))), sources, before: before === undefined ? 51 : undefined, total: 151, revision: 200, truncated: false, activity: { lifecycle: 'ready', background: [] }, model: 'example/code', effort: 'off' } as never;
+		});
+		try {
+			await fixture.start({ onHistoryReconcile }); await fixture.backend.switchSession('old-session');
+			fixture.listeners.get('turn.started')?.({ turnId: 7 });
+			fixture.listeners.get('turn.step.started')?.({ turnId: 7, step: 1, stepId: 'step-0' });
+			fixture.listeners.get('assistant.delta')?.({ turnId: 7, delta: 'Offline 0' });
+			fixture.disconnect();
+			await vi.waitFor(() => { expect(fixture.connectionStates.at(-1)?.state).toBe('reconnected'); });
+			expect(replacement.agent.getHistory).toHaveBeenCalledTimes(2);
+			const messages = onHistoryReconcile.mock.calls[0]![0] as TranscriptMessage[];
+			expect(messages).toHaveLength(151);
+			expect(messages[0]?.id).toBe('assistant:7');
+			expect(messages.at(-1)?.id).toBe('assistant-step:step-150');
+		} finally { await fixture.backend.dispose(); await replacement.backend.dispose(); }
+	});
+
+	it('keeps explicit same-session switching and old-daemon recovery on the existing restore path', async () => {
+		const replacement = draftBackendFixture();
+		const fixture = draftBackendFixture(async () => replacement.connection, [0]);
+		const onHistory = vi.fn(); const onHistoryReconcile = vi.fn(); const onNotice = vi.fn();
+		try {
+			await fixture.start({ onHistory, onHistoryReconcile, onNotice });
+			await fixture.backend.switchSession('old-session');
+			fixture.reset.mockClear(); onHistory.mockClear();
+			await fixture.backend.switchSession('old-session');
+			expect(fixture.reset).toHaveBeenCalledWith(expect.objectContaining({ reason: 'resume' }));
+			expect(onHistory).toHaveBeenCalledOnce();
+			fixture.reset.mockClear(); onHistory.mockClear();
+			fixture.disconnect();
+			await vi.waitFor(() => { expect(fixture.connectionStates.at(-1)?.state).toBe('reconnected'); });
+			expect(fixture.reset).toHaveBeenCalledWith(expect.objectContaining({ reason: 'resume' }));
+			expect(onHistory).toHaveBeenCalledOnce();
+			expect(onHistoryReconcile).not.toHaveBeenCalled();
+			expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('缺少稳定来源'), 'warning');
+		} finally { await fixture.backend.dispose(); await replacement.backend.dispose(); }
+	});
+
+	it('does not mistake rewritten history ordinals for known stable steps when recovering more than 100 replies', async () => {
+		const replacement = draftBackendFixture();
+		const fixture = draftBackendFixture(async () => replacement.connection, [0]);
+		const onHistoryReconcile = vi.fn();
+		fixture.agent.getHistory.mockResolvedValue({ items: [{ id: 'history:150', role: 'assistant', content: [{ type: 'text', text: 'same' }] }], sources: { 'history:150': { stepId: 'old-step' } }, total: 151, revision: 1, truncated: false, activity: { lifecycle: 'ready', background: [] }, model: 'example/code', effort: 'off' } as never);
+		replacement.agent.getHistory.mockImplementation(async (...args: unknown[]) => {
+			const before = (args[0] as { before?: number } | undefined)?.before;
+			const start = before === undefined ? 51 : 0;
+			const count = before === undefined ? 100 : 51;
+			return { items: Array.from({ length: count }, (_, index) => ({ id: `history:${start + index}`, role: 'assistant', content: [{ type: 'text', text: 'same' }] })), sources: Object.fromEntries(Array.from({ length: count }, (_, index) => [`history:${start + index}`, { stepId: `rewritten-step-${start + index}` }])), before: before === undefined ? 51 : undefined, total: 151, revision: 10, truncated: false, activity: { lifecycle: 'ready', background: [] }, model: 'example/code', effort: 'off' } as never;
+		});
+		try {
+			await fixture.start({ onHistory: vi.fn(), onHistoryReconcile }); await fixture.backend.switchSession('old-session');
+			fixture.disconnect();
+			await vi.waitFor(() => { expect(fixture.connectionStates.at(-1)?.state).toBe('reconnected'); });
+			expect(replacement.agent.getHistory).toHaveBeenCalledTimes(2);
+			expect(onHistoryReconcile.mock.calls[0]![0]).toHaveLength(151);
+			expect(onHistoryReconcile.mock.calls[0]![0].every((message: TranscriptMessage) => message.id.startsWith('assistant-step:rewritten-step-'))).toBe(true);
+		} finally { await fixture.backend.dispose(); await replacement.backend.dispose(); }
+	});
+
+	it('marks still-active tools running before reconciliation and preserves queued user identities', async () => {
+		const replacement = draftBackendFixture();
+		const fixture = draftBackendFixture(async () => replacement.connection, [0]);
+		const onHistoryReconcile = vi.fn(); const onPromptLifecycle = vi.fn();
+		fixture.agent.prompt.mockImplementation(async () => {});
+		replacement.agent.getHistory.mockResolvedValue({ items: [
+			{ id: 'persisted-user', role: 'user', origin: { kind: 'user' }, content: [{ type: 'text', text: 'queued question' }] },
+			{ id: 'history:1', role: 'assistant', content: [], toolCalls: [{ id: 'still-active', name: 'Shell', arguments: '{}' }] },
+		], sources: { 'history:1': { stepId: 'active-tool-step' } }, total: 2, revision: 20, truncated: false, activity: { lifecycle: 'ready', turn: { turnId: 7, step: 1, activeToolCalls: [{ toolCallId: 'still-active', name: 'Shell', since: 0 }] }, background: [] }, model: 'example/code', effort: 'off' } as never);
+		try {
+			await fixture.start({ onHistoryReconcile, onPromptLifecycle }); await fixture.backend.switchSession('old-session');
+			fixture.listeners.get('turn.started')?.({ turnId: 7 });
+			await fixture.backend.send('queued question', { attachments: [], effort: 'off', behavior: 'followUp', clientMessageId: 'queued-client' });
+			fixture.listeners.get('prompt.submitted')?.({ promptId: 'queued-client', userMessageId: 'persisted-user', status: 'queued', content: [{ type: 'text', text: 'queued question' }] });
+			fixture.disconnect();
+			await vi.waitFor(() => { expect(fixture.connectionStates.at(-1)?.state).toBe('reconnected'); });
+			const messages = onHistoryReconcile.mock.calls[0]![0] as TranscriptMessage[];
+			expect(messages.find(message => message.id === 'still-active')).toMatchObject({ status: 'running' });
+			expect(messages.find(message => message.role === 'user')?.id).toBe('queued-client');
+			expect(onPromptLifecycle).toHaveBeenCalledWith('queued-client', 'started');
+		} finally { await fixture.backend.dispose(); await replacement.backend.dispose(); }
+	});
+
+	it('retains the known long stream when a recovered live view is a capped tail without an offset', async () => {
+		const replacement = draftBackendFixture();
+		const fixture = draftBackendFixture(async () => replacement.connection, [0]);
+		const onMessageUpdate = vi.fn(); const onHistoryReconcile = vi.fn(); const onNotice = vi.fn();
+		replacement.agent.getHistory.mockResolvedValue({ items: [], sources: {}, total: 0, revision: 20, truncated: false, activity: { lifecycle: 'ready', background: [] }, model: 'example/code', effort: 'off', live: { turnId: 7, segment: 0, stepId: 'long-step', text: 'a'.repeat(262144), thinking: '' } } as never);
+		try {
+			await fixture.start({ onMessageUpdate, onHistoryReconcile, onNotice }); await fixture.backend.switchSession('old-session');
+			fixture.listeners.get('turn.started')?.({ turnId: 7 });
+			fixture.listeners.get('turn.step.started')?.({ turnId: 7, step: 1, stepId: 'long-step' });
+			fixture.listeners.get('assistant.delta')?.({ turnId: 7, delta: 'a'.repeat(300000) });
+			onMessageUpdate.mockClear(); fixture.disconnect();
+			await vi.waitFor(() => { expect(fixture.connectionStates.at(-1)?.state).toBe('reconnected'); });
+			replacement.listeners.get('assistant.delta')?.({ turnId: 7, delta: 'later', viewRevision: 21, viewSegment: 0 });
+			expect(onMessageUpdate.mock.calls.some(([, patch]) => typeof patch.text === 'string')).toBe(false);
+			expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('本窗口暂停显示该段增量'), 'warning');
+		} finally { await fixture.backend.dispose(); await replacement.backend.dispose(); }
+	});
+
+	it('marks a truncated completed snapshot so the frontend can retain a longer known same-source reply', async () => {
+		const replacement = draftBackendFixture();
+		const fixture = draftBackendFixture(async () => replacement.connection, [0]);
+		const onHistoryReconcile = vi.fn();
+		const complete = 'content '.repeat(10000);
+		replacement.agent.getHistory.mockResolvedValue({ items: [{ id: 'history:1', role: 'assistant', content: [{ type: 'text', text: `${complete.slice(0, 65536)}[display truncated]` }] }], sources: { 'history:1': { stepId: 'bounded-step' } }, total: 1, revision: 20, truncated: true, activity: { lifecycle: 'ready', background: [] }, model: 'example/code', effort: 'off' } as never);
+		try {
+			await fixture.start({ onHistoryReconcile }); await fixture.backend.switchSession('old-session');
+			fixture.listeners.get('turn.started')?.({ turnId: 7 });
+			fixture.listeners.get('turn.step.started')?.({ turnId: 7, step: 1, stepId: 'bounded-step' });
+			fixture.listeners.get('assistant.delta')?.({ turnId: 7, delta: complete });
+			fixture.disconnect();
+			await vi.waitFor(() => { expect(fixture.connectionStates.at(-1)?.state).toBe('reconnected'); });
+			expect(onHistoryReconcile).toHaveBeenCalledWith([expect.objectContaining({ id: 'assistant:7' })], { truncated: true });
+		} finally { await fixture.backend.dispose(); await replacement.backend.dispose(); }
+	});
+
+	it('uses compatibility restore when a source-less assistant ordinal is reused', async () => {
+		const replacement = draftBackendFixture();
+		const fixture = draftBackendFixture(async () => replacement.connection, [0]);
+		const onHistory = vi.fn(); const onHistoryReconcile = vi.fn();
+		const page = { items: [{ id: 'history:1', role: 'assistant', content: [{ type: 'text', text: 'old source-less reply' }] }], sources: {}, total: 1, revision: 1, truncated: false, activity: { lifecycle: 'ready', background: [] }, model: 'example/code', effort: 'off' };
+		fixture.agent.getHistory.mockResolvedValue(page as never);
+		replacement.agent.getHistory.mockResolvedValue({ ...page, items: [{ id: 'history:1', role: 'assistant', content: [{ type: 'text', text: 'new source-less reply' }] }] } as never);
+		try {
+			await fixture.start({ onHistory, onHistoryReconcile }); await fixture.backend.switchSession('old-session');
+			fixture.reset.mockClear(); onHistory.mockClear(); fixture.disconnect();
+			await vi.waitFor(() => { expect(fixture.connectionStates.at(-1)?.state).toBe('reconnected'); });
+			expect(fixture.reset).toHaveBeenCalledWith(expect.objectContaining({ reason: 'resume' }));
+			expect(onHistory).toHaveBeenCalledWith([expect.objectContaining({ text: 'new source-less reply' })], false);
+			expect(onHistoryReconcile).not.toHaveBeenCalled();
+		} finally { await fixture.backend.dispose(); await replacement.backend.dispose(); }
+	});
+
+	it('does not append a merged steer again when every constituent input was already displayed', async () => {
+		const replacement = draftBackendFixture();
+		const fixture = draftBackendFixture(async () => replacement.connection, [0]);
+		const onHistoryReconcile = vi.fn();
+		fixture.agent.steer.mockImplementation(async () => {});
+		replacement.agent.getHistory.mockResolvedValue({ items: [
+			{ id: 'merged-user', role: 'user', origin: { kind: 'user' }, content: [{ type: 'text', text: 'one\ntwo' }] },
+			{ id: 'external-user', role: 'user', origin: { kind: 'user' }, content: [{ type: 'text', text: 'external input' }] },
+		], sources: {}, total: 2, revision: 20, truncated: false, activity: { lifecycle: 'ready', background: [] }, model: 'example/code', effort: 'off' } as never);
+		try {
+			await fixture.start({ onHistoryReconcile }); await fixture.backend.switchSession('old-session');
+			fixture.listeners.get('turn.started')?.({ turnId: 7 });
+			for (const id of ['one', 'two']) await fixture.backend.send(id, { attachments: [], effort: 'off', behavior: 'prompt', clientMessageId: id });
+			fixture.listeners.get('prompt.steered')?.({ promptIds: ['one', 'two'], messageId: 'merged-user', content: [] });
+			fixture.disconnect();
+			await vi.waitFor(() => { expect(fixture.connectionStates.at(-1)?.state).toBe('reconnected'); });
+			expect(onHistoryReconcile).toHaveBeenCalledWith([expect.objectContaining({ id: 'external-user', text: 'external input' })], { truncated: false });
+		} finally { await fixture.backend.dispose(); await replacement.backend.dispose(); }
+	});
+
+	it('continues from the recovered committed current-step prefix when live text is already journaled', async () => {
+		const replacement = draftBackendFixture();
+		const fixture = draftBackendFixture(async () => replacement.connection, [0]);
+		const onMessageUpdate = vi.fn();
+		replacement.agent.getHistory.mockResolvedValue({ items: [{ id: 'history:1', role: 'assistant', content: [{ type: 'text', text: 'before offline' }] }], sources: { 'history:1': { stepId: 'committed-step' } }, total: 1, revision: 20, truncated: false, activity: { lifecycle: 'ready', background: [] }, model: 'example/code', effort: 'off', live: { turnId: 7, segment: 0, stepId: 'committed-step', text: '', thinking: '' } } as never);
+		try {
+			await fixture.start({ onMessageUpdate, onHistoryReconcile: vi.fn() }); await fixture.backend.switchSession('old-session');
+			fixture.listeners.get('turn.started')?.({ turnId: 7 });
+			fixture.listeners.get('turn.step.started')?.({ turnId: 7, step: 1, stepId: 'committed-step' });
+			fixture.listeners.get('assistant.delta')?.({ turnId: 7, delta: 'before' });
+			fixture.disconnect();
+			await vi.waitFor(() => { expect(fixture.connectionStates.at(-1)?.state).toBe('reconnected'); });
+			replacement.listeners.get('assistant.delta')?.({ turnId: 7, viewSegment: 0, viewRevision: 21, delta: ' tail' });
+			expect(onMessageUpdate).toHaveBeenLastCalledWith('assistant:7', { text: 'before offline tail' });
+		} finally { await fixture.backend.dispose(); await replacement.backend.dispose(); }
+	});
+
+	it('seeds a committed active-step prefix on explicit initial resume without replacing it with the next delta', async () => {
+		const fixture = draftBackendFixture();
+		const onMessage = vi.fn(); const onMessageUpdate = vi.fn();
+		fixture.agent.getHistory.mockResolvedValue({ items: [{ id: 'history:1', role: 'assistant', content: [{ type: 'text', text: 'committed prefix' }] }], sources: { 'history:1': { stepId: 'initial-step' } }, total: 1, revision: 20, truncated: false, activity: { lifecycle: 'ready', background: [] }, model: 'example/code', effort: 'off', live: { turnId: 7, segment: 0, stepId: 'initial-step', text: '', thinking: '' } } as never);
+		try {
+			await fixture.start({ onMessage, onMessageUpdate, onHistory: vi.fn() }); await fixture.backend.switchSession('old-session');
+			onMessage.mockClear();
+			fixture.listeners.get('assistant.delta')?.({ turnId: 7, viewSegment: 0, viewRevision: 21, delta: ' tail' });
+			expect(onMessage).not.toHaveBeenCalled();
+			expect(onMessageUpdate).toHaveBeenLastCalledWith('history:1', { text: 'committed prefix tail' });
+		} finally { await fixture.backend.dispose(); }
 	});
 
 	it("closes a late reconnect result when the frontend was disposed", async () => {
@@ -1273,7 +1546,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 			questionCount: 2,
 			toolCallId: "question-tool",
 		} satisfies AgentTaskInfo;
-		const getTasks = vi.fn().mockResolvedValue([task, process, question]);
+		const getTasks = vi.fn(async () => structuredClone([task, process, question]));
 		const onMessage = vi.fn();
 		const onMessageUpdate = vi.fn();
 		const onAgentSnapshot = vi.fn();
@@ -1290,12 +1563,11 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		});
 		const refresh = backend as unknown as { refreshTasks(): Promise<void> };
 
-		await refresh.refreshTasks();
-		await refresh.refreshTasks();
+		for (let index = 0; index < 20; index++) await refresh.refreshTasks();
 
 		expect(onMessage).not.toHaveBeenCalled();
-		expect(onAgentSnapshot).toHaveBeenCalledTimes(2);
-		expect(onTaskSnapshot).toHaveBeenCalledTimes(2);
+		expect(onAgentSnapshot).toHaveBeenCalledOnce();
+		expect(onTaskSnapshot).toHaveBeenCalledOnce();
 		expect(onTaskSnapshot).toHaveBeenLastCalledWith({
 			agents: [
 				expect.objectContaining({
@@ -1325,6 +1597,158 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 				}),
 			],
 		});
+	});
+
+	it.each([
+		{ taskTitle: "Updated task" },
+		{ model: "example/updated" },
+		{ subagentType: "researcher" },
+		{ startedAt: 2_000 },
+	])("preserves parent Agent metadata changes in %j", async (patch) => {
+		const task: AgentTaskInfo = { taskId: "agent-running", kind: "agent", description: "Inspect repository", codename: "Worker", taskTitle: "Original task", status: "running", startedAt: 1_000, endedAt: null, parentToolCallId: "parent", model: "example/original", subagentType: "worker" };
+		const fixture = taskBackendFixture([task]);
+		await fixture.refresh();
+		fixture.events.onMessageUpdate.mockClear();
+		fixture.agent.getTasks.mockResolvedValue([{ ...task, ...patch }]);
+		await fixture.refresh();
+		expect(fixture.events.onMessageUpdate).toHaveBeenCalledOnce();
+		expect(fixture.events.onMessageUpdate).toHaveBeenLastCalledWith("parent", { agentRuns: [expect.objectContaining({ name: "Worker", task: patch.taskTitle ?? "Original task", model: patch.model ?? "example/original", profile: patch.subagentType ?? "worker", startedAt: new Date(patch.startedAt ?? 1_000).toISOString() })] });
+	});
+
+	it("publishes terminal tasks before slow outputs and enriches them once", async () => {
+		const task: AgentTaskInfo = { taskId: "agent-terminal", kind: "agent", description: "Check result", status: "completed", startedAt: 1_000, endedAt: 2_000, parentToolCallId: "parent" };
+		const fixture = taskBackendFixture([task]);
+		let finish!: (output: string) => void;
+		fixture.agent.getTaskOutput.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+		await fixture.refresh();
+		expect(fixture.events.onTaskSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({ agents: [expect.objectContaining({ status: "completed", outputPreview: undefined })] }));
+		await fixture.refresh();
+		expect(fixture.events.onTaskSnapshot).toHaveBeenCalledOnce();
+		expect(fixture.agent.getTaskOutput).toHaveBeenCalledOnce();
+		finish("COMPLETE_RESULT");
+		await vi.waitFor(() => { expect(fixture.events.onTaskSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({ agents: [expect.objectContaining({ outputPreview: "COMPLETE_RESULT" })] })); });
+		await fixture.refresh();
+		expect(fixture.events.onTaskSnapshot).toHaveBeenCalledTimes(2);
+		expect(fixture.agent.getTaskOutput).toHaveBeenCalledOnce();
+	});
+
+	it("backs off failed output reads and never polls output for a missing task", async () => {
+		const task: AgentTaskInfo = { taskId: "agent-terminal", kind: "agent", description: "Check result", status: "completed", startedAt: 1_000, endedAt: 2_000 };
+		const fixture = taskBackendFixture([task, { ...task, taskId: "agent-gone", status: "lost" }]);
+		fixture.agent.getTaskOutput.mockRejectedValueOnce(new Error("temporarily unavailable")).mockResolvedValue("RECOVERED_OUTPUT");
+		const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+		try {
+			await fixture.refresh();
+			await vi.waitFor(() => { expect((fixture.backend as unknown as { taskOutputActive: number }).taskOutputActive).toBe(0); });
+			for (let index = 0; index < 20; index++) await fixture.refresh();
+			expect(fixture.agent.getTaskOutput).toHaveBeenCalledOnce();
+			now.mockReturnValue(15_001);
+			await fixture.refresh();
+			await vi.waitFor(() => { expect(fixture.backend.getTaskSnapshot().agents[0]?.outputPreview).toBe("RECOVERED_OUTPUT"); });
+			expect(fixture.agent.getTaskOutput).toHaveBeenCalledTimes(2);
+			expect(fixture.agent.getTaskOutput).toHaveBeenLastCalledWith({ taskId: "agent-terminal", tail: 200 });
+		} finally { now.mockRestore(); }
+	});
+
+	it("ignores an old task output after the same task resumes", async () => {
+		const completed: AgentTaskInfo = { taskId: "agent-reused", kind: "agent", description: "Check result", status: "completed", startedAt: 1_000, endedAt: 2_000 };
+		const fixture = taskBackendFixture([completed]);
+		let finish!: (output: string) => void;
+		fixture.agent.getTaskOutput.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+		await fixture.refresh();
+		fixture.agent.getTasks.mockResolvedValue([{ ...completed, status: "running", startedAt: 3_000, endedAt: null }]);
+		await fixture.refresh();
+		const calls = fixture.events.onTaskSnapshot.mock.calls.length;
+		finish("STALE_OUTPUT");
+		await vi.waitFor(() => { expect((fixture.backend as unknown as { taskOutputActive: number }).taskOutputActive).toBe(0); });
+		expect(fixture.events.onTaskSnapshot).toHaveBeenCalledTimes(calls);
+		expect(fixture.backend.getTaskSnapshot().agents[0]).toMatchObject({ status: "running", outputPreview: undefined });
+	});
+
+	it("guards task output across a session reset even when task identifiers are reused", async () => {
+		const task: AgentTaskInfo = { taskId: "agent-reused", kind: "agent", description: "Check result", status: "completed", startedAt: 1_000, endedAt: 2_000 };
+		const fixture = taskBackendFixture(Array.from({ length: 4 }, (_, index) => ({ ...task, taskId: `agent-${index}` })));
+		const finishes: Array<(output: string) => void> = [];
+		fixture.agent.getTaskOutput.mockImplementation(() => new Promise(resolve => { finishes.push(resolve); }));
+		await fixture.refresh();
+		(fixture.backend as unknown as { clearBindings(): void }).clearBindings();
+		await fixture.refresh();
+		expect(finishes).toHaveLength(8);
+		for (const finish of finishes.slice(0, 4)) finish("OLD_SESSION");
+		await Promise.resolve();
+		await Promise.resolve();
+		expect((fixture.backend as unknown as { taskOutputActive: number }).taskOutputActive).toBe(4);
+		expect(fixture.backend.getTaskSnapshot().agents[0]?.outputPreview).toBeUndefined();
+		for (const finish of finishes.slice(4)) finish("CURRENT_SESSION");
+		await vi.waitFor(() => { expect(fixture.backend.getTaskSnapshot().agents[0]?.outputPreview).toBe("CURRENT_SESSION"); });
+	});
+
+	it("limits background output reads without delaying any terminal state", async () => {
+		const tasks: AgentTaskInfo[] = Array.from({ length: 8 }, (_, index) => ({ taskId: `agent-${index}`, kind: "agent", description: "Check result", status: "completed", startedAt: 1_000, endedAt: 2_000 }));
+		const fixture = taskBackendFixture(tasks);
+		const finishes: Array<(output: string) => void> = [];
+		fixture.agent.getTaskOutput.mockImplementation(() => new Promise(resolve => { finishes.push(resolve); }));
+		await fixture.refresh();
+		expect(fixture.backend.getTaskSnapshot().agents).toHaveLength(8);
+		expect(finishes).toHaveLength(4);
+		await fixture.refresh();
+		expect(finishes).toHaveLength(4);
+		for (const finish of finishes.slice(0, 4)) finish("READY");
+		await vi.waitFor(() => { expect(finishes).toHaveLength(8); });
+		for (const finish of finishes.slice(4)) finish("READY");
+		await vi.waitFor(() => { expect((fixture.backend as unknown as { taskOutputActive: number }).taskOutputActive).toBe(0); });
+	});
+
+	it.each(["text", "thinking"] as const)("preserves complete %s beyond the former stream truncation boundary", (kind) => {
+		const backend = new KlientChatBackend({} as RuntimeConnection, "/workspace", "new");
+		const onMessage = vi.fn();
+		const onMessageUpdate = vi.fn();
+		Object.assign(backend, { events: { onMessage, onMessageUpdate } });
+		const stream = backend as unknown as { appendStream(id: string, delta: string, kind: "text" | "thinking"): void };
+		const chunks = Array.from({ length: 300 }, (_, index) => `STREAM_${index}_${"中".repeat(1_000)}\n`);
+		for (const chunk of chunks) stream.appendStream("message", chunk, kind);
+		expect(onMessage).toHaveBeenCalledOnce();
+		expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ text: chunks[0] }));
+		expect(onMessageUpdate).toHaveBeenLastCalledWith("message", { text: chunks.join("") });
+		expect(onMessageUpdate.mock.calls.every(([id, patch], index) => id === "message" && patch.text === chunks.slice(0, index + 2).join(""))).toBe(true);
+	});
+
+	it("deduplicates complete Tower projections and keeps changed plan fields", async () => {
+		const mission: TowerMissionProjection = { id: "M1", title: "engine", kind: "build", status: "active", scope: [], deps: [], tasks: [{ text: "Implement engine", done: false }], blockers: [], workers: [] };
+		const agent = { isTowerActive: vi.fn(async () => true), getTowerMissions: vi.fn(async () => [mission]) };
+		const onTowerMissions = vi.fn();
+		const onPlanItems = vi.fn();
+		const backend = new KlientChatBackend({} as RuntimeConnection, "/workspace", "new");
+		Object.assign(backend, { agent, events: { onTowerMissions, onPlanItems } });
+		const refresh = backend as unknown as { refreshTowerMissions(): Promise<void> };
+		await refresh.refreshTowerMissions();
+		await refresh.refreshTowerMissions();
+		expect(onTowerMissions).toHaveBeenCalledOnce();
+		expect(onPlanItems).toHaveBeenCalledOnce();
+		agent.getTowerMissions.mockResolvedValue([{ ...mission, tasks: [{ text: "Implement engine", done: true }] }]);
+		await refresh.refreshTowerMissions();
+		expect(onTowerMissions).toHaveBeenCalledTimes(2);
+		expect(onPlanItems).toHaveBeenLastCalledWith(expect.arrayContaining([expect.objectContaining({ id: "tower:M1:task:0", status: "done" })]));
+		agent.isTowerActive.mockResolvedValue(false);
+		await refresh.refreshTowerMissions();
+		await refresh.refreshTowerMissions();
+		expect(onTowerMissions).toHaveBeenCalledTimes(3);
+		expect(onPlanItems).toHaveBeenLastCalledWith([]);
+	});
+
+	it("does not republish identical throughput while preserving new usage counters", () => {
+		const onUsage = vi.fn();
+		const backend = new KlientChatBackend({} as RuntimeConnection, "/workspace", "new");
+		Object.assign(backend, { events: { onUsage } });
+		const publish = backend as unknown as { publishUsageSnapshot(snapshot: typeof DEFAULT_USAGE): void; publishSpeed(speed: { now: number | null; average: number | null }): void };
+		publish.publishUsageSnapshot({ ...DEFAULT_USAGE });
+		publish.publishSpeed({ now: null, average: null });
+		publish.publishSpeed({ now: 4, average: 5 });
+		publish.publishSpeed({ now: 4, average: 5 });
+		expect(onUsage).toHaveBeenCalledTimes(2);
+		publish.publishUsageSnapshot({ ...DEFAULT_USAGE, inputTokens: 42, throughputNow: 4, throughputAverage: 5 });
+		expect(onUsage).toHaveBeenCalledTimes(3);
+		expect(onUsage).toHaveBeenLastCalledWith(expect.objectContaining({ inputTokens: 42 }));
 	});
 
 	it("recovers a completed agent when the task list temporarily omits it", async () => {
@@ -2005,6 +2429,7 @@ describe("Klient backend projection (Core wire to VSPi UI)", () => {
 		);
 		expect(listModels).toHaveBeenCalledOnce();
 		expect(listProviders).toHaveBeenCalledOnce();
+		expect(onUsage).toHaveBeenCalledOnce();
 	});
 
 	it("matches the full VSPLab alias to its exact official price during usage projection", async () => {

@@ -222,7 +222,7 @@ export class AgentHistoryService extends Disposable implements IAgentHistoryServ
   }
 
   private observe(event: Event2<any>): void {
-    const data = event as Event2<any> & { turnId?: number; delta?: string; step?: number };
+    const data = event as Event2<any> & { turnId?: number; delta?: string; step?: number; stepId?: string };
     this.sequences.set(event, ++this.revision);
     if (event.type === 'assistant.delta' || event.type === 'thinking.delta') {
       if (data.turnId === undefined || typeof data.delta !== 'string') return;
@@ -235,9 +235,10 @@ export class AgentHistoryService extends Disposable implements IAgentHistoryServ
     if (event.type === 'turn.started' && data.turnId !== undefined) { this.live = { turnId: data.turnId, segment: 0, text: '', thinking: '' }; this.liveStep = undefined; }
     if (event.type === 'turn.step.started' && data.step !== undefined) {
       if (this.live && this.liveStep !== undefined && this.liveStep !== data.step) this.live = { turnId: this.live.turnId, segment: this.live.segment + 1, text: '', thinking: '' };
+      if (this.live) this.live = { ...this.live, stepId: data.stepId };
       this.liveStep = data.step;
     }
-    if ((event.type === 'tool.call.started' || event.type === 'prompt.steered' || event.type === 'turn.step.retrying') && this.live) this.live = { turnId: this.live.turnId, segment: this.live.segment + 1, text: '', thinking: '' };
+    if ((event.type === 'tool.call.started' || event.type === 'prompt.steered' || event.type === 'turn.step.retrying') && this.live) this.live = { ...this.live, segment: this.live.segment + 1, text: '', thinking: '' };
     if (event.type === 'turn.ended') { this.live = undefined; this.liveStep = undefined; }
   }
 
@@ -285,6 +286,10 @@ export class AgentHistoryService extends Disposable implements IAgentHistoryServ
       const currentCommitted = this.committed !== undefined && Number(this.committed.turnId) === this.live?.turnId && this.committed.step === this.liveStep;
       const transcript = reducer.result();
       const items = transcript.entries.slice(start, end).map((message, index) => ({ ...message, id: message.id ?? `history:${positions[start + index]}` }));
+      const sources = Object.fromEntries(items.flatMap((message, index) => {
+        const source = reducer.sourceAt(positions[start + index]!);
+        return source ? [[message.id, source]] : [];
+      }));
       return {
         items,
         before: start > 0 ? start : undefined,
@@ -294,6 +299,7 @@ export class AgentHistoryService extends Disposable implements IAgentHistoryServ
         activity: this.activity.state(),
         model: this.profile.hasModel() ? this.profile.getModel() : undefined,
         effort: this.profile.getEffectiveThinkingLevel(),
+        sources,
         live: this.live ? { ...this.live, text: currentCommitted && this.committed?.text ? '' : this.live.text, thinking: currentCommitted && this.committed?.thinking ? '' : this.live.thinking } : undefined,
       };
     }

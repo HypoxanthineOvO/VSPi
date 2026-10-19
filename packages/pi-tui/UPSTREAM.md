@@ -230,3 +230,15 @@ Each card: **decision** and **why not in the app**. Status is `keep` or `absorbe
 **Decision:** Existing `setViewportOnlyRedraw` callers keep viewport-only resize redraws, without clearing native scrollback. Ordinary content revisions still render the full changed content. The default remains off.
 
 **Why not in the app:** This is an existing main-screen renderer option. New host redraw hooks must remain additive and preserve callers that use it.
+
+### host-owned-initial-rows — keep
+
+**Decision:** `TuiMainScreen.initialRenderRow()` is a protected host hook that defaults to zero. An append-only host can adopt already visible terminal rows when starting a new surface, position the first write below them, and initialize normal differential state without repainting or clearing the adopted rows.
+
+**Why not in the app:** The initial full-frame writer and processed-line state are private to the renderer; a host cannot safely trim its output after writing has begun. Ordinary callers retain the original first-render behavior.
+
+### stdin-codepoint-boundaries — keep
+
+**Decision:** Emit a supplementary Unicode character as one input event, retain a trailing high surrogate until its following chunk, and suppress matching supplementary raw duplicates after Kitty CSI-u. Escape, control, and paste boundaries remain unchanged.
+
+**Why not in the app:** StdinBuffer splits raw terminal input before host dispatch; an app cannot reconstruct already dispatched half-character events.

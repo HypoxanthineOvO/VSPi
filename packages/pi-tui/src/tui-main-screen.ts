@@ -162,6 +162,11 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		return false;
 	}
 
+	/** Rows already owned by the terminal when a host starts an append-only surface. */
+	protected initialRenderRow(): number {
+		return 0;
+	}
+
 	captureRenderState(): TuiMainScreenRenderState {
 		return {
 			previousLines: [...this.previousLines],
@@ -354,7 +359,10 @@ export class TuiMainScreen extends TuiBase implements TUI {
 				output.append(this.deleteKittyImages(this.previousKittyImageIds));
 				output.append(this.viewportOnlyRedraw ? "\x1b[2J\x1b[H" : "\x1b[2J\x1b[H\x1b[3J"); // Clear screen, home, then clear scrollback
 			}
-			const firstRow = clear && resized && this.viewportOnlyRedraw ? Math.max(0, newLines.length - height) : 0;
+			const firstRow = clear
+				? resized && this.viewportOnlyRedraw ? Math.max(0, newLines.length - height) : 0
+				: Math.max(0, Math.min(newLines.length, this.initialRenderRow()));
+			if (!clear && firstRow > 0) output.append(`\x1b[${firstRow + 1};1H`);
 			for (let i = firstRow; i < newLines.length; i++) {
 				if (i > firstRow) output.append("\r\n");
 				const line = newLines[i]!;

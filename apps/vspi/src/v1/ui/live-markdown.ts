@@ -25,7 +25,7 @@ export class LiveMarkdown {
   private table: string | undefined;
   private tableHasRows = false;
   private tableHeaderPending = false;
-  private continuationColumn = 0;
+  private plainTable = false;
   private rows: string[] = [];
   private preview: string[] = [];
   private headerShown = false;
@@ -53,6 +53,7 @@ export class LiveMarkdown {
       this.fence = undefined;
       this.fenceHeaderShown = false;
       this.table = undefined;
+      this.plainTable = false;
       this.continuation = false;
       this.tableHasRows = false;
       this.finalized = false;
@@ -76,8 +77,10 @@ export class LiveMarkdown {
     const started = performance.now();
     const end = Math.min(this.source.length, this.offset + SOURCE_BATCH_CHARS);
     while (this.offset < end && this.rows.length < maxRows && performance.now() - started < FRAME_LAYOUT_MS) {
-      const newline = this.source.indexOf('\n', this.offset);
-      let stop = Math.min(newline < 0 ? this.source.length : newline, end, this.offset + BLOCK_CHARS - this.line.length);
+      const limit = Math.min(end, this.offset + BLOCK_CHARS - this.line.length);
+      const found = this.source.slice(this.offset, limit).indexOf('\n');
+      const newline = found < 0 ? -1 : this.offset + found;
+      let stop = newline < 0 ? limit : newline;
       if (stop > this.offset && /[\uD800-\uDBFF]/u.test(this.source[stop - 1] ?? '') && /[\uDC00-\uDFFF]/u.test(this.source[stop] ?? '')) stop--;
       if (message.streaming && stop === this.source.length && /[\uD800-\uDBFF]/u.test(this.source[stop - 1] ?? '')) stop--;
       if (stop === this.offset && this.line.length < BLOCK_CHARS - 1 && newline !== this.offset) break;
@@ -90,6 +93,10 @@ export class LiveMarkdown {
         this.continuation = false;
       } else if (this.line.length >= BLOCK_CHARS - 1) {
         this.flushBlock();
+        if (this.table || !this.fence && this.line.includes('|')) {
+          this.closeTable();
+          this.plainTable = true;
+        }
         this.ensureCodeHeader();
         this.append(this.renderFragment(this.line));
         this.line = '';
@@ -103,7 +110,8 @@ export class LiveMarkdown {
       this.closeTable();
       this.finalized = true;
     }
-    this.preview = this.renderPreview();
+    const waitingForCharacter = message.streaming && this.offset === this.source.length - 1 && /[\uD800-\uDBFF]/u.test(this.source[this.offset] ?? '');
+    this.preview = this.offset === this.source.length || waitingForCharacter ? this.renderPreview() : [];
     if (message.kind === 'text' && message.role === 'user' && this.offset === this.source.length) {
       const status = deliveryStatus(message);
       const labels = [...attachmentSummary(message), ...status ? [`↳ ${status}`] : []];
@@ -121,10 +129,11 @@ export class LiveMarkdown {
     const lines = [...this.rows.slice(0, maxRows)];
     if (lines.length < maxRows) lines.push(...this.preview.slice(0, maxRows - lines.length));
     if (lines.length < maxRows) lines.push(...this.footer.slice(0, maxRows - lines.length));
-    this.pending = this.offset < this.source.length || this.rows.length + this.preview.length + this.footer.length > maxRows;
+    const awaitingSurrogate = message.streaming && this.offset === this.source.length - 1 && /[\uD800-\uDBFF]/u.test(this.source[this.offset] ?? '');
+    this.pending = this.offset < this.source.length && !awaitingSurrogate || this.rows.length + this.preview.length + this.footer.length > maxRows;
     if (message.streaming && !this.pending && lines.length) {
       const last = lines.at(-1)!;
-      lines[lines.length - 1] = `${truncateToWidth(last, Math.max(0, width - 1), '')}${theme.focus('▋')}`;
+      if (visibleWidth(stripAnsi(last).trimEnd()) < width) lines[lines.length - 1] = `${truncateToWidth(last, Math.max(0, width - 1), '')}${theme.focus('▋')}`;
     }
     return lines;
   }
@@ -176,6 +185,7 @@ export class LiveMarkdown {
     const width = Math.max(1, this.width - 2);
     const theme = this.theme!;
     if (this.message?.role === 'user') return wrapTextWithAnsi(text, Math.max(1, this.width - 4));
+    if (this.plainTable) return wrapTextWithAnsi(text, width);
     if (this.fence) {
       const language = this.fence.replace(/^\s*[`~]+/u, '').trim();
       const styled = this.message?.kind === 'thinking' ? text.split('\n').map(theme.thinking) : theme.markdown.highlightCode?.(text, language) ?? text.split('\n').map(theme.markdown.codeBlock);
@@ -187,11 +197,14 @@ export class LiveMarkdown {
 
   private consumeLine(line: string): void {
     if (this.message?.role === 'user') { this.append(this.renderFragment(line)); return; }
-    if (this.block && this.block.length + line.length + 1 > BLOCK_CHARS) this.flushBlock();
-    if (this.continuation && this.table) {
-      if (line.trim()) { this.ensureTableHeader(); this.block += `${this.tableContinuation(line)}\n`; this.flushBlock(); }
-      return;
+    if (this.plainTable) {
+      if (this.continuation || line.trim() && line.includes('|')) {
+        if (line || !this.continuation) this.append(this.renderFragment(line));
+        return;
+      }
+      this.plainTable = false;
     }
+    if (this.block && this.block.length + line.length + 1 > BLOCK_CHARS) this.flushBlock();
     if (this.continuation) {
       this.ensureCodeHeader();
       this.append(this.renderFragment(line));
@@ -255,13 +268,6 @@ export class LiveMarkdown {
     this.tableHasRows = false;
   }
 
-  private tableContinuation(text: string): string {
-    const count = (this.table?.split('\n')[0]?.replace(/^\s*\||\|\s*$/gu, '').split('|').length ?? 1);
-    const cells = Array<string>(count).fill('');
-    cells[Math.min(count - 1, this.continuationColumn)] = text.replace(/\|\s*$/u, '');
-    return `| ${cells.join(' | ')} |`;
-  }
-
   private closeTable(): void {
     if (!this.table) return;
     const table = this.renderTable('');
@@ -272,7 +278,7 @@ export class LiveMarkdown {
 
   private ensureCodeHeader(): void {
     if (this.fence && !this.fenceHeaderShown) {
-      this.append([codeHeader(this.fence, Math.max(1, this.width - 2), this.theme!, this.message?.kind === 'thinking' ? 'thinking' : undefined)]);
+      this.append([codeHeader(this.fence.replace(/^\s*[`~]+/u, '').trim() || 'CODE', Math.max(1, this.width - 2), this.theme!, this.message?.kind === 'thinking' ? 'thinking' : undefined)]);
       this.fenceHeaderShown = true;
     }
   }
@@ -295,22 +301,22 @@ export class LiveMarkdown {
     const text = this.block + this.line;
     if (this.table) {
       if (this.tableHeaderPending && !text) return [];
-      const table = this.renderTable(this.continuation ? this.tableContinuation(text) : text);
+      const table = this.renderTable(text);
       return this.decorate([...this.tableHeaderPending ? table.head : [], ...this.tableHasRows && text && table.separator ? [table.separator] : [], ...table.body, table.bottom].filter(Boolean));
     }
-    if (this.fence) return this.decorate([...this.fenceHeaderShown ? [] : [codeHeader(this.fence, Math.max(1, this.width - 2), this.theme!, this.message?.kind === 'thinking' ? 'thinking' : undefined)], ...text ? this.renderFragment(text) : []]);
+    if (this.fence) return this.decorate([...this.fenceHeaderShown ? [] : [codeHeader(this.fence.replace(/^\s*[`~]+/u, '').trim() || 'CODE', Math.max(1, this.width - 2), this.theme!, this.message?.kind === 'thinking' ? 'thinking' : undefined)], ...text ? this.renderFragment(text) : []]);
     return text ? this.decorate(this.renderFragment(text)) : [];
   }
 
   private promotePreview(): void {
     if (this.fence) this.fenceHeaderShown = true;
     if (this.table) {
-      const last = (this.block + this.line).trimEnd().split('\n').at(-1) ?? '';
-      this.continuationColumn = Math.max(0, last.replace(/^\s*\|/u, '').split(/(?<!\\)\|/u).length - 1);
+      // Preserve the exact printed preview, then continue as source text so
+      // escaped delimiters cannot move later fragments into a different cell.
+      this.table = undefined;
       this.tableHeaderPending = false;
-      const table = this.renderTable('');
-      if (this.preview.at(-1)?.includes(table.bottom.trimEnd())) this.preview.pop();
-      this.tableHasRows = true;
+      this.tableHasRows = false;
+      this.plainTable = true;
     }
     this.rows.push(...this.preview);
     if (this.preview.length) this.headerShown = true;
