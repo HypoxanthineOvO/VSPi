@@ -577,8 +577,8 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 		expect(prompt).not.toContain("${KIMI_SESSION_");
 		for (const command of ["vspi inspect paths", "vspi inspect models", "vspi config patch", "vspi config diagnostics"])
 			expect(prompt).toContain(command);
-		expect(prompt).toContain("Never select the newest session");
-		expect(prompt).toContain("Do not read OAuth token stores");
+		expect(prompt).toContain("Do not pick the newest session");
+		expect(prompt).toContain("Do not read token stores");
 	});
 
 	it("removes discoverable runtime state when the owner closes", async () => {
