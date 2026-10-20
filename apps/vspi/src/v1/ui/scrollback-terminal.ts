@@ -1,14 +1,15 @@
 import { appendFileSync } from "node:fs";
 import { ProcessTerminal, type Terminal, TuiMainScreen } from "@moonshot-ai/pi-tui";
-import { stripAnsi } from "./ansi.js";
+import { stripAnsi, visibleWidth } from "./ansi.js";
+import { terminalReflowsOnResize } from "./capabilities.js";
 import { TerminalFrameOptimizer } from "./terminal-frame-optimizer.js";
 import { resolveTuiFrameInterval, TuiFramePacer } from "./tui-frame-pacer.js";
 
-const CLEAR_SCROLLBACK = "\u001b[3J";
-const BEGIN_SYNC = "\u001b[?2026h";
-const END_SYNC = "\u001b[?2026l";
-const FOCUS_IN = "\u001b[I";
-const FOCUS_OUT = "\u001b[O";
+const CLEAR_SCROLLBACK = "\u001B[3J";
+const BEGIN_SYNC = "\u001B[?2026h";
+const END_SYNC = "\u001B[?2026l";
+const FOCUS_IN = "\u001B[I";
+const FOCUS_OUT = "\u001B[O";
 
 export interface StaticCommitTerminal extends Terminal {
   beginSurfaceEpoch(lineOffset?: number): void;
@@ -25,7 +26,7 @@ export function adaptInteractiveTerminalOutput(chunk: string, env: NodeJS.Proces
 }
 
 export function renderSurfaceEpochBreak(lineOffset = 0): string {
-  const move = lineOffset > 0 ? `\u001b[${lineOffset}B` : lineOffset < 0 ? `\u001b[${-lineOffset}A` : "";
+  const move = lineOffset > 0 ? `\u001B[${lineOffset}B` : lineOffset < 0 ? `\u001B[${-lineOffset}A` : "";
   return `${BEGIN_SYNC}${move}\r\n${END_SYNC}`;
 }
 
@@ -117,13 +118,19 @@ export class ScrollbackTUI extends TuiMainScreen {
   private framePacer: TuiFramePacer | undefined;
   private clearingDeferred = false;
   private firstRenderOffset = 0;
+  private hardwareCursorColumn = 0;
+  private pendingCursorColumn: number | undefined;
+  private rebuildVersion = 0;
+  private rebuildRunning = false;
+  private reflowPending = false;
+  private cancelCursorQuery: (() => void) | undefined;
   private epochGeometry: { width: number; height: number } | undefined;
   /** Runs synchronously after every rendered frame so the host can freeze scrolled-off rows. */
   onFrameRendered: (() => void) | undefined;
   /** Runs after resize or a clearing fallback settles; the host preserves the old frame. */
-  onRebuildSettled: ((reason: string) => void) | undefined;
+  onRebuildSettled: ((reason: string) => void | Promise<void>) | undefined;
 
-  constructor(terminal: Terminal, showHardwareCursor = true, logDirectory?: string) {
+  constructor(terminal: Terminal, showHardwareCursor = true, logDirectory?: string, private readonly env: NodeJS.ProcessEnv = process.env) {
     super(terminal, showHardwareCursor, logDirectory);
     this.framePacer = new TuiFramePacer(resolveTuiFrameInterval());
     this.setClearOnShrink(false);
@@ -142,9 +149,20 @@ export class ScrollbackTUI extends TuiMainScreen {
   private armRebuildSettle(reason: string, rearm: boolean): void {
     if (this.rebuildSettleArmed && !rearm) return;
     this.rebuildSettleArmed = true;
+    const version = this.rebuildVersion;
     this.framePacer?.requestSettle(() => {
       this.rebuildSettleArmed = false;
-      this.onRebuildSettled?.(reason);
+      this.rebuildRunning = true;
+      void (async () => {
+        try {
+          await this.onRebuildSettled?.(reason);
+        } finally {
+          if (version === this.rebuildVersion) {
+            this.rebuildRunning = false;
+            this.requestRender();
+          }
+        }
+      })();
     });
   }
 
@@ -161,16 +179,23 @@ export class ScrollbackTUI extends TuiMainScreen {
   }
 
   protected override requestResizeRender(): void {
-    // Resize drags report a stream of sizes; rebuild once after the size settles.
+    this.cancelReflow();
     this.armRebuildSettle("resize", true);
   }
 
   protected override requestInputRender(): void {
-    if (this.rebuildSettleArmed) return;
+    if (this.rebuildSettleArmed || this.rebuildRunning || this.reflowPending) return;
     this.framePacer?.requestInput(() => { super.requestInputRender(); });
   }
 
+  protected override extractCursorPosition(lines: string[], height: number): { row: number; col: number } | null {
+    const cursor = super.extractCursorPosition(lines, height);
+    this.pendingCursorColumn = cursor?.col;
+    return cursor;
+  }
+
   protected override doRender(): void {
+    if (this.rebuildSettleArmed || this.rebuildRunning || this.reflowPending) return;
     if ((this.terminal as Partial<ScrollbackProcessTerminal>).deferRender?.(() => this.requestRender())) return;
     const previous = this.captureRenderState();
     const geometry = previous.previousWidth > 0 ? { width: previous.previousWidth, height: previous.previousHeight } : this.epochGeometry;
@@ -183,8 +208,16 @@ export class ScrollbackTUI extends TuiMainScreen {
     // pre-resize frame; the host's per-node row ranges no longer match it, so
     // freeze bookkeeping must wait for the next committed frame.
     this.clearingDeferred = false;
+    this.pendingCursorColumn = undefined;
     super.doRender();
     if (!this.clearingDeferred) {
+      if (this.pendingCursorColumn !== undefined) this.hardwareCursorColumn = Math.min(this.terminal.columns - 1, this.pendingCursorColumn);
+      else {
+        const current = this.captureRenderState();
+        if (previous.previousLines.length !== current.previousLines.length || current.previousLines.some((line, index) => line !== previous.previousLines[index])) {
+          this.hardwareCursorColumn = Math.min(this.terminal.columns, visibleWidth(current.previousLines[current.hardwareCursorRow] ?? ""));
+        }
+      }
       this.firstRenderOffset = 0;
       this.epochGeometry = undefined;
       this.onFrameRendered?.();
@@ -193,6 +226,7 @@ export class ScrollbackTUI extends TuiMainScreen {
   }
 
   override renderNow(force = false): void {
+    if (this.rebuildSettleArmed || this.rebuildRunning || this.reflowPending) return;
     if (force && this.framePacer && this.captureRenderState().previousWidth > 0) {
       this.armRebuildSettle("force", false);
       return;
@@ -201,6 +235,7 @@ export class ScrollbackTUI extends TuiMainScreen {
   }
 
   override requestRender(force = false): void {
+    if (this.rebuildSettleArmed || this.rebuildRunning || this.reflowPending) return;
     if (force && this.framePacer && this.captureRenderState().previousWidth > 0) {
       this.armRebuildSettle("force", false);
       return;
@@ -212,10 +247,18 @@ export class ScrollbackTUI extends TuiMainScreen {
     this.framePacer.request(force, (nextForce) => super.requestRender(nextForce));
   }
 
+  private cancelReflow(): void {
+    this.rebuildVersion++;
+    this.cancelCursorQuery?.();
+    this.reflowPending = false;
+    this.rebuildRunning = false;
+  }
+
   override pauseRendering(): void {
     this.framePacer?.cancel();
     this.framePacer?.cancelSettle();
     this.rebuildSettleArmed = false;
+    this.cancelReflow();
     super.pauseRendering();
   }
 
@@ -223,6 +266,7 @@ export class ScrollbackTUI extends TuiMainScreen {
     this.framePacer?.cancel();
     this.framePacer?.cancelSettle();
     this.rebuildSettleArmed = false;
+    this.cancelReflow();
     super.stop(options);
   }
 
@@ -246,21 +290,80 @@ export class ScrollbackTUI extends TuiMainScreen {
   }
 
 
-  preserveViewportEpoch(preservedRows = 0): void {
+  async preserveViewportEpoch(preservedRows = 0, oldDockRows = 0): Promise<number | undefined> {
+    if (this.reflowPending) this.cancelReflow();
+    const version = this.rebuildVersion;
     const height = Math.max(1, this.terminal.rows);
-    this.epochGeometry = { width: this.terminal.columns, height };
-    this.firstRenderOffset = Math.max(0, Math.min(height - 1, preservedRows));
-    const scroll = preservedRows > 0 ? height - this.firstRenderOffset : 1;
-    this.terminal.write(`${BEGIN_SYNC}\u001b[${height};1H${"\r\n".repeat(scroll)}${END_SYNC}`);
-    this.resetScrollbackRenderState();
+    const width = Math.max(1, this.terminal.columns);
+    const state = this.captureRenderState();
+    const column = this.hardwareCursorColumn;
+    this.reflowPending = true;
+    try {
+      if (state.previousLines.length > 0 && oldDockRows > 0) {
+        const cursor = await new Promise<{ row: number; col: number } | null | undefined>(resolve => {
+          const finish = (value: { row: number; col: number } | null | undefined) => {
+            clearTimeout(timeout);
+            removeListener();
+            this.cancelCursorQuery = undefined;
+            resolve(value);
+          };
+          const removeListener = this.addInputListener(data => {
+            const match = /^\u001B\[(\d+);(\d+)R$/u.exec(data);
+            if (!match) return undefined;
+            const row = Number(match[1]) - 1;
+            const col = Number(match[2]) - 1;
+            if (row < 0 || col < 0 || row >= height || col >= width) return undefined;
+            finish({ row, col });
+            return { consume: true };
+          });
+          const timeout = setTimeout(() => finish(null), 200);
+          this.cancelCursorQuery = () => finish(undefined);
+          this.terminal.write("\u001B[6n");
+        });
+        if (version !== this.rebuildVersion || cursor === undefined) return undefined;
+        if (width !== this.terminal.columns || height !== this.terminal.rows) {
+          this.requestResizeRender();
+          return undefined;
+        }
+        if (cursor) {
+          const dockStart = Math.max(0, state.previousLines.length - oldDockRows);
+          let retreat = state.hardwareCursorRow - dockStart;
+          if (width < state.previousWidth && terminalReflowsOnResize(this.env) && retreat >= 0) {
+            retreat = state.previousLines.slice(dockStart, state.hardwareCursorRow).reduce(
+              (rows, line) => rows + Math.max(1, Math.ceil(visibleWidth(stripAnsi(line).trimEnd()) / width)), 0,
+            );
+            if (column >= width && cursor.col === column % width) retreat += Math.floor(column / width);
+          }
+          this.firstRenderOffset = Math.max(0, Math.min(height - 1, cursor.row - retreat));
+          this.terminal.write(`${BEGIN_SYNC}\u001B[${this.firstRenderOffset + 1};1H\u001B[J${END_SYNC}`);
+        } else {
+          this.firstRenderOffset = Math.max(0, Math.min(height - 1, preservedRows));
+          const scroll = preservedRows > 0 ? height - this.firstRenderOffset : 1;
+          this.terminal.write(`${BEGIN_SYNC}\u001B[${height};1H${"\r\n".repeat(scroll)}${END_SYNC}`);
+        }
+      } else {
+        this.firstRenderOffset = Math.max(0, Math.min(height - 1, preservedRows));
+      }
+      this.epochGeometry = { width, height };
+      this.resetScrollbackRenderState();
+      return this.firstRenderOffset;
+    } finally {
+      if (version === this.rebuildVersion) {
+        this.reflowPending = false;
+        this.requestRender();
+      }
+    }
   }
 
-  reflowViewport(preservedRows = 0): void {
-    this.preserveViewportEpoch(preservedRows);
+  reflowViewport(preservedRows = 0, oldDockRows = 0): Promise<number | undefined> {
+    return this.preserveViewportEpoch(preservedRows, oldDockRows);
   }
 
 
   beginSurfaceEpoch(): void {
+    this.framePacer?.cancelSettle();
+    this.rebuildSettleArmed = false;
+    this.cancelReflow();
     this.firstRenderOffset = 0;
     this.epochGeometry = undefined;
     const state = this.captureRenderState();

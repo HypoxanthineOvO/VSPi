@@ -10,6 +10,13 @@ export interface TerminalCapabilities {
   ssh: boolean;
 }
 
+export function terminalReflowsOnResize(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.VSPI_TUI_REFLOW === "0") return false;
+  if (env.VSPI_TUI_REFLOW === "1") return true;
+  return ["vscode", "iterm.app", "wezterm", "ghostty", "apple_terminal", "tabby", "hyper"].includes(env.TERM_PROGRAM?.toLowerCase() ?? "") ||
+    ["KITTY_WINDOW_ID", "WT_SESSION", "VTE_VERSION", "KONSOLE_VERSION", "TMUX", "ALACRITTY_SOCKET", "ALACRITTY_WINDOW_ID", "WARP_IS_LOCAL_SHELL_SESSION"].some(key => Boolean(env[key]));
+}
+
 export function detectTerminalCapabilities(env: NodeJS.ProcessEnv = process.env): TerminalCapabilities {
   const term = env.TERM ?? "";
   const colorTerm = env.COLORTERM?.toLowerCase() ?? "";

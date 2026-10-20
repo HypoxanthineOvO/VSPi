@@ -37,7 +37,7 @@ import {
 	renderActivityRail,
 	renderQueuedMessage,
 } from "../src/v1/ui/activity.js";
-import { detectTerminalCapabilities } from "../src/v1/ui/capabilities.js";
+import { detectTerminalCapabilities, terminalReflowsOnResize } from "../src/v1/ui/capabilities.js";
 import {
   Composer,
   GOAL_SLASH_COMMAND,
@@ -71,6 +71,18 @@ import {
 	retainTranscript,
 	renderTranscriptMessage,
 } from "../src/v1/ui/transcript.js";
+
+function respondToCursorQueries(terminal: VirtualTerminal, deliver: (reply: () => void) => void = reply => reply(), onQuery: () => void = () => {}, transform: (chunk: string) => string = chunk => chunk) {
+	const write = (chunk: string) => VirtualTerminal.prototype.write.call(terminal, transform(chunk));
+	return vi.spyOn(terminal, "write").mockImplementation(chunk => {
+		write(chunk);
+		if (chunk === "\u001B[6n") void terminal.flush().then(() => {
+			onQuery();
+			const { x, y } = terminal.getCursorPosition();
+			deliver(() => terminal.sendInput(`\u001B[${y + 1};${Math.min(terminal.columns - 1, x) + 1}R`));
+		});
+	});
+}
 
 function panelsAgentSnapshot(run: AgentRunSnapshot): AgentSnapshot {
 	return {
@@ -233,8 +245,9 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		}
 	});
 
-	function renderFixture(home?: string, terminal = new VirtualTerminal(80, 24)) {
-		const tui = new ScrollbackTUI(terminal);
+	function renderFixture(home?: string, terminal = new VirtualTerminal(80, 24), env: NodeJS.ProcessEnv = {}) {
+		respondToCursorQueries(terminal);
+		const tui = new ScrollbackTUI(terminal, true, undefined, env);
 		let events: ChatBackendEvents;
 		const setPolicy = vi.fn(async (policy: PolicyLevel): Promise<PolicySnapshot> => ({
 			policy, boundary: "Host" as const, sandboxed: false as const, recovery: false, sessionAllowlist: [],
@@ -347,9 +360,363 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 	});
 
 	it("preserves atomic frame markers by default with an explicit compatibility opt-out", () => {
-		const frame = "\u001b[?2026h\u001b[3Jcontent\u001b[?2026l";
-		expect(adaptInteractiveTerminalOutput(frame, {})).toBe("\u001b[?2026hcontent\u001b[?2026l");
+		const frame = "\u001B[?2026h\u001B[3Jcontent\u001B[?2026l";
+		expect(adaptInteractiveTerminalOutput(frame, {})).toBe("\u001B[?2026hcontent\u001B[?2026l");
 		expect(adaptInteractiveTerminalOutput(frame, { VSPI_TUI_SYNC_OUTPUT: "0" })).toBe("content");
+	});
+
+	it.each([
+		...["vscode", "iTerm.app", "WezTerm", "ghostty", "Apple_Terminal", "Tabby", "Hyper"].map(value => ({ env: { TERM_PROGRAM: value } as NodeJS.ProcessEnv, expected: true })),
+		...["KITTY_WINDOW_ID", "WT_SESSION", "VTE_VERSION", "KONSOLE_VERSION", "TMUX", "ALACRITTY_SOCKET", "ALACRITTY_WINDOW_ID", "WARP_IS_LOCAL_SHELL_SESSION"].map(key => ({ env: { [key]: "example" }, expected: true })),
+		{ env: {}, expected: false },
+		{ env: { TERM_PROGRAM: "unknown" }, expected: false },
+		{ env: { TERM_PROGRAM: "vscode", VSPI_TUI_REFLOW: "0" }, expected: false },
+		{ env: { VSPI_TUI_REFLOW: "1" }, expected: true },
+	])("detects resize reflow from $env as $expected", ({ env, expected }) => {
+		expect(terminalReflowsOnResize(env)).toBe(expected);
+	});
+
+	it.each([
+		{ name: "vscode", env: { TERM_PROGRAM: "vscode" } as NodeJS.ProcessEnv },
+		{ name: "kitty", env: { KITTY_WINDOW_ID: "property" } as NodeJS.ProcessEnv },
+		{ name: "unknown", env: {} as NodeJS.ProcessEnv },
+	])("preserves CPR body snapshots across 320 seeded $name narrowing cases", async ({ name, env }) => {
+		let seed = 0x6d2b79f5;
+		const random = (max: number) => {
+			seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+			return seed % max;
+		};
+		const distribution = new Map<number, number>();
+		for (let sample = 0; sample < 320; sample++) {
+			const oldWidth = 36 + random(45);
+			const newWidth = 12 + random(oldWidth - 13);
+			const oldHeight = 10 + random(19);
+			const newHeight = 8 + random(25);
+			const count = random(41);
+			const dockRows = 2 + random(5);
+			const cursorRow = random(dockRows);
+			const cursorColumn = random(oldWidth);
+			const capacity = sample < 120 ? 2000 : 50;
+			const history = [0, 3, capacity, capacity + 40][sample % 4]!;
+			const terminal = new VirtualTerminal(oldWidth, oldHeight, capacity);
+			const optimizer = new TerminalFrameOptimizer();
+			let snapshot: string[] = [];
+			const markers = (lines: string[]) => lines.join("\n").match(/B\d\d_/gu) ?? [];
+			const write = respondToCursorQueries(terminal, reply => reply(), () => { snapshot = markers(terminal.getScrollBuffer()); }, chunk => sample % 2 === 0 ? adaptInteractiveTerminalOutput(optimizer.optimize(chunk, terminal.rows, terminal.columns), {}) : chunk);
+			terminal.write(Array.from({ length: history }, (_, index) => `HISTORY_${index}\r\n`).join(""));
+			await terminal.flush();
+			const original = Array.from({ length: count }, (_, index) => {
+				const width = [oldWidth, newWidth, Math.min(oldWidth, newWidth + 1), 4 + random(oldWidth - 3)][index % 4]!;
+				return `B${String(index).padStart(2, "0")}_`.padEnd(width, String(index % 10));
+			});
+			let round = 0;
+			const oldGlyphs: string[] = [];
+			const makeDock = (width: number) => Array.from({ length: dockRows }, (_, row) => {
+				const glyph = String.fromCodePoint(0x2500 + round * 8 + row);
+				const length = row === 0 || row === dockRows - 1 ? width : Math.min(width, [width, newWidth, newWidth + 1, Math.max(1, newWidth - 1)][row % 4]!);
+				let line = glyph.repeat(length);
+				if (sample % 17 === 0 && row === 0) line = ["界", "語", "漢"][round]!.repeat(Math.floor(length / 2));
+				if (sample % 5 === 0 && row === dockRows - 1) line = glyph + " ".repeat(width - 1);
+				if (row === cursorRow) {
+					const column = Math.min(cursorColumn, line.length);
+					line = line.slice(0, column) + "\u001B_pi:c\u0007" + line.slice(column);
+				}
+				return line;
+			});
+			let body = [...original];
+			let dock = makeDock(oldWidth);
+			const tui = new ScrollbackTUI(terminal, true, undefined, env);
+			tui.addChild({ render: () => [...body, ...Array.from({ length: Math.max(0, terminal.rows - body.length - dock.length) }, () => ""), ...dock], invalidate() {} });
+			tui.start();
+			try {
+				tui.renderNow();
+				await terminal.flush();
+				const sizes: [number, number][] = [[newWidth, newHeight]];
+				if (sample % 3 === 0 && newWidth > 12) sizes.push([Math.max(10, newWidth - 1 - random(newWidth - 11)), 8 + random(25)]);
+				for (const [width, height] of sizes) {
+					oldGlyphs.push(...dock.flatMap(line => Array.from(stripTerminalSequences(line)).filter(char => char !== " ")));
+					terminal.resize(width, height);
+					tui.pauseRendering();
+					const offset = await tui.reflowViewport(Math.max(0, height - dockRows), dockRows);
+					expect(offset).toBeDefined();
+					await terminal.flush();
+					const afterErase = markers(terminal.getScrollBuffer());
+					expect(afterErase.filter(marker => snapshot.includes(marker)), JSON.stringify({ phase: "erase", name, sample, width, height, snapshot, afterErase })).toEqual(snapshot);
+					body = Array.from({ length: offset! }, () => "");
+					round++;
+					dock = makeDock(width);
+					tui.start();
+					tui.renderNow();
+					await terminal.flush();
+					const after = markers(terminal.getScrollBuffer());
+					const context = JSON.stringify({ name, sample, oldWidth, oldHeight, width, height, history, capacity, count, dockRows, cursorRow, cursorColumn, snapshot, after });
+					expect(after, context).toEqual(capacity >= 2000 ? snapshot : snapshot.slice(snapshot.length - after.length));
+					if (snapshot.length > 0) expect(after.at(-1), context).toBe(snapshot.at(-1));
+					for (const marker of after) expect(after.filter(value => value === marker)).toHaveLength(1);
+				}
+				const buffer = terminal.getScrollBuffer();
+				const residual = buffer.filter(line => Array.from(line).some(char => oldGlyphs.includes(char))).length;
+				distribution.set(residual, (distribution.get(residual) ?? 0) + 1);
+				body.push("ADD!");
+				tui.renderNow();
+				await terminal.flush();
+				expect(terminal.getScrollBuffer().filter(line => line.includes("ADD!"))).toHaveLength(1);
+				expect(terminal.getViewport().slice(-dockRows).map(line => line.trimEnd())).toEqual(dock.map(line => stripTerminalSequences(line).trimEnd()));
+				expect(write.mock.calls.map(([chunk]) => chunk).join("")).not.toMatch(/\u001B\[(?:2|3)J/u);
+			} finally { tui.stop({ preserveScreen: true }); write.mockRestore(); }
+		}
+		console.info("REFLOW_RESIDUALS", JSON.stringify({ name, seed: "0x6d2b79f5", groups: 320, maximum: Math.max(...distribution.keys()), distribution: Object.fromEntries([...distribution.entries()].toSorted(([left], [right]) => left - right)) }));
+	}, 120000);
+
+	it.each<{
+		kind: string; sizes: [number, number][]; count?: number; long?: boolean; cursor?: number;
+		reflow?: boolean; reply?: boolean; initial?: [number, number]; bodyWidth?: number; residual?: number;
+	}>([
+		{ kind: "force", sizes: [[60, 12]] },
+		{ kind: "clearing", sizes: [[60, 12]] },
+		{ kind: "narrower", sizes: [[30, 12]] },
+		{ kind: "wider", sizes: [[90, 12]] },
+		{ kind: "taller", sizes: [[60, 18]] },
+		{ kind: "taller-scrolled", sizes: [[60, 18]], count: 30 },
+		{ kind: "full-dock", sizes: [[30, 12]], count: 15 },
+		{ kind: "full-dock-shorter", sizes: [[45, 8]], count: 15 },
+		{ kind: "full-dock-height-short", sizes: [[60, 8]], count: 15 },
+		{ kind: "full-dock-cursor", sizes: [[30, 12]], count: 15, cursor: 50, residual: 2 },
+		{ kind: "long-body narrow", sizes: [[30, 12]], count: 15, long: true, cursor: 11, residual: 2 },
+		{ kind: "short-body narrow", sizes: [[30, 12]], count: 3, long: true, cursor: 11, residual: 2 },
+		{ kind: "two narrowings", sizes: [[45, 12], [30, 12]], count: 6, long: true, cursor: 11, residual: 4 },
+		{ kind: "typical-width", initial: [120, 30], sizes: [[80, 30]], count: 40, bodyWidth: 70, cursor: 11, residual: 2 },
+		{ kind: "two narrowings no cursor", sizes: [[45, 12], [30, 12]], count: 6, long: true },
+		{ kind: "narrow+shorter", sizes: [[40, 8]], count: 15, long: true, cursor: 11 },
+		{ kind: "disabled reflow", sizes: [[30, 12]], count: 15, long: true, reflow: false },
+		{ kind: "CPR timeout", sizes: [[30, 12]], count: 15, long: true, reply: false },
+	])("preserves body rows on $kind dock rebuild", async ({ kind, sizes, count = 3, long = false, cursor, reflow = true, reply = true, initial = [60, 12], bodyWidth, residual }) => {
+		const terminal = new VirtualTerminal(...initial);
+		const write = reply ? respondToCursorQueries(terminal) : vi.spyOn(terminal, "write");
+		const tui = new ScrollbackTUI(terminal, true, undefined, { VSPI_TUI_REFLOW: reflow ? "1" : "0", ...(residual !== undefined ? { TERM_PROGRAM: "vscode" } : {}) });
+		const original = Array.from({ length: count }, (_, index) => (`BODY_${String(index).padStart(2, "0")}_` + (long ? "x".repeat(40) : "")).padEnd(bodyWidth ?? 0, "x"));
+		const makeDock = (width: number, tag: string) => {
+			const text = ("│ > " + tag).padEnd(width - 1) + "│";
+			const markerColumn = cursor === undefined ? undefined : Math.min(width - 2, cursor);
+			return ["╭" + "─".repeat(width - 2) + "╮", markerColumn === undefined ? text : text.slice(0, markerColumn) + "\u001B_pi:c\u0007" + text.slice(markerColumn), "╰" + "─".repeat(width - 2) + "╯", `FOOTER ${tag}`.padEnd(width)];
+		};
+		let body = [...original];
+		let dock = makeDock(initial[0], "OLDDOCK");
+		let round = 0;
+		tui.addChild({ render: () => [...body, ...dock], invalidate() {} });
+		tui.onRebuildSettled = async () => {
+			const offset = await tui.reflowViewport(Math.max(0, terminal.rows - 4), 4);
+			if (offset === undefined) return;
+			body = Array.from({ length: offset }, () => "");
+			dock = makeDock(terminal.columns, `NEWDOCK_${++round}`);
+		};
+		tui.start();
+		try {
+			tui.renderNow();
+			await terminal.flush();
+			for (const [index, [width, height]] of sizes.entries()) {
+				if (kind === "force") tui.renderNow(true);
+				else if (kind === "clearing") (tui as unknown as { deferClearingRedraw(reason: string): boolean }).deferClearingRedraw("test");
+				else terminal.resize(width, height);
+				await vi.waitFor(async () => { await terminal.flush(); expect(terminal.getViewport().join("\n")).toContain(`FOOTER NEWDOCK_${index + 1}`); });
+			}
+			const appended = Array.from({ length: 10 }, (_, index) => `APPEND_${String(index).padStart(2, "0")}`);
+			body.push(...appended);
+			tui.renderNow();
+			await terminal.flush();
+			const buffer = terminal.getScrollBuffer();
+			expect(buffer.join("\n").match(/BODY_\d\d_/gu)).toEqual(original.map(line => line.slice(0, 8)));
+			if (bodyWidth !== undefined) expect(buffer.filter(line => line.startsWith("BODY_"))).toEqual(original);
+			for (const marker of appended) expect(buffer.filter(line => line.includes(marker)), marker).toHaveLength(1);
+			if (residual !== undefined) {
+				const oldDock = buffer.slice(0, -dock.length).filter(line => /[╭╮╰╯│─]/u.test(line));
+				expect(oldDock.length).toBe(residual);
+				expect(buffer.slice(-dock.length).map(line => line.trimEnd())).toEqual(dock.map(line => stripTerminalSequences(line).trimEnd()));
+			} else if (reflow && reply) {
+				const width = terminal.columns;
+				const originalRows = original.flatMap(line => Array.from({ length: Math.ceil(line.length / width) }, (_, index) => line.slice(index * width, (index + 1) * width)));
+				expect(buffer.map(line => line.trimEnd()).join("\n").trimEnd()).toBe([...originalRows, ...appended, ...dock.map(line => stripTerminalSequences(line).trimEnd())].join("\n").trimEnd());
+			}
+			expect(write.mock.calls.map(([chunk]) => chunk).join("")).not.toMatch(/\u001B\[(?:2|3)J/u);
+		} finally { tui.stop(); }
+	});
+
+	it.each([
+		{ width: 60, height: 12, residual: 0 },
+		{ width: 30, height: 12, residual: 4 },
+		{ width: 90, height: 18, residual: 0 },
+	])("keeps app body rows and $residual residual dock rows at $width x $height", async ({ width, height, residual }) => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-dock-rebuild-"));
+		const { app, tui, terminal, events } = renderFixture(home, new VirtualTerminal(60, 12), { TERM_PROGRAM: "vscode" });
+		const write = vi.spyOn(terminal, "write");
+		const markers = Array.from({ length: 15 }, (_, index) => `APP_BODY_${String(index).padStart(2, "0")}`);
+		try {
+			await app.start();
+			app.composer.setText("OLD_APP_DRAFT" + "x".repeat(30) + "TAIL_OLD");
+			tui.start();
+			for (const marker of markers) events().onMessage({ id: marker, role: "assistant", kind: "text", text: marker });
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getScrollBuffer().join("\n")).toContain("APP_BODY_14");
+				expect(terminal.getViewport().join("\n")).toContain("TAIL_OLD");
+				expect(terminal.getCursorPosition().x).toBeGreaterThan(45);
+				expect(terminal.getViewport().find(line => line.startsWith("╭"))).toHaveLength(60);
+			});
+			app.composer.setText("NEW_APP_DRAFT");
+			if (width === 60) tui.requestRender(true);
+			else terminal.resize(width, height);
+			await vi.waitFor(async () => {
+				await terminal.flush();
+				expect(terminal.getViewport().join("\n")).toContain("NEW_APP_DRAFT");
+				expect(terminal.getCursorPosition().y).toBeGreaterThanOrEqual(height - 6);
+			});
+			for (let index = 15; index < 25; index++) {
+				const marker = `APP_BODY_${String(index).padStart(2, "0")}`;
+				markers.push(marker);
+				events().onMessage({ id: marker, role: "assistant", kind: "text", text: marker });
+			}
+			await vi.waitFor(async () => { await terminal.flush(); expect(terminal.getScrollBuffer().join("\n")).toContain("APP_BODY_24"); });
+			const buffer = terminal.getScrollBuffer();
+			for (const marker of [...markers, "NEW_APP_DRAFT"]) expect(buffer.filter(line => line.includes(marker)), marker).toHaveLength(1);
+			expect(buffer.join("\n").match(/APP_BODY_\d\d/gu)).toEqual(markers);
+			const borders = buffer.filter(line => /[╭╮╰╯│─]/u.test(line));
+			if (width === 30) {
+				expect(borders.length - 3).toBe(residual);
+				expect(terminal.getViewport().filter(line => /[╭╮╰╯│─]/u.test(line))).toHaveLength(3);
+			} else {
+				expect(buffer.join("\n")).not.toMatch(/OLD_APP_DRAFT|TAIL_OLD/u);
+				expect(borders).toHaveLength(3);
+			}
+			for (const line of borders) expect(visibleWidth(line)).toBe(width);
+			expect(write.mock.calls.map(([chunk]) => chunk).join("")).not.toMatch(/\u001B\[(?:2|3)J/u);
+		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("consumes CPR only while querying and blocks frames until the reply", async () => {
+		const terminal = new VirtualTerminal(60, 12);
+		const replies: (() => void)[] = [];
+		const write = respondToCursorQueries(terminal, reply => replies.push(reply));
+		const tui = new ScrollbackTUI(terminal);
+		const component = { render: () => ["BODY_CPR", "DOCK_CPR"], invalidate() {}, handleInput: vi.fn() };
+		tui.addChild(component);
+		tui.setFocus(component);
+		tui.start();
+		try {
+			tui.renderNow();
+			await terminal.flush();
+			terminal.sendInput("\u001B[1;2R");
+			expect(component.handleInput).toHaveBeenCalledWith("\u001B[1;2R");
+			component.handleInput.mockClear();
+			write.mockClear();
+			const query = tui.reflowViewport(1, 1);
+			await vi.waitFor(() => expect(replies).toHaveLength(1));
+			tui.renderNow(true);
+			tui.requestRender(true);
+			terminal.sendInput("x");
+			expect(component.handleInput).toHaveBeenCalledWith("x");
+			expect(write.mock.calls.map(([chunk]) => chunk)).toEqual(["\u001B[6n"]);
+			replies[0]!();
+			expect(await query).toBe(1);
+			expect(component.handleInput).toHaveBeenCalledTimes(1);
+			terminal.sendInput("\u001B[1;2R");
+			expect(component.handleInput).toHaveBeenLastCalledWith("\u001B[1;2R");
+		} finally { tui.stop(); }
+	});
+
+	it.each(["pause", "stop", "epoch"] as const)("cancels a pending CPR query on %s without erasing", async action => {
+		const terminal = new VirtualTerminal(60, 12);
+		const replies: (() => void)[] = [];
+		const write = respondToCursorQueries(terminal, reply => replies.push(reply));
+		const tui = new ScrollbackTUI(terminal);
+		tui.addChild({ render: () => ["BODY_CANCEL", "DOCK_CANCEL"], invalidate() {} });
+		tui.start();
+		try {
+			tui.renderNow();
+			await terminal.flush();
+			const query = tui.reflowViewport(1, 1);
+			await vi.waitFor(() => expect(replies).toHaveLength(1));
+			if (action === "pause") tui.pauseRendering();
+			else if (action === "stop") tui.stop({ preserveScreen: true });
+			else tui.beginSurfaceEpoch();
+			expect(await query).toBeUndefined();
+			const calls = write.mock.calls.length;
+			replies[0]!();
+			await Promise.resolve();
+			expect(write.mock.calls).toHaveLength(calls);
+			expect(write.mock.calls.map(([chunk]) => chunk).join("")).not.toMatch(/\u001B\[\d+;1H\u001B\[J/u);
+		} finally { tui.stop(); }
+	});
+
+	it("cancels stale CPR on resize and queries the settled geometry again", async () => {
+		const terminal = new VirtualTerminal(60, 12);
+		const replies: (() => void)[] = [];
+		respondToCursorQueries(terminal, reply => replies.push(reply));
+		const tui = new ScrollbackTUI(terminal);
+		tui.addChild({ render: () => ["BODY_RESIZE", "DOCK_RESIZE"], invalidate() {} });
+		const offsets: (number | undefined)[] = [];
+		tui.onRebuildSettled = async () => { offsets.push(await tui.reflowViewport(1, 1)); };
+		tui.start();
+		try {
+			tui.renderNow();
+			await terminal.flush();
+			terminal.resize(55, 12);
+			await vi.waitFor(() => expect(replies).toHaveLength(1));
+			terminal.resize(50, 12);
+			await vi.waitFor(() => expect(offsets).toEqual([undefined]));
+			await vi.waitFor(() => expect(replies).toHaveLength(2));
+			replies[1]!();
+			await vi.waitFor(() => expect(offsets).toEqual([undefined, 1]));
+		} finally { tui.stop(); }
+	});
+
+	it("keeps messages arriving during CPR pending until the rebuilt app frame", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-pending-cpr-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		const replies: (() => void)[] = [];
+		const write = respondToCursorQueries(terminal, reply => replies.push(reply));
+		try {
+			await app.start();
+			tui.start();
+			events().onMessage({ id: "before-cpr", role: "assistant", kind: "text", text: "BODY_BEFORE_CPR" });
+			await vi.waitFor(async () => { await terminal.flush(); expect(terminal.getScrollBuffer().join("\n")).toContain("BODY_BEFORE_CPR"); });
+			tui.renderNow(true);
+			await vi.waitFor(() => expect(replies).toHaveLength(1));
+			write.mockClear();
+			events().onMessage({ id: "during-cpr", role: "assistant", kind: "text", text: "BODY_DURING_CPR" });
+			tui.renderNow(true);
+			await new Promise(resolve => setTimeout(resolve, 20));
+			expect(write).not.toHaveBeenCalled();
+			replies[0]!();
+			await vi.waitFor(async () => { await terminal.flush(); expect(terminal.getScrollBuffer().join("\n")).toContain("BODY_DURING_CPR"); });
+			for (const marker of ["BODY_BEFORE_CPR", "BODY_DURING_CPR"]) expect(terminal.getScrollBuffer().filter(line => line.includes(marker))).toHaveLength(1);
+		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it("cancels an app CPR rebuild before switching TUI mode", async () => {
+		const home = await mkdtemp(join(tmpdir(), "vspi-mode-cpr-"));
+		const { app, tui, terminal, events } = renderFixture(home);
+		const replies: (() => void)[] = [];
+		respondToCursorQueries(terminal, reply => replies.push(reply));
+		const internals = app as unknown as {
+			switchTuiMode(mode: "fullscreen"): boolean;
+			tui: { stop(): void };
+			preservedNativeRows: number;
+		};
+		const reflow = vi.spyOn(tui, "reflowViewport");
+		try {
+			await app.start();
+			tui.start();
+			events().onMessage({ id: "before-mode", role: "assistant", kind: "text", text: "BODY_BEFORE_MODE" });
+			await vi.waitFor(async () => { await terminal.flush(); expect(terminal.getScrollBuffer().join("\n")).toContain("BODY_BEFORE_MODE"); });
+			tui.renderNow(true);
+			await vi.waitFor(() => expect(replies).toHaveLength(1));
+			const offset = internals.preservedNativeRows;
+			expect(internals.switchTuiMode("fullscreen")).toBe(true);
+			expect(await reflow.mock.results[0]!.value).toBeUndefined();
+			await Promise.resolve();
+			expect(internals.preservedNativeRows).toBe(offset);
+			expect(internals.tui).not.toBe(tui);
+		} finally { internals.tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
 	});
 
 	it("drops a pending resize offset before starting a restored session epoch", async () => {
@@ -364,7 +731,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			tui.renderNow();
 			await terminal.flush();
 			blocked = true;
-			tui.reflowViewport(16);
+			void tui.reflowViewport(16);
 			component.lines = Array.from({ length: 10 }, (_, index) => `RESTORED_EPOCH_${index}`);
 			tui.beginSurfaceEpoch();
 			blocked = false;
@@ -386,7 +753,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		tui.addChild({ render: () => [...Array.from({ length: prefix }, () => ""), ...tail], invalidate() {} });
 		tui.onRebuildSettled = () => {
 			prefix = Math.max(0, terminal.rows - tail.length);
-			tui.reflowViewport(prefix);
+			void tui.reflowViewport(prefix);
 		};
 		tui.start();
 		try {
@@ -394,7 +761,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			await terminal.flush();
 			blocked = true;
 			prefix = 16;
-			tui.reflowViewport(prefix);
+			void tui.reflowViewport(prefix);
 			terminal.resize(50, 12);
 			write.mockClear();
 			blocked = false;
@@ -504,7 +871,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			});
 			const update = write.mock.calls.map(([data]) => data).join("");
 			expect(update).not.toContain("FINAL_000");
-			expect(update).not.toContain("\u001b[2J");
+			expect(update).not.toContain("\u001B[2J");
 			terminal.resize(60, 30);
 			await new Promise((resolve) => setTimeout(resolve, 400));
 			await terminal.flush();
@@ -536,7 +903,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			const buffer = terminal.getScrollBuffer();
 			expect(buffer.filter((line) => line.includes("LATEST_INPUT"))).toHaveLength(1);
 			expect(buffer.filter((line) => line.includes("QUESTION_0"))).toHaveLength(1);
-			expect(write.mock.calls.map(([data]) => data).join("")).not.toContain("\u001b[2J");
+			expect(write.mock.calls.map(([data]) => data).join("")).not.toContain("\u001B[2J");
 		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
 	});
 
@@ -564,7 +931,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			});
 			const output = write.mock.calls.map(([chunk]) => chunk).join("");
 			expect(output).not.toContain("HISTORY_LINE_0");
-			expect(output).not.toContain("\u001b[2J");
+			expect(output).not.toContain("\u001B[2J");
 		} finally {
 			tui.stop();
 			await app.dispose();
@@ -994,7 +1361,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			await new Promise((resolve) => setTimeout(resolve, 120));
 			await terminal.flush();
 			for (const chunk of write.mock.calls.map(([data]) => data)) {
-				expect(chunk).not.toContain("\u001b[2J");
+				expect(chunk).not.toContain("\u001B[2J");
 			}
 			expect(rebuild).not.toHaveBeenCalled();
 			const buffer = terminal.getScrollBuffer();
@@ -1037,11 +1404,11 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			await new Promise((resolve) => setTimeout(resolve, 400));
 			await terminal.flush();
 			const chunks = write.mock.calls.map(([data]) => data);
-			const reflows = chunks.filter((chunk) => /\u001b\[\d+;1H\r\n/u.test(chunk));
+			const reflows = chunks.filter((chunk) => /^\u001B\[\?2026h\u001B\[\d+;1H\u001B\[J\u001B\[\?2026l$/u.test(chunk));
 			expect(reflows).toHaveLength(1);
 			for (const chunk of chunks) {
-				expect(chunk).not.toContain("\u001b[2J");
-				expect(chunk).not.toContain("\u001b[3J");
+				expect(chunk).not.toContain("\u001B[2J");
+				expect(chunk).not.toContain("\u001B[3J");
 			}
 			const buffer = terminal.getScrollBuffer();
 			let lastIndex = -1;
@@ -1235,8 +1602,8 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 				expect(terminal.getViewport().join("\n")).toContain("Session 已移交到新终端");
 			});
 			const output = write.mock.calls.map(([data]) => data).join("");
-			expect(output).not.toContain("\u001b[2J");
-			expect(output).not.toContain("\u001b[3J");
+			expect(output).not.toContain("\u001B[2J");
+			expect(output).not.toContain("\u001B[3J");
 			expect(rebuild).not.toHaveBeenCalled();
 		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
 	});
@@ -1319,8 +1686,8 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			expect(internals.committedMessageCount).toBe(1000);
 			expect(internals.messages[0]).toMatchObject({ text: "PRUNE_ROW_100" });
 			const output = write.mock.calls.map(([data]) => data).join("");
-			expect(output).not.toContain("\u001b[2J");
-			expect(output).not.toContain("\u001b[3J");
+			expect(output).not.toContain("\u001B[2J");
+			expect(output).not.toContain("\u001B[3J");
 		} finally { tui.stop(); await app.dispose(); }
 	});
 
@@ -4067,7 +4434,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 	it("keeps every task reachable while Agent snapshots refresh", () => {
 		const { panels, agents, snapshot } = taskNavigationFixture();
 		for (let index = 0; index < snapshot.agents.length + snapshot.processes.length; index++) {
-			panels.handleInput("\u001b[B");
+			panels.handleInput("\u001B[B");
 			panels.setAgentSnapshot(agents);
 			panels.setTaskSnapshot(snapshot);
 			const output = panels.render(80, 10, theme, DEFAULT_USAGE).map(stripTerminalSequences);
@@ -4080,8 +4447,8 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 
 	it("preserves task identity across reorder and exposes the complete command", () => {
 		const { panels, agents, snapshot } = taskNavigationFixture();
-		panels.handleInput("\u001b[F");
-		panels.handleInput("\u001b[A");
+		panels.handleInput("\u001B[F");
+		panels.handleInput("\u001B[A");
 		const last = snapshot.processes.at(-1)!;
 		panels.setTaskSnapshot({ ...snapshot, processes: [last, ...snapshot.processes.slice(0, -1)] });
 		panels.setAgentSnapshot(agents);
@@ -4090,19 +4457,19 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		const first = panels.render(80, 10, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n");
 		expect(first).toContain("Task · process-19");
 		expect(first).toContain("PID: 1019");
-		panels.handleInput("\u001b[6~");
+		panels.handleInput("\u001B[6~");
 		expect(panels.render(80, 10, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n")).toContain("COMMAND_END");
-		panels.handleInput("\u001b");
+		panels.handleInput("\u001B");
 		expect(panels.kind).toBe("tasks");
 		expect(panels.render(80, 10, theme, DEFAULT_USAGE).map(stripTerminalSequences).find((line) => line.includes("›"))).toContain("pid 1019");
-		panels.handleInput("\u001b[H");
-		panels.handleInput("\u001b[6~");
+		panels.handleInput("\u001B[H");
+		panels.handleInput("\u001B[6~");
 		expect(panels.render(80, 10, theme, DEFAULT_USAGE).map(stripTerminalSequences).find((line) => line.includes("›"))).toContain("pid 1005");
 	});
 
 	it("returns from task details when the selected task disappears", () => {
 		const { panels, snapshot } = taskNavigationFixture();
-		panels.handleInput("\u001b[F");
+		panels.handleInput("\u001B[F");
 		panels.handleInput("\r");
 		panels.setTaskSnapshot({ ...snapshot, questions: [] });
 		const output = panels.render(80, 10, theme, DEFAULT_USAGE).map(stripTerminalSequences).join("\n");
@@ -4437,10 +4804,10 @@ describe('canonical model picker', () => {
     expect(picker.handleInput('\u0010')).toMatchObject({ type: 'modelPin', pinned: [modelIdentityKey(devin), unrelatedPin, canonicalPin] });
     expect(picker.handleInput('\u0010')).toMatchObject({ type: 'modelPin', pinned: [modelIdentityKey(devin), unrelatedPin] });
     picker.handleInput('\t');
-    picker.handleInput('\x1b[B');
+    picker.handleInput('\x1B[B');
     expect(picker.handleInput('\u0010')).toMatchObject({ type: 'modelPin', pinned: [modelIdentityKey(devin), unrelatedPin, modelIdentityKey(gateway)] });
     expect(picker.handleInput('\u0010')).toMatchObject({ type: 'modelPin', pinned: [modelIdentityKey(devin), unrelatedPin] });
-    picker.handleInput('\x1b[A');
+    picker.handleInput('\x1B[A');
     expect(picker.handleInput('\u0010')).toMatchObject({ type: 'modelPin', pinned: [unrelatedPin] });
   });
 
@@ -4470,7 +4837,7 @@ describe('canonical model picker', () => {
     panels.open('models');
     expect(panels.acceptsInput('\t')).toBe(true);
     panels.handleInput('\t');
-    panels.handleInput('\x1b[B');
+    panels.handleInput('\x1B[B');
     expect(panels.handleInput('\r')).toMatchObject({ type: 'model', model: { provider: 'gateway' } });
     panels.openEffort('high', ['low', 'high', 'max']);
     panels.returnToModels();
@@ -4485,7 +4852,7 @@ describe('canonical model picker', () => {
     expect(lines.length).toBeLessThanOrEqual(height);
     for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     const terminal = new VirtualTerminal(width, height);
-    terminal.write('\x1b[?7l\x1b[H' + lines.join('\r\n'));
+    terminal.write('\x1B[?7l\x1B[H' + lines.join('\r\n'));
     await terminal.flush();
     const text = terminal.getViewport().join('\n');
     expect(text).toContain('Anthropic');

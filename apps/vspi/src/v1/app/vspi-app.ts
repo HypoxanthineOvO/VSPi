@@ -396,7 +396,8 @@ export class VspiApp implements Component, Focusable {
 	private liveSections: LiveTranscriptSection[] = [];
 	private liveSectionsBase = 0;
 	/** Deferred frames may queue new layout, but they do not own terminal history. */
-	private lastNativeFrame: { sections: LiveTranscriptSection[]; base: number; rows: number } | undefined;
+	private lastNativeFrame: { sections: LiveTranscriptSection[]; base: number; rows: number; dockRows: number } | undefined;
+	private renderedDockRows = 0;
 	/** Rows at the top of the last committed frame owned by splash + transcript. */
 	private liveTranscriptRows = 0;
 	private preservedNativeRows = 0;
@@ -1216,11 +1217,9 @@ export class VspiApp implements Component, Focusable {
 		if (tui instanceof ScrollbackTUI) {
 			tui.onFrameRendered = () => {
 				this.freezeScrolledTranscriptRows();
-				this.lastNativeFrame = { sections: this.liveSections.map(section => ({ ...section, emitted: [...section.emitted] })), base: this.liveSectionsBase, rows: this.liveTranscriptRows };
+				this.lastNativeFrame = { sections: this.liveSections.map(section => ({ ...section, emitted: [...section.emitted] })), base: this.liveSectionsBase, rows: this.liveTranscriptRows, dockRows: this.renderedDockRows };
 			};
-			tui.onRebuildSettled = () => {
-				this.reflowTranscriptViewport();
-			};
+			tui.onRebuildSettled = () => this.reflowTranscriptViewport(tui);
 		}
 	}
 
@@ -1585,6 +1584,7 @@ export class VspiApp implements Component, Focusable {
 
 	render(width: number): string[] {
 		const sections = this.buildRenderSections(width);
+		this.renderedDockRows = sections.dock.length;
 		const rows = Number.isFinite(this.tui.terminal.rows)
 			? this.tui.terminal.rows
 			: 24;
@@ -2078,7 +2078,7 @@ export class VspiApp implements Component, Focusable {
 		if (frozen && (lines.length === 0 || lines.length === 1 && (frozen.column ?? 0) >= visibleWidth(stripAnsi(lines[0]!).trimEnd())) && section.kind === "toolGroup") {
 			const completed = (section.references ?? []).filter(message => message.kind === "tool" && message.status !== "running" && message.status !== "queued");
 			const fresh = completed.filter(message => !frozen.completed?.has(message.id));
-			if (fresh.length) {
+			if (fresh.length > 0) {
 				frozen.completed = new Set(completed.map(message => message.id));
 				const last = fresh.at(-1)!;
 				const summary = last.kind === "tool" ? `${last.name} · ${last.summary}` : "";
@@ -2211,10 +2211,13 @@ export class VspiApp implements Component, Focusable {
 	}
 
 	/** Archive the already emitted live rows; native resize reflow owns their history. */
-	private reflowTranscriptViewport(): void {
-		if (this.tui.mode !== "regular") return;
-		const tui = this.tui as TUI & { reflowViewport?: (preservedRows: number) => void };
+	private async reflowTranscriptViewport(tui: ScrollbackTUI): Promise<void> {
+		if (this.tui !== tui) return;
 		const frame = this.lastNativeFrame;
+		const dock = this.buildRenderDock(Math.max(1, tui.terminal.columns));
+		const fallbackRows = Math.max(0, tui.terminal.rows - dock.lines.length);
+		const offset = await tui.reflowViewport(fallbackRows, frame?.dockRows ?? 0);
+		if (offset === undefined || this.tui !== tui || this.lastNativeFrame !== frame) return;
 		this.liveSections = frame?.sections.map(section => ({ ...section, emitted: [...section.emitted] })) ?? [];
 		this.liveSectionsBase = frame?.base ?? this.committedMessageCount;
 		this.liveTranscriptRows = frame?.rows ?? 0;
@@ -2222,12 +2225,8 @@ export class VspiApp implements Component, Focusable {
 		this.advanceCommittedPrefix(this.liveSectionsBase);
 		this.rebaseLiveSections(this.liveTranscriptRows);
 		for (const layout of this.liveLayouts.values()) layout.beginViewport();
-		const height = Math.max(1, this.tui.terminal.rows);
-		const dock = this.buildRenderDock(Math.max(1, this.tui.terminal.columns));
-		this.preservedNativeRows = Math.max(0, height - dock.lines.length);
+		this.preservedNativeRows = offset;
 		this.regularBodyRevision++;
-		if (tui.reflowViewport) tui.reflowViewport(this.preservedNativeRows);
-		else this.beginTuiSurfaceEpoch();
 	}
 
 	private resetTranscriptSurfaceState(): void {

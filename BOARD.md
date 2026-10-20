@@ -7,18 +7,18 @@
 ### Claude Opus · 主导：规划、调度、把关、合并与发布
 
 - 更新：2026-10-20
-- 在做：VSPi 2.9.0 发布准备与文档收口
-- 做到哪：需求文件、分区规则和文档地图已建立
-- 下一步：全量校验通过后发版
-- 未提交：无
+- 在做：修常规模式刷新把旧输入框留进终端历史（Sol 实现，`apps/vspi/src/v1/ui/scrollback-terminal.ts`、`apps/vspi/src/v1/app/vspi-app.ts` 的 reflow 路径）
+- 做到哪：已验收，typecheck、lint、全量测试、注释检查、构建全部通过；缩窄残留旧边框记入 `docs/需求/会话与对话.md` 的“未定”
+- 下一步：等用户确认提交，并在真实 VS Code 终端里确认；之后继续 2.9.0 发版
+- 未提交：scrollback-terminal.ts、capabilities.ts、vspi-app.ts、tui-render.test.ts、apps/vspi/AGENTS.md、docs/需求/会话与对话.md
 
 ### GPT 6.1 Sol · 主力实现
 
 - 更新：2026-10-20
 - 在做：等待下一批实现任务
-- 做到哪：Devin Provider、新模型选择、统一 Provider 管理已合入
+- 做到哪：刷新原地擦除旧输入框已交主导验收
 - 下一步：按 BOARD 派活
-- 未提交：无
+- 未提交：无（工作区改动由主导统一提交）
 
 ### GPT 6 Astra · 代码 Review 与复杂问题分析
 
