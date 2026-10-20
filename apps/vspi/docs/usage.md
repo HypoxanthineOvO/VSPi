@@ -421,6 +421,6 @@ Pi 的 Chat Completions、Responses、Anthropic HTTP 路径在发起请求及接
 
 明确收到其他协议事件、HTML 页面或非流式 JSON 时，仍为 `provider.protocol_error`，不盲目换协议或重试。工具参数JSON错误、本地配置错误不因这项修复一律重试。重试成功会清除临时提示，耗尽预算才留下最终错误；已经结束的历史失败不会被后续任意输出删除。Google/Vertex 原生 SDK 等未经过该 HTTP 路径的请求不具备完整的此类诊断。新增容错不代表已经证明具体上游或网关的故障根因。
 
-Subagent 自身默认任务超时仍为 2 小时，`[subagent].timeout_ms` 或 `KIMI_CODE_SUBAGENT_TIMEOUT_MS` 可调整，`0` 表示禁用这层任务时限，不是禁用模型恢复预算。`/agents` 显示实际错误和任务超时值。若任务失败，应先检查错误详情，再决定是否继续同一 Agent；没有证据时不要把“约 30 分钟失败”直接解释成固定的 30 分钟限制。
+Subagent 自身默认任务超时仍为 2 小时，`[subagent].timeout_ms` 或 `KIMI_SUBAGENT_TIMEOUT_MS` 可调整，`0` 表示禁用这层任务时限，不是禁用模型恢复预算。`/agents` 显示实际错误和任务超时值。若任务失败，应先检查错误详情，再决定是否继续同一 Agent；没有证据时不要把“约 30 分钟失败”直接解释成固定的 30 分钟限制。
 
 `vspi web` 当前只输出本机 runtime 地址。安装包不附带独立浏览器前端，也不自动开放远程访问；不能把它等同于部署完整 Web UI 或公网服务。

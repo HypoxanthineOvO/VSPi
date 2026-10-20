@@ -5,128 +5,229 @@ description: Inspect, configure, or debug VSPi itself. Use whenever the user ask
 
 # Manage VSPi itself
 
-Use this Skill for VSPi's own configuration and runtime state. Do not apply Kimi Code paths, commands, or configuration instructions.
+This Skill covers VSPi's own configuration and runtime state. Kimi Code paths, commands and config files do not apply. Neither do `.pi/agent`, `PI_CODING_AGENT_DIR` or the old `.config/vspi/runtime-defaults.json`.
 
-## Authoritative paths
+Ground rules for the whole Skill:
 
-The current session is:
+- Read the current value first, change it with the CLI, then read it back. Report what actually became effective.
+- Credentials never pass through you. Do not put API keys, OAuth tokens or auth headers in command arguments, logs or replies. Do not read token stores, `auth.json` files or environment dumps. CLI output already redacts secrets, so do not work around that by dumping the raw config.
+- Interactive commands need a human terminal: `vspi login`, `vspi logout`, `vspi config` without arguments, `vspi init` and `vspi proxy`. Ask the user to run them. Everything else in this Skill is non-interactive and safe for you to run.
+
+## Paths
+
+The current session:
 
 - ID: `${KIMI_SESSION_ID}`
 - Directory: `${KIMI_SESSION_DIR}`
 
-The session directory is `<VSPi home>/sessions/<workspace id>/<session id>`. Derive the exact VSPi home from the current session instead of guessing or selecting the newest session:
+The session directory has the form `<VSPi home>/sessions/<workspace id>/<session id>`. Derive VSPi home from it rather than guessing:
 
 ```bash
 session_dir='${KIMI_SESSION_DIR}'
 vspi_home="$(cd "$session_dir/../../.." && pwd -P)"
-config_path="$vspi_home/config.toml"
-sessions_dir="$vspi_home/sessions"
-log_path="$vspi_home/server/runtime.log"
-printf 'home=%s\nconfig=%s\nsessions=%s\nlog=%s\n' "$vspi_home" "$config_path" "$sessions_dir" "$log_path"
-```
-
-Normally VSPi home is `$VSPI_HOME` when set, otherwise `~/.vspi`. Use the current session directory to select the runtime, then verify the paths reported by the running daemon:
-
-From 2.5.1, `.pi/agent`, `PI_CODING_AGENT_DIR`, and the old `.config/vspi/runtime-defaults.json` are not configuration sources. Do not inspect, edit, or import them to configure VSPi. Existing VSPi configuration and session history remain in the selected VSPi home.
-
-```bash
 VSPI_HOME="$vspi_home" vspi inspect paths
 VSPI_HOME="$vspi_home" vspi inspect session '${KIMI_SESSION_ID}'
 ```
 
-`inspect paths` returns the daemon's actual `homeDir`, `configPath`, `sessionsDir`, `logsDir`, and `runtimeLogPath`. These are authoritative; the shell's home or working directory may differ. `vspi config path` only resolves the current shell's choice of home without connecting. If the session placeholders are empty or unresolved, ask for the intended runtime/session instead of picking the newest one.
+Prefix every `vspi` call with `VSPI_HOME="$vspi_home"`. Otherwise a session running under a custom home connects to the default daemon. `inspect paths` reports the daemon's actual `homeDir`, `configPath`, `sessionsDir`, `logsDir` and `runtimeLogPath`, and those values are authoritative. If the session placeholders above are empty, ask which runtime the user means. Do not pick the newest session.
 
-The current session's main transcript is `agents/main/wire.jsonl`; durable state is `state.json`; subagent transcripts live at `agents/<agent-id>/wire.jsonl`. The inspect command returns metadata and a transcript path, not prompt content. It does not restore an archived session. Treat these files as read-only diagnostic data. Session repair is a separate operation that needs explicit user authorization and an inactive session.
+Inside a session directory:
 
-## Read or change runtime configuration
+- `agents/main/wire.jsonl` is the main transcript.
+- `agents/<agent-id>/wire.jsonl` is each subagent's transcript.
+- `state.json` is durable state.
 
-Prefer the non-interactive CLI because Core validates the section and writes `config.toml` atomically:
+Treat all of these as read-only. Repairing a session needs explicit user authorization and an inactive session.
+
+## Read and change configuration
 
 ```bash
-VSPI_HOME="$vspi_home" vspi config get defaultModel
-VSPI_HOME="$vspi_home" vspi config set defaultModel '"provider/model"'
-VSPI_HOME="$vspi_home" vspi config get secondaryModel
-VSPI_HOME="$vspi_home" vspi config patch secondaryModel '{"defaultModel":"provider/model","models":{"provider/model":"default subagent model"}}'
-VSPI_HOME="$vspi_home" vspi config inspect thinking
+VSPI_HOME="$vspi_home" vspi config get <section>        # effective value
+VSPI_HOME="$vspi_home" vspi config inspect <section>    # default / user / memory layers
+VSPI_HOME="$vspi_home" vspi config patch <section> '<json>'
+VSPI_HOME="$vspi_home" vspi config set <section> '<json>'
 VSPI_HOME="$vspi_home" vspi config diagnostics
 ```
 
-The CLI uses Core section names in camelCase. The corresponding TOML keys are snake_case:
+Section names are camelCase in the CLI and snake_case in `config.toml`:
 
-- `defaultModel` -> top-level `default_model`, the main model alias.
-- `secondaryModel` -> `[secondary_model]`, the subagent model policy.
-- `subagent` -> `[subagent]`; this section only controls `timeout_ms`, not the subagent model pool.
-- `models` -> `[models."provider/model"]`, model declarations.
-- `providers` -> `[providers.<id>]`, provider declarations and credentials.
+| CLI section | TOML | Purpose |
+| --- | --- | --- |
+| `defaultModel` | `default_model` | main model alias |
+| `secondaryModel` | `[secondary_model]` | subagent model pool |
+| `subagent` | `[subagent]` | only `timeout_ms` |
+| `providers` | `[providers.<id>]` | endpoints and credential references |
+| `models` | `[models."provider/model"]` | model declarations and overrides |
+| `thinking` | `[thinking]` | effort defaults, `model_efforts` per alias |
+| `proxy` | `[proxy]` | proxy for official vendor endpoints |
+| `loopControl` | `[loop_control]` | model retry budget |
 
-For `[secondary_model.models]`, every table key is a configured model alias, `default_model` must name one of those keys, and `primary` is reserved for the calling agent's model. With `force = true`, set `default_model` and do not set a `models` table. VSPi enables the `secondary-model` feature by default.
+`patch` and `set` behave differently:
 
-For object sections prefer `config patch`: Core merges the supplied fields, validates the resulting section, and writes atomically. CLI JSON uses camelCase field names such as `timeoutMs` and `defaultEffort`, not TOML snake_case. Arrays are replaced, not appended. For scalar values use `config set`. `config set` replaces the complete section; only use it after inspecting that section and preserving unrelated fields. The CLI rejects writing `[REDACTED]` values back so hidden credentials cannot accidentally be destroyed.
+- `patch` deep-merges the JSON into the section. Nested tables merge too, so `patch` can add or update keys but can never remove one. Arrays are replaced, not appended.
+- `set` replaces the whole section. Use it to remove entries or rewrite a map: read the section, edit the complete value, then write it back.
 
-`config inspect` distinguishes effective, default, user, and memory values. `config get` returns the effective value; environment or memory overrides may still take precedence after a successful write. Read back after changes and report what actually became effective. API writes apply to the running config service; use `config reload` only after an authorized external file edit, not as a routine diagnostic. Changing persisted defaults does not prove an already running agent switched models or effort; use the TUI `/model` and `/effort` to change the active agent.
+Both commands validate against the Core schema and write atomically. CLI JSON uses camelCase field names such as `defaultModel` and `timeoutMs`. Writing back a `[REDACTED]` value is rejected, so `set` cannot destroy hidden credentials.
 
-Prefix model-run CLI calls with `VSPI_HOME="$vspi_home"` so a custom-home session cannot connect to the default daemon by mistake. `vspi init` and `vspi config` provide the interactive provider setup, while `vspi login <provider>` handles supported login flows. These require a human terminal; do not launch interactive auth from a non-interactive model shell. Never put API keys, OAuth tokens, or authorization headers in command arguments, logs, or conversation. CLI configuration output hides credentials, headers and environment bags; do not bypass that protection by dumping the raw config or token store.
+The CLI changes apply to the running daemon immediately. Use `config reload` only after someone edits `config.toml` by hand. If a hand edit is really needed:
 
-## Inspect model capabilities
+1. Back up the file with a timestamp.
+2. Edit the copy.
+3. Replace the file and run `vspi config reload`.
+4. Restore the backup if reload fails.
+
+Never rewrite invalid TOML from scratch.
+
+Persisted defaults do not change an agent that is already running. The user switches the live model and effort with `/model` and `/effort`.
+
+## Providers, login and proxy
+
+### Declare a provider
+
+Builtin provider types such as `openai-codex`, `anthropic`, `google` and `xai` come from the bundled catalog. You can declare one without credentials:
 
 ```bash
-VSPI_HOME="$vspi_home" vspi inspect models
-VSPI_HOME="$vspi_home" vspi config inspect models
+VSPI_HOME="$vspi_home" vspi config patch providers '{"openai-codex":{"type":"openai-codex"}}'
+VSPI_HOME="$vspi_home" vspi inspect models | grep '"openai-codex/'
 ```
 
-`inspect models` reads the same resolved Core catalog that VSPi uses. Builtin provider catalogs ship with the application; VSPLab uses the bundled product catalog, other builtin providers use the pinned provider definitions. Remote metadata cannot overwrite builtin names or capabilities. Model availability still depends on the account and endpoint. Do not edit an installed bundle or install another provider library to change one model.
+The provider's models then resolve in the catalog straight away. You can set up `defaultModel` or a subagent pool before login; requests fail until credentials exist.
 
-For builtin models, patch only the requested fields directly under the model alias; they override builtin defaults and survive upgrades. Removing the user field restores its builtin value. A legacy `overrides` block remains higher priority: inspect it first and update/remove conflicting values there. For a custom provider using remote discovery, continue using `overrides` to protect values from its remote refresh. Use canonical `thinking.efforts` and `thinking.defaultEffort`, not flat effort fields underneath an existing canonical thinking definition.
+### Log in
+
+The user runs `vspi login <provider>` in their own terminal. After that, `config get providers` shows an `oauth` reference or a redacted `apiKey` on the entry.
+
+`vspi login openai-codex` reuses the backend machine's Codex ChatGPT login when it is valid. It reads `$CODEX_HOME/auth.json`, or `~/.codex/auth.json` when `CODEX_HOME` is unset, and re-reads it on each request. VSPi does not copy the refresh token. If that file has no valid login, the command offers browser or device-code sign-in.
+
+### Proxy
+
+`[proxy].url` applies only to HTTPS requests to supported official vendor hosts: `api.openai.com`, `chatgpt.com`, `api.anthropic.com`, `generativelanguage.googleapis.com`, `aiplatform.googleapis.com`, regional `*-aiplatform.googleapis.com`, `api.x.ai`, `api.devin.ai`, `app.devin.ai` and `server.codeium.com`. Relays and custom base URLs ignore it.
+
+An empty string disables this explicit account proxy; the backend's environment network settings may still apply. It does not guarantee direct access when the shell exports `HTTPS_PROXY`.
+
+The usual symptom of a missing proxy is a request that fails after about 30 seconds with `UND_ERR_CONNECT_TIMEOUT`, while relay models keep working. Fix it with the user's actual proxy, which you can take from the shell's `HTTPS_PROXY` or ask for:
 
 ```bash
-VSPI_HOME="$vspi_home" vspi config patch models '{"provider/model":{"capabilities":["image_in","thinking","tool_use"],"thinking":{"efforts":["low","medium","high"],"defaultEffort":"medium"}}}'
-VSPI_HOME="$vspi_home" vspi inspect models
+VSPI_HOME="$vspi_home" vspi config set proxy '{"url":"http://127.0.0.1:7890"}'
 ```
 
-The example is not a declaration about any real model. Verify the provider's supported values before writing. A custom base URL can serve a different model behind an alias. Preserve other capability entries because arrays are replaced. Only claim success when the read-back catalog matches the requested result.
+### Add Gemini or any other new provider
 
-For builtin models, a display-name-only TOML override is sufficient:
+1. Choose a route:
+   - Official Gemini: the builtin `google` provider with an API key (it has no OAuth).
+   - A relay: a custom provider created by the user with `vspi config`. It uses the `google-genai`, `openai`, `openai_responses` or `anthropic` protocol, and its models are discovered remotely. `vspi config refresh <provider>` re-reads that list.
+2. Declare the provider, and have the user log in or enter the key.
+3. Read the real model aliases from `vspi inspect models`. Never derive IDs from display names.
+4. For official Google hosts, check the proxy (see above).
+5. Make one real request (see "Verify" under Subagent models) before calling it done.
 
-```toml
-[models."vsplab/deepseek-flash"]
-display_name = "My Flash"
+The Google native path does not yet have the byte-level idle watchdog that the Chat, Responses and Anthropic paths have.
+
+## Models and capabilities
+
+```bash
+VSPI_HOME="$vspi_home" vspi inspect models          # resolved catalog VSPi actually uses
+VSPI_HOME="$vspi_home" vspi config inspect models   # user-layer declarations
 ```
 
-The builtin `deepseek-flash` is DeepSeek V4.1 Flash and starred; `deepseek-v4-flash` is a separate non-starred entry; V4 Pro is independently starred. GPT-6 Astra uses `gpt-6-astra`. Do not invent model IDs from display names. `/model` defaults to stars; Ctrl+O shows all. Stars are independent of Subagent membership and cannot grant API access. For a missing model, distinguish the installed version, configured provider, resolved catalog and account availability; do not relabel an unrelated model to make it appear.
+**Where the catalog comes from.** Builtin catalogs ship with VSPi, and VSPLab uses the bundled product catalog. Remote metadata does not overwrite those builtin names or capabilities. Devin additionally reads the signed-in account's dynamic catalog, with SWE 1.6 and SWE 1.6 Fast as fallbacks; thinking/context variants are grouped and Fusion/router entries are hidden. `config refresh` updates discoverable custom providers, not the bundled defaults. Being listed in the catalog does not prove the account can use a model.
 
-`vspi config refresh [provider]` refreshes discoverable custom providers; builtin providers return unchanged because their defaults update with VSPi releases. `config reload` only reloads the local file. Do not repeatedly refresh a builtin provider to try to download a newer model.
+**Overriding a builtin model.** Patch only the fields you need directly under the alias, for example `display_name` or `capabilities`. Removing a field restores the builtin value.
 
-If direct TOML editing is specifically required, read the existing file first, keep a timestamped backup, edit a candidate copy, and use `vspi config reload` after replacement. If reload fails, restore the backup. Never overwrite invalid TOML from scratch or drop unrelated sections.
+- A legacy `overrides` block still wins over these fields. Inspect it first and update or remove anything that conflicts.
+- Custom providers with remote discovery keep using `overrides`.
+- Use canonical `thinking.efforts` and `thinking.defaultEffort`.
+- `capabilities` is an array and gets replaced, so include the existing entries.
 
-## User-requested feedback and candidate distribution
+```bash
+VSPI_HOME="$vspi_home" vspi config patch models '{"provider/model":{"capabilities":["image_in","thinking","tool_use"]}}'
+```
 
-From 2.4.2, new `exec` sessions default to Auto (automatic approval after explicit deny rules, not a sandbox). `--permission auto|manual|yolo|inherit` is explicit: resume defaults to inherit; an explicit resume override applies only to that turn and never writes the stored mode or broadcasts to other agents. Do not silently repair an old session by elevating it. Non-interactive approvals are not assumed granted: rejection stops the owned turn and reports failure. If an HTTP bridge only submits text, omit `permission_mode`; that REST field still changes persistent permissions.
+**Missing `tool_use`.** `tool_use` missing from a catalog entry only disables dynamically loaded tools. Normal tool calls still work.
 
-`provider.stream_parse_error` identifies invalid JSON in a complete SSE event. Recovery is bounded; do not repair malformed tool commands, skip bad frames, switch protocols automatically, or replay already executed tools. Structural diagnostics include request ID, parse stage and bounded event metadata, not raw bad frames. Oversized events (4 MiB limit) are not retried. A successful automatic retry clears the transient notice, not unrelated historical failures.
+**Effort levels** differ per model. The baseline lives in core `effortProfiles.ts`:
 
-From 2.4.1, idle clients do not block updates. Active work requires explicit interactive confirmation (default No); never supply that consent on the user's behalf or use an unguarded daemon stop as an automatic workaround. Old interfaces do not respawn an intentionally stopped runtime. The daemon exits after five idle seconds when there are no clients, active turns/tasks, active goals or scheduled work; `VSPI_DAEMON_IDLE_TIMEOUT_MS=0` explicitly disables idle exit. The first upgrade from 2.3.0/2.4.0 still needs the old interfaces to exit before stopping their daemon. Never kill unrelated processes or delete session history to resolve an update conflict.
+- Kimi K3 and GLM 5.3: low/high/max, default max.
+- DeepSeek V4: low/high/max, default high.
+- Qwen 3.8: low/medium/xhigh.
+- GPT-6 family: low through max, default medium.
+- MiMo V2.5 and MiniMax M3: a single fixed thinking-on mode.
 
-`/feedback <description>` and `vspi feedback --help` are available by default. Never upload a transcript automatically. A user must choose the context range and review the actual redacted package. CLI export is local-only; `preview` prints the content and hash, and `submit --confirm-sha256` requires that unchanged hash after human approval. Do not compute a hash and treat it as a substitute for consent. Editing a package requires `feedback redact` and a fresh preview. The first confirmed upload automatically registers the device-name/user-name identity and privately caches a server-issued token under `VSPI_HOME/feedback/identities/`; no administrator-issued file or model API key is required. Existing private `VSPI_HOME/feedback.json` credentials remain compatible. Do not read or share identity caches, invent credentials, or bypass consent. Diagnostic logs and selected intermediate output may still contain unidentified secrets; the user must inspect them.
+The `/model` picker saves the chosen effort per alias in `[thinking.model_efforts]`. Patch that map; do not overwrite the whole `thinking` section.
 
-`provider.protocol_error` means the response is demonstrably incompatible with the requested stream; inspect protocol and endpoint rather than retrying blindly. `provider.incomplete_stream` remains eligible for bounded recovery. Transient retry status clears after recovery or cancellation without erasing unrelated warnings.
+**Stars and VSPLab defaults.**
 
-Candidate dual-entry updates require `KIMI_CODE_EXPERIMENTAL_VSPI_DISTRIBUTION=true` and an independently verified Ed25519 public-key file in `VSPI_HOME/distribution.json`. Never disable TLS or signature verification, copy private signing keys into a download directory, or treat a feedback message as permission to install, deploy or publish. Administrator activation is separate from local feature validation.
+- `/model` groups entries by company, canonical model and provider source. Enter stages the default source; Right/Tab expands sources, and Effort confirmation applies the binding. Ctrl+P pins a model or source; Ctrl+O switches between common and all models. Search accepts `@provider`. The chosen source is remembered per canonical model; recent failures affect default selection, but failed requests never switch sources automatically. Common-model picks are unrelated to subagent membership and do not grant API access.
+- VSPLab sends GPT through Responses, Claude through Anthropic, and Kimi, GLM and DeepSeek through Chat Completions. An explicit model `protocol` overrides that.
+- `vsplab/deepseek-flash` is DeepSeek V4.1 Flash. `deepseek-v4-flash` is a different entry.
 
-## Configure subagent model candidates
+## Subagent models
 
-The model candidates are user-configured references to the same Core model catalog, not separate provider definitions or an official recommendation list. Use `/subagent-model`: Enter adds/removes a candidate, Ctrl+D sets the default subagent model, and Ctrl+P edits its capability/purpose description. An empty pool inherits the main model. These edits apply to future spawns; they do not switch the main model or running subagents. A forced `secondary_model.force=true` configuration is read-only in this candidate UI; never silently disable it. When editing by CLI, inspect `secondaryModel` first and preserve unrelated settings. Never populate the pool from the main-model stars or the entire provider catalog.
+### How a spawn picks its model
 
-`/model` is independent: its stars are the official common-model selection, not subagent membership or a stability rating. It opens in the starred view; Ctrl+O switches to all models. Search respects the current view. It has no subagent candidate editing shortcuts. Choosing a model opens Effort confirmation before applying either setting; Esc returns without changing the current binding. Effort preferences are stored per actual model alias in `[thinking.model_efforts]`; do not overwrite the entire `thinking` section or copy one model's choice to every model. Existing sessions retain their own binding. The pickers hide Off, and models without adjustable effort use a fixed-configuration confirmation.
+The logic lives in `resolveSubagentBinding` (`packages/agent-core-v2/src/session/subagent/configSection.ts`):
 
-For VSPLab, product defaults route GPT through Responses, Claude through Anthropic, and Kimi/GLM/DeepSeek through Chat Completions. A catalog `default_protocol` can update that default; an explicit model `protocol` wins. Inspect the effective protocol before troubleshooting an old configuration; do not silently erase explicit overrides or change official-provider endpoints. Treat an Effort selection as verified only when the effective backend value and request encoding agree.
+- **Pool configured** (`[secondary_model.models]`): the caller passes `model` set to a pool alias or `primary`. Without it, the subagent uses `default_model`.
+- **No pool:** subagents inherit the caller's model, and `model` only accepts `primary`.
+- **`force = true`:** every subagent uses `default_model`, and the `model` parameter is removed. This mode cannot be combined with a `models` table.
+- **`fork`:** always inherits the caller's model and effort.
 
-Effort levels are model-specific, not a universal ladder. Kimi K3 and GLM 5.3 use low/high/max with max as default; DeepSeek V4 uses the same levels with high as default. Qwen 3.8 uses low/medium/xhigh. MiMo V2.5 and MiniMax M3 have no independently documented fine-grained effort control: the UI uses a fixed thinking-on choice, not fabricated Low/Medium/High levels. Keep compatible aliases distinct from real model levels. The source-backed baseline is owned by core `effortProfiles.ts`; versioned relay declarations can update it, while old unversioned lists cannot overwrite it.
+`primary` is reserved and means the caller's own model and effort.
 
-The 2.5.1 pre-bootstrap migration backs up VSPi configuration, retires expired model references and removes fields identical to shipped defaults. It corrects the known generated V4 label on `deepseek-flash`, but preserves other differences of uncertain origin, API keys, custom endpoints, legacy `overrides`, per-model effort preferences and `secondary_model`. It does not read Pi state to infer user intent. Invalid TOML stops startup without modifying the original file. Do not run blanket cleanup or tell users to delete their home directory.
+### Effort
 
-## Add or change subagent profiles
+Pool models do not inherit the caller's effort. They use `[secondary_model].default_effort` when it is set; that value must be valid for every pool model. Otherwise each model uses its declared default. `[thinking.model_efforts]` does not apply to subagents.
 
-Subagent profiles are Markdown files with YAML frontmatter. User-wide VSPi profiles live in `<VSPi home>/agents/`; portable cross-client user profiles may live in `~/.agents/agents/`. Project profiles should use `<project root>/.agents/agents/`. Use kebab-case names and include a non-empty description and prompt body:
+### Priority
+
+There is no priority, weight or routing field. The calling model sees the pool in the `Agent` and `AgentSwarm` tool descriptions, one line per model in the form `- alias [default]: description`. The default comes first, then table order. Priority is therefore expressed through two things:
+
+- Which model is `default_model`. This is what runs when the caller does not choose.
+- The description, which is read by the calling model. Say what the model is for, when to prefer it over the others, and how to handle its weaknesses. Keep it to one or two sentences. Example:
+
+```json
+{
+  "defaultModel": "openai-codex/gpt-6.1-sol",
+  "force": false,
+  "models": {
+    "openai-codex/gpt-6.1-sol": "Main implementer, same tier as Flash. Careful, has vision; use when reliability matters.",
+    "vsplab/deepseek-flash": "Main implementer, same tier as Sol. Fast and cheap, more varied ideas; no vision.",
+    "openai-codex/gpt-6-astra": "Hard analysis, design and code review, difficult features. Tends to over-defend: give a clear scope and stop condition, then weigh its findings by real risk."
+  }
+}
+```
+
+### Edit the pool
+
+The user can use `/subagent-model` in the TUI:
+
+- Enter adds or removes a candidate.
+- Ctrl+D sets the default.
+- Ctrl+P edits the description.
+
+A forced configuration is read-only there.
+
+From the shell, run `config get secondaryModel`, build the complete new value, then `config set secondaryModel '<json>'`. Use `set`, not `patch`, whenever entries are removed. Every alias must already resolve in the catalog when you write, so declare the provider first. Add only the models the user asked for; do not seed the pool from the starred models or a whole provider catalog. An empty pool means subagents inherit the main model.
+
+Changes apply to the next spawn, including in sessions that are already running. Subagents that are already running keep their model.
+
+### Verify
+
+A catalog entry does not prove that credentials or the network work. Spawn one small read-only subagent per pool model, pass `model`, and require a tool call (for example: read one file and return its first heading). Then interpret the result:
+
+- `provider.api_error` with 503 on one model, while another model on the same provider works: investigate model-specific upstream availability and routing; this alone does not rule out configuration errors.
+- `UND_ERR_CONNECT_TIMEOUT` on official hosts: check backend network reachability and the account proxy (see above).
+- Auth errors: check the selected provider and credential reference before asking the user to log in again.
+
+### Profiles
+
+Subagent profiles are Markdown files with YAML frontmatter. They live in three places:
+
+- `<VSPi home>/agents/`: user-wide.
+- `~/.agents/agents/`: portable across clients.
+- `<project>/.agents/agents/`: per project.
+
+Supported frontmatter fields are `name` (kebab-case), `description` (required), `whenToUse`, `tools`, `disallowedTools`, `subagents` (restricts which profiles this one may spawn) and `override`. There is no `model` field: the model is chosen per spawn, so put model guidance in the pool descriptions. Start a new session if a new profile does not appear.
 
 ```markdown
 ---
@@ -138,38 +239,74 @@ tools: Read, Grep, Glob
 Review the requested change. Lead with actionable findings and cite exact files and lines.
 ```
 
-Use `subagents` in a profile only to restrict which child profiles it may spawn. Start a new session after adding a profile if the current session catalog has not refreshed.
+### Timeout
+
+The subagent task timeout is `[subagent].timeout_ms` or `KIMI_SUBAGENT_TIMEOUT_MS`. The default is 2 hours, and `0` disables the task deadline. It is separate from the model retry budget. `/agents` shows the actual error and deadline; read them before you blame a timeout.
 
 ## Diagnose VSPi
 
-Use these non-destructive checks first:
-
 ```bash
 vspi --version
-vspi --help
-vspi config --help
 VSPI_HOME="$vspi_home" vspi daemon status
 VSPI_HOME="$vspi_home" vspi inspect paths
 VSPI_HOME="$vspi_home" vspi config diagnostics
 VSPI_HOME="$vspi_home" vspi inspect session '${KIMI_SESSION_ID}'
 ```
 
-`inspect` and config reads only connect to an existing daemon. They do not start/restart it or restore a session. If IPC is closed or the daemon is unreachable, record that failure before considering changes; do not turn a diagnostic request into an automatic restart or config reload.
+`inspect` and config reads connect only to an existing daemon. They never start, restart or reload anything. If IPC is unreachable, report that first.
 
-For current-session history, read a bounded tail of the exact transcript returned above (for example 100 lines) and parse each JSONL line separately. A live writer may leave an incomplete final line; do not treat that alone as corruption. Expand the range only when the requested event is absent. Trace a subagent only when its agent ID belongs to this session and is relevant to the reported failure. Never select the newest session, enumerate all session contents, or search another workspace's prompts merely to find a similar error. An explicitly requested historical session needs its exact ID and user-authorized scope.
+For session history:
 
-Read only the relevant time range from `runtimeLogPath` when necessary. Logs and transcripts can contain secrets and private prompts even though CLI config output is redacted: avoid dumping them, omit unrelated content, and redact credentials before reporting. Do not read OAuth token stores or environment dumps. Report the observed error/time/session, evidence, and uncertainty separately from a proposed repair. Do not stop or restart the daemon while sessions are active unless the user explicitly approves the disruption.
+- Read a bounded tail of the exact transcript, around 100 lines, and parse each JSONL line separately. A live writer may leave an incomplete last line.
+- Widen the range only if the event you need is missing.
+- Only look at subagents of this session that are relevant to the problem.
+- Do not search other sessions or workspaces unless the user names the exact session.
 
-## Stability and upgrade boundaries
+Read only the relevant time range of `runtimeLogPath`. Logs and transcripts can contain secrets and private prompts, so quote only what matters and redact credentials. Keep the observed facts separate from the repair you propose.
 
-In 2.3.0, `/history` loads older durable messages and `/history latest` returns to the recent window. The UI does not use compacted model context as its complete conversation history. Long records may have a bounded display preview; never infer that the original transcript was deleted. IPC payload/call budgets are intentional: use paging and lightweight counters instead of removing limits or blindly retrying a timed-out mutation.
+## Runtime behavior worth knowing
 
-Model recovery defaults live in `loopControl` (`[loop_control]`): `maxAttemptsPerStep = 3` includes the first request, `retryBudgetMs = 120000` bounds waiting/reconnecting after the first transient failure, and `requestIdleTimeoutMs = 300000` detects absent protocol progress on Pi Chat/Responses/Anthropic HTTP paths. Receiving protocol content releases that request's hard recovery deadline; a healthy recovered stream is not cut at two minutes. A later failure outside the original recovery window cannot start another attempt. Thinking, tool, and SSE heartbeat bytes count as progress; lack of visible prose is not a timeout. Google/Vertex native SDK and legacy compatibility adapters do not yet provide this byte-level watchdog. Do not claim universal idle-timeout coverage or increase limits as a blind fix. VSPi's finite recovery disables the legacy infinite-retry switch. Over-budget Retry-After stops recovery rather than retrying early. Cancellation clears request/retry timers. Failed partial text is discarded, not concatenated with a successful retry; already-executed tools are not blindly replayed.
+**Model retries** (`[loop_control]`):
 
-The Subagent task timeout remains separate: `[subagent].timeout_ms` / `KIMI_CODE_SUBAGENT_TIMEOUT_MS`, default two hours, with `0` disabling that task deadline only. `/agents` reports the actual error and task deadline. Do not diagnose an unverified “about 30 minutes” failure as a built-in 30-minute limit; inspect the authorized task's error first.
+- `maxAttemptsPerStep = 3`, counting the first request.
+- `retryBudgetMs = 120000` after the first transient failure.
+- `requestIdleTimeoutMs = 300000` covers missing protocol progress. Thinking, tool and heartbeat bytes count as progress.
+- A healthy stream is not cut at two minutes. An over-budget `Retry-After` stops recovery.
+- Partial text from a failed attempt is discarded, and tools that already ran are not replayed.
+- Do not raise limits as a blind fix.
 
-Use `vspi update` from the user's terminal only after work has finished and attached clients have exited. The updater backs up the old package/config, refuses a busy runtime, and verifies installation and runtime startup. The daemon and its nested CLI run from an immutable build snapshot; do not update that snapshot from a model-run shell. `/update` gives the safe CLI workflow. `/reload` does not perform unsafe TTY handoff: ask the user to exit the client and run `vspi continue`, not to stop the shared daemon merely to refresh a terminal.
+**Stream errors:**
 
-From 2.2.x, stop the old instance before replacing the installation. New instances shut down through authenticated IPC and produce cleanup confirmation. An old Windows instance may lack this protocol; `vspi daemon stop --force-legacy` explicitly permits termination and is not a diagnostic or a routine repair. Require confirmation that its tasks have finished. Do not bypass failed ownership verification or kill an arbitrary PID.
+- `provider.stream_parse_error`: a complete SSE event contained invalid JSON. Recovery is bounded, and events over 4 MiB are not retried.
+- `provider.protocol_error`: the response does not match the requested protocol. Check the protocol and endpoint instead of retrying.
+- `provider.incomplete_stream`: still eligible for bounded recovery.
 
-For a corrupt leftover lock, first establish that no daemon for the selected home is alive. Only then suggest `vspi daemon recover --confirm-stopped`; it protects recent initialization and preserves the old lock. Never remove the entire home. Update backups under `server/update-backups/`, migration backups, logs and heap diagnostics are sensitive data. Heap snapshots near the memory limit are no longer enabled automatically.
+**Permissions:** `exec` defaults to Auto, which applies explicit deny rules and is not a sandbox. `--permission auto|manual|yolo|inherit` selects the mode, and a resume uses `inherit` by default. An override on resume affects only that turn. A rejected approval stops the turn. An HTTP bridge that only submits text should omit `permission_mode`, because that field changes the stored mode.
+
+**Daemon lifecycle:**
+
+- The daemon exits after about 5 idle seconds. Idle means no clients, turns, tasks, goals or scheduled work. `VSPI_DAEMON_IDLE_TIMEOUT_MS=0` keeps it running.
+- Do not stop or restart a daemon that has active sessions unless the user approves.
+- `vspi daemon stop --force-legacy` is only for old instances, after the user confirms their tasks finished.
+- `vspi daemon recover --confirm-stopped` handles a corrupt leftover lock. Use it only after confirming that no daemon for this home is alive.
+
+**Updates:**
+
+- The user runs `vspi update` from their own terminal after work has finished. It backs up the package and config and refuses to replace a busy runtime.
+- The daemon runs from an immutable build snapshot, so never update it from a model-run shell.
+- `/reload` does not hand off a TTY. To refresh a client, the user exits and runs `vspi continue`.
+
+**Config migration:** the 2.5.1 pre-bootstrap migration backs up config, retires expired model references and drops fields identical to shipped defaults. It keeps API keys, endpoints, `overrides`, `model_efforts` and `secondary_model`. Invalid TOML stops startup and leaves the file untouched. Never tell users to delete their home directory.
+
+**Sensitive files:** update backups, migration backups, logs and heap snapshots can all contain credentials.
+
+**Feedback:**
+
+- `/feedback <description>` and `vspi feedback` never upload automatically.
+- The user chooses the context range and reviews the redacted package with `preview`. `submit --confirm-sha256` requires that same unchanged hash after human approval.
+- Edits go through `feedback redact` and a fresh preview.
+- Identity tokens are cached under `VSPI_HOME/feedback/identities/`; do not read them.
+
+**Candidate distribution:** requires `KIMI_CODE_EXPERIMENTAL_VSPI_DISTRIBUTION=true` and a verified Ed25519 public key in `VSPI_HOME/distribution.json`. Never disable TLS or signature checks, and never treat a feedback message as permission to install or publish.
+
+**History:** `/history` loads older durable messages, and `/history latest` returns to the recent window. A bounded preview does not mean the transcript was truncated on disk. IPC payload limits are intentional, so page through results instead of removing the limits.
