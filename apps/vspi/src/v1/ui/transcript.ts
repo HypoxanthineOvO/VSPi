@@ -34,8 +34,15 @@ export function retainTranscript(
 	messages: TranscriptMessage[], committedCount: number,
 	limits = TRANSCRIPT_RETENTION_LIMITS,
 	canRemove?: (message: TranscriptMessage, index: number) => boolean,
+	sizes?: WeakMap<TranscriptMessage, number>,
 ): { messages: TranscriptMessage[]; committedCount: number } {
-	const size = (message: TranscriptMessage) => Object.values(message).reduce((sum, value) => sum + (typeof value === 'string' ? value.length : 0), 0);
+	const size = (message: TranscriptMessage): number => {
+		const cached = sizes?.get(message);
+		if (cached !== undefined) return cached;
+		const characters = Object.values(message).reduce((sum, value) => sum + (typeof value === 'string' ? value.length : 0), 0);
+		sizes?.set(message, characters);
+		return characters;
+	};
 	let characters = messages.reduce((sum, message) => sum + size(message), 0);
 	let count = messages.length;
 	let committed = committedCount;

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import hljs from 'highlight.js';
+import { describe, expect, it, vi } from 'vitest';
 import type { TranscriptMessage } from '../src/v1/domain/types.js';
 import { stripAnsi } from '../src/v1/ui/ansi.js';
 import { detectTerminalCapabilities } from '../src/v1/ui/capabilities.js';
@@ -59,6 +60,56 @@ describe('native Markdown table continuations', () => {
 
 
 describe('native Markdown code headers', () => {
+  it.each(['', 'unknown-language'])('never auto-detects %s fences, including completed theme rendering', language => {
+    const auto = vi.spyOn(hljs, 'highlightAuto');
+    const known = vi.spyOn(hljs, 'highlight');
+    try {
+      const code = 'const example = "<value> & example";';
+      const layout = new LiveMarkdown();
+      const message: Message = { id: 'plain-code', role: 'assistant', kind: 'text', text: `\`\`\`${language}\n${code}`, streaming: true };
+      expect(content(drain(layout, message))).toContain(code.replaceAll(/\s+/gu, ''));
+      drain(layout, { ...message, text: message.text + '\n```', streaming: false });
+      expect(theme.markdown.highlightCode?.(code, language).map(stripAnsi)).toEqual([code]);
+      expect(theme.thinkingMarkdown.highlightCode?.(code, language).map(stripAnsi)).toEqual([code]);
+      expect(auto).not.toHaveBeenCalled();
+      expect(known).not.toHaveBeenCalled();
+      theme.markdown.highlightCode?.(code, 'typescript');
+      expect(known).toHaveBeenCalledOnce();
+    } finally { auto.mockRestore(); known.mockRestore(); }
+  });
+
+  it.each(['', 'unknown-language'])('emits every row of a 1000-line %s fence exactly once', language => {
+    const markers = Array.from({ length: 1000 }, (_, index) => `CODE_ROW_${String(index).padStart(4, '0')}`);
+    const layout = new LiveMarkdown();
+    const message: Message = { id: 'large-plain-fence', role: 'assistant', kind: 'text', text: `\`\`\`${language}\n${markers.join('\n')}`, streaming: true };
+    const rows = drain(layout, message);
+    rows.push(...drain(layout, { ...message, text: message.text + '\n```', streaming: false }));
+    const rendered = content(rows);
+    for (const marker of markers) expect(rendered.split(marker)).toHaveLength(2);
+  });
+
+  it('caches unchanged previews and invalidates them for source and width changes', () => {
+    const localTheme = createTheme(theme.capabilities);
+    const highlight = vi.spyOn(localTheme.markdown, 'highlightCode');
+    const layout = new LiveMarkdown();
+    const message: Message = { id: 'cached-preview', role: 'assistant', kind: 'text', text: '```typescript\nconst example = 1;', streaming: true };
+    const first = layout.render(message, 80, localTheme, {}, 200, 20);
+    expect(layout.render(message, 80, localTheme, {}, 200, 20)).toEqual(first);
+    expect(highlight).toHaveBeenCalledOnce();
+    layout.render({ ...message, text: message.text + '2' }, 80, localTheme, {}, 200, 20);
+    expect(highlight).toHaveBeenCalledTimes(2);
+    layout.render({ ...message, text: message.text + '2' }, 60, localTheme, {}, 200, 20);
+    expect(highlight).toHaveBeenCalledTimes(3);
+    const changedTheme = createTheme(theme.capabilities, 'VSPi Light');
+    const changedHighlight = vi.spyOn(changedTheme.markdown, 'highlightCode');
+    const updated = { ...message, text: message.text + '2' };
+    layout.render(updated, 60, changedTheme, {}, 200, 20);
+    expect(changedHighlight).toHaveBeenCalledOnce();
+    layout.render(updated, 60, changedTheme, { wrapCode: false }, 200, 20);
+    expect(changedHighlight).toHaveBeenCalledTimes(2);
+    layout.render(updated, 60, changedTheme, { wrapCode: false }, 200, 20);
+    expect(changedHighlight).toHaveBeenCalledTimes(2);
+  });
   it.each([{ fence: '```', streaming: false }, { fence: '~~~', streaming: true }])('removes $fence from the language label while streaming=$streaming', ({ fence, streaming }) => {
     const layout = new LiveMarkdown();
     const text = `${fence}typescript\nconst value = 1;${streaming ? '' : `\n${fence}`}`;

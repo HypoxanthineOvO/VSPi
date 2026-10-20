@@ -166,7 +166,8 @@ export class ScrollbackTUI extends TuiMainScreen {
   }
 
   protected override requestInputRender(): void {
-    this.requestRender();
+    if (this.rebuildSettleArmed) return;
+    this.framePacer?.requestInput(() => { super.requestInputRender(); });
   }
 
   protected override doRender(): void {
@@ -183,12 +184,12 @@ export class ScrollbackTUI extends TuiMainScreen {
     // freeze bookkeeping must wait for the next committed frame.
     this.clearingDeferred = false;
     super.doRender();
-    if (FRAME_STATS_PATH) recordFrameRenderMs(performance.now() - started);
     if (!this.clearingDeferred) {
       this.firstRenderOffset = 0;
       this.epochGeometry = undefined;
       this.onFrameRendered?.();
     }
+    if (FRAME_STATS_PATH) recordFrameRenderMs(performance.now() - started);
   }
 
   override renderNow(force = false): void {
@@ -241,7 +242,6 @@ export class ScrollbackTUI extends TuiMainScreen {
       maxLinesRendered: Math.max(0, state.maxLinesRendered - lines.length),
       previousViewportTop: Math.max(0, state.previousViewportTop - lines.length),
     });
-    this.requestRender();
     return true;
   }
 

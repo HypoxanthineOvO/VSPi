@@ -97,14 +97,12 @@ function syntaxLines(
   styles: Record<string, Styler>,
   base: Styler,
 ): string[] {
+  if (!language || !hljs.getLanguage(language)) return code.split("\n").map(line => base(line));
   let highlighted: string;
   try {
-    highlighted =
-      language && hljs.getLanguage(language)
-        ? hljs.highlight(code, { language, ignoreIllegals: true }).value
-        : hljs.highlightAuto(code).value;
+    highlighted = hljs.highlight(code, { language, ignoreIllegals: true }).value;
   } catch {
-    return code.split("\n").map(base);
+    return code.split("\n").map(line => base(line));
   }
 
   const stack: Styler[] = [base];

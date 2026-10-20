@@ -297,15 +297,24 @@ export class LiveMarkdown {
     this.block = '';
   }
 
+  private previewCache: { key: string; theme: VspiTheme; lines: string[] } | undefined;
+
   private renderPreview(): string[] {
     const text = this.block + this.line;
+    const key = JSON.stringify([text, this.width, this.fence, this.fenceHeaderShown, this.table, this.tableHeaderPending, this.tableHasRows, this.plainTable, this.headerShown, this.message?.kind, this.message?.role, this.message?.kind === 'text' ? this.message.presentation : undefined, this.message?.kind === 'thinking' ? this.message.durationMs : undefined, this.message?.streaming, this.options.wrapCode, this.options.mermaidRendering]);
+    if (this.previewCache?.key === key && this.previewCache.theme === this.theme) return this.previewCache.lines;
+    let lines: string[];
     if (this.table) {
-      if (this.tableHeaderPending && !text) return [];
-      const table = this.renderTable(text);
-      return this.decorate([...this.tableHeaderPending ? table.head : [], ...this.tableHasRows && text && table.separator ? [table.separator] : [], ...table.body, table.bottom].filter(Boolean));
-    }
-    if (this.fence) return this.decorate([...this.fenceHeaderShown ? [] : [codeHeader(this.fence.replace(/^\s*[`~]+/u, '').trim() || 'CODE', Math.max(1, this.width - 2), this.theme!, this.message?.kind === 'thinking' ? 'thinking' : undefined)], ...text ? this.renderFragment(text) : []]);
-    return text ? this.decorate(this.renderFragment(text)) : [];
+      if (this.tableHeaderPending && !text) lines = [];
+      else {
+        const table = this.renderTable(text);
+        lines = this.decorate([...this.tableHeaderPending ? table.head : [], ...this.tableHasRows && text && table.separator ? [table.separator] : [], ...table.body, table.bottom].filter(Boolean));
+      }
+    } else if (this.fence) {
+      lines = this.decorate([...this.fenceHeaderShown ? [] : [codeHeader(this.fence.replace(/^\s*[`~]+/u, '').trim() || 'CODE', Math.max(1, this.width - 2), this.theme!, this.message?.kind === 'thinking' ? 'thinking' : undefined)], ...text ? this.renderFragment(text) : []]);
+    } else lines = text ? this.decorate(this.renderFragment(text)) : [];
+    this.previewCache = { key, theme: this.theme!, lines };
+    return lines;
   }
 
   private promotePreview(): void {

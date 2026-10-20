@@ -3,11 +3,6 @@ import { type ScrollbackProcessTerminal, recordFrameRenderMs } from "./scrollbac
 import { writeClipboardText } from '../attachments/clipboard.js';
 
 export const DEFAULT_TUI_FRAME_INTERVAL_MS = 33;
-export const DEFAULT_TUI_SCROLL_INTERVAL_MS = 100;
-// C16 M4a: while the viewport is being scrolled the fullscreen frame cadence
-// drops so each wheel burst costs fewer (larger) frames near the terminal.
-export const DEFAULT_TUI_SCROLL_FRAME_INTERVAL_MS = 66;
-const SCROLL_FRAME_WINDOW_MS = 500;
 // Main-screen resize rebuilds wait for the drag to settle so a burst of
 // reported sizes produces a single history rebuild.
 export const TUI_RESIZE_SETTLE_MS = 300;
@@ -18,18 +13,6 @@ export function resolveTuiFrameInterval(env: NodeJS.ProcessEnv = process.env): n
   return Math.max(16, Math.min(250, Math.floor(configured)));
 }
 
-export function resolveTuiScrollInterval(env: NodeJS.ProcessEnv = process.env): number {
-  const configured = Number(env.VSPI_TUI_SCROLL_INTERVAL_MS);
-  if (!Number.isFinite(configured)) return DEFAULT_TUI_SCROLL_INTERVAL_MS;
-  return Math.max(33, Math.min(250, Math.floor(configured)));
-}
-
-export function resolveTuiScrollFrameInterval(env: NodeJS.ProcessEnv = process.env): number {
-  const configured = Number(env.VSPI_TUI_SCROLL_FRAME_INTERVAL_MS);
-  if (!Number.isFinite(configured)) return DEFAULT_TUI_SCROLL_FRAME_INTERVAL_MS;
-  return Math.max(33, Math.min(250, Math.floor(configured)));
-}
-
 export class TuiFramePacer {
   private timer: NodeJS.Timeout | undefined;
   private resizeTimer: NodeJS.Timeout | undefined;
@@ -38,8 +21,12 @@ export class TuiFramePacer {
 
   constructor(private intervalMs: number) {}
 
-  setIntervalMs(intervalMs: number): void {
-    this.intervalMs = intervalMs;
+  requestInput(forward: () => void): void {
+    if (this.resizeTimer || this.settleTimer) return;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+    this.lastForwardedAt = performance.now();
+    forward();
   }
 
   requestResize(forward: (force: boolean) => void): void {
@@ -102,13 +89,6 @@ export class TuiFramePacer {
 
 export class VspiTuiAltScreen extends TuiAltScreen {
   private framePacer: TuiFramePacer | undefined;
-  private readonly scrollFrameIntervalMs: number;
-  private readonly defaultFrameIntervalMs: number;
-  private readonly scrollIntervalMs: number;
-  private pendingScrollLines = 0;
-  private scrollTimer: NodeJS.Timeout | undefined;
-  private lastScrollAt = Number.NEGATIVE_INFINITY;
-  private lastViewportTop: number | undefined;
 
   constructor(
     terminal: Terminal,
@@ -121,10 +101,7 @@ export class VspiTuiAltScreen extends TuiAltScreen {
         try { await writeClipboardText(text, { writeTerminal: sequence => { terminal.write(sequence); } }); return true; }
         catch { return false; }
       }, ...options });
-    this.defaultFrameIntervalMs = resolveTuiFrameInterval();
-    this.scrollFrameIntervalMs = resolveTuiScrollFrameInterval();
-    this.framePacer = new TuiFramePacer(this.defaultFrameIntervalMs);
-    this.scrollIntervalMs = resolveTuiScrollInterval();
+    this.framePacer = new TuiFramePacer(resolveTuiFrameInterval());
   }
 
   override requestRender(force = false): void {
@@ -132,19 +109,6 @@ export class VspiTuiAltScreen extends TuiAltScreen {
       super.requestRender(force);
       return;
     }
-    // Wheel input reaches ScrollView directly (routeWheel), bypassing
-    // scrollBy(); detect viewport movement itself so any scroll source
-    // (wheel, keys, scrollbar drag) opens the slower scroll cadence window.
-    const viewportTop = this.viewportTop;
-    if (this.lastViewportTop !== undefined && this.lastViewportTop !== viewportTop) {
-      this.lastViewportTop = viewportTop;
-      this.lastScrollAt = performance.now();
-    } else if (this.lastViewportTop === undefined) {
-      this.lastViewportTop = viewportTop;
-    }
-    const sinceScroll = performance.now() - this.lastScrollAt;
-    const cadence = sinceScroll < SCROLL_FRAME_WINDOW_MS ? this.scrollFrameIntervalMs : this.defaultFrameIntervalMs;
-    this.framePacer.setIntervalMs(cadence);
     this.framePacer.request(force, (nextForce) => super.requestRender(nextForce));
   }
 
@@ -153,7 +117,7 @@ export class VspiTuiAltScreen extends TuiAltScreen {
   }
 
   protected override requestInputRender(): void {
-    this.requestRender();
+    this.framePacer?.requestInput(() => { super.requestInputRender(); });
   }
 
   protected override doRender(): void {
@@ -166,53 +130,27 @@ export class VspiTuiAltScreen extends TuiAltScreen {
   override scrollBy(lines: number): void {
     const requested = Number.isFinite(lines) ? Math.trunc(lines) : 0;
     if (requested === 0) return;
-    this.pendingScrollLines += requested;
-    if (this.scrollTimer) return;
-    const delay = Math.max(0, this.scrollIntervalMs - (performance.now() - this.lastScrollAt));
-    if (delay === 0) {
-      this.flushScroll();
-      return;
-    }
-    this.scrollTimer = setTimeout(() => {
-      this.scrollTimer = undefined;
-      this.flushScroll();
-    }, delay);
-    this.scrollTimer.unref();
+    super.scrollBy(requested);
+    this.requestInputRender();
   }
 
   override scrollToTop(): void {
-    this.cancelScroll();
     super.scrollToTop();
+    this.requestInputRender();
   }
 
   override scrollToBottom(): void {
-    this.cancelScroll();
     super.scrollToBottom();
-  }
-
-  private flushScroll(): void {
-    const lines = this.pendingScrollLines;
-    this.pendingScrollLines = 0;
-    if (lines === 0) return;
-    this.lastScrollAt = performance.now();
-    super.scrollBy(lines);
-  }
-
-  private cancelScroll(): void {
-    if (this.scrollTimer) clearTimeout(this.scrollTimer);
-    this.scrollTimer = undefined;
-    this.pendingScrollLines = 0;
+    this.requestInputRender();
   }
 
   override pauseRendering(): void {
-    this.cancelScroll();
     this.framePacer?.cancel();
     this.framePacer?.cancelSettle();
     super.pauseRendering();
   }
 
   override stop(options: TuiStopOptions = {}): void {
-    this.cancelScroll();
     this.framePacer?.cancel();
     this.framePacer?.cancelSettle();
     super.stop(options);

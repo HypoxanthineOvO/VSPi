@@ -1096,13 +1096,23 @@ export class VspiApp implements Component, Focusable {
 		return { render, invalidate() {} };
 	}
 
+	private readonly transcriptSizes = new WeakMap<TranscriptMessage, number>();
+	private transcriptRetentionDirty = false;
+
 	private pruneTranscript(): void {
-		const nodeIds = new Map<number, string>();
-		if (this.tui.mode === "regular") {
-			for (const node of buildTranscriptNodes(this.messages)) for (const index of node.messageIndexes) nodeIds.set(index, node.id);
-		}
+		this.transcriptRetentionDirty = false;
+		let nodeIds: Map<number, string> | undefined;
 		const retained = retainTranscript(this.messages, this.committedMessageCount, undefined,
-			this.tui.mode === "regular" ? (_message, index) => index < this.committedMessageCount || this.committedNodeIds.has(nodeIds.get(index) ?? "") : undefined,
+			this.tui.mode === "regular" ? (_message, index) => {
+				if (index < this.committedMessageCount) return true;
+				if (this.committedNodeIds.size === 0) return false;
+				if (!nodeIds) {
+					nodeIds = new Map();
+					for (const node of buildTranscriptNodes(this.messages)) for (const messageIndex of node.messageIndexes) nodeIds.set(messageIndex, node.id);
+				}
+				return this.committedNodeIds.has(nodeIds.get(index) ?? "");
+			} : undefined,
+			this.transcriptSizes,
 		);
 		if (retained.messages === this.messages) return;
 		const retainedIds = new Set(retained.messages.map(message => message.id));
@@ -2122,14 +2132,19 @@ export class VspiApp implements Component, Focusable {
 		// Nodes whose emitted remainder collapsed to zero rows are entirely in
 		// scrollback; once final they join the committed prefix even when nothing
 		// scrolled this frame.
+		let newlyCommitted = false;
 		for (const section of this.liveSections) {
-			if (section.emitted.length === 0 && section.final)
+			if (section.emitted.length === 0 && section.final && !this.committedNodeIds.has(section.nodeId) && section.messageIndexes.some(index => base + index >= this.committedMessageCount)) {
 				this.commitLiveSection(section);
+				newlyCommitted = true;
+			}
 		}
 		this.advanceCommittedPrefix(base);
-		this.rebaseLiveSections(frozenRows);
-		this.pruneTranscript();
-		if (frozenRows > 0 || previousCommitted !== this.committedMessageCount) this.regularBodyRevision++;
+		if (frozenRows > 0) {
+			this.rebaseLiveSections(frozenRows);
+			if (this.regularBodyCache) this.regularBodyCache.lines = this.regularBodyCache.lines.slice(frozenRows);
+		}
+		if (this.transcriptRetentionDirty || frozenRows > 0 || newlyCommitted || previousCommitted !== this.committedMessageCount) this.pruneTranscript();
 		if (this.pendingLiveOutput) this.requestRender();
 	}
 
@@ -6204,7 +6219,10 @@ export class VspiApp implements Component, Focusable {
 
 	private requestRender(force = false, scope: "all" | "dock" = "all"): void {
 		this.fullscreenRenderRevision += 1;
-		if (scope === "all") this.regularBodyRevision++;
+		if (scope === "all") {
+			this.regularBodyRevision++;
+			this.transcriptRetentionDirty = true;
+		}
 		if (this.renderReady) this.syncDisplayClock();
 		if (
 			!this.shutdownRequested &&

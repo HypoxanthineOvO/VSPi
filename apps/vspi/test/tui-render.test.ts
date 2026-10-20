@@ -58,7 +58,7 @@ import {
 	renderRuntimeStatus,
 	renderStatusLines,
 } from "../src/v1/ui/status.js";
-import { TuiFramePacer } from "../src/v1/ui/tui-frame-pacer.js";
+import { TuiFramePacer, VspiTuiAltScreen } from "../src/v1/ui/tui-frame-pacer.js";
 import { TerminalFrameOptimizer } from "../src/v1/ui/terminal-frame-optimizer.js";
 import { createTheme } from "../src/v1/ui/theme.js";
 import {
@@ -124,6 +124,29 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(messages[1]?.id).toBe('m19901');
 		expect(messages.at(-1)?.id).toBe('m19999');
 	});
+	it('reuses unchanged retention sizes and never drops an oversized unprinted update', () => {
+		const sizes = new WeakMap<TranscriptMessage, number>();
+		const messages: TranscriptMessage[] = [
+			{ id: 'printed', role: 'assistant', kind: 'text', text: 'old' },
+			{ id: 'unprinted', role: 'assistant', kind: 'text', text: 'new' },
+		];
+		const values = vi.spyOn(Object, 'values');
+		const limits = { messages: 1000, characters: 100 };
+		const canRemove = (_message: TranscriptMessage, index: number) => index < 1;
+		try {
+			retainTranscript(messages, 1, limits, canRemove, sizes);
+			expect(values).toHaveBeenCalledTimes(2);
+			values.mockClear();
+			retainTranscript(messages, 1, limits, canRemove, sizes);
+			expect(values).not.toHaveBeenCalled();
+			messages[1] = { ...messages[1]!, kind: 'text', text: 'x'.repeat(200) } as TranscriptMessage;
+			const retained = retainTranscript(messages, 1, limits, canRemove, sizes);
+			expect(values).toHaveBeenCalledOnce();
+			expect(retained.messages.map(message => message.id)).toEqual(['unprinted']);
+			expect(retained.committedCount).toBe(0);
+		} finally { values.mockRestore(); }
+	});
+
 	const capabilities = detectTerminalCapabilities({
 		TERM: "xterm-256color",
 		LANG: "zh_CN.UTF-8",
@@ -243,6 +266,69 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		return { terminal, tui, app, backend, events: () => events, setPolicy };
 	}
 
+	it.each([ScrollbackTUI, VspiTuiAltScreen])("renders input before a paced frame in %s", async (Tui) => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+		const terminal = new VirtualTerminal(80, 24);
+		const tui = new Tui(terminal);
+		let text = "";
+		const render = vi.fn(() => [text]);
+		const component = { render, invalidate() {}, handleInput(data: string) { text += data; } };
+		tui.addChild(component);
+		tui.setFocus(component);
+		tui.start();
+		try {
+			tui.renderNow();
+			render.mockClear();
+			tui.requestRender();
+			terminal.sendInput("x");
+			await new Promise<void>(resolve => { process.nextTick(resolve); });
+			expect(render).toHaveBeenCalledOnce();
+			expect(render.mock.results[0]?.value).toEqual(["x"]);
+		} finally { tui.stop(); vi.useRealTimers(); }
+	});
+
+	it("does not promote input through resize debounce or settling", () => {
+		vi.useFakeTimers();
+		const pacer = new TuiFramePacer(33);
+		const input = vi.fn();
+		const resize = vi.fn();
+		try {
+			pacer.requestResize(resize);
+			pacer.requestInput(input);
+			expect(input).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(100);
+			expect(resize).toHaveBeenCalledOnce();
+			pacer.requestSettle(resize);
+			pacer.requestInput(input);
+			expect(input).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(300);
+			pacer.requestInput(input);
+			expect(input).toHaveBeenCalledOnce();
+		} finally { pacer.cancel(); pacer.cancelSettle(); vi.useRealTimers(); }
+	});
+
+	it("keeps follow-end output at normal cadence and applies scroll bursts immediately", async () => {
+		const terminal = new VirtualTerminal(80, 24);
+		const tui = new VspiTuiAltScreen(terminal);
+		const lines = Array.from({ length: 100 }, (_, index) => `LINE_${index}`);
+		tui.addChild({ render: () => lines, invalidate() {} });
+		tui.start();
+		try {
+			tui.renderNow();
+			const previousTop = tui.viewportTop;
+			lines.push("FOLLOW_END");
+			tui.renderNow();
+			tui.requestRender();
+			expect(tui.viewportTop).toBeGreaterThan(previousTop);
+			const internals = tui as unknown as { framePacer: { intervalMs: number } };
+			expect(internals.framePacer.intervalMs).toBe(33);
+			tui.scrollBy(-1);
+			tui.scrollBy(-2);
+			expect(tui.viewportTop).toBe(previousTop - 2);
+			await new Promise<void>(resolve => { process.nextTick(resolve); });
+		} finally { tui.stop(); }
+	});
+
 	it("coalesces resize bursts and pending ordinary renders", () => {
 		vi.useFakeTimers();
 		try {
@@ -330,9 +416,9 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		try {
 			tui.renderNow();
 			render.mockClear();
-			for (let i = 0; i < 100; i++) {
-				terminal.sendInput("中");
-				await new Promise((resolve) => setTimeout(resolve, 2));
+			for (let burst = 0; burst < 10; burst++) {
+				for (let i = 0; i < 10; i++) terminal.sendInput("中");
+				await new Promise<void>((resolve) => process.nextTick(resolve));
 			}
 			await new Promise((resolve) => setTimeout(resolve, 80));
 			await terminal.flush();
@@ -354,6 +440,9 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			render.mockClear();
 			blocked = true;
 			for (let i = 0; i < 20; i++) terminal.sendInput("中");
+			await new Promise<void>(resolve => { process.nextTick(resolve); });
+			expect(render).not.toHaveBeenCalled();
+			expect(resume).toBeDefined();
 			await new Promise((resolve) => setTimeout(resolve, 80));
 			expect(render).not.toHaveBeenCalled();
 			expect(resume).toBeDefined();
@@ -806,9 +895,12 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		}
 	});
 
-	it("freezes nothing into scrollback while the frame fits the viewport", async () => {
+	it("freezes nothing and skips pruning on frames that fit the viewport", async () => {
 		const { app, tui, terminal } = renderFixture();
 		const commit = vi.spyOn(tui, "commitStatic");
+		const internals = app as unknown as { pruneTranscript(): void; regularBodyRevision: number; buildRenderBody: (width: number, dock: unknown) => string[] };
+		const prune = vi.spyOn(internals, "pruneTranscript");
+		const body = vi.spyOn(internals, "buildRenderBody");
 		tui.start();
 		try {
 			Object.assign(app, { messages: [{ id: "short", role: "assistant", kind: "text", text: "Short output" }] });
@@ -817,8 +909,24 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 				await terminal.flush();
 				expect(terminal.getViewport().join("\n")).toContain("Short output");
 			});
+			const revision = internals.regularBodyRevision;
+			body.mockClear();
+			prune.mockClear();
+			tui.renderNow();
+			expect(body).not.toHaveBeenCalled();
+			expect(internals.regularBodyRevision).toBe(revision);
 			expect(commit).not.toHaveBeenCalled();
+			expect(prune).not.toHaveBeenCalled();
 		} finally { tui.stop(); await app.dispose(); }
+	});
+
+	it("rebases static rows without scheduling another frame", () => {
+		const tui = new ScrollbackTUI(new VirtualTerminal(80, 24));
+		tui.restoreRenderState({ previousLines: ["frozen", "visible"], previousWidth: 80, previousHeight: 24, previousViewportTop: 1, cursorRow: 1, hardwareCursorRow: 1, maxLinesRendered: 2 });
+		const request = vi.spyOn(tui, "requestRender");
+		expect(tui.commitStatic(["frozen"])).toBe(true);
+		expect(tui.captureRenderState().previousLines).toEqual(["visible"]);
+		expect(request).not.toHaveBeenCalled();
 	});
 
 	it.each(["queued", "running"] as const)("does not freeze a %s tool that is still on screen", async (status) => {
@@ -1131,6 +1239,59 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			expect(output).not.toContain("\u001b[3J");
 			expect(rebuild).not.toHaveBeenCalled();
 		} finally { tui.stop(); await app.dispose(); await rm(home, { recursive: true, force: true }); }
+	});
+
+	it.each(["translation", "handoff"] as const)("prunes committed history after a %s update without further output", async (update) => {
+		const { app, tui, terminal } = renderFixture();
+		let finishTranslation!: (text: string) => void;
+		const translate = vi.fn(() => new Promise<string>(resolve => { finishTranslation = resolve; }));
+		const internals = app as unknown as {
+			messages: TranscriptMessage[];
+			committedMessageCount: number;
+			pruneTranscript(): void;
+			options: { settings: { thinkingTranslationEndpoint?: string } };
+			thinkingTranslator: { translate: typeof translate };
+			thinkingTranslationQueue: Promise<void>;
+			queueThinkingTranslation(id: string): void;
+			applyHandoffProjection(projection: { kind: "message-update"; id: string; patch: { output: string } }): void;
+		};
+		const prune = vi.spyOn(internals, "pruneTranscript");
+		const commit = vi.spyOn(tui, "commitStatic");
+		try {
+			await app.start();
+			internals.messages = [
+				update === "translation"
+					? { id: "committed", role: "assistant", kind: "thinking", effort: "medium", text: "Original thought", streaming: false, collapsed: true }
+					: { id: "committed", role: "assistant", kind: "tool", name: "Read", summary: "Printed result", output: "Small output", status: "success", expanded: false },
+				{ id: "live", role: "assistant", kind: "text", text: "VISIBLE_UNPRINTED_REMAINDER" },
+			];
+			internals.committedMessageCount = 1;
+			internals.pruneTranscript();
+			tui.start();
+			tui.renderNow();
+			if (update === "translation") {
+				internals.options.settings.thinkingTranslationEndpoint = "https://example.test/translate";
+				internals.thinkingTranslator = { translate };
+				internals.queueThinkingTranslation("committed");
+				await vi.waitFor(() => { expect(translate).toHaveBeenCalledOnce(); });
+				tui.renderNow();
+			}
+			prune.mockClear();
+			commit.mockClear();
+			const oversized = "x".repeat(4 * 1024 * 1024 + 1);
+			if (update === "translation") {
+				finishTranslation(oversized);
+				await internals.thinkingTranslationQueue;
+			} else internals.applyHandoffProjection({ kind: "message-update", id: "committed", patch: { output: oversized } });
+			await vi.waitFor(() => {
+				expect(internals.messages.map(message => message.id)).toEqual(["live"]);
+			});
+			expect(prune).toHaveBeenCalledOnce();
+			expect(commit).not.toHaveBeenCalled();
+			expect(internals.committedMessageCount).toBe(0);
+			await terminal.flush();
+			expect(terminal.getViewport().join("\n")).toContain("VISIBLE_UNPRINTED_REMAINDER");
+		} finally { tui.stop(); await app.dispose(); }
 	});
 
 	it("prunes over-limit history without a clearing redraw", async () => {
