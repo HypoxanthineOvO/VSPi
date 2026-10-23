@@ -2586,14 +2586,21 @@ describe('Agent tool execution contract', () => {
       ),
     );
     lifecycle.addHandle('agent-existing', 'explore');
-
-    const result = await executeAgentTool(context, {
-      run_in_background: false,
-      prompt: 'Continue',
-      description: 'Continue work',
-      resume: 'agent-existing',
-    });
-
+    const resolveModel = vi.fn(() => { throw new Error('resume must not resolve a new binding'); });
+    class BindingProvider extends Service {
+      constructor() { super(); this.provide(SubagentDefaultBindingContribution, { resolveModel }); }
+    }
+    const provider = context.get(IInstantiationService).createInstance(BindingProvider);
+    let result: Awaited<ReturnType<typeof executeAgentTool>>;
+    try {
+      result = await executeAgentTool(context, {
+        run_in_background: false,
+        prompt: 'Continue',
+        description: 'Continue work',
+        resume: 'agent-existing',
+      });
+    } finally { provider.dispose(); }
+    expect(resolveModel).not.toHaveBeenCalled();
     expect(lifecycle.create).not.toHaveBeenCalled();
     expect(lifecycle.run).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: 'agent-existing' }),

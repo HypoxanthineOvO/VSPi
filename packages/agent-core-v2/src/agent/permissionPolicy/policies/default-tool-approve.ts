@@ -35,7 +35,7 @@ export class DefaultToolApprovePermissionPolicyService implements PermissionPoli
   readonly name = 'default-tool-approve';
 
   evaluate(context: ResolvedToolExecutionHookContext): PermissionPolicyResult | undefined {
-    return DEFAULT_APPROVE_TOOLS.has(context.toolCall.name)
+    return context.execution.readOnly === true || DEFAULT_APPROVE_TOOLS.has(context.toolCall.name)
       ? { kind: 'approve' }
       : undefined;
   }

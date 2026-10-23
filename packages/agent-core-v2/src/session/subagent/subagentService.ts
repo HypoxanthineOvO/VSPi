@@ -57,8 +57,13 @@ import {
 import { selectSubagentIdentity } from './codename';
 import { SECONDARY_MODEL_SECTION, type SecondaryModelConfig } from './configSection';
 
+export interface SubagentBindingResolution {
+  readonly model: string;
+  readonly notice?: string;
+}
+
 export interface SubagentDefaultBindingContribution {
-  resolveModel(profileName: string): string | undefined;
+  resolveModel(profileName: string, requestedModel?: string): string | SubagentBindingResolution | undefined | Promise<string | SubagentBindingResolution | undefined>;
 }
 
 export const SubagentDefaultBindingContribution = collection<SubagentDefaultBindingContribution>(
@@ -137,9 +142,11 @@ export class SessionSubagentService extends Service implements ISessionSubagentS
       });
     }
     const forced = this.configService.get<SecondaryModelConfig | undefined>(SECONDARY_MODEL_SECTION)?.force === true;
-    const requestedModel = !fork && !forced && input.model === undefined
-      ? this.defaults.items[0]?.resolveModel(requestedProfileName)
-      : input.model;
+    const resolution = !fork && !forced && input.model !== 'primary'
+      ? await this.defaults.items[0]?.resolveModel(requestedProfileName, input.model)
+      : undefined;
+    const requestedModel = typeof resolution === 'object' ? resolution.model : resolution ?? input.model;
+    const bindingNotice = typeof resolution === 'object' ? resolution.notice : undefined;
     const binding = fork
       ? { model: own.modelAlias, thinking: own.thinkingLevel, modelSource: 'inherited' as const }
       : resolveSubagentBinding(
@@ -159,6 +166,7 @@ export class SessionSubagentService extends Service implements ISessionSubagentS
       modelSource: binding.modelSource,
       thinking: resolveSubagentThinking(this.configService, model, binding.thinking),
       fork,
+      bindingNotice,
     };
   }
 
@@ -209,13 +217,17 @@ export class SessionSubagentService extends Service implements ISessionSubagentS
       } else {
         createdUserTools.inheritUserTools(callerUserTools);
       }
+      const notice = plan.fork ? undefined : plan.bindingNotice;
+      if (notice !== undefined) this.log.info(notice);
+      const prompt = notice === undefined ? opts.prompt : `${notice}\nInclude this binding notice in your handoff.\n\n${opts.prompt}`;
       const promptText = plan.fork
-        ? opts.prompt
-        : await this.applyPromptPrefix(plan.profileName, opts.prompt, lease!.runtime);
+        ? prompt
+        : await this.applyPromptPrefix(plan.profileName, prompt, lease!.runtime);
       const identity = await this.assignIdentity(
         created.id,
         plan.profileName,
         opts.taskTitle ?? opts.prompt,
+        notice,
       );
       return {
         agentId: created.id,
@@ -255,6 +267,7 @@ export class SessionSubagentService extends Service implements ISessionSubagentS
     agentId: string,
     profileName: string,
     taskText: string,
+    bindingNotice?: string,
   ): Promise<{ readonly codename: string; readonly taskTitle: string }> {
     const metadata = await this.sessionMetadata.read();
     const existing = metadata.agents?.[agentId];
@@ -269,13 +282,14 @@ export class SessionSubagentService extends Service implements ISessionSubagentS
       const codename = meta.labels?.['codename'];
       if (codename !== undefined) used.add(codename);
     }
-    const identity = selectSubagentIdentity({
+    const selected = selectSubagentIdentity({
       sessionId: this.sessionContext.sessionId,
       agentId,
       profileName,
       taskText,
       usedCodenames: used,
     });
+    const identity = { ...selected, taskTitle: bindingNotice === undefined ? selected.taskTitle : `${selected.taskTitle} — ${bindingNotice}` };
     this.reservedCodenames.add(identity.codename);
     try {
       await this.sessionMetadata.registerAgent(agentId, {

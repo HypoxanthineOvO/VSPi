@@ -240,7 +240,7 @@ describe('SessionSubagentService planSpawn and spawn', () => {
   }
 
   class DefaultBindingProvider extends Service {
-    constructor(resolveModel: (profile: string) => string | undefined) {
+    constructor(resolveModel: SubagentDefaultBindingContribution['resolveModel']) {
       super();
       this.provide(SubagentDefaultBindingContribution, { resolveModel });
     }
@@ -252,10 +252,19 @@ describe('SessionSubagentService planSpawn and spawn', () => {
     modelIds.add('provider/fast').add('provider/smart');
     const svc = service({ secondaryModel: { defaultModel: 'provider/fast', models: { 'provider/fast': '', 'provider/smart': '' } } });
     expect((await svc.planSpawn({ callerAgentId: CALLER_ID, profileName: 'coder' })).model).toBe('provider/smart');
-    expect(resolve).toHaveBeenCalledWith('coder');
+    expect(resolve).toHaveBeenCalledWith('coder', undefined);
   });
 
-  it('does not call the provider for explicit models, force or fork', async () => {
+  it('resolves explicit aliases asynchronously and preserves the binding notice', async () => {
+    const resolve = vi.fn(async () => ({ model: 'provider/smart', notice: 'preferred unavailable; using smart' }));
+    disposables.add(ix.createInstance(DefaultBindingProvider, resolve));
+    modelIds.add('provider/fast').add('provider/smart');
+    const svc = service({ secondaryModel: { models: { 'provider/fast': '', 'provider/smart': '' } } });
+    expect(await svc.planSpawn({ callerAgentId: CALLER_ID, profileName: 'coder', model: 'provider/fast' })).toMatchObject({ model: 'provider/smart', bindingNotice: 'preferred unavailable; using smart' });
+    expect(resolve).toHaveBeenCalledWith('coder', 'provider/fast');
+  });
+
+  it('does not call the provider for force or fork', async () => {
     const resolve = vi.fn(() => { throw new Error('must not resolve'); });
     disposables.add(ix.createInstance(DefaultBindingProvider, resolve));
     modelIds.add('provider/fast');

@@ -141,6 +141,15 @@ describe('AgentPermissionPolicyService chain', () => {
     return svc.evaluate(policyContext(input));
   }
 
+  it('approves declared read-only executions but asks for ordinary writes and still honors deny rules', async () => {
+    const context = policyContext({ toolName: 'Configuration', args: {} });
+    const read = { ...context, execution: { ...context.execution, readOnly: true } };
+    expect(await service().evaluate(read)).toMatchObject({ policyName: 'default-tool-approve', result: { kind: 'approve' } });
+    expect(await service().evaluate(context)).toMatchObject({ result: { kind: 'ask' } });
+    rules.push({ decision: 'deny', scope: 'user', pattern: 'Configuration' });
+    expect(await service().evaluate(read)).toMatchObject({ result: { kind: 'deny' } });
+  });
+
   it('allows AskUserQuestion through the auto-mode policy', async () => {
     mode = 'auto';
 
