@@ -29,7 +29,8 @@ import { ISessionMetadata, type AgentMeta, type SessionMetadataChangedEvent } fr
 import { ISessionContext } from '#/session/sessionContext/sessionContext';
 import { SECONDARY_MODEL_SECTION } from '#/session/subagent/configSection';
 import { ISessionSubagentService } from '#/session/subagent/subagent';
-import { SessionSubagentService } from '#/session/subagent/subagentService';
+import { SessionSubagentService, SubagentDefaultBindingContribution } from '#/session/subagent/subagentService';
+import { Service } from '#/_base/di/service';
 import {
   FORK_CONTEXT_NOTICE,
   type SpawnedSubagent,
@@ -237,6 +238,46 @@ describe('SessionSubagentService planSpawn and spawn', () => {
     ix.set(ISessionSubagentService, new SyncDescriptor(SessionSubagentService));
     return ix.get(ISessionSubagentService);
   }
+
+  class DefaultBindingProvider extends Service {
+    constructor(resolveModel: (profile: string) => string | undefined) {
+      super();
+      this.provide(SubagentDefaultBindingContribution, { resolveModel });
+    }
+  }
+
+  it('uses a contributed default and validates it through the existing pool', async () => {
+    const resolve = vi.fn(() => 'provider/smart');
+    disposables.add(ix.createInstance(DefaultBindingProvider, resolve));
+    modelIds.add('provider/fast').add('provider/smart');
+    const svc = service({ secondaryModel: { defaultModel: 'provider/fast', models: { 'provider/fast': '', 'provider/smart': '' } } });
+    expect((await svc.planSpawn({ callerAgentId: CALLER_ID, profileName: 'coder' })).model).toBe('provider/smart');
+    expect(resolve).toHaveBeenCalledWith('coder');
+  });
+
+  it('does not call the provider for explicit models, force or fork', async () => {
+    const resolve = vi.fn(() => { throw new Error('must not resolve'); });
+    disposables.add(ix.createInstance(DefaultBindingProvider, resolve));
+    modelIds.add('provider/fast');
+    const svc = service({ secondaryModel: { defaultModel: 'provider/fast', force: true } });
+    expect((await svc.planSpawn({ callerAgentId: CALLER_ID, profileName: 'coder' })).model).toBe('provider/fast');
+    expect((await svc.planSpawn({ callerAgentId: CALLER_ID, fork: true })).model).toBe('main-model');
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it('honors explicit primary without invoking the provider', async () => {
+    const resolve = vi.fn(() => 'not-in-pool');
+    disposables.add(ix.createInstance(DefaultBindingProvider, resolve));
+    const svc = service();
+    expect((await svc.planSpawn({ callerAgentId: CALLER_ID, profileName: 'coder', model: 'primary' })).model).toBe('main-model');
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it('rejects a contributed model outside the pool instead of falling back', async () => {
+    disposables.add(ix.createInstance(DefaultBindingProvider, () => 'provider/not-authorized'));
+    const svc = service({ secondaryModel: { defaultModel: 'provider/fast', models: { 'provider/fast': '' } } });
+    await expect(svc.planSpawn({ callerAgentId: CALLER_ID, profileName: 'coder' })).rejects.toThrow('provider/not-authorized');
+  });
 
   async function planSpawnError(
     svc: ISessionSubagentService,

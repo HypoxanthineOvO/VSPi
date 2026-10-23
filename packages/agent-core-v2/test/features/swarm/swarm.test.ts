@@ -211,6 +211,7 @@ function realSubagents(
   catalog: ISessionAgentProfileCatalog,
   config: IConfigService,
   callerProfile: IAgentProfileService,
+  resolveModel?: (profile: string) => string | undefined,
 ): ISessionSubagentService {
   const caller = {
     _serviceBrand: undefined,
@@ -286,6 +287,7 @@ function realSubagents(
     sessionContext,
     sessionMetadata,
     stubLog(),
+    { items: resolveModel === undefined ? [] : [{ resolveModel }], records: [], onDidChange: () => toDisposable(() => {}) },
   );
 }
 
@@ -1226,6 +1228,20 @@ describe('AgentSwarmTool', () => {
         ],
       }),
     );
+  });
+
+  it('routes new AgentSwarm items through the contributed profile default', async () => {
+    const host = mockSwarmHost();
+    const config = stubConfig({ defaultModel: 'provider/fast', models: { 'provider/fast': '', 'provider/smart': '' } });
+    const caller = stubCallerProfile({ modelAlias: 'main-model', thinkingLevel: 'high' });
+    const resolveModel = vi.fn(() => 'provider/smart');
+    const tool = new AgentSwarmTool(host.swarmService, makeAgentScopeContext({ agentId: host.callerAgentId, agentScope: '' }), mockSwarmMode(), config, stubFlag(true), realSubagents(stubSwarmCatalog(), config, caller, resolveModel), caller);
+    await executeTool(tool, context({ description: 'Inspect', prompt_template: 'Inspect {{item}}', items: ['a', 'b'] }));
+    expect(resolveModel).toHaveBeenCalledTimes(1);
+    expect(host.swarmService.run).toHaveBeenCalledWith(expect.objectContaining({ tasks: [
+      expect.objectContaining({ plan: expect.objectContaining({ model: 'provider/smart' }) }),
+      expect.objectContaining({ plan: expect.objectContaining({ model: 'provider/smart' }) }),
+    ] }));
   });
 
   it('resolves spawn task plans from the configured model pool default', async () => {

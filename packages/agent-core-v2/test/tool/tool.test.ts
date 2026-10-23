@@ -4,6 +4,9 @@ import { join } from 'node:path';
 import { Readable, type Writable } from 'node:stream';
 import { createControlledPromise } from '@antfu/utils';
 import { LifecycleScope } from '#/app/scopes';
+import { Service } from '#/_base/di/service';
+import { IInstantiationService } from '#/_base/di/instantiation';
+import { SubagentDefaultBindingContribution } from '#/session/subagent/subagentService';
 import { type IAgentScopeHandle } from '#/_base/di/scope';
 import { Event, type Event as KimiEvent } from '#/_base/event';
 import { ILogService } from '#/_base/log/log';
@@ -1359,6 +1362,27 @@ describe('Agent tool execution contract', () => {
       reload: async () => {},
     };
   }
+
+  it('routes a new Agent task through the contributed profile default', async () => {
+    class DefaultBinding extends Service {
+      constructor() {
+        super();
+        this.provide(SubagentDefaultBindingContribution, { resolveModel: () => 'provider/smart' });
+      }
+    }
+    const lifecycle = createAgentLifecycleStub();
+    const context = createAgentToolContext(lifecycle, {
+      initialConfig: { secondaryModel: { defaultModel: 'provider/fast', models: { 'provider/fast': '', 'provider/smart': '' } }, models: POOL_MODEL_ENTRIES },
+    });
+    const provider = context.get(IInstantiationService).createInstance(DefaultBinding);
+    try {
+      const result = await executeAgentTool(context, { prompt: 'Inspect code', description: 'Inspect', subagent_type: 'coder', run_in_background: false });
+      expect(result.isError).not.toBe(true);
+      expect(lifecycle.create).toHaveBeenCalledWith(expect.objectContaining({ binding: expect.objectContaining({ model: 'provider/smart' }) }));
+    } finally {
+      provider.dispose();
+    }
+  });
 
   it('rejects a subagent type outside the caller allowlist', async () => {
     const lifecycle = createAgentLifecycleStub();

@@ -1,4 +1,5 @@
 import { Service } from '#/_base/di/service';
+import { collection, type CollectionView } from '#/_base/di/collection';
 import type { AgentContext } from '#/agent/agentContext/agentContext';
 import { Error2, ErrorCodes } from '#/errors';
 import { LifecycleScope } from '#/app/scopes';
@@ -54,6 +55,18 @@ import {
   type SubagentSpawnPlanInput,
 } from './spawn';
 import { selectSubagentIdentity } from './codename';
+import { SECONDARY_MODEL_SECTION, type SecondaryModelConfig } from './configSection';
+
+export interface SubagentDefaultBindingContribution {
+  resolveModel(profileName: string): string | undefined;
+}
+
+export const SubagentDefaultBindingContribution = collection<SubagentDefaultBindingContribution>(
+  'subagent-default-binding',
+  { validate: (_value, existing) => {
+    if (existing.length > 0) throw new Error('Only one subagent default binding provider may be registered');
+  } },
+);
 
 export class SessionSubagentService extends Service implements ISessionSubagentService {
   declare readonly _serviceBrand: undefined;
@@ -76,6 +89,7 @@ export class SessionSubagentService extends Service implements ISessionSubagentS
     @ISessionContext private readonly sessionContext: ISessionContext,
     @ISessionMetadata private readonly sessionMetadata: ISessionMetadata,
     @ILogService private readonly log: ILogService,
+    @SubagentDefaultBindingContribution private readonly defaults: CollectionView<SubagentDefaultBindingContribution>,
   ) {
     super();
   }
@@ -122,12 +136,16 @@ export class SessionSubagentService extends Service implements ISessionSubagentS
         details: { agentId: input.callerAgentId },
       });
     }
+    const forced = this.configService.get<SecondaryModelConfig | undefined>(SECONDARY_MODEL_SECTION)?.force === true;
+    const requestedModel = !fork && !forced && input.model === undefined
+      ? this.defaults.items[0]?.resolveModel(requestedProfileName)
+      : input.model;
     const binding = fork
       ? { model: own.modelAlias, thinking: own.thinkingLevel, modelSource: 'inherited' as const }
       : resolveSubagentBinding(
           this.configService,
           { modelAlias: own.modelAlias, thinkingLevel: own.thinkingLevel },
-          input.model,
+          requestedModel,
         );
     let model: Model;
     try {
