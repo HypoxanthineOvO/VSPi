@@ -63,6 +63,7 @@ function normalizeSettings(input: unknown, fallback: AppSettings): AppSettings {
 					: "hidden"
 				: fallback.thinkingDisplay;
 	return {
+		sessionsScope: value.sessionsScope === "all" || value.sessionsScope === "workspace" ? value.sessionsScope : fallback.sessionsScope,
 		scope:
 			value.scope === "global" || value.scope === "project"
 				? value.scope
@@ -128,6 +129,7 @@ function projectSettings(input: unknown, global: AppSettings): AppSettings {
 		...normalizeSettings(input, global),
 		scope: "project",
 		thinkingTranslationEndpoint: global.thinkingTranslationEndpoint,
+		sessionsScope: global.sessionsScope,
 	};
 }
 
@@ -236,7 +238,10 @@ export async function saveSettings(
 		}
 	}
 	const saved: Partial<AppSettings> = { ...settings };
-	if (settings.scope === "project") delete saved.thinkingTranslationEndpoint;
+	if (settings.scope === "project") {
+		delete saved.thinkingTranslationEndpoint;
+		delete saved.sessionsScope;
+	}
 	const target = settings.scope === "global" ? paths.global : paths.project;
 	const projectScope =
 		settings.scope === "project"

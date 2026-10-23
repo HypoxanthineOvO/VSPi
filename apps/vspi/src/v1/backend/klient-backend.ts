@@ -39,6 +39,8 @@ import type {
 	Question,
 	SessionMarkerMessage,
 	SessionOption,
+	SessionListOptions,
+	SessionPage,
 	TranscriptMessage,
 	UsageSnapshot,
 } from "../domain/types.js";
@@ -272,7 +274,7 @@ export class KlientChatBackend implements ChatBackend {
 
 	constructor(
 		connection: RuntimeConnection,
-		private readonly cwd: string,
+		private cwd: string,
 		private readonly startupMode: SessionStartupMode,
 		private readonly reconnectRuntime?: () => Promise<RuntimeConnection>,
 		private readonly recoveryDelays: readonly number[] = [1_000, 2_000, 4_000, 8_000, 16_000],
@@ -522,29 +524,32 @@ export class KlientChatBackend implements ChatBackend {
 		this.events?.onSessionReady?.();
 	}
 
-	async listSessions(): Promise<SessionOption[]> {
+	async listSessions(options: SessionListOptions = {}): Promise<SessionPage> {
 		const workspaces = await withTimeout(
-			this.connection.klient.global.workspaces.list(),
-			10_000,
-			"读取 workspace 超时",
+			this.connection.klient.global.workspaces.list(), 10_000, "读取 workspace 超时",
 		);
 		const workspace = workspaces.find((item) => item.root === this.cwd);
-		if (workspace === undefined) return [];
-		const page = await withTimeout(
-			this.connection.klient.global.sessions.list({
-				workspaceIds: [workspace.id],
+		if (options.scope !== "all" && workspace === undefined) return { items: [] };
+		const roots = new Map(workspaces.map((item) => [item.id, item.root]));
+		const query = options.query?.trim().toLocaleLowerCase();
+		let cursor = options.cursor;
+		const items: SessionOption[] = [];
+		do {
+			const page = await withTimeout(this.connection.klient.global.sessions.list({
+				workspaceIds: options.scope === "all" ? undefined : [workspace!.id],
 				limit: 100,
-			}),
-			10_000,
-			"读取会话列表超时",
-		);
-		return page.items.map((item) => ({
-			id: item.id,
-			label: sessionDisplayLabel(item),
-			relativeTime: relativeTime(item.updatedAt),
-			branchDepth: 0,
-			current: item.id === this.meta?.id,
-		}));
+				before: cursor,
+			}), 10_000, "读取会话列表超时");
+			for (const item of page.items) {
+				const label = sessionDisplayLabel(item);
+				const cwd = item.cwd ?? roots.get(item.workspaceId);
+				if (query && !`${label} ${cwd ?? ""}`.toLocaleLowerCase().includes(query)) continue;
+				items.push({ id: item.id, label, cwd, relativeTime: relativeTime(item.updatedAt), branchDepth: 0, current: item.id === this.meta?.id });
+			}
+			if (page.nextCursor === cursor && cursor !== undefined) throw new Error("会话分页游标未前进，请重试");
+			cursor = page.nextCursor;
+		} while (query && items.length === 0 && cursor !== undefined);
+		return { items, nextCursor: cursor };
 	}
 
 	async switchSession(id: string): Promise<void> {
@@ -1159,6 +1164,7 @@ export class KlientChatBackend implements ChatBackend {
 		this.policyRevision += 1;
 		if (reason !== "created") this.policy = "Standard";
 		this.meta = meta;
+		this.cwd = meta.cwd ?? this.cwd;
 		this.session = this.connection.klient.session(meta.id);
 		this.agent = this.session.agent("main");
 		if (draftPermission !== undefined) await this.writePermission(this.agent, draftPermission);
@@ -1220,7 +1226,7 @@ export class KlientChatBackend implements ChatBackend {
 			this.currentProvider = "";
 			this.supportsVision = false;
 		}
-		if (!preserving) this.events?.onSessionReset?.({ id: meta.id, reason, effort: this.effort });
+		if (!preserving) this.events?.onSessionReset?.({ id: meta.id, reason, effort: this.effort, cwd: this.cwd });
 		this.hydrating = reason !== 'created';
 		this.subscribe();
 		await this.refreshPolicy(this.agent);

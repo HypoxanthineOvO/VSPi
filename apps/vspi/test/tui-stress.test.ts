@@ -32,7 +32,7 @@ async function fixture(scrollback = 20000, shellHistory?: string, thinkingDispla
   const backend: ChatBackend = {
     kind: 'runtime', modelId: 'example/model', modelLabel: 'Example', supportsVision: false,
     start: async listener => { events = listener; }, dispose: async () => {}, send: async () => {}, cancel: async () => {}, compact: async () => false,
-    newSession: async () => {}, listSessions: async () => [], switchSession: async () => {},
+    newSession: async () => {}, listSessions: async () => ({ items: [] }), switchSession: async () => {},
     setPolicy: async policy => ({ policy, boundary: 'Host', sandboxed: false, recovery: false, sessionAllowlist: [] }),
   };
   const app = new VspiApp(tui, theme, backend, { cwd: '/workspace', home, settings: { ...DEFAULT_SETTINGS, thinkingDisplay, summarizeSessionTitleOnExit: false }, attachments: new AttachmentService('pressure-test', theme, { home }), onExit() {} });
@@ -130,7 +130,7 @@ describe('bounded native transcript pressure', () => {
         expect([...found.values()].every(count => count === 1), `${width}x${height}`).toBe(true);
         expect(f.app.composer.getText()).toBe(draft);
       }
-      expect(writes.mock.calls.some(([chunk]) => chunk.includes('\x1b[2J') || chunk.includes('\x1b[3J'))).toBe(false);
+      expect(writes.mock.calls.some(([chunk]) => chunk.includes('\x1B[2J') || chunk.includes('\x1B[3J'))).toBe(false);
       await report('streaming-table-and-dictation', { uniqueRows: expectedRows, resizeSteps: 6, draftCharacters: draft.length, historyClears: 0 });
     } finally { writes.mockRestore(); await f.close(); }
   }, 15000);
@@ -421,8 +421,8 @@ describe('bounded native transcript pressure', () => {
   it('waits for a trailing high surrogate without spinning frames and completes both text and tool emoji', async () => {
     const f = await fixture();
     try {
-      f.events.onMessage({ id: 'emoji-text', role: 'assistant', kind: 'text', text: 'TEXT_EMOJI \ud83d', streaming: true });
-      f.events.onMessage({ id: 'emoji-tool', role: 'assistant', kind: 'tool', name: 'Shell', summary: 'Emoji', expanded: true, status: 'running', output: 'TOOL_EMOJI \ud83d' });
+      f.events.onMessage({ id: 'emoji-text', role: 'assistant', kind: 'text', text: 'TEXT_EMOJI \uD83D', streaming: true });
+      f.events.onMessage({ id: 'emoji-tool', role: 'assistant', kind: 'tool', name: 'Shell', summary: 'Emoji', expanded: true, status: 'running', output: 'TOOL_EMOJI \uD83D' });
       await new Promise(resolve => { setTimeout(resolve, 100); }); await f.terminal.flush();
       const frames = f.heights.length;
       await new Promise(resolve => { setTimeout(resolve, 200); });

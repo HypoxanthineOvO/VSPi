@@ -79,3 +79,14 @@ describe('Thinking translation authorization', () => {
     expect(await loadModelPicks(home)).toMatchObject({ pinned: ['legacy'], recent: [] });
   });
 });
+
+
+it('remembers the session browser scope globally across projects', async () => {
+  const { cwd, home, paths } = await settingsFixture();
+  await saveSettings(cwd, { ...DEFAULT_SETTINGS, scope: 'global', sessionsScope: 'all' }, home);
+  await writeFile(paths.project, JSON.stringify({ sessionsScope: 'workspace' }));
+  expect((await loadSettings(cwd, home, { trustedProject: true })).sessionsScope).toBe('all');
+  expect((await loadSettings(join(cwd, 'another'), home)).sessionsScope).toBe('all');
+  await saveSettings(cwd, { ...DEFAULT_SETTINGS, sessionsScope: 'all' }, home, { trustedProject: true });
+  expect(JSON.parse(await readFile(paths.project, 'utf8')).sessionsScope).toBeUndefined();
+});

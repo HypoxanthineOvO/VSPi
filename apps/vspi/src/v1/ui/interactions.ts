@@ -230,6 +230,12 @@ const actions: InteractionDefinition[] = [
     hint: "Esc 关闭",
   }),
   keyAction({
+    id: "panel.sessions.scope",
+    surface: "panel", context: "sessions",
+    keys: ["Tab", "Shift+Tab"], keyValues: [Key.tab, Key.shift("tab")],
+    handler: "switchSessionsScope", hint: "Tab 切换范围",
+  }),
+  keyAction({
     id: "panel.sessions.move",
     surface: "panel",
     context: "sessions",
@@ -253,11 +259,17 @@ const actions: InteractionDefinition[] = [
     id: "panel.sessions.fork",
     surface: "panel",
     context: "sessions",
-    keys: ["Shift+F"],
-    keyValues: [Key.shift("f")],
+    keys: ["Ctrl+F"],
+    keyValues: [Key.ctrl("f")],
     handler: "forkSession",
     enabled: hasItems,
-    hint: "Shift+F 创建分支",
+    hint: "Ctrl+F 分支",
+  }),
+  inputAction({
+    id: "panel.sessions.search",
+    surface: "panel", context: "sessions",
+    keys: ["Text", "Editing keys"], handler: "editSessionsSearch",
+    matcher: editingInput,
   }),
   keyAction({
     id: "panel.sessions.close",

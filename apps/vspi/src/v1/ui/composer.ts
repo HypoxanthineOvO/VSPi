@@ -121,6 +121,10 @@ export class Composer implements Component, Focusable {
     this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider([GOAL_SLASH_COMMAND], cwd));
   }
 
+  setWorkspace(cwd: string): void {
+    this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider([GOAL_SLASH_COMMAND], cwd));
+  }
+
   set onSubmit(value: (text: string) => void) {
     this.editor.onSubmit = value;
   }
@@ -248,7 +252,7 @@ export class Composer implements Component, Focusable {
     if (goalHint) {
       const hint = this.theme.muted(goalHint);
       body = body.map((line) =>
-        line.includes("\x1B[7m \\x1b[0m") ? line.replace("\x1B[7m \\x1b[0m", `\x1B[7m \\x1b[0m${hint}`) : line,
+        line.includes("\u001B[7m \\x1b[0m") ? line.replace("\u001B[7m \\x1b[0m", `\u001B[7m \\x1b[0m${hint}`) : line,
       );
     }
 

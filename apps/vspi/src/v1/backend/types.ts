@@ -13,7 +13,8 @@ import type {
 	PlanItem,
 	ProviderOption,
 	Question,
-	SessionOption,
+	SessionListOptions,
+	SessionPage,
 	TranscriptMessage,
 	UsageSnapshot,
 } from "../domain/types.js";
@@ -361,6 +362,7 @@ export type SessionResetReason =
 	| "import";
 
 export interface SessionReset {
+	cwd?: string;
 	id: string;
 	reason: SessionResetReason;
 	effort: EffortLevel;
@@ -421,7 +423,7 @@ export interface ChatBackend {
 	compact(options?: CompactOptions): Promise<boolean>;
 	abortCompaction?(): void;
 	newSession(options?: NewSessionOptions): Promise<void>;
-	listSessions(): Promise<SessionOption[]>;
+	listSessions(options?: SessionListOptions): Promise<SessionPage>;
 	switchSession(id: string): Promise<void>;
 	generateSessionTitle?(): Promise<string | undefined>;
 	consumeResolvedModelFallback?(): boolean;

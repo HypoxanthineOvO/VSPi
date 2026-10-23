@@ -136,7 +136,7 @@ describe('canonical source priority', () => {
       },
     } } } as unknown as RuntimeConnection;
     const options = await new KlientChatBackend(connection, '/workspace', 'new').getModelOptions();
-    const ordered = [...options].sort((left, right) => left.sourcePriority! - right.sourcePriority!).map(item => item.provider);
+    const ordered = [...options].toSorted((left, right) => left.sourcePriority! - right.sourcePriority!).map(item => item.provider);
     expect(ordered).toEqual(override ?? ['devin', 'openai-codex', 'example']);
   });
 });
@@ -3098,4 +3098,45 @@ describe('progress updates and side questions', () => {
       expect(startSideQuestion).toHaveBeenCalledOnce();
     } finally { await fixture.backend.dispose(); }
   });
+});
+
+
+describe("session browser", () => {
+	const summary = (id: string, workspaceId: string, title: string, updatedAt = 1) => ({ id, workspaceId, title, updatedAt, createdAt: 1, archived: false });
+	function browser(pages: unknown[], cwd = "/workspace") {
+		const list = vi.fn();
+		for (const page of pages) list.mockResolvedValueOnce(page);
+		const connection = { klient: { global: {
+			workspaces: { list: async () => [{ id: "local", root: "/workspace" }, { id: "other", root: "/other/project" }] },
+			sessions: { list },
+		} } } as unknown as RuntimeConnection;
+		return { backend: new KlientChatBackend(connection, cwd, "resume"), list };
+	}
+	it("keeps workspace as the default and removes its filter for All even outside a known workspace", async () => {
+		const { backend, list } = browser([{ items: [summary("new", "other", "Other", 2), summary("old", "local", "Local")] }], "/unknown");
+		expect(await backend.listSessions()).toEqual({ items: [] });
+		expect(list).not.toHaveBeenCalled();
+		const page = await backend.listSessions({ scope: "all" });
+		expect(list).toHaveBeenCalledWith({ workspaceIds: undefined, limit: 100, before: undefined });
+		expect(page.items.map(item => [item.id, item.cwd])).toEqual([["new", "/other/project"], ["old", "/workspace"]]);
+	});
+	it("searches past the first 100 sessions and preserves the cursor for more matches", async () => {
+		const { backend, list } = browser([
+			{ items: Array.from({ length: 100 }, (_, i) => summary(`recent-${i}`, "local", "Recent")), nextCursor: "recent-99" },
+			{ items: [summary("old-match", "local", "Needle")], nextCursor: "old-match" },
+			{ items: [summary("oldest", "local", "NEEDLE again")] },
+		]);
+		const first = await backend.listSessions({ query: "needle" });
+		expect(first.items.map(item => item.id)).toEqual(["old-match"]);
+		expect(list).toHaveBeenNthCalledWith(2, { workspaceIds: ["local"], limit: 100, before: "recent-99" });
+		const second = await backend.listSessions({ query: "needle", cursor: first.nextCursor });
+		expect(second.items.map(item => item.id)).toEqual(["oldest"]);
+		expect(second.nextCursor).toBeUndefined();
+	});
+	it("searches workspace paths and reports index failures", async () => {
+		const { backend, list } = browser([{ items: [summary("a", "other", "Title"), summary("b", "local", "Title")] }]);
+		expect((await backend.listSessions({ scope: "all", query: "/OTHER" })).items.map(item => item.id)).toEqual(["a"]);
+		list.mockRejectedValueOnce(new Error("index unavailable"));
+		await expect(backend.listSessions({ scope: "all" })).rejects.toThrow("index unavailable");
+	});
 });

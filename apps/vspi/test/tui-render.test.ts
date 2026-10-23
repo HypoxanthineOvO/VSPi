@@ -264,7 +264,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 			cancel: async () => {},
 			compact: async () => false,
 			newSession: async () => {},
-			listSessions: async () => [],
+			listSessions: async () => ({ items: [] }),
 			switchSession: async () => {},
 		};
 		const app = new VspiApp(tui, theme, backend, {
@@ -2118,6 +2118,58 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(output).not.toContain("Kimi");
 		expect(output).not.toContain("Backend");
 		expect(output).not.toContain("VSP Runtime");
+	});
+
+	it("ignores stale session search results after switching scope or closing the panel", async () => {
+		const { app, backend } = renderFixture();
+		const internals = app as unknown as {
+			panels: PanelController;
+			refreshSessions(more?: boolean): Promise<void>;
+			applyPanelEvent(event: { type: "close" }): Promise<void>;
+		};
+		let finish!: (page: { items: [] }) => void;
+		backend.listSessions = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValueOnce({ items: [{ id: "new", label: "New scope", branchDepth: 0, relativeTime: "now" }] });
+		internals.panels.open("sessions");
+		const old = internals.refreshSessions();
+		internals.panels.sessionsScope = "all";
+		await internals.refreshSessions();
+		finish({ items: [] });
+		await old;
+		expect(internals.panels.renderSessionsSurface(90, 10, theme).map(stripTerminalSequences).join("\n")).toContain("New scope");
+		backend.listSessions = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+		const pending = internals.refreshSessions();
+		await internals.applyPanelEvent({ type: "close" });
+		internals.panels.open("settings");
+		internals.panels.handleInput("\x1B[B");
+		const state = internals.panels as unknown as { state: { selected: number } };
+		const selected = state.state.selected;
+		finish({ items: [] });
+		await pending;
+		expect(state.state.selected).toBe(selected);
+		await app.dispose();
+	});
+
+	it("browses all sessions, accepts uppercase search, and keeps headers visible while paging", () => {
+		const panels = new PanelController(DEFAULT_SETTINGS);
+		panels.open("sessions");
+		expect(panels.handleInput("\t")).toEqual({ type: "sessionsQuery", scopeChanged: true });
+		expect(panels.sessionsScope).toBe("all");
+		const sessions = Array.from({ length: 12 }, (_, i) => ({ id: `s${i}`, label: `Session ${i}`, cwd: `/project/${i}`, branchDepth: 0, relativeTime: "1分钟前" }));
+		panels.setSessions(sessions, "next");
+		for (let i = 0; i < 11; i++) panels.handleInput("\x1B[B");
+		expect(panels.handleInput("\x1B[B")).toEqual({ type: "sessionsQuery", more: true });
+		const lines = panels.renderSessionsSurface(90, 12, theme).map(stripTerminalSequences);
+		expect(lines).toHaveLength(12);
+		expect(lines.join("\n")).toContain("[ All ]");
+		expect(lines.join("\n")).toContain("Session 11");
+		expect(lines.join("\n")).toContain("/project/11");
+		expect(panels.handleInput("F")).toEqual({ type: "sessionsQuery" });
+		expect(panels.sessionsQuery).toBe("F");
+		expect(panels.handleInput("\x1B")).toEqual({ type: "sessionsQuery" });
+		expect(panels.sessionsQuery).toBe("");
+		expect(panels.handleInput("\u0006")).toMatchObject({ type: "fork", session: { id: "s0" } });
+		for (const rows of [3, 4, 5]) expect(panels.renderSessionsSurface(24, rows, theme)).toHaveLength(rows);
+		expect(panels.handleInput("\x1B")).toEqual({ type: "close" });
 	});
 
 	it("caps the Sessions surface at 80 percent of the available height", () => {
@@ -4804,10 +4856,10 @@ describe('canonical model picker', () => {
     expect(picker.handleInput('\u0010')).toMatchObject({ type: 'modelPin', pinned: [modelIdentityKey(devin), unrelatedPin, canonicalPin] });
     expect(picker.handleInput('\u0010')).toMatchObject({ type: 'modelPin', pinned: [modelIdentityKey(devin), unrelatedPin] });
     picker.handleInput('\t');
-    picker.handleInput('\x1B[B');
+    picker.handleInput('\u001B[B');
     expect(picker.handleInput('\u0010')).toMatchObject({ type: 'modelPin', pinned: [modelIdentityKey(devin), unrelatedPin, modelIdentityKey(gateway)] });
     expect(picker.handleInput('\u0010')).toMatchObject({ type: 'modelPin', pinned: [modelIdentityKey(devin), unrelatedPin] });
-    picker.handleInput('\x1B[A');
+    picker.handleInput('\u001B[A');
     expect(picker.handleInput('\u0010')).toMatchObject({ type: 'modelPin', pinned: [unrelatedPin] });
   });
 
@@ -4837,7 +4889,7 @@ describe('canonical model picker', () => {
     panels.open('models');
     expect(panels.acceptsInput('\t')).toBe(true);
     panels.handleInput('\t');
-    panels.handleInput('\x1B[B');
+    panels.handleInput('\u001B[B');
     expect(panels.handleInput('\r')).toMatchObject({ type: 'model', model: { provider: 'gateway' } });
     panels.openEffort('high', ['low', 'high', 'max']);
     panels.returnToModels();
@@ -4852,7 +4904,7 @@ describe('canonical model picker', () => {
     expect(lines.length).toBeLessThanOrEqual(height);
     for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     const terminal = new VirtualTerminal(width, height);
-    terminal.write('\x1B[?7l\x1B[H' + lines.join('\r\n'));
+    terminal.write('\u001B[?7l\u001B[H' + lines.join('\r\n'));
     await terminal.flush();
     const text = terminal.getViewport().join('\n');
     expect(text).toContain('Anthropic');

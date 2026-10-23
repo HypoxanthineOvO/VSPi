@@ -128,6 +128,7 @@ export type PanelEvent =
 	| { type: "subagentModel"; edit: SubagentModelEdit }
 	| { type: "modelGroup"; group: ModelGroup }
 	| { type: 'providerManager'; action: ProviderManagerAction }
+	| { type: "sessionsQuery"; scopeChanged?: boolean; more?: boolean }
 	| { type: "session"; session: SessionOption }
 	| { type: "fork"; session: SessionOption }
 	| { type: "externalImport"; session: ExternalSessionSummary }
@@ -664,6 +665,10 @@ export class PanelController {
 	private modelGroups: ModelGroup[] = [];
 	private providers: ProviderOption[] = [];
 	private sessions: SessionOption[] = [];
+	sessionsScope: AppSettings["sessionsScope"];
+	sessionsQuery = "";
+	sessionsCursor: string | undefined;
+	sessionsLoading = false;
 	private externalSessions: ExternalSessionSummary[] = [];
 	private externalImportSource: ExternalSessionSource = "codex";
 	private externalImportSearch = "";
@@ -792,6 +797,7 @@ export class PanelController {
 
 	constructor(settings: AppSettings) {
 		this.settings = { ...settings };
+		this.sessionsScope = settings.sessionsScope;
 		this.questionInput.focused = false;
 		this.settingsLayers = {
 			global: { ...settings, scope: "global" },
@@ -956,9 +962,10 @@ export class PanelController {
 		this.open("plan");
 	}
 
-	setSessions(sessions: SessionOption[]): void {
-		this.sessions = sessions.length > 0 ? [...sessions] : [];
-		clampSelection(this.state, this.sessions.length);
+	setSessions(sessions: SessionOption[], nextCursor?: string, append = false): void {
+		this.sessions = append ? [...new Map([...this.sessions, ...sessions].map(item => [item.id, item])).values()] : [...sessions];
+		this.sessionsCursor = nextCursor;
+		if (this.kind === "sessions") clampSelection(this.state, this.sessions.length);
 	}
 
 	setExternalSessions(
@@ -1400,6 +1407,12 @@ export class PanelController {
 				this.promptImportPath = "";
 				return;
 			}
+			if (this.kind === "sessions" && this.sessionsQuery) {
+				this.sessionsQuery = "";
+				this.state.selected = 0;
+				this.state.scroll = 0;
+				return { type: "sessionsQuery" };
+			}
 			if (this.kind === "settings") this.restoreSettingsDraft();
 			if (this.kind !== "plan") {
 				this.close();
@@ -1718,17 +1731,20 @@ export class PanelController {
 		theme: VspiTheme,
 	): string[] {
 		const bodyWidth = Math.max(1, width - 2);
-		const bodyRows = Math.max(1, maxRows - 2);
 		this.lastBodyWidth = bodyWidth;
-		let body = this.renderSessions(bodyWidth, theme);
+		const rendered = this.renderSessions(bodyWidth, theme);
+		const header = rendered.slice(0, Math.min(2, Math.max(0, maxRows - 3)));
+		const bodyRows = Math.max(1, maxRows - 2 - header.length);
+		let body = rendered.slice(2);
 		this.state.scroll = Math.max(
 			0,
 			Math.min(this.state.scroll, Math.max(0, body.length - bodyRows)),
 		);
 		const selectedRow = this.state.selected * 2;
 		if (selectedRow < this.state.scroll) this.state.scroll = selectedRow;
-		if (selectedRow >= this.state.scroll + bodyRows) {
-			this.state.scroll = selectedRow - bodyRows + 1;
+		const selectedEnd = selectedRow + Math.min(2, bodyRows) - 1;
+		if (selectedEnd >= this.state.scroll + bodyRows) {
+			this.state.scroll = selectedEnd - bodyRows + 1;
 			if (this.state.scroll % 2 !== 0) this.state.scroll += 1;
 		}
 		this.state.scroll = Math.max(
@@ -1742,13 +1758,13 @@ export class PanelController {
 			"sessions",
 			this.interactionState(),
 		);
-		return frame(body, width, theme, {
+		return frame([...header, ...body], width, theme, {
 			title: "Sessions",
-			rightTitle: `${this.sessions.length} 个会话`,
+			rightTitle: `${this.sessions.length}${this.sessionsCursor ? "+" : ""} 个会话${this.sessionsLoading ? " · 加载中" : ""}`,
 			footer: hint,
 			footerPosition: "left",
 			focused: true,
-			maxBodyLines: bodyRows,
+			maxBodyLines: bodyRows + header.length,
 		});
 	}
 
@@ -2010,12 +2026,27 @@ export class PanelController {
 		return action ? { type: 'providerManager', action } : undefined;
 	}
 
-	private handleSessions(
-		data: string,
-		handler: string,
-	): PanelEvent | undefined {
-		if (handler === "moveSelection" && this.move(data, this.sessions.length))
+	private handleSessions(data: string, handler: string): PanelEvent | undefined {
+		if (handler === "switchSessionsScope") {
+			this.sessionsScope = this.sessionsScope === "all" ? "workspace" : "all";
+			this.state.selected = 0;
+			this.state.scroll = 0;
+			return { type: "sessionsQuery", scopeChanged: true };
+		}
+		if (handler === "editSessionsSearch") {
+			const query = this.editSharedTextField("sessions-search", this.sessionsQuery, data, 500);
+			if (query === this.sessionsQuery) return;
+			this.sessionsQuery = query;
+			this.state.selected = 0;
+			this.state.scroll = 0;
+			return { type: "sessionsQuery" };
+		}
+		if (handler === "moveSelection") {
+			this.move(data, this.sessions.length);
+			if (panelKey(data, Key.down) && this.state.selected >= this.sessions.length - 1 && this.sessionsCursor && !this.sessionsLoading)
+				return { type: "sessionsQuery", more: true };
 			return;
+		}
 		const session = this.sessions[this.state.selected];
 		if (!session) return;
 		if (handler === "openSession") return { type: "session", session };
@@ -3091,9 +3122,13 @@ export class PanelController {
 	}
 
 	private renderSessions(width: number, theme: VspiTheme): string[] {
+		const header = [
+			truncateToWidth(["workspace", "all"].map(scope => scope === this.sessionsScope ? theme.focus(theme.bold(scope === "all" ? "[ All ]" : "[ Current workspace ]")) : theme.muted(scope === "all" ? "All" : "Current workspace")).join("  "), width),
+			truncateToWidth(theme.muted(this.sessionsQuery ? `搜索：${singleLine(this.sessionsQuery)}` : "输入标题或目录搜索 · 最近活动优先"), width),
+		];
 		if (this.sessions.length === 0)
-			return [theme.muted(padLine("暂无会话", width))];
-		return this.sessions.flatMap((session, index) => {
+			return [...header, theme.muted(padLine(this.sessionsLoading ? "正在读取会话…" : this.sessionsQuery ? "没有匹配的会话" : "暂无会话", width))];
+		return [...header, ...this.sessions.flatMap((session, index) => {
 			const branch = session.branchDepth > 0 ? `${theme.muted("└─")} ` : "";
 			const current = session.current ? theme.success("● ") : "";
 			// 运行状态：owner = 其他 VSPi 进程持有租约（活跃运行）；current = 本进程正在使用的会话。
@@ -3110,8 +3145,8 @@ export class PanelController {
 				status,
 				width,
 			);
-			return index < this.sessions.length - 1 ? [line, ""] : [line];
-		});
+			return [line, truncateToWidth(theme.muted(`  ${singleLine(session.cwd ?? "")}`), width)];
+		})];
 	}
 
 	private renderExternalImport(

@@ -56,7 +56,7 @@ const backend: ChatBackend = {
 	cancel: async () => {},
 	compact: async () => false,
 	newSession: async () => {},
-	listSessions: async () => [],
+	listSessions: async () => ({ items: [] }),
 	switchSession: async () => {},
 	setPolicy: async (policy) => ({
 		policy,

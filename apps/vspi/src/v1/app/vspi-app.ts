@@ -858,6 +858,12 @@ export class VspiApp implements Component, Focusable {
 					);
 				},
 				onSessionReset: (session) => {
+					if (session.cwd && session.cwd !== this.options.cwd) {
+						this.options.cwd = session.cwd;
+						this.composer.setWorkspace(session.cwd);
+						this.imagePathPaste.setWorkspace(session.cwd);
+					}
+
 					if (session.reason === "created") {
 						this.backendSessionReady = true;
 						this.effort = session.effort;
@@ -946,7 +952,7 @@ export class VspiApp implements Component, Focusable {
 			this.queueVisibleThinkingTranslations();
 			if (this.options.openOnStart === "sessions") {
 				try {
-					this.panels.setSessions(await this.backend.listSessions());
+					await this.refreshSessions();
 					this.panels.open("sessions");
 				} catch (error) {
 					this.showNotice(
@@ -1049,6 +1055,8 @@ export class VspiApp implements Component, Focusable {
 		this.feedbackPreview = undefined;
 		if (this.disposing) return;
 		this.disposing = true;
+		this.sessionsRequest++;
+		await this.sessionsPreferenceSave;
 		this.renderReady = false;
 		await this.sideQuestion?.close().catch(() => {});
 		this.authDialog?.cancel();
@@ -3445,7 +3453,7 @@ export class VspiApp implements Component, Focusable {
 			catch (error) { this.showNotice(`历史读取失败：${error instanceof Error ? error.message : String(error)}`, 'error'); }
 		} else if (action.handler === "sessions") {
 			try {
-				this.panels.setSessions(await this.backend.listSessions());
+				await this.refreshSessions();
 				this.panels.open("sessions");
 				this.startupSurface = [];
 				this.beginTuiSurfaceEpoch();
@@ -3515,12 +3523,34 @@ export class VspiApp implements Component, Focusable {
 		this.requestRender();
 	}
 
+	private sessionsRequest = 0;
+	private sessionsPreferenceSave = Promise.resolve();
+
+	private async refreshSessions(more = false): Promise<void> {
+		const request = ++this.sessionsRequest;
+		const cursor = more ? this.panels.sessionsCursor : undefined;
+		if (!more) this.panels.setSessions([]);
+		this.panels.sessionsLoading = true;
+		this.requestRender();
+		try {
+			const page = await this.backend.listSessions({ scope: this.panels.sessionsScope, query: this.panels.sessionsQuery, cursor });
+			if (request === this.sessionsRequest) this.panels.setSessions(page.items, page.nextCursor, more);
+		} catch (error) {
+			if (request === this.sessionsRequest) this.showNotice(`会话读取失败：${error instanceof Error ? error.message : String(error)}`, "error");
+		} finally {
+			if (request === this.sessionsRequest) this.panels.sessionsLoading = false;
+			this.requestRender();
+		}
+	}
+
 	private async applyPanelEvent(event: PanelEvent | undefined): Promise<void> {
 		if (!event) {
 			this.requestRender();
 			return;
 		}
 		if (event.type === "close") {
+			this.sessionsRequest++;
+			this.panels.sessionsLoading = false;
 			if (this.pendingModelSelection) {
 				this.pendingModelSelection = undefined;
 				this.panels.returnToModels();
@@ -3704,12 +3734,22 @@ export class VspiApp implements Component, Focusable {
 				else this.showNotice(message, 'error');
 			}
 
+		} else if (event.type === "sessionsQuery") {
+			if (event.scopeChanged) {
+				const sessionsScope = this.panels.sessionsScope;
+				this.options.settings.sessionsScope = sessionsScope;
+				this.sessionsPreferenceSave = this.sessionsPreferenceSave.then(async () => {
+					const { global } = await loadSettingsLayers(this.options.cwd, this.options.home);
+					await saveSettings(this.options.cwd, { ...global, sessionsScope }, this.options.home);
+				}).catch(error => this.showNotice(`会话范围保存失败：${error instanceof Error ? error.message : String(error)}`, "error"));
+			}
+			await this.refreshSessions(event.more);
 		} else if (event.type === "session") {
 			if (event.session.owner) {
 				try {
 					const action = await this.confirmSessionCollision(event.session);
 					if (action === "cancel") {
-						this.panels.setSessions(await this.backend.listSessions());
+						await this.refreshSessions();
 						this.panels.open("sessions");
 						return;
 					}
@@ -3879,6 +3919,7 @@ export class VspiApp implements Component, Focusable {
 				}
 				const settings = {
 					...event.settings,
+					sessionsScope: this.panels.sessionsScope,
 					thinkingTranslationEndpoint: normalizeTranslationEndpoint(
 						event.settings.thinkingTranslationEndpoint,
 					),

@@ -288,7 +288,21 @@ export interface PlanItem {
 	collapsed?: boolean;
 }
 
+export type SessionScope = "workspace" | "all";
+
+export interface SessionListOptions {
+	scope?: SessionScope;
+	query?: string;
+	cursor?: string;
+}
+
+export interface SessionPage {
+	items: SessionOption[];
+	nextCursor?: string;
+}
+
 export interface SessionOption {
+	cwd?: string;
 	id: string;
 	label: string;
 	relativeTime: string;
@@ -324,6 +338,7 @@ export interface Question {
 }
 
 export interface AppSettings {
+	sessionsScope: SessionScope;
 	scope: "global" | "project";
 	theme: "VSPi Dark" | "VSPi Light" | "Terminal";
 	tuiMode: "fullscreen" | "regular";

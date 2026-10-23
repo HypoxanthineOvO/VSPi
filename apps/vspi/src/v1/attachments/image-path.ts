@@ -73,6 +73,8 @@ export class ImagePathPasteHandler {
     notice: (message: string) => void;
   }) {}
 
+  setWorkspace(cwd: string): void { this.reset(); this.options.cwd = cwd; }
+
   get active(): boolean { return this.pending || this.buffer !== undefined || this.passing; }
 
   reset(): void { this.revision++; this.controller?.abort(); this.controller = undefined; this.buffer = undefined; this.queued = []; this.queuedSize = 0; this.pending = false; this.passing = false; this.passingTail = ''; }

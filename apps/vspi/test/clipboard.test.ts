@@ -191,3 +191,15 @@ describe('image paste input ordering', () => {
     expect(replay).toHaveBeenCalledWith('\r'); expect(attach).not.toHaveBeenCalled();
   });
 });
+
+
+it('resolves same-named image paths against the resumed workspace', async () => {
+  const attach = vi.fn(async (_path: string, _signal: AbortSignal) => {});
+  const handler = new ImagePathPasteHandler({ cwd: '/project-a', attach, replay: vi.fn(), insert: vi.fn(), notice: vi.fn() });
+  handler.handle('\u001B[200~./image.png\u001B[201~');
+  await vi.waitFor(() => expect(handler.active).toBe(false));
+  handler.setWorkspace('/project-b');
+  handler.handle('\u001B[200~./image.png\u001B[201~');
+  await vi.waitFor(() => expect(handler.active).toBe(false));
+  expect(attach.mock.calls.map(call => call[0])).toEqual(['/project-a/image.png', '/project-b/image.png']);
+});

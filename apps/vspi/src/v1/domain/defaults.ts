@@ -33,6 +33,7 @@ export const DEFAULT_USAGE: UsageSnapshot = {
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
+	sessionsScope: "workspace",
 	scope: "project",
 	theme: "Terminal",
 	tuiMode: "regular",
