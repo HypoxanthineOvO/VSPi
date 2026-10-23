@@ -19,9 +19,14 @@ import { parseSkillText } from "@moonshot-ai/agent-core-v2/features/skill/catalo
 import { InMemorySkillCatalog } from "@moonshot-ai/agent-core-v2/features/skill/catalog/registry";
 import { IAgentLifecycleService, ISessionManager, IAgentGoalService } from '@moonshot-ai/agent-core-v2';
 import { startServer } from '@moonshot-ai/kap-server';
-import { getAgentProfileContributions } from '@moonshot-ai/agent-core-v2/app/agentProfileCatalog/contribution';
-import type { IConfigService } from '@moonshot-ai/agent-core-v2/app/config/config';
-import { createRoleProfiles } from '../src/roles/profiles.js';
+import { IBuiltinAgentProfileLoader } from '@moonshot-ai/agent-core-v2/app/agentProfileCatalog/builtinAgentProfileLoader';
+import { IConfigService } from '@moonshot-ai/agent-core-v2/app/config/config';
+import { ISessionAgentProfileCatalog } from '@moonshot-ai/agent-core-v2/session/sessionAgentProfileCatalog/sessionAgentProfileCatalog';
+import { IInstantiationService } from '@moonshot-ai/agent-core-v2/_base/di/instantiation';
+import { SyncDescriptor } from '@moonshot-ai/agent-core-v2/_base/di/descriptors';
+import type { CollectionView } from '@moonshot-ai/agent-core-v2/_base/di/collection';
+import { ILogService } from '@moonshot-ai/agent-core-v2/_base/log/log';
+import { SubagentDefaultBindingContribution } from '@moonshot-ai/agent-core-v2/session/subagent/subagentService';
 import { ROLE_NAMES } from '../src/roles/config.js';
 import { connectKlient } from '@moonshot-ai/klient/tcp';
 
@@ -56,29 +61,69 @@ const identity = {
 };
 
 describe('role presets', () => {
-	it('exposes six leaf roles, preserves plan and shows configured routing to the main agent', () => {
-		const definitions = getAgentProfileContributions();
-		const builtin = { _serviceBrand: undefined, get: (name: string) => definitions.find(profile => profile.name === name), getDefault: () => definitions.find(profile => profile.name === 'agent')!, list: () => definitions };
-		const config = { get: (domain: string) => domain === 'roleRouting' ? { coder: { default: 'Example/Sol', fast: 'Example/Flash' } } : {} } as unknown as IConfigService;
-		const profiles = createRoleProfiles(builtin, config);
-		const main = profiles.find(profile => profile.name === 'agent')!;
-		expect(main.subagents).toEqual(ROLE_NAMES);
-		expect(main.systemPrompt({})).toContain('coder/fast → Example/Flash');
-		expect(main.systemPrompt({})).toContain('This includes small mechanical edits and short call chains');
-		for (const role of ROLE_NAMES) {
-			const profile = profiles.find(profile => profile.name === role)!;
-			expect(profile.subagents).toEqual([]);
-			expect(profile.tools).not.toContain('Agent');
-			expect(profile.tools).not.toContain('AgentSwarm');
+	it('merges leaf roles through the real catalog, preserves builtin capabilities and validates default routing', async () => {
+		const homeDir = await mkdtemp(join(tmpdir(), 'vsp-role-catalog-'));
+		let core!: Awaited<ReturnType<typeof startServer>>['core'];
+		const daemon = await startRuntimeDaemon({
+			homeDir, hostIdentity: identity, env: { ...process.env, HOME: homeDir }, idleTimeoutMs: 0,
+			startServer: async options => { const server = await startServer(options); core = server.core; return server; },
+		});
+		try {
+			const config = core.accessor.get(IConfigService);
+			await config.set('roleRouting', { coder: { default: 'Example/Sol', fast: 'Example/Flash' } });
+			const session = await core.accessor.get(ISessionManager).create({ workDir: homeDir });
+			const catalog = session.accessor.get(ISessionAgentProfileCatalog);
+			await catalog.ready;
+			const builtin = core.accessor.get(IBuiltinAgentProfileLoader);
+			const main = catalog.getDefault();
+			expect(main.subagents).toEqual(ROLE_NAMES);
+			const prompt = main.systemPrompt({});
+			expect(prompt).toContain('coder/fast → Example/Flash');
+			expect(prompt).toMatch(/investigation.*~3 searches/);
+			expect(prompt).toMatch(/multi-file or bulk/);
+			expect(prompt).toMatch(/small, well-scoped edits and quick lookups yourself/);
+			for (const role of ROLE_NAMES) {
+				const profile = catalog.get(role)!;
+				expect(catalog.inspect(role)?.sourceId).toBe('vspi');
+				expect(profile.subagents).toEqual([]);
+				expect(profile.tools).not.toContain('Agent');
+				expect(profile.tools).not.toContain('AgentSwarm');
+			}
+			for (const role of ['coder', 'frontend']) {
+				expect(catalog.get(role)!.tools).toEqual(builtin.get('coder')!.tools);
+				expect(catalog.get(role)!.tools).toEqual(expect.arrayContaining(['mcp__*', 'CronCreate', 'CronList', 'CronDelete']));
+			}
+			for (const role of ['explore', 'reviewer', 'consultant']) {
+				expect(catalog.get(role)!.tools).not.toContain('Write');
+				expect(catalog.get(role)!.tools).not.toContain('Edit');
+			}
+			const explore = catalog.get('explore')!;
+			expect(explore.promptPrefix).toBe(builtin.get('explore')!.promptPrefix);
+			expect(explore.promptPrefix).toBeTypeOf('function');
+			expect(explore.systemPrompt({})).toContain(builtin.get('explore')!.systemPrompt({}));
+			expect(explore.systemPrompt({})).toContain('--no-ext-diff --no-textconv');
+			expect(catalog.get('consultant')!.tools).not.toContain('Bash');
+			expect(catalog.get('plan')!.tools).toEqual(builtin.get('plan')!.tools);
+			expect(catalog.get('plan')!.systemPrompt({})).toBe(builtin.get('plan')!.systemPrompt({}));
+
+			class DefaultsProbe {
+				constructor(@SubagentDefaultBindingContribution readonly defaults: CollectionView<SubagentDefaultBindingContribution>) {}
+			}
+			const resolver = core.accessor.get(IInstantiationService).createInstance<DefaultsProbe>(new SyncDescriptor(DefaultsProbe)).defaults.items[0]!;
+			const warning = vi.spyOn(core.accessor.get(ILogService), 'warn');
+			expect(resolver.resolveModel('coder')).toBeUndefined();
+			expect(warning).toHaveBeenLastCalledWith(expect.stringContaining('role_routing.coder.default'));
+			await config.set('secondaryModel', { models: { 'Example/Other': '' } });
+			expect(resolver.resolveModel('coder')).toBeUndefined();
+			expect(warning).toHaveBeenCalledTimes(2);
+			await config.set('secondaryModel', { models: { 'Example/Sol': '' } });
+			expect(resolver.resolveModel('coder')).toBe('Example/Sol');
+			expect(resolver.resolveModel('explore')).toBeUndefined();
+			expect(warning).toHaveBeenCalledTimes(2);
+		} finally {
+			await daemon.close();
+			await rm(homeDir, { recursive: true, force: true });
 		}
-		for (const role of ['explore', 'reviewer', 'consultant']) {
-			const profile = profiles.find(profile => profile.name === role)!;
-			expect(profile.tools).not.toContain('Write');
-			expect(profile.tools).not.toContain('Edit');
-		}
-		expect(profiles.find(profile => profile.name === 'consultant')!.tools).not.toContain('Bash');
-		expect(profiles.find(profile => profile.name === 'plan')!.tools).toEqual(builtin.get('plan')!.tools);
-		expect(profiles.find(profile => profile.name === 'plan')!.systemPrompt({})).toBe(builtin.get('plan')!.systemPrompt({}));
 	});
 });
 

@@ -31,8 +31,8 @@
 ### GPT 6.1 Sol 子 Agent · 角色预设
 
 - 更新：2026-10-23
-- 在做：roles-preset 最终全量校验与文档检查，等待主控验收
-- 下一步：临时 home 获得 Flash 凭据后，复验 explore 与 coder/fast 的指定 alias 完成任务
+- 在做：等待主控验收 roles-preset 审查修复
+- 下一步：主控复核后决定合并；Flash 指定 alias 仍需临时 home 的凭据
 - 未提交：无
 
 ## 留言

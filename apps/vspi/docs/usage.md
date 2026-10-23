@@ -174,7 +174,9 @@ default = "devin/gemini-4-argon"
 
 编辑后执行 `vspi config reload`、`vspi config get roleRouting`，并开始新会话。也可通过 `vspi config set roleRouting '{"coder":{"default":"openai-codex/gpt-6.1-sol","fast":"vsplab/deepseek-flash","hard":"openai-codex/gpt-6-astra"}}'` 保存 JSON；`set` 会替换整张表，`patch` 合并已有角色。每个已配置角色必须有 `default`；coder 支持 `fast/default/hard`，frontend 额外支持 `mid/high`。机械/批量活选 fast，常规实现选 default，困难功能选 hard；中等视觉选 mid，高要求视觉或视频选 high。主 Agent 看得到映射表，通过已有 `model` 参数传实际 alias，不传档位名。
 
-省略 `model` 时，运行时按角色 default 确定绑定；显式 model 优先，最终仍校验现有子模型池，错误 alias 会报错，不静默换模型。`secondary_model.force` 优先于角色配置，此时不能传 model。fork/resume 保持原绑定。没有配置的角色沿用原有池默认或主模型继承；`vspi config set roleRouting '{}'` 可停用模型路由，但保留六角色。角色目录和主方路由说明以新会话为准，default 绑定在每次新派任务时读取。
+省略 `model` 时，运行时按角色 default 确定绑定；未配置子模型池或角色 default 不在池内时，记录提到 `role_routing` 的 warning，并回落到原有池默认或主模型继承。显式 model 仍由现有子模型池校验，错误 alias 会报错。`secondary_model.force` 优先于角色配置，此时不能传 model。fork/resume 保持原绑定。没有配置的角色沿用原有池默认或主模型继承；`vspi config set roleRouting '{}'` 可停用模型路由，但保留六角色。角色目录和主方路由说明以新会话为准，default 绑定在每次新派任务时读取。
+
+主 Agent 自己处理小范围修改和快速查找；需要超过约 3 次搜索的调查、多文件或批量实现、前端/视觉工作和明确要求的审查才派给对应角色。coder/frontend 沿用内置 coder 的工具，包括 MCP 和 Cron；explore 保留内置角色提示与 git 上下文。用户自定义 `SYSTEM.md` 时，会盖掉主 Agent 的路由说明和派活规则，但六个角色仍然可派。
 
 plan/consultant 没有 shell 或写工具。explore/reviewer 不开放写工具，但为读取 git log/blame/show/diff/status 保留 Bash；只读 git 是提示词约束，不是命令级沙箱，不能据此认为 shell 写入被系统完全隔离。用户和项目角色仍按现有优先级覆盖产品预设；同名内置角色需要 `override: true`。
 
