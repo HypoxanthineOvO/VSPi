@@ -179,7 +179,7 @@ default = "devin/gemini-4-argon"
 
 手改后执行 `vspi config reload`、`vspi config get roleRouting`。也可用 `vspi config set roleRouting '<JSON>'` 保存完整 JSON，或 `patch` 合并已有角色。每个已配置角色必须有 `default`；explore/coder 支持 `fast/default/hard`，frontend 只支持 `default/mid/high`（旧 frontend fast/hard 要移到 default/high）。简单调查、机械或批量活选 fast，常规任务选 default，困难任务选 hard；中等视觉选 mid，高要求视觉或视频选 high。主 Agent 通过既有 `model` 参数传档位对应的实际 alias，不传档位名。
 
-也可以直接说“查看角色路由”或“把 explore 默认改成池里的某个 alias，并设置备用”。主 Agent 使用 `RoleRouting({"action":"get"})` 查看，使用 `RoleRouting({"action":"set","routing":{...完整配置...}})` 替换整张表；修改按当前权限模式审批，查看无需审批。写入同一个 `config.toml`，不修改子模型池；所有 alias 都必须已在池中。工具每次返回最新映射，覆盖本会话启动时的旧表，之后派活立即使用新配置，不必重开会话。子角色拿不到这个工具。
+也可以直接说“查看角色路由”或“把 explore 默认改成池里的某个 alias，并设置备用”。主 Agent 使用 `RoleRouting({"action":"get"})` 查看，使用 `RoleRouting({"action":"set","routing":{...完整配置...}})` 替换整张表；查看和修改都按当前权限模式审批：auto 模式下直接执行，manual 模式下会询问，可对 `RoleRouting(get)` 选“总是允许”。写入同一个 `config.toml`，不修改子模型池；所有 alias 都必须已在池中。工具每次返回最新映射，覆盖本会话启动时的旧表，之后派活立即使用新配置，不必重开会话。子角色拿不到这个工具。
 
 省略 `model` 使用角色 default；显式档位 alias 也会检查自己的备用列表。仅在配置了该 alias 的 fallback 列表时，派活前会检查来源是否有可用凭据，并复用来源详情的健康记录：有效期内，最近失败晚于最近成功就跳过。按列表顺序选第一个有凭据、没有近期失败且仍在子模型池内的 alias；不递归查其他列表，不跨到没列出的模型。池外备用不会被选中；全部不可用时明确报错、不派任务。切换说明“X 不可用，已用 Y”会进入任务详情的提示、交接和日志。已有任务中途失败不换模型。未配置备用列表的 alias 保持原行为。
 

@@ -28,7 +28,7 @@ export class RoleRoutingTool implements AgentTool {
     const args = input as { action?: unknown; routing?: unknown };
     if (Object.keys(args).some(key => key !== 'action' && key !== 'routing')) return { isError: true, output: 'Unknown RoleRouting argument.' };
     if (args.action === 'get' && args.routing === undefined) return {
-      approvalRule: 'RoleRouting(get)', readOnly: true, accesses: ToolAccesses.none(),
+      approvalRule: 'RoleRouting(get)', accesses: ToolAccesses.none(),
       execute: async () => ({ output: this.current() }),
     };
     if (args.action !== 'set' || args.routing === undefined) return { isError: true, output: 'Use get without routing, or set with the complete routing object.' };

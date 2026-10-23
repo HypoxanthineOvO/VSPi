@@ -91,11 +91,11 @@ describe('role presets', () => {
 			const ctx: ExecutableToolContext = { turnId: 1, toolCallId: 'routing', signal: new AbortController().signal };
 			const read = await tool.resolveExecution({ action: 'get' });
 			if (read.isError) throw new Error(JSON.stringify(read.output));
-			expect(read.readOnly).toBe(true);
+			expect(read.approvalRule).toBe('RoleRouting(get)');
 			const routing = { explore: { default: 'missing/sonnet', fast: 'example/flash', hard: 'example/sol' }, fallback: { 'missing/sonnet': ['example/flash', 'example/sol'], 'example/flash': ['example/sol'] } };
 			const write = await tool.resolveExecution({ action: 'set', routing });
 			if (write.isError) throw new Error(JSON.stringify(write.output));
-			expect(write.readOnly).toBeUndefined();
+			expect(write.approvalRule).toBe('RoleRouting(set)');
 			expect(config.get('roleRouting')).toEqual({});
 			expect((await write.execute(ctx)).output).toContain('explore/default → missing/sonnet');
 			expect((await read.execute(ctx)).output).toContain('explore/hard → example/sol');
