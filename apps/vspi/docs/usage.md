@@ -149,6 +149,8 @@ SSH 下收到 Ctrl+V/Alt+V 图片快捷键时，会提示改用服务器图片�
 ```toml
 [role_routing.explore]
 default = "vsplab/deepseek-flash"
+fast = "vsplab/deepseek-flash"
+hard = "openai-codex/gpt-6-astra"
 
 [role_routing.coder]
 default = "openai-codex/gpt-6.1-sol"
@@ -157,8 +159,6 @@ hard = "openai-codex/gpt-6-astra"
 
 [role_routing.frontend]
 default = "vsplab/deepseek-flash"
-fast = "vsplab/deepseek-flash"
-hard = "Claude/claude-opus-5-5"
 mid = "Claude/claude-sonnet-5-5"
 high = "Claude/claude-opus-5-5"
 
@@ -170,11 +170,20 @@ default = "openai-codex/gpt-6-astra"
 
 [role_routing.consultant]
 default = "devin/gemini-4-argon"
+
+[role_routing.fallback]
+"vsplab/deepseek-flash" = ["openai-codex/gpt-6.1-sol"]
+"openai-codex/gpt-6.1-sol" = ["vsplab/deepseek-flash"]
+"Claude/claude-sonnet-5-5" = ["vsplab/deepseek-flash", "openai-codex/gpt-6.1-sol"]
 ```
 
-编辑后执行 `vspi config reload`、`vspi config get roleRouting`，并开始新会话。也可通过 `vspi config set roleRouting '{"coder":{"default":"openai-codex/gpt-6.1-sol","fast":"vsplab/deepseek-flash","hard":"openai-codex/gpt-6-astra"}}'` 保存 JSON；`set` 会替换整张表，`patch` 合并已有角色。每个已配置角色必须有 `default`；coder 支持 `fast/default/hard`，frontend 额外支持 `mid/high`。机械/批量活选 fast，常规实现选 default，困难功能选 hard；中等视觉选 mid，高要求视觉或视频选 high。主 Agent 看得到映射表，通过已有 `model` 参数传实际 alias，不传档位名。
+手改后执行 `vspi config reload`、`vspi config get roleRouting`。也可用 `vspi config set roleRouting '<JSON>'` 保存完整 JSON，或 `patch` 合并已有角色。每个已配置角色必须有 `default`；explore/coder 支持 `fast/default/hard`，frontend 只支持 `default/mid/high`（旧 frontend fast/hard 要移到 default/high）。简单调查、机械或批量活选 fast，常规任务选 default，困难任务选 hard；中等视觉选 mid，高要求视觉或视频选 high。主 Agent 通过既有 `model` 参数传档位对应的实际 alias，不传档位名。
 
-省略 `model` 时，运行时按角色 default 确定绑定；未配置子模型池或角色 default 不在池内时，记录提到 `role_routing` 的 warning，并回落到原有池默认或主模型继承。显式 model 仍由现有子模型池校验，错误 alias 会报错。`secondary_model.force` 优先于角色配置，此时不能传 model。fork/resume 保持原绑定。没有配置的角色沿用原有池默认或主模型继承；`vspi config set roleRouting '{}'` 可停用模型路由，但保留六角色。角色目录和主方路由说明以新会话为准，default 绑定在每次新派任务时读取。
+也可以直接说“查看角色路由”或“把 explore 默认改成池里的某个 alias，并设置备用”。主 Agent 使用 `RoleRouting({"action":"get"})` 查看，使用 `RoleRouting({"action":"set","routing":{...完整配置...}})` 替换整张表；修改按当前权限模式审批，查看无需审批。写入同一个 `config.toml`，不修改子模型池；所有 alias 都必须已在池中。工具每次返回最新映射，覆盖本会话启动时的旧表，之后派活立即使用新配置，不必重开会话。子角色拿不到这个工具。
+
+省略 `model` 使用角色 default；显式档位 alias 也会检查自己的备用列表。仅在配置了该 alias 的 fallback 列表时，派活前会检查来源是否有可用凭据，并复用来源详情的健康记录：有效期内，最近失败晚于最近成功就跳过。按列表顺序选第一个有凭据、没有近期失败且仍在子模型池内的 alias；不递归查其他列表，不跨到没列出的模型。池外备用不会被选中；全部不可用时明确报错、不派任务。切换说明“X 不可用，已用 Y”会进入任务详情的提示、交接和日志。已有任务中途失败不换模型。未配置备用列表的 alias 保持原行为。
+
+未配置子模型池或角色 default 不在池内时，记录 `role_routing` warning 并回落原有默认绑定；显式错误 alias 仍报错。`secondary_model.force` 优先，此时不能传 model；fork/resume 保持原绑定，都不做备用切换。未配置角色沿用池默认或主模型继承；`vspi config set roleRouting '{}'` 停用模型路由但保留六角色。角色目录仍以新会话为准。
 
 主 Agent 自己处理小范围修改和快速查找；需要超过约 3 次搜索的调查、多文件或批量实现、前端/视觉工作和明确要求的审查才派给对应角色。coder/frontend 沿用内置 coder 的工具，包括 MCP 和 Cron；explore 保留内置角色提示与 git 上下文。用户自定义 `SYSTEM.md` 时，会盖掉主 Agent 的路由说明和派活规则，但六个角色仍然可派。
 

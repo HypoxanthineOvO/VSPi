@@ -21,6 +21,7 @@ export function createRoleProfiles(builtin: IBuiltinAgentProfileLoader, config: 
   return [
     normalizeAgentProfile({
       ...main, override: true, subagents: ROLE_NAMES,
+      tools: main.tools === undefined ? undefined : [...main.tools, 'RoleRouting'],
       renderSystemPrompt: context => {
         const result = main.renderSystemPrompt(context);
         return { ...result, text: `${result.text}\n\n${POLICY}\n\n${routingInstructions(config.get<RoleRouting>('roleRouting'), config.get<{ force?: boolean }>('secondaryModel')?.force === true)}` };

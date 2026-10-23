@@ -2,7 +2,7 @@ import { registerConfigSection } from '@moonshot-ai/agent-core-v2/app/config/con
 
 export const ROLE_NAMES = ['explore', 'coder', 'frontend', 'plan', 'reviewer', 'consultant'] as const;
 export type RoleName = typeof ROLE_NAMES[number];
-export type RoleRouting = Partial<Record<RoleName, { default: string; fast?: string; hard?: string; mid?: string; high?: string }>>;
+export type RoleRouting = Partial<Record<RoleName, { default: string; fast?: string; hard?: string; mid?: string; high?: string }>> & { fallback?: Record<string, string[]> };
 
 export const roleRoutingSchema = {
   parse(value: unknown): RoleRouting {
@@ -10,10 +10,20 @@ export const roleRoutingSchema = {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('roleRouting must be a role-to-model table');
     const result: RoleRouting = {};
     for (const [role, raw] of Object.entries(value)) {
+      if (role === 'fallback') {
+        if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('roleRouting.fallback must be an alias-to-list table');
+        const fallback: Record<string, string[]> = {};
+        for (const [alias, candidates] of Object.entries(raw)) {
+          if (!alias.trim() || alias === 'primary' || !Array.isArray(candidates) || candidates.some(candidate => typeof candidate !== 'string' || !candidate.trim() || candidate === 'primary')) throw new Error(`Invalid roleRouting.fallback.${alias}`);
+          fallback[alias] = [...new Set(candidates as string[])];
+        }
+        result.fallback = fallback;
+        continue;
+      }
       if (!ROLE_NAMES.includes(role as RoleName)) throw new Error(`Unknown roleRouting role: ${role}`);
       if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`roleRouting.${role} must be a tier table`);
       const tiers = raw as Record<string, unknown>;
-      const allowed = role === 'frontend' ? ['default', 'fast', 'hard', 'mid', 'high'] : role === 'coder' ? ['default', 'fast', 'hard'] : ['default'];
+      const allowed = role === 'frontend' ? ['default', 'mid', 'high'] : role === 'coder' || role === 'explore' ? ['default', 'fast', 'hard'] : ['default'];
       for (const [tier, alias] of Object.entries(tiers)) {
         if (!allowed.includes(tier) || typeof alias !== 'string' || alias.trim() === '' || alias === 'primary') throw new Error(`Invalid roleRouting.${role}.${tier}: expected a secondary model pool alias`);
       }
@@ -32,6 +42,7 @@ export function routingInstructions(routing: RoleRouting, forced: boolean): stri
   for (const role of ROLE_NAMES) {
     for (const [tier, alias] of Object.entries(routing[role] ?? {})) lines.push(`- ${role}/${tier} → ${alias}`);
   }
-  lines.push('Omit model to use the role default. For coder/frontend mechanical or bulk edits choose fast; routine implementation uses default; difficult features use hard. For frontend visual refinement use mid, demanding visual/video work uses high. Pass the configured alias via the existing model parameter for a non-default tier; never pass a tier name as model. If a tier is not configured use the role default, do not invent an alias. Model capability and installed tools must actually support the requested media work. Fork and resume preserve their existing binding.');
+  for (const [alias, candidates] of Object.entries(routing.fallback ?? {})) lines.push(`- fallback ${alias} → ${candidates.join(' → ') || '(none)'}`);
+  lines.push('Use RoleRouting to read the latest table before choosing a tier or changing routing. Its latest output supersedes this startup snapshot. Omit model to use the role default. For explore/coder use fast for simple or bulk work, default for routine work, hard for difficult work. Frontend uses default for routine work, mid for visual refinement, high for demanding visual/video work. Pass the configured alias via model for a non-default tier; never pass a tier name or invent an alias. If a tier is absent use the role default. Only configured in-pool fallbacks may be selected before spawn; failures during a task never switch models. Report binding notices to the user. Model capability and installed tools must support the requested media work. Fork and resume preserve their existing binding.');
   return lines.join('\n');
 }

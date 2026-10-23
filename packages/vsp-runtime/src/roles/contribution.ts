@@ -10,12 +10,16 @@ import { IConfigService } from '@moonshot-ai/agent-core-v2/app/config/config';
 import { SubagentDefaultBindingContribution } from '@moonshot-ai/agent-core-v2/session/subagent/subagentService';
 import { createRoleProfiles } from './profiles.js';
 import { type RoleName, type RoleRouting } from './config.js';
+import { IModelCatalog } from '@moonshot-ai/agent-core-v2/llm-adapter/model/catalog';
+import { resolveRoleModel } from './routing.js';
+import './tool.js';
 
 class RolePresetContribution extends Service {
   constructor(
     @IBuiltinAgentProfileLoader builtin: IBuiltinAgentProfileLoader,
     @IConfigService config: IConfigService,
     @ILogService log: ILogService,
+    @IModelCatalog catalog: IModelCatalog,
   ) {
     super();
     this.provide(AgentProfileContribution, {
@@ -23,15 +27,15 @@ class RolePresetContribution extends Service {
       contribution: { profiles: createRoleProfiles(builtin, config) },
     });
     this.provide(SubagentDefaultBindingContribution, {
-      resolveModel: role => {
-        const alias = config.get<RoleRouting>('roleRouting')[role as RoleName]?.default;
+      resolveModel: (role, requested) => {
+        const alias = requested ?? config.get<RoleRouting>('roleRouting')[role as RoleName]?.default;
         if (alias === undefined) return undefined;
         const pool = resolveSubagentModelPool(config);
         if (pool === undefined || !Object.hasOwn(pool.models, alias)) {
-          log.warn(`role_routing.${role}.default "${alias}" is not in secondary_model.models; falling back to the existing subagent default`);
+          if (requested === undefined) log.warn(`role_routing.${role}.default "${alias}" is not in secondary_model.models; falling back to the existing subagent default`);
           return undefined;
         }
-        return alias;
+        return resolveRoleModel(config, catalog, role, requested);
       },
     });
   }

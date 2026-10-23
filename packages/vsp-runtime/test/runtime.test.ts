@@ -27,7 +27,12 @@ import { SyncDescriptor } from '@moonshot-ai/agent-core-v2/_base/di/descriptors'
 import type { CollectionView } from '@moonshot-ai/agent-core-v2/_base/di/collection';
 import { ILogService } from '@moonshot-ai/agent-core-v2/_base/log/log';
 import { SubagentDefaultBindingContribution } from '@moonshot-ai/agent-core-v2/session/subagent/subagentService';
-import { ROLE_NAMES } from '../src/roles/config.js';
+import { ROLE_NAMES, roleRoutingSchema } from '../src/roles/config.js';
+import { ISessionSubagentService } from '@moonshot-ai/agent-core-v2/session/subagent/subagent';
+import { IAgentToolRegistryService } from '@moonshot-ai/agent-core-v2/agent/toolRegistry/toolRegistry';
+import { IAgentToolActivationService } from '@moonshot-ai/agent-core-v2/agent/toolActivation/toolActivation';
+import { IModelHealth } from '@moonshot-ai/agent-core-v2/llm-adapter/model/health';
+import type { ExecutableToolContext } from '@moonshot-ai/agent-core-v2/tool/toolContract';
 import { connectKlient } from '@moonshot-ai/klient/tcp';
 
 import {
@@ -61,6 +66,71 @@ const identity = {
 };
 
 describe('role presets', () => {
+	it('routes new tasks using current tool configuration, credentials and shared health without exposing the tool to leaves', async () => {
+		const homeDir = await mkdtemp(join(tmpdir(), 'vsp-role-fallback-'));
+		let core!: Awaited<ReturnType<typeof startServer>>['core'];
+		const daemon = await startRuntimeDaemon({ homeDir, hostIdentity: identity, env: { ...process.env, HOME: homeDir }, idleTimeoutMs: 0,
+			startServer: async options => { const server = await startServer(options); core = server.core; return server; },
+		});
+		try {
+			const config = core.accessor.get(IConfigService);
+			await config.replaceSections({ providers: { example: { type: 'openai', apiKey: 'YOUR_API_KEY' }, missing: { type: 'openai' } }, models: {
+				'example/sol': { provider: 'example', model: 'sol', maxContextSize: 4096 },
+				'example/flash': { provider: 'example', model: 'flash', maxContextSize: 4096 },
+				'example/outside': { provider: 'example', model: 'outside', maxContextSize: 4096 },
+				'missing/sonnet': { provider: 'missing', model: 'sonnet', maxContextSize: 4096 },
+			} });
+			await config.replace('secondaryModel', { defaultModel: 'example/sol', models: { 'example/sol': '', 'example/flash': '', 'missing/sonnet': '' } });
+			const session = await core.accessor.get(ISessionManager).create({ workDir: homeDir });
+			const lifecycle = session.accessor.get(IAgentLifecycleService);
+			await lifecycle.create({ agentId: 'main', binding: { profile: 'agent', model: 'example/sol' } });
+			const main = lifecycle.handleOf('main')!;
+			await main.accessor.get(IAgentToolActivationService).activate();
+			const tool = main.accessor.get(IAgentToolRegistryService).resolve('RoleRouting')!;
+			expect(tool).toBeDefined();
+			const ctx: ExecutableToolContext = { turnId: 1, toolCallId: 'routing', signal: new AbortController().signal };
+			const read = await tool.resolveExecution({ action: 'get' });
+			if (read.isError) throw new Error(JSON.stringify(read.output));
+			expect(read.readOnly).toBe(true);
+			const routing = { explore: { default: 'missing/sonnet', fast: 'example/flash', hard: 'example/sol' }, fallback: { 'missing/sonnet': ['example/flash', 'example/sol'], 'example/flash': ['example/sol'] } };
+			const write = await tool.resolveExecution({ action: 'set', routing });
+			if (write.isError) throw new Error(JSON.stringify(write.output));
+			expect(write.readOnly).toBeUndefined();
+			expect(config.get('roleRouting')).toEqual({});
+			expect((await write.execute(ctx)).output).toContain('explore/default → missing/sonnet');
+			expect((await read.execute(ctx)).output).toContain('explore/hard → example/sol');
+			expect((await readFile(resolveRuntimePaths(homeDir).configPath, 'utf8'))).toContain('[role_routing.fallback]');
+			const subagents = session.accessor.get(ISessionSubagentService);
+			const input = { callerAgentId: 'main', profileName: 'explore' };
+			const plan = await subagents.planSpawn(input);
+			expect(plan).toMatchObject({ model: 'example/flash', bindingNotice: expect.stringContaining('missing/sonnet 不可用') });
+			const spawned = await subagents.spawn({ callerAgentId: 'main', plan, prompt: 'Read the first heading', taskTitle: 'Explore routing' });
+			expect(spawned.promptText).toContain('已用 example/flash');
+			const child = lifecycle.handleOf(spawned.agentId)!;
+			await child.accessor.get(IAgentToolActivationService).activate();
+			expect(child.accessor.get(IAgentToolRegistryService).resolve('RoleRouting')).toBeUndefined();
+			const health = core.accessor.get(IModelHealth);
+			health.record('example', 'example/flash', new TypeError('network failed'));
+			expect(await subagents.planSpawn({ ...input, model: 'example/flash' })).toMatchObject({ model: 'example/sol', bindingNotice: expect.stringContaining('network') });
+			health.record('example', 'example/sol', new Error('quota exhausted'));
+			await expect(subagents.planSpawn(input)).rejects.toThrow('备用模型全部不可用');
+			health.record('example', 'example/sol');
+			expect((await subagents.planSpawn(input)).model).toBe('example/sol');
+			await config.replace('roleRouting', { explore: { default: 'missing/sonnet' }, fallback: { 'missing/sonnet': ['example/outside'] } });
+			await expect(subagents.planSpawn(input)).rejects.toThrow('未派发任务');
+			expect(await tool.resolveExecution({ action: 'set', routing: { explore: { default: 'example/outside' } } })).toMatchObject({ isError: true, output: expect.stringContaining('not in secondary_model.models') });
+			for (const role of ROLE_NAMES) {
+				const agent = await lifecycle.create({ binding: { profile: role, model: 'example/sol' } });
+				const handle = lifecycle.handleOf(agent.agentId)!;
+				await handle.accessor.get(IAgentToolActivationService).activate();
+				expect(handle.accessor.get(IAgentToolRegistryService).resolve('RoleRouting')).toBeUndefined();
+			}
+			await config.replace('secondaryModel', { force: true, defaultModel: 'example/sol' });
+			expect((await subagents.planSpawn(input)).model).toBe('example/sol');
+			expect((await subagents.planSpawn({ callerAgentId: 'main', fork: true })).model).toBe('example/sol');
+		} finally { await daemon.close(); await rm(homeDir, { recursive: true, force: true }); }
+	});
+
 	it('merges leaf roles through the real catalog, preserves builtin capabilities and validates default routing', async () => {
 		const homeDir = await mkdtemp(join(tmpdir(), 'vsp-role-catalog-'));
 		let core!: Awaited<ReturnType<typeof startServer>>['core'];
@@ -117,7 +187,7 @@ describe('role presets', () => {
 			expect(resolver.resolveModel('coder')).toBeUndefined();
 			expect(warning).toHaveBeenCalledTimes(2);
 			await config.set('secondaryModel', { models: { 'Example/Sol': '' } });
-			expect(resolver.resolveModel('coder')).toBe('Example/Sol');
+			expect(await resolver.resolveModel('coder')).toBe('Example/Sol');
 			expect(resolver.resolveModel('explore')).toBeUndefined();
 			expect(warning).toHaveBeenCalledTimes(2);
 		} finally {
@@ -137,12 +207,12 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 		daemon = await startTestDaemon(homeDir);
 		const connection = await connectRuntime(homeDir);
 		try {
-			const routing = { coder: { default: 'Example/Sol', fast: 'Example/Flash', hard: 'Example/Astra' }, frontend: { default: 'Example/Flash', mid: 'Example/Sonnet', high: 'Example/Opus' } };
+			const routing = { explore: { default: 'Example/Sol', fast: 'Example/Flash', hard: 'Example/Astra' }, coder: { default: 'Example/Sol', fast: 'Example/Flash', hard: 'Example/Astra' }, frontend: { default: 'Example/Flash', mid: 'Example/Sonnet', high: 'Example/Opus' }, fallback: { 'Example/Flash': ['Example/Sol'] } };
 			await connection.klient.global.config.replace({ domain: 'roleRouting', value: routing });
 			await connection.klient.global.config.reload();
 			expect(await connection.klient.global.config.get('roleRouting')).toEqual(routing);
 			expect(await readFile(resolveRuntimePaths(homeDir).configPath, 'utf8')).toContain('[role_routing.coder]');
-			await expect(connection.klient.global.config.replace({ domain: 'roleRouting', value: { explore: { default: 'Example/Flash', hard: 'Example/Astra' } } })).rejects.toThrow('roleRouting.explore.hard');
+			for (const invalid of [{ explore: { default: 'Example/Flash', mid: 'Example/Astra' } }, { frontend: { default: 'Example/Flash', fast: 'Example/Sol' } }, { explore: { default: 'primary' } }, { fallback: { 'Example/Sol': ['primary'] } }, { explore: { hard: 'Example/Astra' } }]) expect(() => roleRoutingSchema.parse(invalid)).toThrow();
 		} finally { await connection.close(); }
 	});
 
