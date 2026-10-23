@@ -19,6 +19,10 @@ import { parseSkillText } from "@moonshot-ai/agent-core-v2/features/skill/catalo
 import { InMemorySkillCatalog } from "@moonshot-ai/agent-core-v2/features/skill/catalog/registry";
 import { IAgentLifecycleService, ISessionManager, IAgentGoalService } from '@moonshot-ai/agent-core-v2';
 import { startServer } from '@moonshot-ai/kap-server';
+import { getAgentProfileContributions } from '@moonshot-ai/agent-core-v2/app/agentProfileCatalog/contribution';
+import type { IConfigService } from '@moonshot-ai/agent-core-v2/app/config/config';
+import { createRoleProfiles } from '../src/roles/profiles.js';
+import { ROLE_NAMES } from '../src/roles/config.js';
 import { connectKlient } from '@moonshot-ai/klient/tcp';
 
 import {
@@ -51,10 +55,51 @@ const identity = {
 	displayName: "VSPi Test",
 };
 
+describe('role presets', () => {
+	it('exposes six leaf roles, preserves plan and shows configured routing to the main agent', () => {
+		const definitions = getAgentProfileContributions();
+		const builtin = { _serviceBrand: undefined, get: (name: string) => definitions.find(profile => profile.name === name), getDefault: () => definitions.find(profile => profile.name === 'agent')!, list: () => definitions };
+		const config = { get: (domain: string) => domain === 'roleRouting' ? { coder: { default: 'Example/Sol', fast: 'Example/Flash' } } : {} } as unknown as IConfigService;
+		const profiles = createRoleProfiles(builtin, config);
+		const main = profiles.find(profile => profile.name === 'agent')!;
+		expect(main.subagents).toEqual(ROLE_NAMES);
+		expect(main.systemPrompt({})).toContain('coder/fast → Example/Flash');
+		expect(main.systemPrompt({})).toContain('This includes small mechanical edits and short call chains');
+		for (const role of ROLE_NAMES) {
+			const profile = profiles.find(profile => profile.name === role)!;
+			expect(profile.subagents).toEqual([]);
+			expect(profile.tools).not.toContain('Agent');
+			expect(profile.tools).not.toContain('AgentSwarm');
+		}
+		for (const role of ['explore', 'reviewer', 'consultant']) {
+			const profile = profiles.find(profile => profile.name === role)!;
+			expect(profile.tools).not.toContain('Write');
+			expect(profile.tools).not.toContain('Edit');
+		}
+		expect(profiles.find(profile => profile.name === 'consultant')!.tools).not.toContain('Bash');
+		expect(profiles.find(profile => profile.name === 'plan')!.tools).toEqual(builtin.get('plan')!.tools);
+		expect(profiles.find(profile => profile.name === 'plan')!.systemPrompt({})).toBe(builtin.get('plan')!.systemPrompt({}));
+	});
+});
+
 describe("VSP runtime daemon (shared Core ownership)", () => {
 	let homeDir: string | undefined;
 	let daemon: RuntimeDaemon | undefined;
 	let closePeer: (() => Promise<void>) | undefined;
+
+	it('persists role routing in config.toml and rejects unsupported tiers', async () => {
+		homeDir = await mkdtemp(join(tmpdir(), 'vsp-role-routing-'));
+		daemon = await startTestDaemon(homeDir);
+		const connection = await connectRuntime(homeDir);
+		try {
+			const routing = { coder: { default: 'Example/Sol', fast: 'Example/Flash', hard: 'Example/Astra' }, frontend: { default: 'Example/Flash', mid: 'Example/Sonnet', high: 'Example/Opus' } };
+			await connection.klient.global.config.replace({ domain: 'roleRouting', value: routing });
+			await connection.klient.global.config.reload();
+			expect(await connection.klient.global.config.get('roleRouting')).toEqual(routing);
+			expect(await readFile(resolveRuntimePaths(homeDir).configPath, 'utf8')).toContain('[role_routing.coder]');
+			await expect(connection.klient.global.config.replace({ domain: 'roleRouting', value: { explore: { default: 'Example/Flash', hard: 'Example/Astra' } } })).rejects.toThrow('roleRouting.explore.hard');
+		} finally { await connection.close(); }
+	});
 
 	it("persists per-model efforts with exact alias keys while preserving other thinking settings", async () => {
 		homeDir = await mkdtemp(join(tmpdir(), "vsp-model-efforts-"));

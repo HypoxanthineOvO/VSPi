@@ -6,6 +6,7 @@ import { ISessionManager, IAgentLifecycleService, IAgentActivityView, IAgentTask
 
 import './feature-defaults.js';
 import './model-defaults.js';
+import './roles/contribution.js';
 
 import {
   migrateRuntimeConfig,
