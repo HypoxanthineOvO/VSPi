@@ -1,6 +1,6 @@
 # VSPLab 中转站模型目录（Golden）
 
-2026-10-24：维护源补齐 Kimi K3.1 Pro / Highspeed、MiniMax M3.1 Flash、Claude Haiku 5.5，共 77 条；已完成首轮 cn/tech 公网及本机回读，最终修订待再次发布。Kimi 使用官方 Coding Plan ID `k3.1-pro` / `k3.1-pro-highspeed`，`kimi-` 前缀名称仅作显式兼容别名；新增两项优先使用原生 Responses。Kimi K2.8 Preview 的显示名称、1M 上下文与三档思考已校正，K2.7 Code Highspeed 仅保持思考开启，不再展示虚假的强度档位。K3/K3.1 的 Coding Plan 默认显式设为 `high`，依据[模型配置表](https://www.kimi.com/code/docs/kimi-code/models.html)；发布公告和按量 API 文档写作 `max`，因此不依赖上游省略字段的默认值。
+2026-10-24：维护源补齐 Kimi K3.1 Pro / Highspeed、MiniMax M3.1 Flash、Claude Haiku 5.5，共 77 条，已通过固定免密安装器发布到 Babel；最终 cn/tech 公网回读 SHA256 均为 `bacdc9e686fc04a278381c4d038a489e537c24ef9641aba6921f008d65ac5e98`，与维护源逐字节一致。Kimi 使用官方 Coding Plan ID `k3.1-pro` / `k3.1-pro-highspeed`，`kimi-` 前缀名称仅作显式兼容别名；新增两项优先使用原生 Responses。Kimi K2.8 Preview 的显示名称、1M 上下文与三档思考已校正，K2.7 Code Highspeed 仅保持思考开启，不再展示虚假的强度档位。K3/K3.1 的 Coding Plan 默认显式设为 `high`，依据[模型配置表](https://www.kimi.com/code/docs/kimi-code/models.html)；发布公告和按量 API 文档写作 `max`，因此不依赖上游省略字段的默认值。
 
 新模型的上下文、输入类型、思考与参考价格均保留逐字段官方来源。未取得 Coding Plan / MiniMax 新模型的独立最大输出规格时省略 `maxTokens`，不拿上下文长度或旧模型配置代替；K2.8 主 ID 与旧别名互相矛盾的继承输出上限一并移除，Coding Plan 两个旧条目的未核实费用估算也不再发布。K3 的视频输入按官方规格补齐。Haiku 5.5 的参考价保留 100K 输入以上的高档整单价格。模型元数据与账号准入分开：本次目录更新不启用 Claude、GPT、Devin 或额外 Go 模型，也不改变既有 MiniMax 备用链。DeepSeek V4.1 Flash 1017 已在上次目录更新中记录，本轮保留；没有把官方 checkpoint 更新直接视作 Go/Free 同步证明。
 
