@@ -526,13 +526,6 @@
         "video"
       ],
       "contextWindow": 1048576,
-      "maxTokens": 32768,
-      "cost": {
-        "input": 0.95,
-        "output": 4,
-        "cacheRead": 0.19,
-        "cacheWrite": 0
-      },
       "effortLevels": [
         "off",
         "low",
@@ -548,8 +541,8 @@
           "verification": "official-docs"
         },
         "cost": {
-          "verification": "unverified-existing",
-          "reason": "Existing estimate retained; no verified paid first-party equivalent"
+          "verification": "not-declared",
+          "reason": "No verified pay-as-you-go equivalent for this Coding Plan model; removed old unverified estimate."
         },
         "effort": {
           "source": "https://www.kimi.com/code/docs/kimi-code/models.html",
@@ -566,6 +559,10 @@
           "checkedAt": "2026-10-24",
           "verification": "official-docs",
           "upstreamModel": "kimi-for-coding"
+        },
+        "maxTokens": {
+          "verification": "not-declared",
+          "reason": "Current K2.8 Preview hosted output maximum not established; removed conflicting inherited K2.7 limits."
         }
       },
       "protocol": "openai",
@@ -594,12 +591,6 @@
       ],
       "contextWindow": 262144,
       "maxTokens": 32768,
-      "cost": {
-        "input": 1.9,
-        "output": 8,
-        "cacheRead": 0.38,
-        "cacheWrite": 0
-      },
       "effortLevels": [
         "on"
       ],
@@ -614,8 +605,8 @@
           "checkedAt": "2026-09-06T14:08:33.645Z"
         },
         "cost": {
-          "verification": "unverified-existing",
-          "reason": "Existing estimate retained; no verified paid first-party equivalent"
+          "verification": "not-declared",
+          "reason": "No verified pay-as-you-go equivalent for this Coding Plan model; removed old unverified estimate."
         },
         "effort": {
           "source": "https://www.kimi.com/code/docs/kimi-code/models.html",
@@ -640,7 +631,8 @@
       "reasoning": true,
       "input": [
         "text",
-        "image"
+        "image",
+        "video"
       ],
       "contextWindow": 1048576,
       "maxTokens": 131072,
@@ -681,6 +673,11 @@
           "checkedAt": "2026-10-24",
           "verification": "official-docs",
           "note": "Coding Plan model table default; selected explicitly because the release announcement lists a different default."
+        },
+        "input": {
+          "source": "https://www.kimi.com/code/docs/kimi-code/models.html",
+          "checkedAt": "2026-10-24",
+          "verification": "official-docs"
         }
       },
       "curated": true,
@@ -742,7 +739,6 @@
         "video"
       ],
       "contextWindow": 1048576,
-      "maxTokens": 262144,
       "cost": {
         "input": 0.95,
         "output": 4,
@@ -787,6 +783,10 @@
           "checkedAt": "2026-10-24",
           "verification": "official-docs",
           "upstreamModel": "kimi-for-coding"
+        },
+        "maxTokens": {
+          "verification": "not-declared",
+          "reason": "Current K2.8 Preview hosted output maximum not established; removed conflicting inherited K2.7 limits."
         }
       },
       "protocol": "openai",
@@ -2119,7 +2119,8 @@
       "reasoning": true,
       "input": [
         "text",
-        "image"
+        "image",
+        "video"
       ],
       "contextWindow": 1048576,
       "maxTokens": 131072,
@@ -2154,6 +2155,11 @@
           "checkedAt": "2026-10-24",
           "verification": "official-docs",
           "note": "Coding Plan model table default; selected explicitly because the release announcement lists a different default."
+        },
+        "input": {
+          "source": "https://www.kimi.com/code/docs/kimi-code/models.html",
+          "checkedAt": "2026-10-24",
+          "verification": "official-docs"
         }
       },
       "curated": true,
