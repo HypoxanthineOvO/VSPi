@@ -2,7 +2,7 @@
 
 2026-10-27：新增 GPT-6.1 Terra（`gpt-6.1-terra`），目录共 78 条，已通过受限安装器发布。cn/tech 公网回读 SHA-256 均为 `de096cae095a47a58cb007c377227095b655dcf19b68500ee86ca3aea631b8d7`。模型支持文本、图片输入及 Responses 工具调用，API 上下文 1,050,000、最大输出 128,000；思考关闭映射到官方 `none`，其余为 low/medium/high/xhigh/max，默认 medium。参考价为每百万 token 输入 $1、输出 $5、缓存读 $0.05、30 分钟缓存写 $1.25；输入超过 272,000 时输入及缓存价翻倍、输出价 1.5 倍。官方另有 12 小时缓存写入价格，当前目录的单个缓存写字段只表示 30 分钟价格。
 
-来源：[模型规格与价格](https://developers.openai.com/api/docs/models/gpt-6.1-terra)、[发布日期](https://developers.openai.com/api/docs/changelog)。目录是元数据；生产暂无 OpenAI 上游账号，GPT 路由未启用，不能把目录更新或路由预览当作实际模型可调用的证明。VSPi 消费 `mergeRelayCatalog` 的实际测试已验证 `off → none`、Responses、图片/工具能力与价格；已安装客户端的内置目录仍取决于后续客户端发布。
+来源：[模型规格与价格](https://developers.openai.com/api/docs/models/gpt-6.1-terra)、[发布日期](https://developers.openai.com/api/docs/changelog)。目录是元数据；生产暂无 OpenAI 上游账号。组 38 的 Terra 精确路由已配置到 OpenAI，无备用链，但组白名单未开放该模型，原有 GPT 通配路由保持停用；不能把目录更新或路由预览当作实际模型可调用的证明。VSPi 消费 `mergeRelayCatalog` 的实际测试已验证 `off → none`、Responses、图片/工具能力与价格；已安装客户端的内置目录仍取决于后续客户端发布。
 
 2026-10-24：维护源补齐 Kimi K3.1 Pro / Highspeed、MiniMax M3.1 Flash、Claude Haiku 5.5，共 77 条，已通过固定免密安装器发布到 Babel；最终 cn/tech 公网回读 SHA256 均为 `bacdc9e686fc04a278381c4d038a489e537c24ef9641aba6921f008d65ac5e98`，与维护源逐字节一致。Kimi 使用官方 Coding Plan ID `k3.1-pro` / `k3.1-pro-highspeed`，`kimi-` 前缀名称仅作显式兼容别名；新增两项优先使用原生 Responses。Kimi K2.8 Preview 的显示名称、1M 上下文与三档思考已校正，K2.7 Code Highspeed 仅保持思考开启，不再展示虚假的强度档位。K3/K3.1 的 Coding Plan 默认显式设为 `high`，依据[模型配置表](https://www.kimi.com/code/docs/kimi-code/models.html)；发布公告和按量 API 文档写作 `max`，因此不依赖上游省略字段的默认值。
 
