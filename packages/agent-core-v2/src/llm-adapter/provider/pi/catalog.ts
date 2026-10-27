@@ -75,6 +75,10 @@ export function findPiModel(providerType: string | undefined, modelName: string,
   const exact = listPiProviders().find((entry) => entry.id === provider)?.models.find(compatible);
   if (exact !== undefined) return structuredClone(exact);
   if (options.allowFallback === false) return undefined;
+  if (provider === 'openai-codex' && modelName === 'gpt-6.1-terra' && (protocol === undefined || protocol === 'openai_responses')) {
+    const template = listPiProviders().find((entry) => entry.id === provider)?.models.find((model) => model.api === 'openai-codex-responses');
+    if (template !== undefined) return { ...structuredClone(template), id: modelName, name: 'GPT 6.1 Terra', cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  }
   const native = listPiProviders().find((entry) => entry.id === relayNativeProvider(modelName))?.models.find(compatible);
   if (native !== undefined) return structuredClone(native);
   const candidates = listPiProviders().flatMap((entry) => entry.models.filter(compatible));

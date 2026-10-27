@@ -46,6 +46,12 @@ describe('pi catalog boundary', () => {
     })));
   });
 
+  it('routes explicitly configured Terra through Codex when the catalog lacks it', () => {
+    const model = findPiModel('openai-codex', 'gpt-6.1-terra', 'openai_responses');
+    expect(model).toMatchObject({ id: 'gpt-6.1-terra', api: 'openai-codex-responses', provider: 'openai-codex' });
+    expect(findPiModel('openai-codex', 'gpt-6.1-fabricated', 'openai_responses')).toBeUndefined();
+  });
+
   it('does not infer a fabricated model from a familiar name prefix', () => {
     expect(findPiModel('openai', 'gpt-5-example-unknown')).toBeUndefined();
   });
