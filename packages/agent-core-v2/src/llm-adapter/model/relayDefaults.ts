@@ -8,8 +8,9 @@ export function isRelayModel(model: ModelRecord, provider?: ProviderConfig): boo
 
 export function defaultRelayProtocol(name: string): Protocol | undefined {
   const id = name.split('/').at(-1)?.toLowerCase() ?? '';
-  if (/^(?:gpt-|o\d(?:-|$))/.test(id)) return 'openai_responses';
+  if (/^(?:gpt-|o\d(?:-|$)|codex-|grok-)/u.test(id)) return 'openai_responses';
   if (id.startsWith('claude-')) return 'anthropic';
-  if (/^(?:kimi-|k[23](?:-|$)|glm-|deepseek-)/.test(id)) return 'openai';
+  if (id.startsWith('gemini-')) return 'google-genai';
+  if (/^(?:kimi-|k[23](?:[.-]|$)|glm-|deepseek-|mimo-|minimax-|qwen|doubao-|swe-|hy4)/u.test(id)) return 'openai';
   return undefined;
 }

@@ -110,6 +110,8 @@ export function parseAnthropicModelVersion(
 const CEILING_BY_FAMILY_VERSION: Readonly<Record<string, number>> = {
   'fable-5': 128000,
   'mythos-5': 128000,
+  'opus-5': 128000,
+  'haiku-5-5': 128000,
   'opus-4-8': 128000,
   'opus-4-7': 128000,
   'opus-4-6': 128000,
@@ -164,6 +166,7 @@ export function matchKnownAnthropicModelProfile(model: string): AnthropicModelPr
 
   switch (version.family) {
     case 'opus':
+      if (version.major === 5) return version.minor === 5 ? ALWAYS_ADAPTIVE_PROFILE : LATEST_OPUS_PROFILE;
       if (version.major === 4 && (version.minor === 7 || version.minor === 8)) {
         return LATEST_OPUS_PROFILE;
       }
@@ -174,13 +177,14 @@ export function matchKnownAnthropicModelProfile(model: string): AnthropicModelPr
       }
       return undefined;
     case 'sonnet':
-      if (version.major === 5) return LATEST_OPUS_PROFILE;
+      if (version.major === 5) return version.minor === 5 ? ALWAYS_ADAPTIVE_PROFILE : LATEST_OPUS_PROFILE;
       if (version.major === 4 && version.minor === 6) return ADAPTIVE_MAX_PROFILE;
       if (version.major < 4 || (version.major === 4 && (version.minor ?? 0) <= 5)) {
         return BUDGET_PROFILE;
       }
       return undefined;
     case 'haiku':
+      if (version.major === 5 && version.minor === 5) return LATEST_OPUS_PROFILE;
       if (version.major < 4 || (version.major === 4 && (version.minor ?? 0) <= 5)) {
         return BUDGET_PROFILE;
       }

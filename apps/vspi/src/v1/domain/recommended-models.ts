@@ -5,23 +5,31 @@ interface RecommendedModel {
 }
 
 export const RECOMMENDED_MODELS: readonly RecommendedModel[] = [
+	{ label: "GPT 6.2 Sol", ids: ["gpt-6.2-sol"] },
+	{ label: "GPT 6.2 Astra", ids: ["gpt-6.2-astra"] },
+	{ label: "GPT 6.1 Terra", ids: ["gpt-6.1-terra"] },
 	{ label: "GPT 6 Astra", ids: ["gpt-6", "gpt-6-astra"] },
 	{ label: "GPT 6.1 Sol", ids: ["gpt-6.1-sol"] },
 	{ label: "GPT 6 Sol", ids: ["gpt-6-sol"] },
 	{ label: "GPT 6 Luna", ids: ["gpt-6-luna"] },
 	{ label: "GPT 5.6 Sol", ids: ["gpt-5.6-sol"] },
 	{ label: "GPT 5.6 Luna", ids: ["gpt-5.6-luna"] },
+	{ label: "Claude Fable 5.2", ids: ["claude-fable-5-2"] },
 	{ label: "Claude Fable 5.1", ids: ["claude-fable-5-1"] },
 	{ label: "Claude Fable 5", ids: ["claude-fable-5"] },
 	{ label: "Claude Opus 5.5", ids: ["claude-opus-5-5"] },
 	{ label: "Claude Sonnet 5.5", ids: ["claude-sonnet-5-5"] },
+	{ label: "Claude Haiku 5.5", ids: ["claude-haiku-5-5"] },
 	{ label: "Claude Opus 5", ids: ["claude-opus-5"] },
+	{ label: "Kimi K3.1 Pro", ids: ["k3.1-pro", "kimi-k3.1-pro"] },
+	{ label: "Kimi K3.1 Pro Highspeed", ids: ["k3.1-pro-highspeed", "kimi-k3.1-pro-highspeed"] },
 	{ label: "Kimi K3", ids: ["kimi-k3", "k3"] },
-	{ label: "Kimi K2.8 Preview", ids: [], names: ["Kimi K2.8", "Kimi K2.8 Preview"] },
+	{ label: "Kimi K2.8 Preview", ids: ["kimi-k2.7-code"], names: ["Kimi K2.8", "Kimi K2.8 Preview"] },
 	{ label: "GLM 5.3", ids: ["glm-5.3"] },
 	{ label: "GLM 5.3 Flash", ids: ["glm-5.3-flash"] },
 	{ label: "DeepSeek V4.1 Flash", ids: ["deepseek-flash", "deepseek-v4.1-flash"] },
 	{ label: "DeepSeek V4 Pro", ids: ["deepseek-v4-pro"] },
+	{ label: "MiniMax M3.1 Flash", ids: ["minimax-m3.1-flash"] },
 	{ label: "MiniMax M3", ids: ["minimax-m3"] },
 	{ label: "MiMo V2.6 Flash", ids: ["mimo-v2.6-flash"] },
 	{ label: "MiMo V2.6 Pro", ids: ["mimo-v2.6-pro"] },
@@ -31,6 +39,9 @@ export const RECOMMENDED_MODELS: readonly RecommendedModel[] = [
 	{ label: "Qwen 3.8 Max", ids: ["qwen3.8-max"] },
 	{ label: "Qwen 3.8 Flash", ids: ["qwen3.8-flash"] },
 	{ label: "Gemini 4 Argon", ids: ["gemini-4-argon"] },
+	{ label: "Gemini 4 Carbon", ids: ["gemini-4-carbon"] },
+	{ label: "Gemini 4 Neon", ids: ["gemini-4-neon"] },
+	{ label: "Gemini 4 Hydrogen", ids: ["gemini-4-hydrogen"] },
 	{ label: "Gemini 3.8 Flash", ids: ["gemini-3.8-flash"] },
 	{ label: "Gemini 3.1 Pro", ids: ["gemini-3.1-pro", "gemini-3.1-pro-preview"] },
 	{ label: "Hy4 Preview", ids: ["hy4-preview"] },
@@ -40,6 +51,9 @@ const recommendedIds = new Set(RECOMMENDED_MODELS.flatMap((model) => model.ids))
 const pendingNames = new Set(RECOMMENDED_MODELS.flatMap((model) => model.names ?? []).map((name) => name.toLowerCase()));
 
 export function isOfficialRecommendedModel(id: string, displayName?: string): boolean {
-	const modelId = id.split("/").at(-1)?.toLowerCase() ?? "";
+	const modelId = (id.split("/").at(-1)?.toLowerCase() ?? "")
+		.replace(/-\d{8}$/u, "")
+		.replace(/^(claude-[a-z]+-\d+)\.(\d+)(?=-|$)/u, "$1-$2")
+		.replace(/^((?:claude-[a-z]+-\d+(?:-\d+)?|gemini-(?:4-(?:argon|carbon|neon|hydrogen)|3\.8-flash)))-(?:low|medium|high|xhigh|max)$/u, "$1");
 	return recommendedIds.has(modelId) || (displayName !== undefined && pendingNames.has(displayName.trim().toLowerCase()));
 }

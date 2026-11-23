@@ -2,6 +2,8 @@ import { getSupportedThinkingLevels, type Api, type Model } from '@earendil-work
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import type { ModelCapability, ThinkingCapability } from '#/llm-adapter/contract/capability';
 import type { Protocol } from '#/llm-adapter/protocol/protocol';
+import { normalizeIdentity } from '#/llm-adapter/model/canonical';
+import { ADDITIONAL_PI_CATALOGS, extendPiCatalog } from './catalog-overrides';
 
 const PROVIDER_ALIASES: Readonly<Record<string, string>> = {
   openai_responses: 'openai',
@@ -15,14 +17,16 @@ const providers = builtinProviders();
 
 export function relayNativeProvider(name: string): string | undefined {
   const id = name.split('/').at(-1)?.toLowerCase() ?? '';
-  if (/^(?:gpt-|o\d(?:-|$))/.test(id)) return 'openai';
+  if (/^(?:gpt-|o\d(?:-|$)|codex-)/u.test(id)) return 'openai';
   if (id.startsWith('claude-')) return 'anthropic';
-  if (/^(?:kimi-|k[23](?:-|$))/.test(id)) return 'moonshotai';
+  if (/^(?:kimi-|k[23](?:[.-]|$))/u.test(id)) return 'moonshotai';
   if (id.startsWith('glm-')) return 'zai';
   if (id.startsWith('deepseek-')) return 'deepseek';
   if (id.startsWith('mimo-')) return 'xiaomi';
   if (id.startsWith('minimax-')) return 'minimax';
   if (id.startsWith('gemini-')) return 'google';
+  if (id.startsWith('doubao-')) return 'volcengine-token-plan';
+  if (/^qwen3\.8-(?:max|flash)$/u.test(id)) return 'qwen-token-plan-cn';
   if (id.startsWith('qwen')) return 'alibaba';
   if (id.startsWith('hy4')) return 'tencent';
   return undefined;
@@ -41,53 +45,48 @@ export function piProtocolForApi(api: Api): Protocol | undefined {
   }
 }
 
-export function listPiProviders() {
-  return providers.flatMap((provider) => {
-    const models = provider.getModels().filter((model) => piProtocolForApi(model.api) !== undefined);
-    if (provider.id === 'deepseek' && !models.some((model) => model.id === 'deepseek-flash')) {
-      const legacy = models.find((model) => model.id === 'deepseek-v4-flash');
-      if (legacy) models.unshift({
-        ...legacy,
-        id: 'deepseek-flash',
-        name: 'DeepSeek V4.1 Flash',
-        input: ['text', 'image'],
-        contextWindow: 1000000,
-        maxTokens: 384000,
-        cost: { input: 0.15, output: 0.6, cacheRead: 0.003, cacheWrite: 0 },
-      });
-    }
+interface PiProviderCatalog {
+  readonly id: string;
+  readonly protocol: Protocol;
+  readonly baseUrl: string;
+  readonly envKey?: string;
+  readonly models: Model<Api>[];
+}
+
+const catalogOnly = new Set(['codex-auto-review']);
+const catalogs: readonly PiProviderCatalog[] = [
+  ...providers.flatMap((provider) => {
+    const models = extendPiCatalog(provider.id, provider.getModels().filter(model => piProtocolForApi(model.api) !== undefined));
     const first = models[0];
-    return first === undefined ? [] : [{
-      id: provider.id,
-      protocol: piProtocolForApi(first.api)!,
-      baseUrl: first.baseUrl,
-      envKey: undefined,
-      models,
-    }];
-  });
+    return first === undefined ? [] : [{ id: provider.id, protocol: piProtocolForApi(first.api)!, baseUrl: first.baseUrl, models }];
+  }),
+  ...ADDITIONAL_PI_CATALOGS,
+];
+const selectableCatalogs = catalogs.map(provider => ({ ...provider, models: provider.models.filter(model => !catalogOnly.has(model.id)) }));
+
+export function listPiProviders(): readonly PiProviderCatalog[] {
+  return selectableCatalogs;
 }
 
 export function findPiModel(providerType: string | undefined, modelName: string, protocol?: Protocol, options: { allowFallback?: boolean } = {}): Model<Api> | undefined {
   if (providerType === 'devin') return undefined;
   const provider = PROVIDER_ALIASES[providerType ?? ''] ?? providerType;
-  const compatible = (model: Model<Api>) => model.id === modelName &&
-    (protocol === undefined || piProtocolForApi(model.api) === protocol);
-  const exact = listPiProviders().find((entry) => entry.id === provider)?.models.find(compatible);
+  const protocolMatches = (model: Model<Api>) => protocol === undefined || piProtocolForApi(model.api) === protocol;
+  const exactMatch = (model: Model<Api>) => model.id === modelName && protocolMatches(model);
+  const exact = catalogs.find(entry => entry.id === provider)?.models.find(exactMatch);
   if (exact !== undefined) return structuredClone(exact);
   if (options.allowFallback === false) return undefined;
-  if (provider === 'openai-codex' && modelName === 'gpt-6.1-terra' && (protocol === undefined || protocol === 'openai_responses')) {
-    const template = listPiProviders().find((entry) => entry.id === provider)?.models.find((model) => model.api === 'openai-codex-responses');
-    if (template !== undefined) return { ...structuredClone(template), id: modelName, name: 'GPT 6.1 Terra', cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
-  }
-  const native = listPiProviders().find((entry) => entry.id === relayNativeProvider(modelName))?.models.find(compatible);
+  const nativeModels = catalogs.find(entry => entry.id === relayNativeProvider(modelName))?.models;
+  const id = normalizeIdentity(modelName.split('/').at(-1) ?? '');
+  const native = nativeModels?.find(exactMatch) ?? nativeModels?.find(model => protocolMatches(model) && normalizeIdentity(model.id) === id);
   if (native !== undefined) return structuredClone(native);
-  const candidates = listPiProviders().flatMap((entry) => entry.models.filter(compatible));
-  const direct = candidates.filter((model) => !['openrouter', 'vercel-ai-gateway', 'github-copilot', 'opencode', 'opencode-go'].includes(model.provider));
+  const candidates = catalogs.flatMap(entry => entry.models.filter(model => model.api !== 'openai-codex-responses' && exactMatch(model)));
+  const direct = candidates.filter(model => !['openrouter', 'vercel-ai-gateway', 'github-copilot', 'opencode', 'opencode-go'].includes(model.provider));
   const picked = direct[0] ?? candidates[0];
   if (picked === undefined) return undefined;
   const signature = (model: Model<Api>) => JSON.stringify([model.input, getSupportedThinkingLevels(model), model.thinkingLevelMap]);
   const peers = direct.length > 0 ? direct : candidates;
-  return peers.every((model) => signature(model) === signature(picked)) ? structuredClone(picked) : undefined;
+  return peers.every(model => signature(model) === signature(picked)) ? structuredClone(picked) : undefined;
 }
 
 export function piThinking(model: Model<Api>): ThinkingCapability {

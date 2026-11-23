@@ -22,6 +22,7 @@ const FAMILIES: ReadonlyArray<readonly [RegExp, string, string]> = [
   [/^minimax-(?:m\d|text)/u, 'minimax', 'MiniMax'],
   [/^mimo-v\d/u, 'xiaomi', 'Xiaomi'],
   [/^swe-\d/u, 'cognition', 'Cognition'],
+  [/^doubao-seed-/u, 'bytedance', 'ByteDance'],
   [/^qwen(?:\d|-\d)/u, 'alibaba', 'Alibaba'],
   [/^grok-\d/u, 'xai', 'xAI'],
   [/^(?:hunyuan(?:-|\d)|hy\d)/u, 'tencent', 'Tencent'],
@@ -30,17 +31,23 @@ const FAMILIES: ReadonlyArray<readonly [RegExp, string, string]> = [
   [/^nemotron-\d/u, 'nvidia', 'NVIDIA'],
 ];
 
-const VENDOR_PREFIX = /^(?:devin|claude|anthropic|openai|moonshotai|moonshot|google|deepseek|zhipu|z-ai|minimax|xiaomi|cognition|alibaba|qwen|x-ai|xai|tencent|nvidia)\//u;
-const REVIEWED_ALIASES: Readonly<Record<string, string>> = { 'deepseek-flash': 'deepseek-v4.1-flash' };
+const VENDOR_PREFIX = /^(?:devin|claude|anthropic|openai|moonshotai|moonshot|google|deepseek|zhipu|z-ai|minimax|xiaomi|cognition|alibaba|qwen|x-ai|xai|tencent|nvidia|bytedance)\//u;
+const REVIEWED_ALIASES: Readonly<Record<string, string>> = {
+  'deepseek-flash': 'deepseek-v4.1-flash',
+  'gpt-6': 'gpt-6-astra',
+  'gemini-3.1-pro-preview': 'gemini-3.1-pro',
+};
 
-function normalizeIdentity(value: string): string {
+export function normalizeIdentity(value: string): string {
   let id = value.trim().toLowerCase().replace(VENDOR_PREFIX, '')
     .replace(/\s*\((?:official|官方)\)$/u, '')
-    .replace(/[ _]+/gu, '-').replace(/-+/gu, '-');
+    .replaceAll(/[ _]+/gu, '-').replaceAll(/-+/gu, '-');
   id = id.replace(/^k(\d)/u, 'kimi-k$1');
-  if (id.startsWith('claude-')) id = id.replace(/-(?:low|medium|high|max)$/u, '');
   id = id.replace(/-\d{8}$/u, '');
-  id = id.replace(/(\d)[.-](?=\d+(?:[.-]|$))/gu, '$1.');
+  if (id.startsWith('claude-') || /^gemini-(?:4-(?:argon|carbon|neon|hydrogen)|3\.8-flash)(?:-|$)/u.test(id)) {
+    id = id.replace(/-(?:low|medium|high|xhigh|max)$/u, '');
+  }
+  id = id.replaceAll(/(\d)[.-](?=\d+(?:[.-]|$))/gu, '$1.');
   return REVIEWED_ALIASES[id] ?? id;
 }
 

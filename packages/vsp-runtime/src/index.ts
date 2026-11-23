@@ -17,6 +17,8 @@ export * from './remote.js';
 export * from './state.js';
 export * from './thinking-effort-repair.js';
 export * from './types.js';
+export { lookupBuiltinModelMetadata } from '@moonshot-ai/agent-core-v2/llm-adapter/model/metadata-lookup';
+export type { BuiltinModelMetadata, LookupBuiltinModelMetadata, ModelMetadataLookupOptions } from '@moonshot-ai/agent-core-v2/llm-adapter/model/model-metadata-contract';
 export { normalizeProxyAddress } from '@moonshot-ai/agent-core-v2/_base/utils/proxyAddress';
 export { withScopedProxy } from '@moonshot-ai/agent-core-v2/_base/utils/scopedProxy';
 export { accountProxyForUrl, accountProxyPreference, usesAccountProxy } from '@moonshot-ai/agent-core-v2/app/auth/proxy';

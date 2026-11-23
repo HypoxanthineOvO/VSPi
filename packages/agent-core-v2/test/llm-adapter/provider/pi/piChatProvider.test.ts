@@ -1,4 +1,5 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
+import { zstdDecompressSync } from 'node:zlib';
 
 import {
   createAssistantMessageEventStream,
@@ -26,6 +27,7 @@ import { ProtocolAdapterRegistry } from '#/llm-adapter/protocol/protocolAdapterR
 import { normalizeThinkingCapability } from '#/human/llm/capability';
 import { applyModelEffortProfile } from '#/llm-adapter/model/effortProfiles';
 import { modelEffortProfile } from '#/llm-adapter/provider/effortProfiles';
+import { lookupBuiltinModelMetadata } from '#/llm-adapter/model/metadata-lookup';
 import { registerProviderDefinition } from '#/llm-adapter/provider/provider-definition';
 
 describe('bounded SSE event validation', () => {
@@ -150,6 +152,50 @@ describe('Chat system role compatibility behind a custom relay', () => {
       expect(body['messages']).toContainEqual({ role: 'developer', content: 'Keep these instructions.' });
     } finally { request.mockRestore(); }
   });
+});
+
+describe('VSPLab Chat tool round trip', () => {
+  it.each(['glm-5.3', 'deepseek-flash', 'deepseek-v4.1-flash', 'k3.1-pro', 'kimi-k3.1-pro', 'kimi-k3', 'k3-256k'])(
+    'inherits metadata and completes a tool round trip for %s', async modelName => {
+      const requests: Array<Record<string, unknown>> = [];
+      const server = createTestHttpServer(async (request, response) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        requests.push(JSON.parse(Buffer.concat(chunks).toString()));
+        expect(request.url).toBe('/v1/chat/completions');
+        const first = requests.length === 1;
+        const delta = first ? {
+          role: 'assistant', reasoning_content: 'Need a result.',
+          tool_calls: [{ index: 0, id: 'call_lookup', type: 'function', function: { name: 'lookup', arguments: '{"task":"example"}' } }],
+        } : { role: 'assistant', content: 'Done.' };
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: first ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`);
+      });
+      const baseUrl = await listen(server);
+      try {
+        const metadata = lookupBuiltinModelMetadata(modelName, { protocol: 'openai' })!;
+        expect(metadata.maxContextSize).toBeGreaterThan(131072);
+        expect(metadata.capabilities).toContain('tool_use');
+        expect(metadata.supportEfforts).toEqual(['low', 'high', 'max']);
+        const provider = createChatProvider({
+          protocol: 'openai', providerType: 'vsplab', modelName, baseUrl, apiKey: 'YOUR_API_KEY',
+          providerOptions: { relay: true }, thinking: normalizeThinkingCapability(metadata.thinking),
+          effortMapping: metadata.effortMapping,
+        });
+        const tools = [{ name: 'lookup', description: 'Look up a value', parameters: { type: 'object', properties: { task: { type: 'string' } }, required: ['task'] } }];
+        const user: Message = { role: 'user', content: [{ type: 'text', text: 'Look this up' }], toolCalls: [] };
+        const options = { thinking: { effort: 'high' } };
+        const first = await generate(provider, '', tools, [user], undefined, options);
+        expect(first.message.toolCalls).toMatchObject([{ id: 'call_lookup', name: 'lookup', arguments: '{"task":"example"}' }]);
+        const result = await generate(provider, '', tools, [user, first.message, {
+          role: 'tool', name: 'lookup', toolCallId: 'call_lookup', content: [{ type: 'text', text: 'Found it.' }], toolCalls: [],
+        }], undefined, options);
+        expect(result.message.content).toContainEqual({ type: 'text', text: 'Done.' });
+        expect(requests[0]).toMatchObject({ model: modelName, reasoning_effort: 'high', tools: [{ type: 'function', function: tools[0] }] });
+        expect(requests[1]?.['messages']).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'tool', tool_call_id: 'call_lookup', content: 'Found it.' })]));
+      } finally { await close(server); }
+    },
+  );
 });
 
 describe('DeepSeek relay history', () => {
@@ -1345,23 +1391,24 @@ describe('pi transcript and subscription routing', () => {
     } finally { await close(server); }
   });
 
-  it('retains the Codex subscription endpoint when tools are loaded during a conversation', async () => {
+  it.each(['gpt-5.4', 'gpt-6.1-terra', 'gpt-6.2-sol', 'gpt-6.2-astra'])('retains the Codex subscription endpoint and tool updates for %s', async modelName => {
     let path = '';
     let headers: IncomingMessage['headers'] = {};
     let body: Record<string, unknown> = {};
     const server = createTestHttpServer(async (request, response) => {
       path = request.url ?? '';
       headers = request.headers;
-      let raw = '';
-      for await (const chunk of request) raw += chunk;
-      body = JSON.parse(raw);
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const raw = Buffer.concat(chunks);
+      body = JSON.parse((headers['content-encoding'] === 'zstd' ? zstdDecompressSync(raw) : raw).toString());
       response.writeHead(401, { 'content-type': 'application/json' });
       response.end('{"error":{"message":"example rejected token"}}');
     });
     const baseUrl = await listen(server);
     const token = `example.${Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: 'example-account' } })).toString('base64url')}.example`;
     try {
-      const provider = createChatProvider({ protocol: 'openai_responses', providerType: 'openai-codex', modelName: 'gpt-5.4', baseUrl: baseUrl.replace(/\/v1$/, '/codex'), apiKey: token, defaultHeaders: { 'chatgpt-account-id': 'example-account' } });
+      const provider = createChatProvider({ protocol: 'openai_responses', providerType: 'openai-codex', modelName, baseUrl: baseUrl.replace(/\/v1$/, '/codex'), apiKey: token, defaultHeaders: { 'chatgpt-account-id': 'example-account' } });
       await expect(generate(provider, 'Example instructions', [], [
         { role: 'user', content: [{ type: 'text', text: 'Search example data' }], toolCalls: [] },
         { role: 'system', content: [], toolCalls: [], tools: [{ name: 'search_example', description: 'Search', parameters: { type: 'object', properties: {} } }] },
