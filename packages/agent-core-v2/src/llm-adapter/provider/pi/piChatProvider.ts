@@ -191,8 +191,15 @@ export class PiChatProvider implements ChatProvider {
     this.modelName = config.modelName;
     this.maxCompletionTokens =
       config.providerOptions?.defaultMaxTokens ?? model?.maxTokens ?? 32768;
+    const api = config.providerOptions?.vertexai === true ? 'google-vertex' : (model?.api ?? API_BY_PROTOCOL[config.protocol]);
+    const wireId = config.modelName.split('/').at(-1)?.toLowerCase() ?? '';
+    const adaptiveClaude = api === 'anthropic-messages' && /^claude-(?:(?:opus|sonnet|haiku)-5[.-]5|fable-5(?:[.-][12])?)(?:-|$)/u.test(wireId);
     const nativeMapping = config.providerOptions?.relay ? undefined : model?.thinkingLevelMap;
-    const thinkingLevelMap: ThinkingLevelMap = { ...nativeMapping, ...config.effortMapping };
+    const thinkingLevelMap: ThinkingLevelMap = {
+      ...adaptiveClaude ? { xhigh: 'xhigh', max: 'max', minimal: null } : undefined,
+      ...nativeMapping,
+      ...config.effortMapping,
+    };
     if (config.thinking !== undefined) {
       const efforts = thinkingEffortsForProvider(config.thinking, config.providerType);
       for (const level of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const) {
@@ -217,10 +224,7 @@ export class PiChatProvider implements ChatProvider {
     this.model = {
       id: config.modelName,
       name: model?.name ?? config.modelName,
-      api:
-        config.providerOptions?.vertexai === true
-          ? 'google-vertex'
-          : (model?.api ?? API_BY_PROTOCOL[config.protocol]),
+      api,
       provider: model?.provider ?? config.providerType ?? config.protocol,
       baseUrl: config.baseUrl ?? model?.baseUrl ?? BASE_URL_BY_PROTOCOL[config.protocol],
       reasoning:
@@ -250,7 +254,11 @@ export class PiChatProvider implements ChatProvider {
                 ? true
                 : declaredReasoningContent,
           }
-        : model?.compat,
+        : api === 'openai-responses' && relayNativeProvider(config.modelName) === 'openai'
+          ? { ...model?.compat, supportsStrictMode: true }
+          : adaptiveClaude
+            ? { ...model?.compat, supportsMidConvoEffort: false, forceAdaptiveThinking: config.providerOptions?.adaptiveThinking ?? true }
+            : model?.compat,
     };
     this.provider = providerForModel(this.model);
   }

@@ -1284,6 +1284,43 @@ async function generate(provider: ChatProvider, system: string, tools: Tool[], h
 }
 
 describe('pi transcript and subscription routing', () => {
+  it('sends explicit non-strict Responses tools without changing optional parameters', async () => {
+    let body: Record<string, unknown> = {};
+    const request = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      if (typeof init?.body !== 'string') throw new Error('Expected JSON body');
+      body = JSON.parse(init.body);
+      throw new Error('offline capture');
+    });
+    const parameters = { type: 'object', properties: { task: { type: 'string' }, model: { type: 'string' } }, required: ['task'] };
+    try {
+      const provider = createChatProvider({ protocol: 'openai_responses', providerType: 'example-relay', modelName: 'gpt-6.2-sol', baseUrl: 'https://relay.example.test/v1', apiKey: 'YOUR_API_KEY', providerOptions: { relay: true } });
+      await expect(generate(provider, '', [{ name: 'delegate', description: 'Assign work', parameters }], [])).rejects.toThrow('Connection error');
+      expect(body['tools']).toEqual([{ type: 'function', name: 'delegate', description: 'Assign work', parameters, strict: false }]);
+    } finally { request.mockRestore(); }
+  });
+
+  it.each(['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-2'].flatMap(modelName =>
+    [false, true].map(relay => ({ modelName, relay })),
+  ))('sends adaptive thinking and selected effort for $modelName (relay=$relay)', async ({ modelName, relay }) => {
+    let body: Record<string, unknown> = {};
+    const request = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      if (typeof init?.body !== 'string') throw new Error('Expected JSON body');
+      body = JSON.parse(init.body);
+      throw new Error('offline capture');
+    });
+    const wireName = relay ? `gateway/${modelName.replace('-5-', '-5.')}-20261118` : modelName;
+    try {
+      const provider = createChatProvider({
+        protocol: 'anthropic', providerType: relay ? 'example-relay' : 'anthropic', modelName: wireName,
+        baseUrl: relay ? 'https://relay.example.test' : 'https://api.anthropic.com', apiKey: 'YOUR_API_KEY', providerOptions: { relay },
+        thinking: { availability: 'always', canDisable: false, controls: ['effort'], efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      });
+      await expect(generate(provider, '', [], [{ role: 'user', content: [{ type: 'text', text: 'ping' }], toolCalls: [] }], undefined, { thinking: { effort: 'xhigh' } })).rejects.toThrow('Connection error');
+      expect(body['model']).toBe(wireName);
+      expect(body['thinking']).toEqual({ type: 'adaptive', display: 'summarized' });
+      expect(body['output_config']).toEqual({ effort: 'xhigh' });
+    } finally { request.mockRestore(); }
+  });
   it('keeps dynamically loaded tools on the Claude OAuth transport', async () => {
     let headers: IncomingMessage['headers'] = {};
     let body: Record<string, unknown> = {};
