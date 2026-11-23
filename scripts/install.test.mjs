@@ -23,7 +23,7 @@ async function makeFixture(directory, env) {
   return join(directory, stdout.trim());
 }
 
-test('install.sh over HTTP with isolated npm and HOME', {
+await test('install.sh over HTTP with isolated npm and HOME', {
   skip: process.platform !== 'linux' || process.arch !== 'x64',
 }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'vspi-install-test-'));
