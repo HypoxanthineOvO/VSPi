@@ -355,8 +355,14 @@ export class ProviderDiscoveryService implements IProviderDiscoveryService {
       try {
         const payload = await fetchRelayCatalog(provider);
         if (JSON.stringify(this.providerService.get(id)) !== JSON.stringify(provider)) throw new Error('Provider changed during discovery; retry refresh');
-        const current = this.config.inspect<Record<string, ModelRecord>>(MODELS_SECTION).userValue ?? {};
+        const inspected = this.config.inspect<Record<string, ModelRecord>>(MODELS_SECTION);
+        const current = inspected.userValue ?? {};
         const merged = mergeRelayCatalog(current, id, provider, payload, lookupBuiltinModelMetadata);
+        for (const [alias, record] of Object.entries(merged)) {
+          if ((record.providerId ?? record.provider) !== id || inspected.value?.[alias]?.pricing === undefined) continue;
+          record.pricing = current[alias]?.pricing;
+          record.pricingSource = current[alias]?.pricingSource;
+        }
         if (JSON.stringify(current) === JSON.stringify(merged)) { response.unchanged.push(id); continue; }
         await this.config.replace(MODELS_SECTION, merged);
         response.changed.push({ provider_id: id, provider_name: id, added: Object.keys(merged).length - Object.keys(current).length, removed: 0 });
