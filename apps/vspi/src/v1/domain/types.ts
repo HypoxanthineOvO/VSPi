@@ -253,19 +253,31 @@ export interface ModelGroup {
 	roles: ModelGroupRole[];
 }
 
-export type ProviderStatus = "已配置" | "已验证" | "检测中" | "未配置" | "异常";
+export type ProviderStatus = "已配置" | "已验证" | "检测中" | "未配置" | "已停用" | "异常";
+
+export interface ProviderModelEntry {
+	id: string;
+	wireModel: string;
+	displayName?: string;
+	protocol?: string;
+	contextWindow?: number;
+	overrideProtocol?: string;
+	overrideContextWindow?: number;
+}
 
 export interface ProviderOption {
 	id: string;
 	label: string;
 	protocol: string;
 	status: ProviderStatus;
+	enabled?: boolean;
 	detail: string;
 	baseUrl?: string;
 	custom?: boolean;
 	authMethods?: ProviderAuthMethod[];
 	storedCredential?: "api_key" | "oauth";
 	models?: readonly string[];
+	modelEntries?: readonly ProviderModelEntry[];
 	authLabel?: string;
 	defaultModel?: string;
 	modelHealth?: { model: string; health: NonNullable<ModelOption['health']> };
