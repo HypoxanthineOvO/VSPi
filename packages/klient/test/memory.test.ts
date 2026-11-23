@@ -1,6 +1,8 @@
 import { rm } from 'node:fs/promises';
 
 import { describe, expect, it } from 'vitest';
+import { interactions } from '@moonshot-ai/agent-core-v2/human/interaction/facade';
+import { INTERACTION_TAG_AGENT_ID, INTERACTION_TAG_SESSION_ID } from '@moonshot-ai/agent-core-v2/human/interaction/interaction';
 
 import { defineKlientConformance } from './helpers/conformance.js';
 import { createKlient } from '../src/transports/memory/index.js';
@@ -16,6 +18,7 @@ defineKlientConformance('memory', async () => {
     app,
     rawCall: (service, method, args, scope) =>
       createMemoryDispatcher(app).call(scope ?? {}, service, method, args),
+    rawStream: (service, method, args) => createMemoryDispatcher(app).stream({}, service, method, args),
     cleanup: async () => {
       await klient.close();
       app.dispose();
@@ -79,16 +82,11 @@ describe('memory dispatcher specifics', () => {
     const first = await klient.global.sessions.create({ workDir: process.cwd() });
     const second = await klient.global.sessions.create({ workDir: process.cwd() });
     try {
-      const parked = (await dispatcher.call({ sessionId: first.id }, 'sessionInteractionService', 'enqueue', [
-        {
-          kind: 'approval',
-          payload: {
-            toolName: 'Bash',
-            action: 'run',
-            display: { kind: 'command', command: 'ls' },
-          },
-        },
-      ])) as { id: string };
+      const parked = interactions.enqueue({
+        kind: 'approval',
+        payload: { toolName: 'Bash', action: 'run', display: { kind: 'command', command: 'ls' } },
+        tags: { [INTERACTION_TAG_SESSION_ID]: first.id, [INTERACTION_TAG_AGENT_ID]: 'main' },
+      });
 
       await dispatcher.call({ sessionId: second.id }, 'sessionInteractionService', 'respond', [
         parked.id,

@@ -1,7 +1,8 @@
 /**
  * The aggregated klient contract — service wire name → method → zod
  * input/output schemas, across the core/session/agent scopes. The klient
- * factory validates every call against this table; transports never see it.
+ * factory uses this table for client validation, and the shared dispatcher
+ * uses it to allow only registered calls and streams.
  * Event registrations live in the per-scope `events.ts` files alongside
  * their payload schemas.
  */

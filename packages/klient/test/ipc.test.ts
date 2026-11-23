@@ -25,6 +25,7 @@ defineKlientConformance('ipc', async () => {
     app,
     rawCall: (service, method, args, scope) =>
       rawChannel.call(scope ?? {}, service, method, args),
+    rawStream: (service, method, args) => rawChannel.stream({}, service, method, args),
     cleanup: async () => {
       await rawChannel.close();
       await klient.close();
@@ -401,23 +402,23 @@ describe('ipc transport specifics', () => {
 describe('IPC response and call budgets', () => {
   it('rejects a large response without closing the connection', async () => {
     const root = await mkdtemp(join(tmpdir(), 'klient-budget-'));
-    const service = { read(size: number) { return 'x'.repeat(size); } };
+    const service = { get(domain: string) { return domain === 'large' ? 'x'.repeat(2048) : 'xx'; } };
     const host = await serveKlientIpc({ socketPath: join(root, 'ipc.sock'), maxFrameBytes: 1024, scope: { accessor: { get: <T>() => service as T } } });
     const channel = new IpcChannel({ socketPath: host.socketPath });
     try {
-      await expect(channel.call({}, 'modelResolver', 'read', [2048])).rejects.toMatchObject({ code: 41301 });
-      await expect(channel.call({}, 'modelResolver', 'read', [2])).resolves.toBe('xx');
+      await expect(channel.call({}, 'configService', 'get', ['large'])).rejects.toMatchObject({ code: 41301 });
+      await expect(channel.call({}, 'configService', 'get', ['small'])).resolves.toBe('xx');
     } finally { await channel.close(); await host.close(); await rm(root, { recursive: true, force: true }); }
   });
 
   it('keeps a connection usable after rejecting a large outgoing request', async () => {
     const root = await mkdtemp(join(tmpdir(), 'klient-budget-'));
-    const service = { echo(value: string) { return value; } };
+    const service = { get(domain: string) { return domain; } };
     const host = await serveKlientIpc({ socketPath: join(root, 'ipc.sock'), scope: { accessor: { get: <T>() => service as T } } });
     const channel = new IpcChannel({ socketPath: host.socketPath, maxFrameBytes: 1024 });
     try {
-      await expect(channel.call({}, 'modelResolver', 'echo', ['x'.repeat(2048)])).rejects.toMatchObject({ code: 41301 });
-      await expect(channel.call({}, 'modelResolver', 'echo', ['ok'])).resolves.toBe('ok');
+      await expect(channel.call({}, 'configService', 'get', ['x'.repeat(2048)])).rejects.toMatchObject({ code: 41301 });
+      await expect(channel.call({}, 'configService', 'get', ['ok'])).resolves.toBe('ok');
     } finally { await channel.close(); await host.close(); await rm(root, { recursive: true, force: true }); }
   });
 
@@ -427,16 +428,16 @@ describe('IPC response and call budgets', () => {
     const pending = new Promise<void>(resolve => { release = resolve; });
     let started!: () => void;
     const entered = new Promise<void>(resolve => { started = resolve; });
-    const service = { async slow() { started(); await pending; return true; } };
+    const service = { async get() { started(); await pending; return true; } };
     const host = await serveKlientIpc({ socketPath: join(root, 'ipc.sock'), maxTotalCalls: 1, scope: { accessor: { get: <T>() => service as T } } });
     const first = new IpcChannel({ socketPath: host.socketPath });
     const second = new IpcChannel({ socketPath: host.socketPath });
     try {
-      const call = first.call({}, 'modelResolver', 'slow', []).catch(() => {});
+      const call = first.call({}, 'configService', 'get', ['example']).catch(() => {});
       await entered;
       await first.close();
       await call;
-      await expect(second.call({}, 'modelResolver', 'slow', [])).rejects.toMatchObject({ code: 42901 });
+      await expect(second.call({}, 'configService', 'get', ['example'])).rejects.toMatchObject({ code: 42901 });
     } finally { release(); await first.close(); await second.close(); await host.close(); await rm(root, { recursive: true, force: true }); }
   });
 });

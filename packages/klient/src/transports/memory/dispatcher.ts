@@ -50,8 +50,7 @@ import type {
 import { FileErrors } from '@moonshot-ai/agent-core-v2/app/file/fileService';
 import { ConfigTarget, type IConfigService } from '@moonshot-ai/agent-core-v2/app/config/config';
 import type { IProviderService } from '@moonshot-ai/agent-core-v2/llm-adapter/provider/provider';
-import { configContract } from '../../contract/global/config.js';
-import { providersContract } from '../../contract/global/providers.js';
+import { globalContract, isStreamingContract, type ProcedureContract, type StreamingProcedureContract } from '../../contract/index.js';
 import { DesktopSettingsConflictError } from '@moonshot-ai/agent-core-v2/app/config/desktopSettings';
 import { Error2, ErrorCodes } from '@moonshot-ai/agent-core-v2/errors';
 
@@ -61,8 +60,6 @@ import { stringifyWire } from '../json.js';
 import type { EventSourceRef, IDisposable, ScopeRef } from '../../core/channel.js';
 import { RPCError } from '../../core/errors.js';
 import { IEventService, serviceTokens } from './serviceRegistry.js';
-import { authContract } from '../../contract/global/auth.js';
-import { sessionTerminalContract } from '../../contract/session/terminal.js';
 
 /** Structural minimum of an engine `Scope` / `IScopeHandle`. */
 export interface ScopeLike {
@@ -235,11 +232,6 @@ const DESKTOP_SETTINGS_CONFLICT = 40930;
 /** Wire name of the engine's `IMcpManagementService` decorator id. */
 const MCP_MANAGEMENT_SERVICE = 'mcpManagementService';
 
-const OAUTH_PUBLIC_METHODS = new Set([
-  ...Object.keys(authContract),
-  'getManagedUsage', 'getManagedUserInfo', 'getRegion',
-]);
-
 /**
  * Session-scope domain services whose methods take the lifecycle-issued
  * `AgentContext` as their first argument. The wire stays agentId-only (the
@@ -252,11 +244,22 @@ const AGENT_CONTEXT_SERVICES: ReadonlySet<string> = new Set([
   'agentUsageService',
 ]);
 
-function assertTerminalArgs(method: string, args: unknown[]): void {
-  const procedure = sessionTerminalContract[method as keyof typeof sessionTerminalContract];
-  if (procedure === undefined) {
-    throw new RPCError(REQUEST_INVALID, `method not found: sessionTerminalService.${method}`);
+function requireWireMethod(service: string, method: string, streaming: boolean) {
+  const methods = Object.hasOwn(globalContract, service) ? globalContract[service] : undefined;
+  if (methods === undefined) {
+    throw new RPCError(REQUEST_INVALID, `unknown service: ${service}`);
   }
+  const procedure = Object.hasOwn(methods, method) ? methods[method] : undefined;
+  if (procedure === undefined) {
+    throw new RPCError(REQUEST_INVALID, `method not found: ${service}.${method}`);
+  }
+  if (isStreamingContract(procedure) !== streaming) {
+    throw new RPCError(REQUEST_INVALID, `${service}.${method} requires ${streaming ? 'call' : 'stream'}`);
+  }
+  return procedure;
+}
+
+function assertTerminalArgs(procedure: ProcedureContract | StreamingProcedureContract, args: unknown[]): void {
   const parsed = procedure.input.safeParse(args);
   if (!parsed.success) {
     throw new RPCError(REQUEST_INVALID, 'invalid terminal request');
@@ -531,13 +534,7 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
 
   return {
     async call(scope, service, method, args) {
-      if (service === 'oauthService' && !OAUTH_PUBLIC_METHODS.has(method)) {
-        throw new RPCError(REQUEST_INVALID, `method not found: ${service}.${method}`);
-      }
-      if ((service === 'configService' && !Object.hasOwn(configContract, method)) ||
-          (service === 'providerService' && !Object.hasOwn(providersContract, method))) {
-        throw new RPCError(REQUEST_INVALID, `method not found: ${service}.${method}`);
-      }
+      const procedure = requireWireMethod(service, method, false);
       const resolved = await resolveScope(scope);
       const instance = resolveService(resolved, service);
       // `fileService` adapts bytes ⇄ streams: the JSON wire cannot carry
@@ -596,7 +593,7 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
         clonedArgs[1] = preserveQuotaSecrets(clonedArgs[1], providers.get(clonedArgs[0]));
       }
       if (service === 'sessionTerminalService') {
-        assertTerminalArgs(method, clonedArgs);
+        assertTerminalArgs(procedure, clonedArgs);
       }
       const callArgs = AGENT_CONTEXT_SERVICES.has(service)
         ? [agentContextOf(resolved.like as IAgentScopeHandle), ...clonedArgs]
@@ -635,6 +632,7 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
 
             const ensureStarted = (): Promise<void> => {
               started ??= (async () => {
+                requireWireMethod(service, method, true);
                 const resolved = await resolveScope(scope);
                 if (closed) return;
                 const catalog = resolveService(resolved, 'modelResolver');
@@ -692,9 +690,7 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
 
           const ensureStarted = (): Promise<void> => {
             started ??= (async () => {
-              if (service === 'oauthService') {
-                throw new RPCError(REQUEST_INVALID, `not a streaming method: ${service}.${method}`);
-              }
+              const procedure = requireWireMethod(service, method, true);
               const resolved = await resolveScope(scope);
               if (closed) return;
               const instance = resolveService(resolved, service);
@@ -707,7 +703,7 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
               }
               const clonedArgs = args.map(wireClone);
               if (service === 'sessionTerminalService') {
-                assertTerminalArgs(method, clonedArgs);
+                assertTerminalArgs(procedure, clonedArgs);
               }
               const iterable = (member as (...a: unknown[]) => unknown).apply(
                 instance,

@@ -19,6 +19,8 @@ import { LifecycleScope } from '@moonshot-ai/agent-core-v2/app/scopes';
 import { IBootstrapService } from '@moonshot-ai/agent-core-v2/app/bootstrap/bootstrap';
 import { CommandContribution } from '@moonshot-ai/agent-core-v2/agent/command/commandContribution';
 import { IFeatureManager } from '@moonshot-ai/agent-core-v2/app/feature/featureManager';
+import { IProviderDiscoveryService } from '@moonshot-ai/agent-core-v2/app/kosongConfig/discovery';
+import { IQuotaService } from '@moonshot-ai/agent-core-v2/app/quota/quota-contract';
 import {
   resetModelsDevUpstreamForTest,
   setModelsDevUpstreamForTest,
@@ -159,6 +161,7 @@ export interface KlientConformanceTarget {
     args: unknown[],
     scope?: ScopeRef,
   ): Promise<unknown>;
+  rawStream(service: string, method: string, args: unknown[]): AsyncIterable<unknown>;
   cleanup(): Promise<void>;
 }
 
@@ -195,14 +198,42 @@ export function defineKlientConformance(
       expect(env.clientVersion.length).toBeGreaterThan(0);
     });
 
-    it('reads persisted quotas over RPC, refreshes and returns no upstream credentials', async () => {
+    it.each(['providerDiscovery', 'quotaService'] as const)('rejects non-contract calls and streams on %s', async (service) => {
+      const instance = service === 'providerDiscovery'
+        ? target.app.accessor.get(IProviderDiscoveryService)
+        : target.app.accessor.get(IQuotaService);
+      const internalFixture = vi.fn(() => 'not a wire result');
+      Object.defineProperty(instance, 'internalFixture', { value: internalFixture, configurable: true });
+      try {
+        for (const method of ['internalFixture', 'toString']) {
+          const error = { code: 40001, message: `method not found: ${service}.${method}` };
+          await expect(target.rawCall(service, method, [])).rejects.toMatchObject(error);
+          const stream = target.rawStream(service, method, [])[Symbol.asyncIterator]();
+          await expect(stream.next()).rejects.toMatchObject(error);
+        }
+        expect(internalFixture).not.toHaveBeenCalled();
+      } finally {
+        Reflect.deleteProperty(instance, 'internalFixture');
+      }
+    });
+
+    it('does not dispatch a registered method using the wrong RPC kind', async () => {
+      await expect(target.rawCall('modelResolver', 'generate', [])).rejects.toMatchObject({ code: 40001 });
+      const stream = target.rawStream('quotaService', 'getQuotas', [])[Symbol.asyncIterator]();
+      await expect(stream.next()).rejects.toMatchObject({ code: 40001 });
+    });
+
+    it('reads persisted quotas and discovery diagnostics without returning upstream credentials', async () => {
       const providerId = 'quota-conformance';
       const key = 'SYNTHETIC_QUOTA_KEY';
+      const inferenceKey = 'YOUR_API_KEY';
       const seen: Array<[string | undefined, string | undefined, string | undefined]> = [];
       const server = createServer((request, response) => {
         seen.push([request.method, request.url, request.headers.authorization]);
         response.setHeader('content-type', 'application/json');
-        if (request.url === '/api/status') {
+        if (request.url === '/v1/models') {
+          response.end(JSON.stringify({ data: [{ id: 'example-model' }] }));
+        } else if (request.url === '/api/status') {
           response.end(JSON.stringify({ success: true, data: { quota_per_unit: 100, quota_display_type: 'USD' } }));
         } else if (request.url === '/api/user/self') {
           response.end(JSON.stringify({ success: true, data: { quota: 825, ignored: 'https://account:pass@example.test' } }));
@@ -217,22 +248,30 @@ export function defineKlientConformance(
         await once(server, 'listening');
         const address = server.address();
         if (!address || typeof address === 'string') throw new Error('quota fixture did not open a TCP port');
-        await config.set({ domain: 'providers', patch: { [providerId]: { type: 'openai', quota: {
-          mode: 'newapi-account', managementKey: key, managementUrl: `http://127.0.0.1:${address.port}`, billingMultiplier: 0.5,
-        } } } });
+        const base = `http://127.0.0.1:${address.port}`;
+        await config.set({ domain: 'providers', patch: { [providerId]: {
+          type: 'openai', apiKey: inferenceKey, baseUrl: `${base}/v1`,
+          quota: { mode: 'newapi-account', managementKey: key, managementUrl: base, billingMultiplier: 0.5 },
+        } } });
         await config.reload();
-        const first = await quota.list({ providerId });
+        type Snapshot = Awaited<ReturnType<typeof quota.list>>;
+        const first = await target.rawCall('quotaService', 'getQuotas', [{ providerId }]) as Snapshot;
         expect(first.items).toMatchObject([{ id: providerId, status: 'ok', balances: [{ id: 'account.balance', amount: 8.25, equivalentAmount: 16.5 }] }]);
-        expect(JSON.stringify(first)).not.toMatch(/SYNTHETIC_QUOTA_KEY|account:pass|127\.0\.0\.1/);
         expect((await quota.list({ providerId })).revision).toBe(first.revision);
-        const refreshed = await quota.refresh({ providerId });
+        const refreshed = await target.rawCall('quotaService', 'refreshQuotas', [{ providerId }]) as Snapshot;
         expect(refreshed.revision).toBeGreaterThan(first.revision);
         const cooled = await quota.refresh({ providerId });
         expect(cooled.cooldownRemainingMs).toBeGreaterThan(0);
         expect(cooled.items).toEqual(refreshed.items);
+        const discovery = await target.rawCall('providerDiscovery', 'testProvider', [providerId]);
+        expect(discovery).toMatchObject({ providerId, ok: true, probeKind: 'models', modelCount: 1 });
+        for (const result of [first, refreshed, cooled, discovery]) {
+          expect(JSON.stringify(result)).not.toMatch(/"(?:managementKey(?:Ref)?|management_key(?:_ref)?)":|SYNTHETIC_QUOTA_KEY|YOUR_API_KEY|account:pass|127\.0\.0\.1/);
+        }
         expect(seen).toEqual([
           ['GET', '/api/status', undefined], ['GET', '/api/user/self', `Bearer ${key}`],
           ['GET', '/api/status', undefined], ['GET', '/api/user/self', `Bearer ${key}`],
+          ['GET', '/v1/models', `Bearer ${inferenceKey}`],
         ]);
       } finally {
         server.closeAllConnections();

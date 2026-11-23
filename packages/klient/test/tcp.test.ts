@@ -65,6 +65,7 @@ defineKlientConformance('tcp', async () => {
     app,
     rawCall: (service, method, args, scope) =>
       rawChannel.call(scope ?? {}, service, method, args),
+    rawStream: (service, method, args) => rawChannel.stream({}, service, method, args),
     cleanup: async () => {
       await rawChannel.close();
       await klient.close();

@@ -51,8 +51,9 @@ ipc │ memory
     getPlan*/getTasks*/stopTask/getTaskOutput`.
 - **Contract** — every method has a zod input tuple + output schema, validated
   on the client before send / after receive (default on; `validate: false` to
-  disable). Validation is sub-µs for typical payloads — cheaper than the JSON
-  serialization the wire already pays.
+  disable). The shared dispatcher rejects calls and streams not declared in the
+  contract, independent of client validation. Validation is sub-µs for typical
+  payloads — cheaper than the JSON serialization the wire already pays.
 - **Events** — `klient.events.on(...)` for the global bus
   (`config.changed`, `kosong.models.changed`, `session.archived`, …),
   `session(id).events.on('metadata.changed' | 'interactions.changed' |
