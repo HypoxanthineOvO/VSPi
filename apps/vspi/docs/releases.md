@@ -4,6 +4,23 @@
 
 发行包本地构建并直接发布，发版流程见[开发指南](development.md#发布)。各版本的平台验收范围分别记录；2.4.0 按 Linux 先行发布，Windows 验收后置，不沿用旧版本的结论。
 
+## 2.10.0 — 新模型、来源管理与额度查询（Linux 终端版）
+
+- `/providers` 和 `vspi config` 现在有「来源」和「额度」两个标签，按 `1` / `2` 切换；`/quota` 直接打开额度页。来源列表显示额度摘要，额度页可看订阅窗口剩余量、CPA 逐账号额度和网关余额。`5h` / `7d` 窗口显示倒计时；临时查询失败时，缓存值标为 `(旧)`，鉴权失败则提示重新登录或检查密钥。首次启动且尚未配置来源时，VSPi 直接打开来源页。
+- 在来源页按 `Space` 停用或启用 Provider。停用后 `/model` 隐藏该来源，凭据和模型配置保留。按 `T` 可用真实接口检查连接，最多等待 8 秒，区分鉴权、网络和接口错误，不发起模型生成。检测到可用的 OMP 凭据时，可按 `R` 确认复用；VSPi 只保存引用，以只读方式访问 OMP，不刷新或改写其凭据。
+- 内置目录补充 GPT 6.2 Sol / Astra、GPT 6.1 Terra、Claude Fable 5.2、Gemini 4 Carbon / Neon / Hydrogen、Kimi K3.1 Pro / Highspeed、MiniMax M3.1 Flash 和 Doubao Seed 2.1 Pro 等型号。其中多款进入 `/model` 常用列表，实际可用型号取决于已配置的来源。
+- 修复 GPT 等通过通用 OpenAI Responses 接口发起工具调用时的可选参数兼容问题；Codex 来源的新版 GPT 使用 Codex 专用 Responses 协议。Claude 5.5 和 Fable 5 系列使用 Anthropic Messages 时按选定档位发送自适应思考设置，直连、中转都适用。
+- 中转站可按已知型号补齐上下文、输入能力与思考档位等规格，保留站点要求的请求模型 ID。网关可统一选协议，也可在来源详情里为单个模型覆写协议和上下文窗口。刷新模型不覆盖已有配置；Kimi K3.1 的 VSPLab 预置继续使用 Responses，Coding Plan 和中转站不沿用开放平台的最大输出上限。
+- Hypo-Vault 对接和为单个来源设置代理留到后续版本。
+
+Linux x86_64，需 Node.js 22.19.0 或更新版本。发布后可用以下命令安装；脚本会校验发行包的 SHA-256，全局安装目录不可写时改用 `~/.local`。已有安装可运行 `vspi update`。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/HypoxanthineOvO/VSPi/v2.10.0/scripts/install.sh | sh
+```
+
+Linux 候选包已通过包校验、7 项打包 daemon 测试，以及 Node.js 22.19.0 下的隔离安装、版本检查与 daemon 启停。本版验收范围为 Linux 终端，不含 Windows、macOS 或桌面端。
+
 ## 2.9.4 — 子 Agent 角色预设与模型路由（Linux 先行）
 
 - 新会话内置六个子 Agent 角色：explore 查代码与调用链，coder 做后端与通用实现，frontend 做前端、视觉与视频，plan 做技术规划，reviewer 审改动，consultant 只在产品取舍或意图有分歧时咨询。主 Agent 按任务自己选角色；小修改和简单查找自己做，不再事事派出去。
