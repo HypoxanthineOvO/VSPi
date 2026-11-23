@@ -31,13 +31,15 @@ export async function loadProviderOptions(klient: Klient, label: (id: string) =>
       const model = models.find(entry => entry.model === id && entry.provider === item.id);
       const record = modelInspection.value?.[id];
       const overrides = record?.overrides as ConfigRecord | undefined;
-      const overrideProtocol = textField(record?.protocol);
-      const overrideContextWindow = numberField(overrides?.maxContextSize) ?? numberField(record?.maxContextSize);
+      const userRecord = modelInspection.userValue?.[id];
+      const userOverrides = userRecord?.overrides as ConfigRecord | undefined;
+      const overrideProtocol = textField(userRecord?.protocol);
+      const overrideContextWindow = numberField(userOverrides?.maxContextSize) ?? numberField(userRecord?.maxContextSize);
       return {
         id, wireModel: model?.wire_model ?? textField(record?.name) ?? textField(record?.model) ?? id,
         displayName: model?.display_name ?? textField(overrides?.displayName) ?? textField(record?.displayName),
-        protocol: model?.protocol ?? overrideProtocol ?? textField(record?.defaultProtocol),
-        contextWindow: model?.max_context_size ?? overrideContextWindow,
+        protocol: model?.protocol ?? textField(record?.protocol) ?? textField(record?.defaultProtocol),
+        contextWindow: model?.max_context_size ?? numberField(overrides?.maxContextSize) ?? numberField(record?.maxContextSize),
         overrideProtocol, overrideContextWindow,
       };
     });
@@ -78,7 +80,8 @@ export async function saveProviderGateway(
   const existingType = textField(current?.type);
   const type = auto ? id === 'vsplab' ? 'vsplab' : 'openai' : value.protocol === provider?.protocol ? existingType ?? siteProtocol : siteProtocol;
   const inlineKey = value.apiKey.trim() || textField(current?.apiKey) || '';
-  const connectionChanged = value.baseUrl !== provider?.baseUrl || value.protocol !== provider?.protocol;
+  const protocolChanged = value.protocol !== provider?.protocol;
+  const connectionChanged = value.baseUrl !== provider?.baseUrl || protocolChanged;
   if (!inlineKey && (value.apiKey || connectionChanged || !provider || requireDiscovery)) throw new Error('更改连接或添加中转站需要 API Key；账号凭据不能发送到自定义 Endpoint');
   let discovered: DiscoveredModel[] = [];
   if (inlineKey) {
@@ -107,11 +110,14 @@ export async function saveProviderGateway(
       }
     }
   }
+  const existingModels = latestModels.value ?? nextModels;
   for (const model of modelEntries.values()) {
-    const aliases = Object.entries({ ...latestModels.value, ...nextModels }).filter(([, record]) => (record.providerId ?? record.provider) === id && (record.name ?? record.model) === model.id).map(([alias]) => alias);
+    const aliases = Object.entries(existingModels).filter(([, record]) => (record.providerId ?? record.provider) === id &&
+      ((record.name ?? record.model) === model.id || Array.isArray(record.aliases) && record.aliases.includes(model.id))).map(([alias]) => alias);
     for (const alias of aliases.length > 0 ? aliases : [`${id}/${model.id}`]) {
       const existing = nextModels[alias];
-      const metadata = lookupMetadata(model.id, { protocol: siteProtocol });
+      const effective = latestModels.value?.[alias];
+      const metadata = lookupMetadata(model.id, { providerType: id === 'vsplab' ? id : undefined, protocol: siteProtocol });
       const defaultProtocol = siteProtocol ?? metadata?.defaultProtocol ?? 'openai';
       const inherited = {
         canonical: metadata?.canonical, displayName: model.name !== model.id ? model.name : metadata?.displayName ?? model.name,
@@ -121,8 +127,8 @@ export async function saveProviderGateway(
         adaptiveThinking: metadata?.adaptiveThinking, pricing: metadata?.pricing, pricingSource: metadata?.pricingSource,
         defaultProtocol,
       };
-      nextModels[alias] = { ...inherited, ...existing, provider: id, model: existing?.model ?? model.id,
-        defaultProtocol: connectionChanged ? defaultProtocol : existing?.defaultProtocol ?? defaultProtocol };
+      nextModels[alias] = { ...inherited, ...existing, provider: id, model: existing?.model ?? effective?.model ?? model.id,
+        defaultProtocol: protocolChanged ? defaultProtocol : existing?.defaultProtocol ?? effective?.defaultProtocol ?? defaultProtocol };
     }
   }
   const source = current?.source as ConfigRecord | undefined;
