@@ -180,11 +180,30 @@ describe('testProvider', () => {
 });
 
 describe('queryAvailableModels', () => {
-  it('preserves a manual context and protocol while updating station defaults', () => {
-    const records = { model: { provider: 'relay', model: 'example', protocol: 'anthropic' as const, maxContextSize: 80_000, overrides: { maxContextSize: 90_000 } } };
+  it('preserves a manual name, context and protocol while updating station defaults', () => {
+    const records = { model: { provider: 'relay', model: 'example', displayName: 'My Model', protocol: 'anthropic' as const, maxContextSize: 80_000, overrides: { maxContextSize: 90_000 } } };
     expect(mergeRelayCatalog(records, 'relay', { type: 'openai', source: { modelProtocol: 'explicit' } }, {
-      models: [{ id: 'example', protocol: 'openai_responses', contextWindow: 500_000 }],
-    })['model']).toMatchObject({ protocol: 'anthropic', defaultProtocol: 'openai', maxContextSize: 80_000, overrides: { maxContextSize: 90_000 } });
+      models: [{ id: 'example', name: 'Station Model', protocol: 'openai_responses', contextWindow: 500_000 }],
+    })['model']).toMatchObject({ displayName: 'My Model', protocol: 'anthropic', defaultProtocol: 'openai', maxContextSize: 80_000, overrides: { maxContextSize: 90_000 } });
+  });
+
+  it('uses station limits before generic metadata only when the model has no effective limits', () => {
+    const userModels = { known: { provider: 'relay', model: 'known' } };
+    const result = mergeRelayCatalog(userModels, 'relay', {}, { models: [
+      { id: 'known', contextWindow: 50_000, maxTokens: 5_000 },
+      { id: 'new', contextWindow: 60_000, maxTokens: 6_000 },
+      { id: 'fallback' },
+    ] }, {
+      effectiveModels: { known: { ...userModels.known, maxContextSize: 40_000, maxOutputSize: 4_000 } },
+      lookupMetadata: id => ({
+        canonical: { id, company: 'Example', displayName: id }, modelId: id, displayName: id, maxContextSize: 30_000, maxOutputSize: 3_000,
+        capabilities: [], thinking: {}, source: 'pi-catalog',
+      }),
+    });
+    expect(result['known']).not.toHaveProperty('maxContextSize');
+    expect(result['known']).not.toHaveProperty('maxOutputSize');
+    expect(result['relay/new']).toMatchObject({ maxContextSize: 60_000, maxOutputSize: 6_000 });
+    expect(result['relay/fallback']).toMatchObject({ maxContextSize: 30_000, maxOutputSize: 3_000 });
   });
 
   it('normalizes the station metadata trailing slash without changing custom catalog paths', () => {

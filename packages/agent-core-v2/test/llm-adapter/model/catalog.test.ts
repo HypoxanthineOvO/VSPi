@@ -830,13 +830,15 @@ describe('wire projection (pure)', () => {
     });
   });
 
-  it('modelIdsForProvider and globalDefaultForProvider group models by provider', () => {
+  it('groups models by providerId first and falls back to provider', () => {
     const models: Record<string, ModelRecord> = {
       a: { provider: 'p1', model: 'm-a' },
       b: { provider: 'p2', model: 'm-b' },
       c: { providerId: 'p1', model: 'm-c' },
+      d: { providerId: 'p2', provider: 'p1', model: 'm-d' },
     };
-    expect(modelIdsForProvider(models, 'p1')).toEqual(['a']);
+    expect(modelIdsForProvider(models, 'p1')).toEqual(['a', 'c']);
+    expect(modelIdsForProvider(models, 'p2')).toEqual(['b', 'd']);
     expect(globalDefaultForProvider(models, 'a', 'p1')).toBe('a');
     expect(globalDefaultForProvider(models, 'a', 'p2')).toBeUndefined();
     expect(globalDefaultForProvider(models, undefined, 'p1')).toBeUndefined();

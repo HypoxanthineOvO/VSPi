@@ -325,6 +325,7 @@ describe('server-v2 /api/v1 model/provider catalog', () => {
       _serviceBrand: undefined,
       refreshProviderModels,
       queryAvailableModels: async (providerId) => ({ providerId, modelIds: [] }),
+      testProvider: async () => { throw new Error('unused'); },
     };
   }
 

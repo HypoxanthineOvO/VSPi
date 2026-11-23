@@ -57,7 +57,10 @@ export function mergeRelayCatalog(
   providerId: string,
   provider: ProviderConfig,
   payload: unknown,
-  lookupMetadata?: LookupBuiltinModelMetadata,
+  { lookupMetadata, effectiveModels }: {
+    lookupMetadata?: LookupBuiltinModelMetadata;
+    effectiveModels?: Readonly<Record<string, ModelRecord>>;
+  } = {},
 ): Record<string, ModelRecord> {
   const { models, pricingBasis } = relayCatalogSchema.parse(payload);
   if (new Set(models.map((model) => model.id)).size !== models.length) throw new Error('Duplicate relay model id');
@@ -70,20 +73,24 @@ export function mergeRelayCatalog(
     }
   }
   const result = { ...records };
+  const modelEntries = Object.entries({ ...records, ...effectiveModels });
   for (const remote of models) {
     const names = new Set([remote.id, ...remote.aliases ?? []]);
-    const aliases = Object.entries(records).filter(([, record]) => (record.providerId ?? record.provider) === providerId && names.has(record.name ?? record.model ?? '')).map(([alias]) => alias);
+    const aliases = modelEntries.filter(([, record]) => (record.providerId ?? record.provider) === providerId && names.has(record.name ?? record.model ?? '')).map(([alias]) => alias);
     if (aliases.length === 0 && remote.hidden) continue;
     if (aliases.length === 0) aliases.push(`${providerId}/${remote.id}`);
     const native = findPiModel(provider.type, remote.id);
     const metadata = lookupMetadata?.(remote.id);
     const nativeThinking = metadata?.thinking ?? (native ? piThinking(native) : undefined);
     for (const alias of aliases) {
-      const old = records[alias];
+      const old = Object.hasOwn(records, alias) ? records[alias] : undefined;
+      const effective = effectiveModels !== undefined && Object.hasOwn(effectiveModels, alias) ? effectiveModels[alias] : undefined;
+      const owner = old?.providerId ?? old?.provider;
+      if (owner !== undefined && owner !== providerId) continue;
+      if (effective !== undefined && (owner === undefined || (old?.name ?? old?.model) === undefined)) continue;
       const record: ModelRecord = { ...old, provider: providerId, model: old?.model ?? remote.id };
       record.canonical ??= metadata?.canonical;
       record.defaultProtocol ??= metadata?.defaultProtocol;
-      record.maxOutputSize ??= metadata?.maxOutputSize;
       record.capabilities ??= metadata?.capabilities === undefined ? undefined : [...metadata.capabilities];
       record.thinking ??= metadata?.thinking;
       record.adaptiveThinking ??= metadata?.adaptiveThinking;
@@ -92,9 +99,11 @@ export function mergeRelayCatalog(
         const siteProtocol = ProtocolSchema.safeParse(provider.type);
         if (siteProtocol.success) record.defaultProtocol = siteProtocol.data;
       } else if (remote.protocol !== undefined) record.defaultProtocol = remote.protocol;
-      if (remote.name !== undefined) record.displayName = remote.name;
-      record.maxContextSize ??= metadata?.maxContextSize ?? remote.contextWindow ?? native?.contextWindow ?? 131072;
-      if (remote.maxTokens !== undefined) record.maxOutputSize = remote.maxTokens;
+      if (effective?.displayName === undefined && remote.name !== undefined) record.displayName ??= remote.name;
+      if (effective?.maxContextSize === undefined) {
+        record.maxContextSize ??= remote.contextWindow ?? metadata?.maxContextSize ?? native?.contextWindow ?? 131072;
+      }
+      if (effective?.maxOutputSize === undefined) record.maxOutputSize ??= remote.maxTokens ?? metadata?.maxOutputSize;
       if (remote.curated !== undefined || remote.hidden) record.curated = remote.hidden ? false : remote.curated;
       if (remote.releasedAt !== undefined) {
         if (!Number.isFinite(Date.parse(remote.releasedAt)) || new Date(remote.releasedAt).toISOString().slice(0, 10) !== remote.releasedAt) throw new Error('Invalid model release date');

@@ -1134,25 +1134,54 @@ describe("VSP runtime daemon (shared Core ownership)", () => {
 
 	it("preserves a flat user override through refresh and reload without persisting builtin defaults", async () => {
 		homeDir = await mkdtemp(join(tmpdir(), "vsp-model-overrides-"));
-		await writeFile(resolveRuntimePaths(homeDir).configPath, '[providers.vsplab]\ntype = "openai"\n');
-		daemon = await startTestDaemon(homeDir);
-		const connection = await connectRuntime(homeDir);
+		const upstream = createHttpServer((request, response) => {
+			if (request.url !== '/vsp/models') { response.writeHead(404).end(); return; }
+			response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ models: [
+				{ id: 'deepseek-flash', name: 'Station Flash', contextWindow: 12345 },
+				{ id: 'gpt-6-astra', name: 'Station Astra', contextWindow: 23456 },
+				{ id: 'glm-5.3-flash', contextWindow: 200000, maxTokens: 32768 },
+				{ id: 'gpt-6.1-sol', contextWindow: 1050000, maxTokens: 128000 },
+				{ id: 'station-only', name: 'Station only', contextWindow: 32768 },
+			] }));
+		});
+		await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
 		try {
-			await connection.klient.global.config.set({ domain: "models", patch: { "vsplab/deepseek-flash": { displayName: "My Flash", maxContextSize: 4096 } } });
-			await connection.klient.global.kosong.refreshProviders({ providerId: "vsplab" });
-			await connection.klient.global.config.reload();
-			expect(await connection.klient.global.kosong.listModels()).toEqual(expect.arrayContaining([
-				expect.objectContaining({ model: "vsplab/deepseek-flash", display_name: "My Flash", max_context_size: 4096 }),
-			]));
-			const disk = await readFile(resolveRuntimePaths(homeDir).configPath, "utf8");
-			expect(disk).toContain('display_name = "My Flash"');
-			expect(disk).not.toContain("gpt-6-astra");
-			expect(disk).not.toContain("overrides");
-			await connection.klient.global.config.replace({ domain: "models", value: {} });
-			expect(await connection.klient.global.kosong.listModels()).toEqual(expect.arrayContaining([
-				expect.objectContaining({ model: "vsplab/deepseek-flash", display_name: "DeepSeek V4.1 Flash 1017", max_context_size: 1000000 }),
-			]));
-		} finally { await connection.close(); }
+			const address = upstream.address();
+			if (!address || typeof address === 'string') throw new Error('Missing listener');
+			const configPath = resolveRuntimePaths(homeDir).configPath;
+			await writeFile(configPath, `[providers.vsplab]\ntype = "openai"\nbase_url = "http://127.0.0.1:${address.port}/v1"\n[model_catalog]\nrefresh_on_start = false\nrefresh_interval_ms = 0\n`);
+			daemon = await startTestDaemon(homeDir);
+			const connection = await connectRuntime(homeDir);
+			try {
+				const shippedLimits = [
+					expect.objectContaining({ model: 'vsplab/glm-5.3-flash', max_context_size: 200000 }),
+					expect.objectContaining({ model: 'vsplab/gpt-6.1-sol', max_context_size: 1050000 }),
+				];
+				expect(await connection.klient.global.kosong.listModels()).toEqual(expect.arrayContaining(shippedLimits));
+				await connection.klient.global.config.set({ domain: "models", patch: { "vsplab/deepseek-flash": { displayName: "My Flash", maxContextSize: 4096 } } });
+				expect(await connection.klient.global.kosong.refreshProviders({ providerId: "vsplab" })).toMatchObject({ changed: [{ provider_id: 'vsplab', added: 1 }], failed: [] });
+				await connection.klient.global.config.reload();
+				expect(await connection.klient.global.kosong.listModels()).toEqual(expect.arrayContaining([
+					expect.objectContaining({ model: "vsplab/deepseek-flash", display_name: "My Flash", max_context_size: 4096 }),
+					expect.objectContaining({ model: "vsplab/gpt-6-astra", display_name: "GPT-6 Astra" }),
+					expect.objectContaining({ model: "vsplab/station-only", display_name: "Station only", max_context_size: 32768 }),
+					...shippedLimits,
+				]));
+				const disk = await readFile(configPath, "utf8");
+				expect(disk).toContain('display_name = "My Flash"');
+				expect(disk).toContain('model = "station-only"');
+				expect(disk).not.toMatch(/gpt-6-astra|glm-5\.3-flash|gpt-6\.1-sol|overrides/);
+				const { userValue } = await connection.klient.global.config.inspect<Record<string, unknown>>('models');
+				expect(userValue?.['vsplab/deepseek-flash']).toEqual({ displayName: 'My Flash', maxContextSize: 4096 });
+				await connection.klient.global.config.replace({ domain: "models", value: {} });
+				expect(await connection.klient.global.kosong.listModels()).toEqual(expect.arrayContaining([
+					expect.objectContaining({ model: "vsplab/deepseek-flash", display_name: "DeepSeek V4.1 Flash 1017", max_context_size: 1000000 }),
+				]));
+			} finally { await connection.close(); }
+		} finally {
+			upstream.closeAllConnections();
+			await new Promise<void>(resolve => upstream.close(() => { resolve(); }));
+		}
 	});
 
 	it("adds bundled models after configuring a provider on an already running daemon", async () => {

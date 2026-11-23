@@ -253,7 +253,7 @@ describe('models TOML transforms', () => {
     });
   });
 
-  it('deletes on-disk fields the new record carries with an explicit undefined', () => {
+  it('clears explicit undefined or null values while retaining omitted model fields', () => {
     expect(
       modelsToToml(
         {
@@ -263,6 +263,7 @@ describe('models TOML transforms', () => {
             maxContextSize: 1000,
             displayName: undefined,
             capabilities: undefined,
+            reasoningKey: null,
           },
         },
         {
@@ -272,7 +273,9 @@ describe('models TOML transforms', () => {
             max_context_size: 128000,
             display_name: 'Old Name',
             capabilities: ['tool_use'],
+            reasoning_key: 'reasoning_content',
             beta_api: true,
+            future_field: 'extension',
           },
         },
       ),
@@ -282,6 +285,7 @@ describe('models TOML transforms', () => {
         model: 'm',
         max_context_size: 1000,
         beta_api: true,
+        future_field: 'extension',
       },
     });
   });
