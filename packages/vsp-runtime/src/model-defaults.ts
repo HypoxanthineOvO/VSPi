@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import catalog from '../../../ops/vsplab/model-catalog.json' with { type: 'json' };
 import { registerConfigOverlay } from '@moonshot-ai/agent-core-v2/app/config/configOverlayContributions';
+import { omitUndefined } from '@moonshot-ai/agent-core-v2/app/config/configPure';
 import { modelsFromToml, modelsToToml, providersFromToml } from '@moonshot-ai/agent-core-v2/app/kosongConfig/configSection';
 import { mergeRelayCatalog } from '@moonshot-ai/agent-core-v2/app/kosongConfig/relayCatalog';
 import { listPiModelRecords, listPiProviders } from '@moonshot-ai/agent-core-v2/llm-adapter/provider/pi/catalog';
@@ -46,26 +47,38 @@ function merge(base: Record<string, unknown>, user: Record<string, unknown>): Re
   return result;
 }
 
+// These model objects have required keys and must validate before defaults are merged.
+const atomicModelFields = new Set(['canonical', 'oauth', 'pricing']);
+
 function difference(value: Record<string, unknown>, defaults: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
     if (isDeepStrictEqual(item, defaults[key])) continue;
     const nested = object(item);
-    const delta = nested && object(defaults[key]) ? difference(nested, object(defaults[key])!) : item;
-    if (!object(delta) || Object.keys(object(delta)!).length > 0) result[key] = delta;
+    const inherited = object(defaults[key]);
+    if (nested && inherited && atomicModelFields.has(key)) {
+      if (!isDeepStrictEqual(omitUndefined(nested), omitUndefined(inherited))) result[key] = item;
+      continue;
+    }
+    const delta = nested && inherited ? difference(nested, inherited) : item;
+    const deltaObject = object(delta);
+    if (!deltaObject || Object.keys(deltaObject).length > 0) result[key] = delta;
   }
   return result;
 }
 
 export function compactModelSnapshots(config: Record<string, unknown>): void {
+  const models = object(modelsFromToml(config['models'] ?? {}));
+  if (!models) return;
   const providers = providersFromToml(config['providers'] ?? {}) as ProvidersSection;
   const defaults = builtinModelDefaults(providers);
-  const models = modelsFromToml(config['models'] ?? {}) as ModelsSection;
-  for (const [alias, model] of Object.entries(models)) {
-    if (!defaults[alias]) continue;
-    if (model.model === 'deepseek-flash' && model.displayName === 'DeepSeek V4 Flash') delete model.displayName;
-    models[alias] = difference(model, defaults[alias]);
-    if (Object.keys(models[alias]!).length === 0) delete models[alias];
+  for (const [alias, value] of Object.entries(models)) {
+    const model = object(value);
+    if (!model || !defaults[alias]) continue;
+    if (model['model'] === 'deepseek-flash' && model['displayName'] === 'DeepSeek V4 Flash') delete model['displayName'];
+    const delta = difference(model, defaults[alias]);
+    if (Object.keys(delta).length > 0) models[alias] = delta;
+    else delete models[alias];
   }
   if (Object.keys(models).length > 0) config['models'] = modelsToToml(models, {});
   else delete config['models'];

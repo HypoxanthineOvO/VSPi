@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { chmod, link, mkdir, open, readFile, rename, rm, type FileHandle } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
+import { ModelsSectionSchema, modelsFromToml } from '@moonshot-ai/agent-core-v2/app/kosongConfig/configSection';
 import { parse, stringify } from 'smol-toml';
 
 import {
@@ -106,7 +107,13 @@ export async function migrateRuntimeConfig(
     ...options,
     cleanProtocolDefaults: options.cleanProtocolDefaults ?? ((marker?.modelDefaultsVersion ?? 0) < 2),
   });
-  const targetBytes = Buffer.from(`${stringify(migration.config)}\n`);
+  const targetText = `${stringify(migration.config)}\n`;
+  const candidate = parse(targetText);
+  if (!ModelsSectionSchema.safeParse(modelsFromToml(candidate['models'] ?? {})).success) {
+    process.emitWarning('VSPi config migration skipped: invalid [models] in the generated config.toml; the original file was left unchanged.');
+    return { status: 'unchanged', targetFingerprint: beforeFingerprint };
+  }
+  const targetBytes = Buffer.from(targetText);
   const targetFingerprint = fingerprint(targetBytes);
   const report = parseReport(originalReport);
   if (
@@ -128,7 +135,6 @@ export async function migrateRuntimeConfig(
     }
     const verified = await readFile(paths.configPath);
     if (fingerprint(verified) !== targetFingerprint) throw new Error('config migration verification fingerprint mismatch');
-    parse(verified.toString('utf8'));
     const completionReport = await writeCompletionFiles(
       paths,
       migration,
@@ -159,7 +165,7 @@ export async function migrateRuntimeConfig(
     await restoreOptional(paths.configMigrationMarkerPath, originalMarker)
       .catch((rollbackError: unknown) => rollbackErrors.push(rollbackError));
     if (rollbackErrors.length > 0) {
-      throw new AggregateError([error, ...rollbackErrors], 'config migration failed and rollback was incomplete');
+      throw new AggregateError([error, ...rollbackErrors], 'config migration failed and rollback was incomplete', { cause: error });
     }
     throw error;
   }
@@ -251,7 +257,7 @@ async function persistImmutableBackup(path: string, payload: Buffer): Promise<vo
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       const raced = await readFile(path);
-      if (!raced.equals(payload)) throw new Error('config migration immutable backup content mismatch');
+      if (!raced.equals(payload)) throw new Error('config migration immutable backup content mismatch', { cause: error });
     }
   } finally {
     await handle?.close().catch(() => {});
