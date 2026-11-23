@@ -2,6 +2,18 @@
 
 [返回项目首页](../../../README.md) · [版本记录](releases.md) · [开发指南](development.md)
 
+## 安装
+
+Linux x86_64 上，先准备 Node.js 22.19.0 或更新版本、npm、curl 和 `sha256sum`，再运行：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/HypoxanthineOvO/VSPi/v2.10.0/scripts/install.sh | sh
+```
+
+脚本从 [GitHub Release 的 `latest` 地址](https://github.com/HypoxanthineOvO/VSPi/releases/latest)下载 `vspi-latest.tgz` 和 `SHA256SUMS`，校验通过后才用 npm 全局安装。全局目录不可写时，脚本改用 `~/.local`；按终端提示更新 `PATH`。安装完成后，在项目目录运行 `vspi`。
+
+如需换源，将 `VSPI_DIST_BASE` 设为同时提供这两个文件的可信 HTTPS 下载目录。旧 daemon 仍在运行时，脚本只给出提示；请等任务结束、退出旧客户端，运行 `vspi daemon stop` 后再打开新版。已有安装优先使用 `vspi update`，见[升级诊断与运行边界](#升级诊断与运行边界)。
+
 ## 会话与后台任务
 
 `vspi` 打开新的交互会话，首次提交时创建会话记录；`vspi continue` 继续当前工作区最近的会话，`vspi resume` 打开会话选择界面。

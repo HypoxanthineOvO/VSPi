@@ -18,36 +18,30 @@ VSPi 是基于 Kimi Code 引擎演进的终端编码助手。常驻进程（daem
 
 ### 新安装
 
-运行安装包需要 **Node.js ≥ 22.19.0**。
+在 Linux x86_64 上，需要 **Node.js ≥ 22.19.0**、npm、curl 和 `sha256sum`：
 
 ```sh
-npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.4.2/vspi-2.4.2.tgz"
+curl -fsSL https://raw.githubusercontent.com/HypoxanthineOvO/VSPi/v2.10.0/scripts/install.sh | sh
+```
+
+脚本下载 GitHub 最新正式版，核对 SHA-256 后安装并打印版本。npm 全局目录不可写时，脚本改装到 `~/.local`，并给出 `PATH` 设置命令，无需 `sudo`。
+
+也可以通过固定的 `latest` 下载地址直接用 npm 安装。此方式不核对发布方提供的 `SHA256SUMS`；需要校验时请用上面的脚本。
+
+```sh
+npm install --global https://github.com/HypoxanthineOvO/VSPi/releases/latest/download/vspi-latest.tgz
 vspi --version
 ```
 
-进入项目目录，在交互式终端中配置服务商、凭据与默认模型，然后启动：
-
-```sh
-vspi init
-vspi
-```
-
-已有配置时直接运行 `vspi`。用 `vspi config` 调整服务商，在界面内用 `/model` 和 `/effort` 选择模型及思考档位。首次配置时可直接选择内置的 VSPLab 中转站（默认接入 `api.vsplab.tech`）。
+安装后在项目目录运行 `vspi`。用 `vspi config` 调整服务商，在界面内用 `/model` 和 `/effort` 选择模型及思考档位。首次配置时可选择内置的 VSPLab 中转站（默认接入 `api.vsplab.tech`）。
 
 ### 更新
 
-Linux 从 2.2.x 升级：先结束任务、退出所有客户端，再停旧并安装固定版本：
+已有安装优先用 `vspi update`。更新器会校验 SHA-256，备份旧包和配置，再安装、验证并切换 daemon。有活跃工作时会先询问是否终止，默认拒绝。
 
-```sh
-vspi daemon stop
-npm install --global "https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.4.2/vspi-2.4.2.tgz"
-vspi --version
-vspi continue
-```
+从 2.2.x 首次升级时，先等任务结束、退出客户端，再运行 `vspi daemon stop`，然后用上面的安装脚本。首次从 2.3.0 / 2.4.0 升级时，也要先在旧界面执行 `/quit`，再停止 daemon 并更新，避免旧界面自动拉起后端。升级后可用 `vspi continue` 恢复会话，无需删除配置目录或重新初始化。
 
-2.4.2 按普通正式版本发布到共享更新通道。首次从2.3.0/2.4.0升级，请先在旧界面 `/quit`，再 `vspi daemon stop` 和 `vspi update`，避免旧界面自动拉起后端。2.4.1 起空闲连接不阻止更新，有活跃工作时先询问是否终止，默认拒绝。本轮实测范围为 Linux，Windows 用户建议暂留[固定 2.2.4 发行包](https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.2.4/vspi-2.2.4.tgz)，等待实机验收，不要先运行 `vspi update`。新版更新器会校验 SHA-256，保存旧包和配置备份，再安装、验证并切换 Daemon。
-
-从 2.2.x 首次升级仍需先确认任务结束并显式运行 `vspi daemon stop`，再安装新版；不要删除配置目录。旧 Windows 实例不支持新关闭协议时，需要明确确认后使用旧实例终止流程。安全升级、回退和锁恢复的边界见[使用指南](apps/vspi/docs/usage.md#升级诊断与运行边界)。
+Windows 用户请暂留[固定 2.2.4 发行包](https://github.com/HypoxanthineOvO/VSPi/releases/download/v2.2.4/vspi-2.2.4.tgz)，等待实机验收。安全升级、回退和锁恢复见[使用指南](apps/vspi/docs/usage.md#升级诊断与运行边界)。
 
 ## 常用操作
 
