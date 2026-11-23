@@ -114,6 +114,12 @@ export function piCapability(model: Model<Api>): ModelCapability {
   };
 }
 
+export function piModelOutputLimit(model: Model<Api>, providerType?: string): number | undefined {
+  if (/^(?:kimi-)?k3\.1-pro(?:-highspeed)?$/u.test(model.id) &&
+      (providerType !== model.provider || !['moonshotai', 'moonshotai-cn'].includes(providerType))) return undefined;
+  return model.maxTokens;
+}
+
 export function piModelRecord(model: Model<Api>, provider: string) {
   return {
     pricingSource: 'official' as const,
@@ -122,7 +128,7 @@ export function piModelRecord(model: Model<Api>, provider: string) {
     protocol: piProtocolForApi(model.api),
     displayName: model.name,
     maxContextSize: model.contextWindow,
-    maxOutputSize: model.maxTokens,
+    maxOutputSize: piModelOutputLimit(model, provider),
     capabilities: ['tool_use', ...model.input.includes('image') ? ['image_in'] : [], ...model.reasoning ? ['thinking'] : []],
     thinking: piThinking(model),
     pricing: {

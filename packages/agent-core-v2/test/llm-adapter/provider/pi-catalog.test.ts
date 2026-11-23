@@ -66,12 +66,20 @@ describe('pi catalog boundary', () => {
     ['glm-5.3', 'zhipu/glm-5.3', 'openai', 1000000, 131072],
     ['deepseek-flash', 'deepseek/deepseek-v4.1-flash', 'openai', 1000000, 384000],
     ['deepseek-v4.1-flash', 'deepseek/deepseek-v4.1-flash', 'openai', 1000000, 384000],
-    ['k3.1-pro', 'moonshot/kimi-k3.1-pro', 'openai', 1048576, 1048576],
-    ['kimi-k3.1-pro', 'moonshot/kimi-k3.1-pro', 'openai', 1048576, 1048576],
+    ['k3.1-pro', 'moonshot/kimi-k3.1-pro', 'openai', 1048576, undefined],
+    ['kimi-k3.1-pro', 'moonshot/kimi-k3.1-pro', 'openai', 1048576, undefined],
+    ['vsplab/k3.1-pro', 'moonshot/kimi-k3.1-pro', 'openai_responses', 1048576, undefined],
     ['k3-256k', 'moonshot/kimi-k3-256k', 'openai', 262144, 131072],
     ['doubao-seed-2.1-pro', 'bytedance/doubao-seed-2.1-pro', 'openai', 1024000, 256000],
   ] as const)('inherits known metadata for %s without changing wire identity', (id, canonical, defaultProtocol, maxContextSize, maxOutputSize) => {
     expect(lookupBuiltinModelMetadata(id, { protocol: 'openai' })).toMatchObject({ canonical: { id: canonical }, defaultProtocol, maxContextSize, maxOutputSize, capabilities: expect.arrayContaining(['tool_use', 'thinking']) });
+  });
+
+  it('respects the VSPLab default without assuming a Coding Plan output limit', () => {
+    expect(lookupBuiltinModelMetadata('kimi-k3.1-pro', { providerType: 'vsplab' })).toMatchObject({ defaultProtocol: 'openai_responses', maxOutputSize: undefined });
+    expect(lookupBuiltinModelMetadata('k3.1-pro', { providerType: 'kimi-coding' })).toMatchObject({ maxOutputSize: undefined });
+    expect(lookupBuiltinModelMetadata('kimi-k3.1-pro', { providerType: 'moonshotai' })).toMatchObject({ maxOutputSize: 1048576 });
+    expect(effectiveModelConfig({ model: 'k3.1-pro', provider: 'example-relay', protocol: 'openai' }, 'openai').maxOutputSize).toBeUndefined();
   });
 
   it('returns no fabricated metadata and resolves provider-specific context', () => {

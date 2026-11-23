@@ -36,7 +36,7 @@ import { normalizeKimiToolSchema } from '#/human/llm-kimi/schema';
 import { toLegacyHistory, toPiContext } from './messages';
 import { convertPiError, PiStreamedMessage, type PiResponseState } from './streamedMessage';
 import { ResponseDiagnostics } from './responseDiagnostics';
-import { relayNativeProvider } from './catalog';
+import { piModelOutputLimit, relayNativeProvider } from './catalog';
 import { errorProvider } from './providerErrors';
 import { withProviderTransport } from '../transport';
 import { deepSeekBaseUrl, deepSeekRouteIdentity, resolveDeepSeekCapabilities } from '../deepseek/capabilities';
@@ -190,7 +190,7 @@ export class PiChatProvider implements ChatProvider {
     this.name = config.providerType ?? model?.provider ?? config.protocol;
     this.modelName = config.modelName;
     this.maxCompletionTokens =
-      config.providerOptions?.defaultMaxTokens ?? model?.maxTokens ?? 32768;
+      config.providerOptions?.defaultMaxTokens ?? (model && piModelOutputLimit(model, config.providerType ?? model.provider)) ?? 32768;
     const api = config.providerOptions?.vertexai === true ? 'google-vertex' : (model?.api ?? API_BY_PROTOCOL[config.protocol]);
     const wireId = config.modelName.split('/').at(-1)?.toLowerCase() ?? '';
     const adaptiveClaude = api === 'anthropic-messages' && /^claude-(?:(?:opus|sonnet|haiku)-5[.-]5|fable-5(?:[.-][12])?)(?:-|$)/u.test(wireId);

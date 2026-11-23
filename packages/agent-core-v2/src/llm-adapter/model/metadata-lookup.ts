@@ -1,7 +1,7 @@
 import catalog from '../../../../../ops/vsplab/model-catalog.json' with { type: 'json' };
 import { mergeRelayCatalog } from '#/app/kosongConfig/relayCatalog';
 import { modelEffortProfile } from '#/llm-adapter/provider/effortProfiles';
-import { findPiModel, listPiProviders, piModelRecord, piProtocolForApi, relayNativeProvider } from '#/llm-adapter/provider/pi/catalog';
+import { findPiModel, listPiProviders, piModelOutputLimit, piModelRecord, piProtocolForApi, relayNativeProvider } from '#/llm-adapter/provider/pi/catalog';
 import { normalizeIdentity, resolveCanonicalModel } from './canonical';
 import { applyModelEffortProfile } from './effortProfiles';
 import type { BuiltinModelMetadata, ModelMetadataLookupOptions } from './model-metadata-contract';
@@ -23,10 +23,12 @@ export function lookupBuiltinModelMetadata(
   modelId: string,
   options: ModelMetadataLookupOptions = {},
 ): BuiltinModelMetadata | undefined {
-  const id = modelId.trim().split('/').at(-1) ?? '';
+  const parts = modelId.trim().split('/');
+  const id = parts.at(-1) ?? '';
   if (!id) return undefined;
+  const providerType = options.providerType ?? (parts[0] === 'vsplab' ? 'vsplab' : undefined);
   const identity = normalizeIdentity(id);
-  const preferredProvider = options.providerType ?? relayNativeProvider(id);
+  const preferredProvider = providerType ?? relayNativeProvider(id);
   const exact = findPiModel(preferredProvider, id, options.protocol, { allowFallback: false });
   const matches = nativeByCanonical.get(identity) ?? [];
   const piModel = exact ?? matches.find(model => model.provider === preferredProvider && piProtocolForApi(model.api) === options.protocol)
@@ -52,10 +54,10 @@ export function lookupBuiltinModelMetadata(
     modelId: id,
     displayName: record.displayName ?? canonical.displayName,
     maxContextSize: known.maxContextSize,
-    maxOutputSize: record.maxOutputSize ?? relay?.maxOutputSize,
+    maxOutputSize: (piModel === undefined ? record.maxOutputSize : piModelOutputLimit(piModel, providerType)) ?? relay?.maxOutputSize,
     capabilities: [...capabilities],
     thinking: structuredClone(thinking),
-    defaultProtocol: defaultRelayProtocol(id) ?? record.defaultProtocol ?? record.protocol,
+    defaultProtocol: (providerType === 'vsplab' ? relay?.defaultProtocol : undefined) ?? defaultRelayProtocol(id) ?? record.defaultProtocol ?? record.protocol,
     pricing: hasPricing ? structuredClone(pricing) : undefined,
     pricingSource: hasPricing ? record.pricingSource : undefined,
     supportEfforts: thinking.efforts === undefined ? undefined : [...thinking.efforts],
