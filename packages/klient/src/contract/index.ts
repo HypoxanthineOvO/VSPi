@@ -45,6 +45,7 @@ import { modelsContract } from './global/models.js';
 import { mcpManagementContract } from './global/mcpManagement.js';
 import { pluginsContract } from './global/plugins.js';
 import { providersContract } from './global/providers.js';
+import { quotaContract } from './global/quota.js';
 import { sessionsContract } from './global/sessions.js';
 import { desktopSettingsContract } from './global/settings.js';
 import { workspacesContract } from './global/workspaces.js';
@@ -64,6 +65,7 @@ export const globalContract: KlientContract = {
   workspaceService: workspacesContract,
   configService: configContract,
   providerService: providersContract,
+  quotaService: quotaContract,
   modelService: modelsContract,
   modelResolver: catalogContract,
   providerDiscovery: providerDiscoveryContract,

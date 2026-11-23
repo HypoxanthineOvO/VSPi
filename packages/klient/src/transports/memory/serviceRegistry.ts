@@ -10,6 +10,7 @@ import type { ServiceIdentifier } from '@moonshot-ai/agent-core-v2/_base/di/inst
 import { ISessionIndex } from '@moonshot-ai/agent-core-v2/app/sessionIndex/sessionIndex';
 import { IWorkspaceService } from '@moonshot-ai/agent-core-v2/app/workspace/workspace';
 import { IConfigService } from '@moonshot-ai/agent-core-v2/app/config/config';
+import { IQuotaService } from '@moonshot-ai/agent-core-v2/app/quota/quota-contract';
 import { IDesktopSettingsService } from '@moonshot-ai/agent-core-v2/app/config/desktopSettings';
 import { IModelService } from '@moonshot-ai/agent-core-v2/llm-adapter/model/model';
 import { IModelCatalog } from '@moonshot-ai/agent-core-v2/llm-adapter/model/catalog';
@@ -66,6 +67,7 @@ export const serviceTokens: Readonly<Record<string, ServiceIdentifier<unknown>>>
   providerDiscovery: IProviderDiscoveryService,
   modelsDevImport: IModelsDevImportService,
   providerService: IProviderService,
+  quotaService: IQuotaService,
   oauthService: IOAuthService,
   authSummaryService: IAuthSummaryService,
   flagService: IFlagService,

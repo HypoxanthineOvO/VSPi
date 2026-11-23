@@ -773,3 +773,6 @@ import './agent/history/historyService';
 
 export * from './agent/activityView/activityView';
 import './agent/activityView/activityViewService';
+
+import '#/app/quota/quotaService';
+export * from '#/app/quota/quota-contract';
