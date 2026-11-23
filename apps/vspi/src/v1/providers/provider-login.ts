@@ -7,7 +7,7 @@ import { accountProxyForUrl, builtinProviderProtocol, usesAccountProxy, withScop
 
 export async function loginProvider(klient: Klient, providerId: string, type: 'api_key' | 'oauth', interaction: ProviderAuthInteraction): Promise<void> {
   if (type === 'oauth') {
-    const local = (await klient.global.auth.listLocalCredentials()).find(item => item.provider === providerId);
+    const local = (await klient.global.auth.listLocalCredentials()).find(item => item.provider === providerId && !item.id.startsWith('omp-'));
     if (local) {
       const method = await interaction.prompt({ type: 'select', message: '认证方式', options: [{ id: 'local', label: `复用本机 ${local.name} 凭据` }, { id: 'browser', label: '浏览器登录' }], signal: interaction.signal });
       if (method === 'local') { await klient.global.auth.useLocalCredential(local.id, interaction.signal); return; }

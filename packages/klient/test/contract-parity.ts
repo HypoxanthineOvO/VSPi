@@ -324,6 +324,7 @@ import {
   thinkingCapabilitySchema,
 } from '../src/contract/global/catalog.js';
 import {
+  providerConnectivityTestResultSchema,
   queryAvailableModelsResponseSchema,
   refreshProviderModelsOptionsSchema,
   refreshProviderModelsResponseSchema,
@@ -513,6 +514,19 @@ const _queryAvailableModelsResponse: AssertWire<
   typeof queryAvailableModelsResponseSchema,
   QueryAvailableModelsResponse
 > = true;
+
+const _testProviderResponse: AssertWire<
+  typeof providerConnectivityTestResultSchema,
+  Awaited<ReturnType<IProviderDiscoveryService['testProvider']>>
+> = true;
+
+// quota.ts
+type QuotaService = import('@moonshot-ai/agent-core-v2/app/quota/quota-contract').IQuotaService;
+type QuotaSchemas = typeof import('../src/contract/global/quota.js');
+const _getQuotaOptions: AssertWire<QuotaSchemas['quotaQueryOptionsSchema'], NonNullable<Parameters<QuotaService['getQuotas']>[0]>> = true;
+const _refreshQuotaOptions: AssertWire<QuotaSchemas['quotaRefreshOptionsSchema'], NonNullable<Parameters<QuotaService['refreshQuotas']>[0]>> = true;
+const _getQuotaSnapshot: AssertWire<QuotaSchemas['quotaSnapshotResponseSchema'], Awaited<ReturnType<QuotaService['getQuotas']>>> = true;
+const _refreshQuotaSnapshot: AssertWire<QuotaSchemas['quotaSnapshotResponseSchema'], Awaited<ReturnType<QuotaService['refreshQuotas']>>> = true;
 
 // models.ts
 const _modelConfig: AssertWire<typeof modelConfigSchema, ModelRecord> = true;

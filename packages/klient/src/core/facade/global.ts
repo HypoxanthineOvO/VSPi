@@ -33,6 +33,8 @@ import type {
   OAuthLoginOptions,
 } from '@moonshot-ai/agent-core-v2/app/auth/auth';
 import type { ExperimentalFeatureState } from '@moonshot-ai/agent-core-v2/app/flag/flag';
+import type { QuotaQueryOptions, QuotaRefreshOptions, QuotaSnapshotResponse } from '@moonshot-ai/agent-core-v2/app/quota/quota-contract';
+export type { ProviderQuotaItem, QuotaBalanceItem, QuotaErrorReason, QuotaQueryOptions, QuotaReadingStatus, QuotaRefreshOptions, QuotaSnapshotResponse, QuotaWindowItem } from '@moonshot-ai/agent-core-v2/app/quota/quota-contract';
 import type {
   FsBrowseResponse,
   FsHomeResponse,
@@ -193,6 +195,7 @@ export interface GlobalKosongFacade {
   removeProvider(id: string): Promise<void>;
   refreshProviders(opts?: RefreshProviderModelsOptions): Promise<RefreshProviderModelsResponse>;
   queryAvailableModels(providerId: string): Promise<QueryAvailableModelsResponse>;
+  testProvider(providerId: string): ReturnType<IProviderDiscoveryService['testProvider']>;
   importCustomRegistry(options: ImportCustomRegistryOptions): Promise<ImportCustomRegistryResult>;
 
   // -- Model ------------------------------------------------------------
@@ -231,6 +234,11 @@ export interface GlobalAuthFacade {
    * release cycle.
    */
   refreshProviderModels(): Promise<RefreshProviderModelsResponse>;
+}
+
+export interface GlobalQuotaFacade {
+  list(options?: QuotaQueryOptions): Promise<QuotaSnapshotResponse>;
+  refresh(options?: QuotaRefreshOptions): Promise<QuotaSnapshotResponse>;
 }
 
 export interface GlobalFlagsFacade {
@@ -360,6 +368,7 @@ export interface GlobalFacade {
   readonly config: GlobalConfigFacade;
   readonly kosong: GlobalKosongFacade;
   readonly auth: GlobalAuthFacade;
+  readonly quota: GlobalQuotaFacade;
   readonly flags: GlobalFlagsFacade;
   readonly plugins: GlobalPluginsFacade;
   readonly capabilities: GlobalCapabilitiesFacade;
@@ -538,6 +547,8 @@ export function createGlobalFacade(scoped: ScopedCaller, scopedStream: ScopedStr
         call('providerDiscovery', 'queryAvailableModels', [
           providerId,
         ]) as Promise<QueryAvailableModelsResponse>,
+      testProvider: (providerId) =>
+        call('providerDiscovery', 'testProvider', [providerId]) as ReturnType<IProviderDiscoveryService['testProvider']>,
 
       listModels: () =>
         call('modelResolver', 'listModels', []) as Promise<readonly ModelCatalogItem[]>,
@@ -581,6 +592,11 @@ export function createGlobalFacade(scoped: ScopedCaller, scopedStream: ScopedStr
         call('oauthService', 'logout', [provider]) as Promise<OAuthLogoutResponse>,
       refreshProviderModels: () =>
         call('oauthService', 'refreshOAuthProviderModels', []) as Promise<RefreshProviderModelsResponse>,
+    },
+
+    quota: {
+      list: (options) => call('quotaService', 'getQuotas', [options], { timeoutMs: 80_000 }) as Promise<QuotaSnapshotResponse>,
+      refresh: (options) => call('quotaService', 'refreshQuotas', [options], { timeoutMs: 80_000 }) as Promise<QuotaSnapshotResponse>,
     },
 
     flags: {

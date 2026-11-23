@@ -121,7 +121,72 @@ const staticSections: Record<string, unknown> = {
   defaultModel: 's1',
 };
 
+describe('testProvider', () => {
+  it.each([
+    ['openai', '/proxy/v1', '/proxy/v1/models', 'authorization', { data: [{ id: 'example' }] }],
+    ['openai_responses', '/proxy/v1', '/proxy/v1/models', 'authorization', { data: [{ id: 'example' }] }],
+    ['anthropic', '/anthropic', '/anthropic/v1/models', 'x-api-key', { data: [{ id: 'example' }] }],
+    ['google', '/v1beta', '/v1beta/models', 'x-goog-api-key', { models: [{ name: 'models/example' }] }],
+  ] as const)('probes %s using only the model list', async (type, base, path, header, payload) => {
+    const { host, discovery } = await createHost({ providers: { station: { type, baseUrl: `https://station.example.test${base}`, apiKey: 'YOUR_API_KEY' } } });
+    const fetch = vi.fn(async (url: URL, input: RequestInit) => {
+      expect(url.pathname).toBe(path);
+      expect(input.method).toBe('GET');
+      expect(input.body).toBeUndefined();
+      expect(input.redirect).toBe('manual');
+      expect(new Headers(input.headers).has(header)).toBe(true);
+      if (type === 'anthropic') expect(new Headers(input.headers).get('anthropic-version')).toBe('2023-06-01');
+      return Response.json(payload);
+    });
+    vi.stubGlobal('fetch', fetch);
+    try {
+      expect(await discovery.testProvider('station')).toMatchObject({ ok: true, category: 'ok', probeKind: 'models', modelCount: 1 });
+      expect(fetch).toHaveBeenCalledOnce();
+    } finally { host.dispose(); }
+  });
+
+  it.each([[401, 'auth_error'], [403, 'auth_error'], [404, 'protocol_error'], [200, 'protocol_error'], [503, 'network_error']] as const)(
+    'classifies %s without returning the response body', async (status, category) => {
+      const { host, discovery } = await createHost({ providers: { station: { type: 'openai', baseUrl: 'https://station.example.test/v1', apiKey: 'YOUR_API_KEY' } } });
+      vi.stubGlobal('fetch', vi.fn(async () => new Response('REDACTED_UPSTREAM_BODY', { status })));
+      try {
+        const probe = await discovery.testProvider('station');
+        expect(probe).toMatchObject({ ok: false, category, httpStatus: status });
+        expect(probe.diagnostic).not.toContain('REDACTED_UPSTREAM_BODY');
+      } finally { host.dispose(); }
+    },
+  );
+
+  it('distinguishes local configuration, network failure and the fixed 8 second timeout', async () => {
+    const { host, discovery } = await createHost({ providers: { station: { type: 'openai', baseUrl: 'https://station.example.test/v1', apiKey: 'YOUR_API_KEY' } } });
+    const fetch = vi.fn(async (): Promise<Response> => { throw new TypeError('REDACTED_NETWORK_ERROR'); });
+    vi.stubGlobal('fetch', fetch);
+    try {
+      expect(await discovery.testProvider('missing')).toMatchObject({ category: 'config_error', probeKind: 'offline' });
+      expect(fetch).not.toHaveBeenCalled();
+      expect(await discovery.testProvider('station')).toMatchObject({ category: 'network_error' });
+      const abort = new AbortController();
+      const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(abort.signal);
+      fetch.mockImplementation(async () => {
+        abort.abort(new DOMException('timed out', 'TimeoutError'));
+        return new Promise<Response>(() => {});
+      });
+      try {
+        expect(await discovery.testProvider('station')).toMatchObject({ category: 'timeout', diagnostic: '✗ 连接超时 (8s)' });
+        expect(timeout).toHaveBeenCalledExactlyOnceWith(8_000);
+      } finally { timeout.mockRestore(); }
+    } finally { host.dispose(); }
+  });
+});
+
 describe('queryAvailableModels', () => {
+  it('preserves a manual context and protocol while updating station defaults', () => {
+    const records = { model: { provider: 'relay', model: 'example', protocol: 'anthropic' as const, maxContextSize: 80_000, overrides: { maxContextSize: 90_000 } } };
+    expect(mergeRelayCatalog(records, 'relay', { type: 'openai', source: { modelProtocol: 'explicit' } }, {
+      models: [{ id: 'example', protocol: 'openai_responses', contextWindow: 500_000 }],
+    })['model']).toMatchObject({ protocol: 'anthropic', defaultProtocol: 'openai', maxContextSize: 80_000, overrides: { maxContextSize: 90_000 } });
+  });
+
   it('normalizes the station metadata trailing slash without changing custom catalog paths', () => {
     expect(relayCatalogUrl({ baseUrl: 'https://relay.example.test/v1', source: { url: '/vsp/models/' } })).toBe('https://relay.example.test/vsp/models');
     expect(relayCatalogUrl({ baseUrl: 'https://relay.example.test/v1', source: { url: '/custom/' } })).toBe('https://relay.example.test/custom/');

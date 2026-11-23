@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { findPiModel, piThinking } from '#/llm-adapter/provider/pi/catalog';
 import type { ModelRecord } from '#/llm-adapter/model/model';
+import type { LookupBuiltinModelMetadata } from '#/llm-adapter/model/model-metadata-contract';
 import type { ProviderConfig } from '#/llm-adapter/provider/provider';
 import { ProtocolSchema } from '#/llm-adapter/protocol/protocol';
 import { applyModelEffortProfile } from '#/llm-adapter/model/effortProfiles';
@@ -56,6 +57,7 @@ export function mergeRelayCatalog(
   providerId: string,
   provider: ProviderConfig,
   payload: unknown,
+  lookupMetadata?: LookupBuiltinModelMetadata,
 ): Record<string, ModelRecord> {
   const { models, pricingBasis } = relayCatalogSchema.parse(payload);
   if (new Set(models.map((model) => model.id)).size !== models.length) throw new Error('Duplicate relay model id');
@@ -74,22 +76,31 @@ export function mergeRelayCatalog(
     if (aliases.length === 0 && remote.hidden) continue;
     if (aliases.length === 0) aliases.push(`${providerId}/${remote.id}`);
     const native = findPiModel(provider.type, remote.id);
-    const nativeThinking = native ? piThinking(native) : undefined;
+    const metadata = lookupMetadata?.(remote.id);
+    const nativeThinking = metadata?.thinking ?? (native ? piThinking(native) : undefined);
     for (const alias of aliases) {
       const old = records[alias];
       const record: ModelRecord = { ...old, provider: providerId, model: old?.model ?? remote.id };
+      record.canonical ??= metadata?.canonical;
+      record.defaultProtocol ??= metadata?.defaultProtocol;
+      record.maxOutputSize ??= metadata?.maxOutputSize;
+      record.capabilities ??= metadata?.capabilities === undefined ? undefined : [...metadata.capabilities];
+      record.thinking ??= metadata?.thinking;
+      record.adaptiveThinking ??= metadata?.adaptiveThinking;
       if (remote.aliases !== undefined) record.aliases = [...remote.aliases];
-      if (remote.protocol !== undefined) record.defaultProtocol = remote.protocol;
+      if (provider.source?.['modelProtocol'] === 'explicit') {
+        const siteProtocol = ProtocolSchema.safeParse(provider.type);
+        if (siteProtocol.success) record.defaultProtocol = siteProtocol.data;
+      } else if (remote.protocol !== undefined) record.defaultProtocol = remote.protocol;
       if (remote.name !== undefined) record.displayName = remote.name;
-      if (remote.contextWindow !== undefined) record.maxContextSize = remote.contextWindow;
-      else if (!record.maxContextSize) record.maxContextSize = native?.contextWindow ?? 131072;
+      record.maxContextSize ??= metadata?.maxContextSize ?? remote.contextWindow ?? native?.contextWindow ?? 131072;
       if (remote.maxTokens !== undefined) record.maxOutputSize = remote.maxTokens;
       if (remote.curated !== undefined || remote.hidden) record.curated = remote.hidden ? false : remote.curated;
       if (remote.releasedAt !== undefined) {
         if (!Number.isFinite(Date.parse(remote.releasedAt)) || new Date(remote.releasedAt).toISOString().slice(0, 10) !== remote.releasedAt) throw new Error('Invalid model release date');
         record.releasedAt = remote.releasedAt;
       }
-      const capabilities = new Set(remote.capabilities ?? old?.capabilities ?? (native ? [ 'tool_use', ...native.input.includes('image') ? ['image_in'] : [] ] : []));
+      const capabilities = new Set(remote.capabilities ?? record.capabilities ?? (native ? [ 'tool_use', ...native.input.includes('image') ? ['image_in'] : [] ] : []));
       if (remote.input !== undefined) {
         for (const [input, capability] of [['image', 'image_in'], ['video', 'video_in'], ['audio', 'audio_in']] as const) {
           if (remote.input.includes(input)) capabilities.add(capability); else capabilities.delete(capability);

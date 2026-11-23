@@ -10,6 +10,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
 
 import { Service } from '@moonshot-ai/agent-core-v2/_base/di/service';
 import { overrideScopedService, ScopeActivation } from '@moonshot-ai/agent-core-v2/_base/di/scope';
@@ -190,6 +192,52 @@ export function defineKlientConformance(
       expect(env.platform).toBe(process.platform);
       expect(env.homeDir.length).toBeGreaterThan(0);
       expect(env.clientVersion.length).toBeGreaterThan(0);
+    });
+
+    it('reads persisted quotas over RPC, refreshes and returns no upstream credentials', async () => {
+      const providerId = 'quota-conformance';
+      const key = 'SYNTHETIC_QUOTA_KEY';
+      const seen: Array<[string | undefined, string | undefined, string | undefined]> = [];
+      const server = createServer((request, response) => {
+        seen.push([request.method, request.url, request.headers.authorization]);
+        response.setHeader('content-type', 'application/json');
+        if (request.url === '/api/status') {
+          response.end(JSON.stringify({ success: true, data: { quota_per_unit: 100, quota_display_type: 'USD' } }));
+        } else if (request.url === '/api/user/self') {
+          response.end(JSON.stringify({ success: true, data: { quota: 825, ignored: 'https://account:pass@example.test' } }));
+        } else {
+          response.writeHead(404).end();
+        }
+      });
+      const { config, quota } = target.klient.global;
+      const saved = (await config.inspect('providers')).userValue;
+      server.listen(0, '127.0.0.1');
+      try {
+        await once(server, 'listening');
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('quota fixture did not open a TCP port');
+        await config.set({ domain: 'providers', patch: { [providerId]: { type: 'openai', quota: {
+          mode: 'newapi-account', managementKey: key, managementUrl: `http://127.0.0.1:${address.port}`, billingMultiplier: 0.5,
+        } } } });
+        await config.reload();
+        const first = await quota.list({ providerId });
+        expect(first.items).toMatchObject([{ id: providerId, status: 'ok', balances: [{ id: 'account.balance', amount: 8.25, equivalentAmount: 16.5 }] }]);
+        expect(JSON.stringify(first)).not.toMatch(/SYNTHETIC_QUOTA_KEY|account:pass|127\.0\.0\.1/);
+        expect((await quota.list({ providerId })).revision).toBe(first.revision);
+        const refreshed = await quota.refresh({ providerId });
+        expect(refreshed.revision).toBeGreaterThan(first.revision);
+        const cooled = await quota.refresh({ providerId });
+        expect(cooled.cooldownRemainingMs).toBeGreaterThan(0);
+        expect(cooled.items).toEqual(refreshed.items);
+        expect(seen).toEqual([
+          ['GET', '/api/status', undefined], ['GET', '/api/user/self', `Bearer ${key}`],
+          ['GET', '/api/status', undefined], ['GET', '/api/user/self', `Bearer ${key}`],
+        ]);
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => { server.close(() => resolve()); });
+        await config.replace({ domain: 'providers', value: saved });
+      }
     });
 
     it('reads the effective permission mode after changing it', async () => {
@@ -462,6 +510,52 @@ export function defineKlientConformance(
       const all = await target.klient.global.config.getAll();
       expect(typeof all).toBe('object');
       expect(Array.isArray(await target.klient.global.config.diagnostics())).toBe(true);
+    });
+
+    it('does not return quota secrets or drop them in an unrelated Provider save', async () => {
+      const { config } = target.klient.global;
+      const id = 'conformance-quota-credentials';
+      const before = await config.inspect<Record<string, unknown>>('providers');
+      try {
+        await config.replace({ domain: 'providers', value: { ...before.userValue, [id]: {
+          type: 'openai', apiKey: 'YOUR_API_KEY', quota: { mode: 'cpa', managementKey: 'EXAMPLE_QUOTA_KEY', managementKeyRef: 'example-ref://EXAMPLE_QUOTA_REF' },
+        } } });
+        const get = await config.get<Record<string, unknown>>('providers');
+        const inspect = await config.inspect<Record<string, unknown>>('providers');
+        const all = await config.getAll();
+        const list = await target.rawCall('providerService', 'list', []);
+        const provider = await target.rawCall('providerService', 'get', [id]);
+        for (const value of [get[id], inspect.value?.[id], inspect.userValue?.[id], (all['providers'] as typeof get)[id], (list as typeof get)[id], provider]) {
+          expect(value).toMatchObject({ apiKey: 'YOUR_API_KEY', quota: { mode: 'cpa', hasManagementKey: true, hasManagementKeyRef: true } });
+          expect(JSON.stringify(value)).not.toMatch(/EXAMPLE_QUOTA_(KEY|REF)/);
+        }
+        await config.replaceSections({ sections: { providers: { ...inspect.userValue, [id]: { ...inspect.userValue?.[id] as object, enabled: false } } } });
+        expect(await config.get('providers')).toMatchObject({ [id]: { enabled: false, quota: { mode: 'cpa', hasManagementKey: true, hasManagementKeyRef: true } } });
+        await config.replace({ domain: 'providers', value: { ...before.userValue, [id]: { type: 'openai', quota: { mode: 'cpa', managementKey: null, managementKeyRef: null } } } });
+        expect(await config.get('providers')).toMatchObject({ [id]: { quota: { mode: 'cpa', hasManagementKey: false, hasManagementKeyRef: false } } });
+      } finally { await config.replace({ domain: 'providers', value: before.userValue }); }
+    });
+
+    it('hides disabled models while retaining their configuration and restoring them on enable', async () => {
+      const { config, kosong, auth } = target.klient.global;
+      const [providers, models, defaultModel] = await Promise.all([config.inspect<Record<string, unknown>>('providers'), config.inspect<Record<string, unknown>>('models'), config.inspect('defaultModel')]);
+      const id = 'conformance-disabled';
+      const alias = `${id}/example`;
+      const provider = { type: 'openai', apiKey: 'YOUR_API_KEY', baseUrl: 'https://example.test/v1' };
+      try {
+        await config.replaceSections({ sections: { providers: { ...providers.userValue, [id]: provider }, models: {
+          ...models.userValue, [alias]: { provider: id, model: 'example', defaultProtocol: 'openai_responses', protocol: 'openai', maxContextSize: 131_072, overrides: { maxContextSize: 120_000 } },
+        }, defaultModel: alias } });
+        expect(await kosong.listModels()).toContainEqual(expect.objectContaining({ model: alias, protocol: 'openai', max_context_size: 120_000 }));
+        await config.replace({ domain: 'providers', value: { ...providers.userValue, [id]: { ...provider, enabled: false } } });
+        expect(await kosong.listModels()).not.toContainEqual(expect.objectContaining({ model: alias }));
+        expect(await kosong.getProvider(id)).toMatchObject({ enabled: false, models: [alias], has_api_key: true });
+        await expect(auth.ensureReady(alias)).rejects.toThrow('is disabled');
+        await expect(kosong.setDefaultModel(alias)).rejects.toThrow('is disabled');
+        await config.replace({ domain: 'providers', value: { ...providers.userValue, [id]: { ...provider, enabled: true } } });
+        expect(await kosong.listModels()).toContainEqual(expect.objectContaining({ model: alias, max_context_size: 120_000 }));
+        await expect(kosong.testProvider('conformance-missing')).resolves.toMatchObject({ ok: false, category: 'config_error' });
+      } finally { await config.replaceSections({ sections: { providers: providers.userValue, models: models.userValue, defaultModel: defaultModel.userValue } }); }
     });
 
     it('settings reads a sanitized snapshot and round-trips provider edits', async () => {

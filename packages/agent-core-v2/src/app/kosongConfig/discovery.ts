@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { createDecorator, type ServiceIdentifier } from '#/_base/di/instantiation';
 import { Event2 } from '#/app/event/event2';
+import type { ProviderConnectivityTestResult } from './provider-probe-contract';
 
 export const providerRefreshChangeSchema = z.object({
   provider_id: z.string().min(1),
@@ -65,6 +66,7 @@ export interface IProviderDiscoveryService {
     options?: RefreshProviderModelsOptions,
   ): Promise<RefreshProviderModelsResponse>;
   queryAvailableModels(providerId: string): Promise<QueryAvailableModelsResponse>;
+  testProvider(providerId: string): Promise<ProviderConnectivityTestResult>;
 }
 
 export const IProviderDiscoveryService: ServiceIdentifier<IProviderDiscoveryService> =

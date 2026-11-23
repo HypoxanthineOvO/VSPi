@@ -32,7 +32,22 @@ export const queryAvailableModelsResponseSchema = z.object({
   modelIds: z.array(z.string().min(1)),
 });
 
+export const providerConnectivityTestResultSchema = z.object({
+  ok: z.boolean(),
+  providerId: z.string(),
+  category: z.enum(['ok', 'config_error', 'auth_error', 'network_error', 'timeout', 'protocol_error', 'unknown_error']),
+  durationMs: z.number().nonnegative(),
+  httpStatus: z.number().int().optional(),
+  modelCount: z.number().int().nonnegative().optional(),
+  probeKind: z.enum(['models', 'balance', 'account', 'offline']).optional(),
+  diagnostic: z.string(),
+});
+
 export const providerDiscoveryContract = {
+  testProvider: {
+    input: z.tuple([z.string().min(1)]),
+    output: providerConnectivityTestResultSchema,
+  },
   refreshProviderModels: {
     input: z.tuple([refreshProviderModelsOptionsSchema.optional()]),
     output: refreshProviderModelsResponseSchema,

@@ -53,7 +53,7 @@ describe("VSPi auth setup", () => {
       expect(replaceSections).toHaveBeenCalledOnce();
       const providerId = Object.keys(sections.providers as object)[0];
       expect(sections.defaultModel).toBe(`${providerId}/example-model`);
-      expect(sections.models).toMatchObject({ [`${providerId}/example-model`]: { provider: providerId, model: 'example-model', protocol: 'openai' } });
+      expect(sections.models).toMatchObject({ [`${providerId}/example-model`]: { provider: providerId, model: 'example-model', defaultProtocol: 'openai', maxContextSize: 131_072 } });
     } finally {
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     }
@@ -66,9 +66,9 @@ describe("VSPi auth setup", () => {
     manager.handleInput('/');
     for (const letter of ['l', 't', 'e', 'd']) expect(manager.handleInput(letter)).toBeUndefined();
     expect(manager.state.query).toBe('lted');
-    manager.handleInput('\u001b');
+    manager.handleInput('\u001B');
     expect(manager.state.searching).toBe(false);
-    manager.handleInput('\u001b');
+    manager.handleInput('\u001B');
     expect(manager.state.query).toBe('');
     expect(manager.handleInput('t')).toMatchObject({ type: 'test', provider: { id: 'example' } });
     manager.handleInput('d');
@@ -79,15 +79,15 @@ describe("VSPi auth setup", () => {
     const { ProviderManagerController } = await import('../src/v1/ui/provider-manager.js');
     const manager = new ProviderManagerController();
     manager.setProviders([{ id: 'example', label: 'Example', protocol: 'openai', status: '已配置', detail: '' }]);
-    manager.handleInput('\u001b[B'); manager.handleInput('\r');
+    manager.handleInput('\u001B[B'); manager.handleInput('\r');
     manager.handleInput('Example Gateway'); manager.handleInput('\t'); manager.handleInput('https://gateway.example.test/v1');
-    manager.handleInput('\t'); manager.handleInput('\u001b[C'); manager.handleInput('\t'); manager.handleInput('YOUR_API_KEY');
+    manager.handleInput('\t'); manager.handleInput('\u001B[C'); manager.handleInput('\t'); manager.handleInput('YOUR_API_KEY');
     expect(manager.handleInput('\u0013')).toMatchObject({ type: 'save', value: { name: 'Example Gateway', protocol: 'openai_responses' } });
     const theme = createTheme(detectTerminalCapabilities(), 'Terminal');
     const text = () => stripAnsi(manager.render(76, 24, theme).join('\n'));
     expect(text()).toContain('正在测试并保存');
     expect(manager.handleInput('\u0013')).toBeUndefined();
-    manager.handleInput('\u001b');
+    manager.handleInput('\u001B');
     expect(text()).toContain('Example Gateway');
     manager.finishSave('HTTP 401');
     expect(text()).toContain('HTTP 401'); expect(text()).toContain('Example Gateway');
@@ -100,7 +100,7 @@ describe("VSPi auth setup", () => {
     const manager = new ProviderManagerController();
     const provider = { id: 'example', label: 'Example', protocol: 'openai', status: '已配置' as const, detail: '', defaultModel: 'example/model-8', models: Array.from({ length: 25 }, (_, index) => `example/model-${index}`) };
     manager.setProviders([provider]); manager.recordCheck('example', '离线检查：配置完整');
-    manager.handleInput('\t'); for (let i = 0; i < 8; i++) manager.handleInput('\u001b[B');
+    manager.handleInput('\t'); for (let i = 0; i < 8; i++) manager.handleInput('\u001B[B');
     expect(manager.state.modelOffset).toBe(8);
     manager.setProviders([provider]);
     const theme = createTheme(detectTerminalCapabilities(), 'Terminal');
@@ -170,6 +170,41 @@ describe("VSPi auth setup", () => {
     expect(sections.defaultModel).toBe(`${id}/model-a`);
   });
 
+  it('inherits known station metadata, mixes protocols and preserves user overrides on refresh', async () => {
+    const { saveProviderGateway, setProviderModelOverride, setProviderEnabled } = await import('../src/v1/providers/provider-management.js');
+    const { lookupBuiltinModelMetadata } = await import('@vsp/vsp-runtime');
+    const ids = ['glm-5.3', 'deepseek-v4.1-flash', 'k3.1-pro', 'gpt-6.2-sol', 'claude-opus-5-5'];
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ data: ids.map(id => ({ id })) })));
+    type Records = Record<string, Record<string, unknown>>;
+    const sections: Record<string, unknown> = { providers: {}, models: {} };
+    const inspect = async (key: string) => ({ value: sections[key], userValue: sections[key] });
+    const klient = { global: { config: { inspect, get: async (key: string) => sections[key],
+      replace: async ({ domain, value }: { domain: string; value: unknown }) => { sections[domain] = value; },
+      replaceSections: async ({ sections: next }: { sections: Record<string, unknown> }) => { Object.assign(sections, next); },
+    } } } as unknown as Klient;
+    const value = { name: 'Test Gateway', baseUrl: 'https://gateway.example.test/v1', protocol: 'auto', apiKey: 'YOUR_API_KEY' };
+    await saveProviderGateway(klient, value);
+    const id = Object.keys(sections.providers as object)[0]!;
+    const records = () => sections.models as Records;
+    for (const model of ids.slice(0, 3)) {
+      const meta = lookupBuiltinModelMetadata(model);
+      expect(meta).toBeDefined();
+      expect(meta?.maxContextSize).not.toBe(131_072);
+      expect(meta?.thinking.efforts?.length).toBeGreaterThan(0);
+      expect(records()[`${id}/${model}`]).toMatchObject({ defaultProtocol: 'openai', maxContextSize: meta?.maxContextSize, thinking: meta?.thinking });
+    }
+    const gpt = `${id}/gpt-6.2-sol`, claude = `${id}/claude-opus-5-5`;
+    expect(records()[gpt]?.defaultProtocol).toBe('openai_responses');
+    expect(records()[claude]?.defaultProtocol).toBe('anthropic');
+    records()[gpt]!.overrides = { maxContextSize: 180_000, displayName: 'My model' };
+    await setProviderModelOverride(klient, id, gpt, { protocol: 'openai_responses', maxContextSize: 200_000 });
+    await setProviderEnabled(klient, id, false);
+    await saveProviderGateway(klient, { ...value, apiKey: '', protocol: 'openai' }, { id, label: value.name, protocol: 'auto', baseUrl: value.baseUrl, status: '已停用', detail: '' });
+    expect(records()[gpt]).toMatchObject({ protocol: 'openai_responses', defaultProtocol: 'openai', overrides: { maxContextSize: 200_000, displayName: 'My model' } });
+    expect(records()[claude]?.defaultProtocol).toBe('openai');
+    expect((sections.providers as Records)[id]).toMatchObject({ enabled: false, apiKey: 'YOUR_API_KEY' });
+  });
+
   it('forwards cancellation when the user selects a local credential', async () => {
     const controller = new AbortController();
     const useLocalCredential = vi.fn(async (_id: string, signal?: AbortSignal) => {
@@ -198,7 +233,7 @@ describe("VSPi auth setup", () => {
     await app.load();
     app.handleInput('r');
     await vi.waitFor(() => expect(useLocalCredential).toHaveBeenCalledOnce());
-    app.handleInput('\u001b');
+    app.handleInput('\u001B');
     expect(signal?.aborted).toBe(true);
     await vi.waitFor(() => expect(stripAnsi(app.render(80).join('\n'))).toContain('管理连接'));
     expect(replaceSections).not.toHaveBeenCalled();
@@ -246,12 +281,12 @@ describe("VSPi auth setup", () => {
     const theme = createTheme(detectTerminalCapabilities(), 'Terminal');
     expect(stripAnsi(form.render(76, theme).join('\n'))).toContain('Example Gateway');
     form.handleInput('\u0015'); form.handleInput('https://example.test/v1');
-    form.handleInput('\t'); form.handleInput('\u001b[C'); form.handleInput('\t');
+    form.handleInput('\t'); form.handleInput('\u001B[C'); form.handleInput('\t');
     form.handleInput('YOUR_API_KEY');
     expect(stripAnsi(form.render(76, theme).join('\n'))).not.toContain('YOUR_API_KEY');
     form.handleInput('\u0013');
     expect(submit).toHaveBeenCalledWith({ name: 'Example Gateway', baseUrl: 'https://example.test/v1', protocol: 'openai_responses', apiKey: 'YOUR_API_KEY' });
-    form.handleInput('\u001b'); expect(cancel).toHaveBeenCalledOnce();
+    form.handleInput('\u001B'); expect(cancel).toHaveBeenCalledOnce();
   });
 	it('defaults SSH login to device code and explains that no localhost callback is needed', async () => {
 		vi.stubEnv('SSH_CONNECTION', '192.0.2.1 12345 192.0.2.2 22');

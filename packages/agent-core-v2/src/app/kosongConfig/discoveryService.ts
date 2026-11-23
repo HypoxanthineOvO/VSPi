@@ -21,7 +21,8 @@ import { IConfigService } from '#/app/config/config';
 import { IEventService } from '#/app/event/event';
 import { ModelCatalogErrors } from '#/llm-adapter/model/errors';
 import { IModelService, type ModelRecord } from '#/llm-adapter/model/model';
-import { effectiveModelConfig } from '#/llm-adapter/model/model-auth';
+import { lookupBuiltinModelMetadata } from '#/llm-adapter/model/metadata-lookup';
+import { effectiveModelConfig, nonEmpty, resolveEndpointBaseUrl, resolveModelAuthMaterial, resolveModelProtocol } from '#/llm-adapter/model/model-auth';
 import {
   IProviderService,
   type ModelSource,
@@ -29,6 +30,7 @@ import {
   type ProviderConfig,
 } from '#/llm-adapter/provider/provider';
 import { getProviderDefinition } from '#/llm-adapter/provider/provider-definition';
+import type { ProviderConnectivityProbeKind, ProviderConnectivityTestResult } from './provider-probe-contract';
 
 import {
   DEFAULT_MODEL_SECTION,
@@ -58,6 +60,8 @@ const availableModelsResponseSchema = z.object({
   data: z.array(z.object({ id: z.string().min(1) }).passthrough()),
 }).passthrough();
 const AVAILABILITY_TIMEOUT_MS = 10_000;
+const PROBE_TIMEOUT_MS = 8_000;
+const googleModelsResponseSchema = z.object({ models: z.array(z.object({ name: z.string().min(1) })) });
 
 export class ProviderDiscoveryService implements IProviderDiscoveryService {
   declare readonly _serviceBrand: undefined;
@@ -89,6 +93,140 @@ export class ProviderDiscoveryService implements IProviderDiscoveryService {
     const provider = this.providerService.get(providerId);
     const preference = accountProxyPreference(this.config.get<ProxyConfig>(PROXY_SECTION), this.config.get<OAuthNetworkConfig>(OAUTH_NETWORK_SECTION));
     return withScopedProxy(accountProxyForUrl(provider?.baseUrl, preference), () => this.queryProviderModels(providerId, provider));
+  }
+
+  async testProvider(providerId: string): Promise<ProviderConnectivityTestResult> {
+    const start = performance.now();
+    const signal = AbortSignal.timeout(PROBE_TIMEOUT_MS);
+    const finish = (
+      category: ProviderConnectivityTestResult['category'],
+      diagnostic: string,
+      probeKind: ProviderConnectivityProbeKind,
+      httpStatus?: number,
+      modelCount?: number,
+    ): ProviderConnectivityTestResult => ({
+      ok: category === 'ok', providerId, category, durationMs: Math.round(performance.now() - start),
+      httpStatus, modelCount, probeKind, diagnostic,
+    });
+    let kind: ProviderConnectivityProbeKind = 'offline';
+    let onTimeout: () => void = () => {};
+    const expired = new Promise<ProviderConnectivityTestResult>(resolve => {
+      onTimeout = () => resolve(finish('timeout', '✗ 连接超时 (8s)', kind));
+      signal.addEventListener('abort', onTimeout, { once: true });
+    });
+    const run = async () => {
+      try { await this.config.reload(); } catch { return finish('config_error', '✗ 无法读取 Provider 配置', 'offline'); }
+      const provider = this.providerService.get(providerId);
+      if (!provider) return finish('config_error', '✗ Provider 未配置', 'offline');
+      const type = provider.type ?? 'openai';
+      const protocol = resolveModelProtocol({}, { type });
+      const account = type === 'openai-codex' || type === 'devin';
+      if (!protocol && !account) return finish('config_error', '✗ Provider 协议未配置', 'offline');
+      let baseUrl: URL;
+      try {
+        const defaults = type === 'anthropic' ? 'https://api.anthropic.com' : type === 'google-genai' || type === 'gemini'
+          ? 'https://generativelanguage.googleapis.com/v1beta' : type === 'openai' || type === 'openai_responses' ? 'https://api.openai.com/v1' : undefined;
+        baseUrl = new URL(resolveEndpointBaseUrl({}, { ...provider, type }) ?? defaults ?? '');
+        if (!['http:', 'https:'].includes(baseUrl.protocol) || baseUrl.username || baseUrl.password || baseUrl.search || baseUrl.hash) throw new Error();
+      } catch { return finish('config_error', '✗ Provider Endpoint 无效', 'offline'); }
+      const preference = accountProxyPreference(this.config.get<ProxyConfig>(PROXY_SECTION), this.config.get<OAuthNetworkConfig>(OAUTH_NETWORK_SECTION));
+      let credential;
+      let oauth = false;
+      try {
+        const material = resolveModelAuthMaterial({ modelId: providerId, model: {}, provider: { ...provider, type }, providerName: providerId });
+        if (material.oauth) {
+          oauth = !material.oauth.key.startsWith('local-cli/omp-');
+          credential = await withScopedProxy(accountProxyForUrl(baseUrl.href, preference), () => this.oauth.resolveRequestAuth(providerId, material.oauth));
+          if (!oauth) oauth = credential.headers?.['anthropic-beta'] !== undefined;
+        } else credential = { apiKey: material.apiKey ?? (material.apiKeyEnv ? process.env[material.apiKeyEnv] : undefined) };
+      } catch (error) {
+        const diagnostic = error instanceof Error && error.name === 'OmpCredentialExpiredError' ? error.message : 'Provider 凭据不可用';
+        return finish('config_error', `✗ ${diagnostic}`, 'offline');
+      }
+      const apiKey = nonEmpty(credential.apiKey);
+      if (!apiKey || /[\r\n]/u.test(apiKey)) return finish('config_error', '✗ Provider 缺少可用凭据', 'offline');
+      signal.throwIfAborted();
+      const headers = new Headers(provider.customHeaders);
+      for (const name of credential.removeHeaders ?? []) headers.delete(name);
+      for (const [name, value] of Object.entries(credential.headers ?? {})) headers.set(name, value);
+      for (const name of ['authorization', 'x-api-key', 'x-goog-api-key']) headers.delete(name);
+      headers.set('accept', 'application/json');
+      let url = new URL(baseUrl);
+      if (credential.baseUrl !== undefined) {
+        try {
+          const fromCredential = new URL(credential.baseUrl);
+          if (!['http:', 'https:'].includes(fromCredential.protocol) || fromCredential.username || fromCredential.password || fromCredential.search || fromCredential.hash) throw new Error();
+          url = fromCredential;
+        } catch { return finish('config_error', '✗ Provider 凭据 Endpoint 无效', 'offline'); }
+      }
+      let body: string | undefined;
+      kind = account ? 'account' : 'models';
+      if (type === 'openai-codex') {
+        url = new URL('https://chatgpt.com/backend-api/wham/usage');
+        headers.set('authorization', `Bearer ${apiKey}`);
+        headers.set('originator', 'codex_cli_rs');
+      } else if (type === 'devin') {
+        url = new URL('https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetUserStatus');
+        const token = apiKey.startsWith('devin-session-token$') ? apiKey : `devin-session-token$${apiKey}`;
+        headers.set('x-api-key', token);
+        headers.set('content-type', 'application/json');
+        headers.set('connect-protocol-version', '1');
+        body = JSON.stringify({ metadata: { ide_name: 'devin-cli', ide_version: '3000.11.3', extension_name: 'devin', extension_version: '3000.11.3', api_key: token, locale: 'en-US', os: process.platform, auth_source: 'API_KEY' } });
+      } else {
+        const prefix = url.pathname.replace(/\/+$/u, '');
+        if (protocol === 'anthropic') {
+          url.pathname = `${prefix}${prefix.endsWith('/v1') ? '' : '/v1'}/models`;
+          headers.set('anthropic-version', '2023-06-01');
+          if (oauth) headers.set('authorization', `Bearer ${apiKey}`);
+          else headers.set('x-api-key', apiKey);
+        } else {
+          const defaultPrefix = url.origin === 'https://api.openai.com' ? '/v1' : url.origin === 'https://generativelanguage.googleapis.com' ? '/v1beta' : '';
+          url.pathname = `${prefix || defaultPrefix}/models`;
+          if (protocol === 'google-genai') headers.set('x-goog-api-key', apiKey);
+          else headers.set('authorization', `Bearer ${apiKey}`);
+        }
+      }
+      const fetchProbe = (endpoint: URL) => withScopedProxy(accountProxyForUrl(endpoint.href, preference), () => providerFetch(endpoint, {
+        method: body === undefined ? 'GET' : 'POST', headers, body, redirect: 'manual', signal,
+      }));
+      let response: Response;
+      try {
+        response = await fetchProbe(url);
+        if (type === 'deepseek' && url.origin === 'https://api.deepseek.com' && [404, 405].includes(response.status)) {
+          void response.body?.cancel().catch(() => {});
+          kind = 'balance';
+          response = await fetchProbe(new URL('/user/balance', url));
+        }
+      } catch {
+        return signal.aborted ? finish('timeout', '✗ 连接超时 (8s)', kind) : finish('network_error', '✗ 代理或网络不可达', kind);
+      }
+      const status = response.status;
+      if (!response.ok) {
+        void response.body?.cancel().catch(() => {});
+        if (status === 401 || status === 403) return finish('auth_error', `✗ 鉴权失败 (HTTP ${status})`, kind, status);
+        if (status >= 500) return finish('network_error', `✗ 上游暂不可用 (HTTP ${status})`, kind, status);
+        return finish('protocol_error', `✗ 协议或路径不匹配 (HTTP ${status})`, kind, status);
+      }
+      if (kind === 'account') {
+        void response.body?.cancel().catch(() => {});
+        return finish('ok', `✓ 可用（账号状态正常 / 耗时 ${Math.round(performance.now() - start)}ms）`, kind, status);
+      }
+      let count: number | undefined;
+      try {
+        const payload: unknown = await response.json();
+        if (kind === 'balance') {
+          if (!z.object({ is_available: z.boolean(), balance_infos: z.array(z.unknown()) }).safeParse(payload).success) throw new Error();
+        } else if (protocol === 'google-genai') count = googleModelsResponseSchema.parse(payload).models.length;
+        else count = availableModelsResponseSchema.parse(payload).data.length;
+      } catch {
+        return signal.aborted ? finish('timeout', '✗ 连接超时 (8s)', kind) : finish('protocol_error', '✗ 协议或路径不匹配 (非模型/余额 JSON)', kind, status);
+      }
+      const detail = count === undefined ? '余额接口正常' : `发现 ${count} 个模型`;
+      return finish('ok', `✓ 可用（${detail} / 耗时 ${Math.round(performance.now() - start)}ms）`, kind, status, count);
+    };
+    try { return await Promise.race([run(), expired]); }
+    catch { return signal.aborted ? finish('timeout', '✗ 连接超时 (8s)', kind) : finish('unknown_error', '✗ Provider 探测失败', kind); }
+    finally { signal.removeEventListener('abort', onTimeout); }
   }
 
   private async queryProviderModels(providerId: string, provider: ProviderConfig | undefined): Promise<QueryAvailableModelsResponse> {
@@ -167,8 +305,10 @@ export class ProviderDiscoveryService implements IProviderDiscoveryService {
     options: RefreshProviderModelsOptions,
   ): Promise<RefreshProviderModelsResponse> {
     await this.config.reload();
+    const userProviders = this.config.inspect<Record<string, ProviderConfig>>(PROVIDERS_SECTION).userValue ?? {};
     const relayIds = options.scope === 'oauth' ? [] : Object.entries(this.providerService.list())
-      .filter(([id, provider]) => (options.providerId === undefined || options.providerId === id) && isRelayCatalogProvider(id, provider))
+      .filter(([id, provider]) => (options.providerId === undefined || options.providerId === id) && provider.enabled !== false &&
+        isRelayCatalogProvider(id, { ...provider, modelSource: userProviders[id]?.modelSource }))
       .map(([id]) => id);
     if (options.providerId !== undefined && relayIds.includes(options.providerId)) {
       const response = await this.refreshRelayProviders(relayIds);
@@ -183,7 +323,7 @@ export class ProviderDiscoveryService implements IProviderDiscoveryService {
           `provider ${options.providerId} does not exist`,
         );
       }
-      if (this.effectiveModelSource(provider) === 'static') {
+      if (provider.enabled === false || this.effectiveModelSource(provider) === 'static') {
         return { changed: [], unchanged: [options.providerId], failed: [] };
       }
     }
@@ -216,7 +356,7 @@ export class ProviderDiscoveryService implements IProviderDiscoveryService {
         const payload = await fetchRelayCatalog(provider);
         if (JSON.stringify(this.providerService.get(id)) !== JSON.stringify(provider)) throw new Error('Provider changed during discovery; retry refresh');
         const current = this.config.inspect<Record<string, ModelRecord>>(MODELS_SECTION).userValue ?? {};
-        const merged = mergeRelayCatalog(current, id, provider, payload);
+        const merged = mergeRelayCatalog(current, id, provider, payload, lookupBuiltinModelMetadata);
         if (JSON.stringify(current) === JSON.stringify(merged)) { response.unchanged.push(id); continue; }
         await this.config.replace(MODELS_SECTION, merged);
         response.changed.push({ provider_id: id, provider_name: id, added: Object.keys(merged).length - Object.keys(current).length, removed: 0 });
@@ -238,7 +378,7 @@ export class ProviderDiscoveryService implements IProviderDiscoveryService {
     const providers =
       this.config.inspect<Record<string, ProviderConfig>>(PROVIDERS_SECTION).userValue ?? {};
     const staticIds = Object.entries(providers)
-      .filter(([, provider]) => this.effectiveModelSource(provider) === 'static')
+      .filter(([, provider]) => provider.enabled === false || this.effectiveModelSource(provider) === 'static')
       .map(([id]) => id);
     if (staticIds.length === 0) return EMPTY_EXCLUSION;
 
