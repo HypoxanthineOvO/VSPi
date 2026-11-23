@@ -11,7 +11,7 @@
 - 内置目录补充 GPT 6.2 Sol / Astra、GPT 6.1 Terra、Claude Fable 5.2、Gemini 4 Carbon / Neon / Hydrogen、Kimi K3.1 Pro / Highspeed、MiniMax M3.1 Flash 和 Doubao Seed 2.1 Pro 等型号。其中多款进入 `/model` 常用列表，实际可用型号取决于已配置的来源。
 - 修复 GPT 等通过通用 OpenAI Responses 接口发起工具调用时的可选参数兼容问题；Codex 来源的新版 GPT 使用 Codex 专用 Responses 协议。Claude 5.5 和 Fable 5 系列使用 Anthropic Messages 时按选定档位发送自适应思考设置，直连、中转都适用。
 - 中转站可按已知型号补齐上下文、输入能力与思考档位等规格，保留站点要求的请求模型 ID。网关可统一选协议，也可在来源详情里为单个模型覆写协议和上下文窗口。刷新模型不覆盖已有配置；Kimi K3.1 的 VSPLab 预置继续使用 Responses，Coding Plan 和中转站不沿用开放平台的最大输出上限。
-- Hypo-Vault 对接和为单个来源设置代理留到后续版本。
+- 自定义中转站若从环境变量读取 API Key，本版可按 `E` 手动填写模型 ID；按 `F` 自动刷新留到后续版本。常规配置查询仍会返回用于模型调用的 API Key；把密钥从配置查询结果中分离、接入 Hypo-Vault 和为单个来源设置代理也留到后续版本。
 
 Linux x86_64，需 Node.js 22.19.0 或更新版本。发布后可用以下命令安装；脚本会校验发行包的 SHA-256，全局安装目录不可写时改用 `~/.local`。已有安装可运行 `vspi update`。
 
