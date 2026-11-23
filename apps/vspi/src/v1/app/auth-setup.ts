@@ -8,11 +8,11 @@ import { loginProvider } from '../providers/provider-login.js';
 import { configureProxy } from '../providers/proxy-setup.js';
 import { catalogEffortCapability, effortLabel } from '../domain/effort.js';
 import { frame, wrapTextWithAnsi } from '../ui/ansi.js';
-import { ProviderManagerController, type ProviderManagerAction } from '../ui/provider-manager.js';
+import { ProviderManagerController, providerCheckLabel, type ProviderManagerAction } from '../ui/provider-manager.js';
 import { AuthDialog } from '../ui/auth-dialog.js';
 import { applySettingsToCapabilities, detectTerminalCapabilities } from '../ui/capabilities.js';
 import { createTheme, type VspiTheme } from '../ui/theme.js';
-import { checkProvider, loadProviderOptions, saveProviderGateway } from '../providers/provider-management.js';
+import { checkProvider, getProviderQuotaSettings, loadProviderOptions, refreshProviderGateway, saveProviderGateway, setProviderEnabled, setProviderModelOverride, setProviderQuota } from '../providers/provider-management.js';
 
 export type AuthSetupMode = 'config' | 'login' | 'logout' | 'proxy';
 type CredentialType = 'api_key' | 'oauth';
@@ -63,6 +63,7 @@ export class AuthSetupApp implements Component, Focusable {
     this.providers = await loadProviderOptions(this.klient, formatProviderDisplayName);
     if (this.mode === 'logout') this.providers = this.providers.filter(provider => provider.storedCredential).map(provider => ({ ...provider, label: `${provider.label} · ${provider.storedCredential === 'api_key' ? 'API Key' : '订阅账号'}` }));
     this.manager.setProviders(this.providers);
+    if (this.mode === 'config' && this.klient.global.quota) void this.loadQuota();
     this.tui.requestRender();
   }
 
@@ -89,8 +90,10 @@ export class AuthSetupApp implements Component, Focusable {
 
   render(width: number): string[] {
     if (this.dialog) return this.dialog.render(width, this.theme);
-    const rows = this.manager.render(Math.max(1, width - 4), Math.max(1, this.tui.terminal.rows - 4 - Number(Boolean(this.notice)) * 2), this.theme);
-    if (this.notice) rows.push(...wrapTextWithAnsi(this.theme.warning(this.notice), Math.max(1, width - 4)));
+    const bodyWidth = Math.max(1, width - 4);
+    const notices = this.notice ? wrapTextWithAnsi(this.theme.warning(this.notice), bodyWidth).slice(0, 2) : [];
+    const rows = this.manager.render(bodyWidth, Math.max(1, this.tui.terminal.rows - 2 - notices.length), this.theme, width);
+    rows.push(...notices);
     return frame(rows, width, this.theme, { title: this.mode === 'logout' ? '移除凭据' : 'VSPi Config · 管理连接', focused: true, paddingX: 1 });
   }
 
@@ -102,37 +105,67 @@ export class AuthSetupApp implements Component, Focusable {
     return dialog;
   }
 
+  private loadQuota(refresh = false): Promise<void> {
+    return this.manager.loadQuota(() => refresh ? this.klient.global.quota.refresh() : this.klient.global.quota.list(), () => this.tui.requestRender(), refresh);
+  }
+
   private async perform(action: ProviderManagerAction): Promise<void> {
     if (action.type === 'close') { this.finish(); return; }
+    if (action.type === 'refreshQuota') { await this.loadQuota(true); return; }
     this.running = true;
     this.notice = '';
     try {
+      if (action.type === 'configureQuota') {
+        this.manager.editQuota(action.provider, await getProviderQuotaSettings(this.klient, action.provider.id));
+        return;
+      }
+      if (action.type === 'test') {
+        this.manager.recordCheck(action.provider.id, '正在测试…');
+        this.tui.requestRender();
+        const result = await checkProvider(this.klient, action.provider.id);
+        const label = providerCheckLabel(result);
+        this.manager.recordCheck(action.provider.id, label);
+        this.notice = label;
+        return;
+      }
       if (action.type === 'save') {
         await saveProviderGateway(this.klient, action.value, action.provider);
-        this.manager.finishSave();
-        this.notice = 'Provider 已测试并原子保存';
-      } else if (action.type === 'test') {
-        const result = await checkProvider(this.klient, action.provider.id);
-        this.manager.recordCheck(action.provider.id, result.diagnostic);
-        this.notice = result.diagnostic;
+        this.notice = 'Provider 已保存';
+      } else if (action.type === 'saveQuota') {
+        await setProviderQuota(this.klient, action.provider.id, action.value);
+        this.notice = '额度配置已保存';
+      } else if (action.type === 'toggle') {
+        await setProviderEnabled(this.klient, action.provider.id, action.enabled);
+        this.notice = action.enabled ? '来源已启用' : '来源已停用';
+      } else if (action.type === 'refreshModels') {
+        this.notice = '正在刷新模型…';
+        this.tui.requestRender();
+        await refreshProviderGateway(this.klient, action.provider);
+        this.notice = '模型已刷新';
+      } else if (action.type === 'saveModel') {
+        await setProviderModelOverride(this.klient, action.provider.id, action.alias, action.value);
+        this.notice = '模型设置已保存';
       } else if (action.type === 'remove') {
         await logoutProvider(this.klient, action.provider.id, action.provider.storedCredential ?? 'api_key');
-        this.notice = '已保存凭据已移除；外部 CLI 凭据未修改';
-      } else {
+        this.notice = '已移除保存的凭据';
+      } else if (action.type === 'local' || action.type === 'login') {
         const dialog = this.makeDialog(action.provider.label);
         if (action.type === 'local') {
           if (!action.provider.localCredential) throw new Error('本机凭据已失效');
           await this.klient.global.auth.useLocalCredential(action.provider.localCredential.id, dialog.signal);
-        } else if (action.type === 'login') await loginProvider(this.klient, action.provider.id, action.credential, dialog);
+        } else await loginProvider(this.klient, action.provider.id, action.credential, dialog);
         dialog.signal.throwIfAborted();
         if (this.mode === 'config') await configureDefaultModel(this.klient, action.provider.id, dialog);
         this.notice = 'Provider 已连接';
       }
+      this.manager.finishSave();
+      this.manager.invalidateQuota();
       await this.load();
       if (this.exitAfterAction) this.finish(this.notice);
     } catch (error) {
-      const message = error instanceof Error ? error.message : '操作失败';
-      if (action.type === 'save') this.manager.finishSave(message);
+      const message = action.type === 'saveQuota' ? '额度配置未保存，请检查字段后重试' : error instanceof Error ? error.message : '操作失败';
+      if (action.type === 'test') this.manager.recordCheck(action.provider.id, '✗ 测试失败');
+      if (action.type === 'save' || action.type === 'saveQuota' || action.type === 'saveModel') this.manager.finishSave(message);
       else this.notice = message;
     } finally {
       this.dialog = undefined;
@@ -146,7 +179,7 @@ export async function configureDefaultModel(klient: Klient, providerId: string, 
   const [catalog, providers] = await Promise.all([klient.global.kosong.listModels(), klient.global.kosong.listProviders()]);
   const models = catalog.filter(model => model.provider === providerId);
   const provider = providers.find(item => item.id === providerId);
-  if (!models.length) throw new Error('Provider 已登录，但没有可选择的模型，请检查配置');
+  if (models.length === 0) throw new Error('Provider 已登录，但没有可选择的模型，请检查配置');
   const modelId = await interaction.prompt({ type: 'select', message: '默认模型', options: models.map(model => ({ id: model.model, label: model.display_name ?? model.model })), signal: interaction.signal });
   const model = models.find(item => item.model === modelId);
   if (!model) throw new Error('模型选择无效');

@@ -39,6 +39,9 @@ import type {
 	SkillManager,
 	SkillScope,
 } from "../skills/types.js";
+import type { ProviderConnectivityTestResult, ProviderModelOverridePatch } from '../providers/provider-contract.js';
+import type { ProviderQuotaPatch, ProviderQuotaSettings } from '../ui/provider-manager.js';
+import type { QuotaSnapshot } from '../ui/quota-view.js';
 import type { WorkflowSnapshot } from "../workflow/types.js";
 import type { TowerMissionProjection } from "@moonshot-ai/klient";
 export type SessionOwnerRecoveryAction = "terminate" | "kill" | "cancel";
@@ -467,6 +470,14 @@ export interface ChatBackend {
 	getModelOptions?(): Promise<RuntimeModelOption[]>;
 	getModelGroups?(): Promise<ModelGroup[]>;
 	getProviderOptions?(): Promise<ProviderOption[]>;
+	getProviderQuota?(): Promise<QuotaSnapshot>;
+	refreshProviderQuota?(): Promise<QuotaSnapshot>;
+	getProviderQuotaSettings?(id: string): Promise<ProviderQuotaSettings>;
+	setProviderQuota?(id: string, value: ProviderQuotaPatch): Promise<void>;
+	setProviderEnabled?(id: string, enabled: boolean): Promise<void>;
+	setProviderModelOverride?(id: string, alias: string, value: ProviderModelOverridePatch): Promise<void>;
+	refreshProviderModels?(provider: ProviderOption): Promise<void>;
+	checkProvider?(id: string): Promise<ProviderConnectivityTestResult>;
 	getVsplabEndpoint?(): Promise<'cn' | 'tech'>;
 	setVsplabEndpoint?(endpoint: 'cn' | 'tech'): Promise<void>;
 	selectModel?(provider: string, id: string, effort?: EffortLevel): Promise<ModelSelectionResult>;

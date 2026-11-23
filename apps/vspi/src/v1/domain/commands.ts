@@ -23,6 +23,7 @@ export type ActionHandler =
 	| "models"
 	| "subagentModels"
 	| "providers"
+	| "quota"
 	| "login"
 	| "logout"
 	| "prompt"
@@ -150,6 +151,15 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
 		description: "管理 Provider",
 		group: "VSPi",
 		handler: "providers",
+		availability: "enabled",
+	},
+	{
+		id: "quota",
+		aliases: ["balance"],
+		label: "/quota",
+		description: "查看订阅窗口和账户余额",
+		group: "VSPi",
+		handler: "quota",
 		availability: "enabled",
 	},
 	{

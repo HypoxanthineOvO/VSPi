@@ -232,6 +232,8 @@ describe("VSPi auth setup", () => {
     const app = new AuthSetupApp(new TuiMainScreen(new VirtualTerminal(80, 24)), createTheme(detectTerminalCapabilities(), 'Terminal'), klient, 'config', vi.fn(), false);
     await app.load();
     app.handleInput('r');
+    expect(useLocalCredential).not.toHaveBeenCalled();
+    app.handleInput('\u001B[A'); app.handleInput('\r');
     await vi.waitFor(() => expect(useLocalCredential).toHaveBeenCalledOnce());
     app.handleInput('\u001B');
     expect(signal?.aborted).toBe(true);
@@ -264,10 +266,10 @@ describe("VSPi auth setup", () => {
     expect(rows.length).toBeLessThanOrEqual(20);
     expect(rows.every(row => visibleWidth(row) <= width)).toBe(true);
     const text = stripAnsi(rows.join('\n'));
-    expect(text).toContain('已连接');
+    expect(text).toContain('已启用');
     expect(text).toContain('Example  ✓ 可用');
     expect(text.includes('Endpoint')).toBe(width >= 96);
-    expect(text).not.toContain('来源');
+    expect(text).toContain('[1 来源]');
   });
 
   it('keeps gateway fields on validation failure and never renders its secret', async () => {
@@ -514,7 +516,7 @@ describe("VSPi auth setup", () => {
 		await app.load();
 		const menu = stripAnsi(app.render(80).join('\n'));
 		expect(menu).toContain('Devin');
-		expect(menu).toContain('L登录');
+		expect(menu).toContain('L 登录');
 		expect(menu).not.toContain('API Key');
 		const backend = new KlientChatBackend({ klient } as RuntimeConnection, '/project', 'new');
 		const options = await backend.getProviderOptions();
@@ -537,7 +539,7 @@ describe("VSPi auth setup", () => {
 		const app = new AuthSetupApp(new TuiMainScreen(new VirtualTerminal(80, 24)), createTheme(detectTerminalCapabilities(), 'Terminal'), klient, 'config', vi.fn(), true);
 		await app.load();
 		const menu = stripAnsi(app.render(80).join('\n'));
-		expect(menu).toContain('已连接');
+		expect(menu).toContain('已启用');
 		expect(menu).toContain('可添加');
 		expect(menu).toContain('Anthropic');
 		expect(menu).toContain('DeepSeek');

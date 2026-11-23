@@ -67,7 +67,7 @@ export async function runVspiTui(
 		cwd: process.cwd(),
 		settings,
 		attachments,
-		openOnStart: startupMode === "resume" ? "sessions" : undefined,
+		openOnStart: startupMode === "resume" ? "sessions" : startupMode === "new" ? "providers-if-empty" : undefined,
 		startupRuntimeDiagnostic: connection.migrationWarning
 			? formatRuntimeMigrationWarning(connection.migrationWarning.reason)
 			: undefined,

@@ -4,7 +4,8 @@
  * Wiring: real VSPi renderers and xterm terminal emulation; a backend boundary fixture for runtime events.
  * Run: pnpm -C apps/vspi test
  */
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from 'node:http';
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -13,6 +14,7 @@ import {
   visibleWidth,
 } from "@moonshot-ai/pi-tui";
 import { describe, expect, it, vi } from "vitest";
+import { connectRuntime, startRuntimeDaemon, type RuntimeConnection } from '@vsp/vsp-runtime';
 import { VirtualTerminal } from "../../../packages/pi-tui/test/virtual-terminal.js";
 import { AttachmentService } from "../src/v1/attachments/service.js";
 import type { AgentConversationActivity, ChatBackend, ChatBackendEvents, TaskDashboardSnapshot } from "../src/v1/backend/types.js";
@@ -26,12 +28,14 @@ import {
 	reduceCompactionActivity,
 	VspiApp,
 } from "../src/v1/app/vspi-app.js";
+import { AuthSetupApp } from '../src/v1/app/auth-setup.js';
+import { KlientChatBackend } from '../src/v1/backend/klient-backend.js';
 import { modelPicksPath } from "../src/v1/config/settings.js";
 import { resolveCommand } from "../src/v1/domain/commands.js";
 import { DEFAULT_SETTINGS, DEFAULT_USAGE } from "../src/v1/domain/defaults.js";
 import { editSubagentModels } from "../src/v1/domain/subagent-models.js";
 import { isOfficialRecommendedModel } from "../src/v1/domain/recommended-models.js";
-import type { ModelOption, TranscriptMessage } from "../src/v1/domain/types.js";
+import type { ModelOption, ProviderOption, TranscriptMessage } from "../src/v1/domain/types.js";
 import { AgentsDock } from "../src/v1/ui/agents-dock.js";
 import {
 	renderActivityRail,
@@ -49,6 +53,8 @@ import {
 	sessionsSurfaceRowLimit,
 } from "../src/v1/ui/panels.js";
 import { renderSplash } from "../src/v1/ui/splash.js";
+import { ProviderManagerController, providerCheckLabel } from '../src/v1/ui/provider-manager.js';
+import { formatQuotaCountdown, type QuotaSnapshot } from '../src/v1/ui/quota-view.js';
 import { ModelPicker } from '../src/v1/ui/model-picker.js';
 import { canonicalModelGroups, searchCanonicalModels, sourceUnhealthy } from '../src/v1/domain/canonical-models.js';
 import { modelIdentityKey } from '../src/v1/domain/model-presentation.js';
@@ -2140,7 +2146,7 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		const pending = internals.refreshSessions();
 		await internals.applyPanelEvent({ type: "close" });
 		internals.panels.open("settings");
-		internals.panels.handleInput("\x1B[B");
+		internals.panels.handleInput("\u001B[B");
 		const state = internals.panels as unknown as { state: { selected: number } };
 		const selected = state.state.selected;
 		finish({ items: [] });
@@ -2156,8 +2162,8 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(panels.sessionsScope).toBe("all");
 		const sessions = Array.from({ length: 12 }, (_, i) => ({ id: `s${i}`, label: `Session ${i}`, cwd: `/project/${i}`, branchDepth: 0, relativeTime: "1分钟前" }));
 		panels.setSessions(sessions, "next");
-		for (let i = 0; i < 11; i++) panels.handleInput("\x1B[B");
-		expect(panels.handleInput("\x1B[B")).toEqual({ type: "sessionsQuery", more: true });
+		for (let i = 0; i < 11; i++) panels.handleInput("\u001B[B");
+		expect(panels.handleInput("\u001B[B")).toEqual({ type: "sessionsQuery", more: true });
 		const lines = panels.renderSessionsSurface(90, 12, theme).map(stripTerminalSequences);
 		expect(lines).toHaveLength(12);
 		expect(lines.join("\n")).toContain("[ All ]");
@@ -2165,11 +2171,11 @@ describe("VSPi TUI presentation (preserved frontend identity)", () => {
 		expect(lines.join("\n")).toContain("/project/11");
 		expect(panels.handleInput("F")).toEqual({ type: "sessionsQuery" });
 		expect(panels.sessionsQuery).toBe("F");
-		expect(panels.handleInput("\x1B")).toEqual({ type: "sessionsQuery" });
+		expect(panels.handleInput("\u001B")).toEqual({ type: "sessionsQuery" });
 		expect(panels.sessionsQuery).toBe("");
 		expect(panels.handleInput("\u0006")).toMatchObject({ type: "fork", session: { id: "s0" } });
 		for (const rows of [3, 4, 5]) expect(panels.renderSessionsSurface(24, rows, theme)).toHaveLength(rows);
-		expect(panels.handleInput("\x1B")).toEqual({ type: "close" });
+		expect(panels.handleInput("\u001B")).toEqual({ type: "close" });
 	});
 
 	it("caps the Sessions surface at 80 percent of the available height", () => {
@@ -4914,5 +4920,267 @@ describe('canonical model picker', () => {
     const expanded = stripTerminalSequences(panels.render(width, height - 1, theme, DEFAULT_USAGE).join('\n'));
     expect(expanded).toContain('401/403');
     expect(expanded).toContain('USD / 1M');
+  });
+});
+
+
+describe('Provider source and quota tabs', () => {
+  const theme = createTheme(detectTerminalCapabilities(), 'Terminal');
+  const providers: ProviderOption[] = [
+    { id: 'off', label: '停用中转站', protocol: 'openai', detail: '', status: '已停用', enabled: false },
+    { id: 'ready', label: '官方订阅', protocol: 'openai', detail: '', status: '已配置', storedCredential: 'oauth',
+      localCredential: { id: 'omp-codex', name: 'OMP (Codex)' }, baseUrl: 'https://example.test/v1', defaultModel: 'ready/one',
+      modelEntries: [{ id: 'ready/one', wireModel: 'one', protocol: 'openai', contextWindow: 500_000 }] },
+    { id: 'cpa', label: '逐账号网关', protocol: 'openai', detail: '', status: '已配置' },
+    { id: 'balance', label: '余额来源', protocol: 'openai', detail: '', status: '已验证' },
+    { id: 'failure', label: '失效来源', protocol: 'openai', detail: '', status: '异常' },
+    { id: 'add', label: '可添加来源', protocol: 'openai', detail: '', status: '未配置' },
+  ];
+  function quotaSnapshot(): QuotaSnapshot {
+    const now = Date.now();
+    const base = { windows: [], balances: [], updatedAt: now, checkedAt: now, stale: false };
+    return { now, revision: 1, items: [
+      { ...base, id: 'ready', providerId: 'ready', category: 'subscription', status: 'ok', windows: [
+        { id: '5h', label: '5h', remainingPercent: 78, resetAt: now + 134 * 60_000 + 5_000 },
+        { id: '7d', label: '7d', remainingPercent: 62, resetsInMs: 4450 * 60_000 + 5_000 },
+      ] },
+      { ...base, id: 'cpa:1', providerId: 'cpa', category: 'cpa', accountLabel: 'CPA · Claude #1', status: 'stale', stale: true,
+        windows: [{ id: '5h', label: '5h', remainingPercent: 64, resetsInMs: 0 }] },
+      { ...base, id: 'cpa:2', providerId: 'cpa', category: 'cpa', accountLabel: 'CPA · Codex #2', status: 'ok',
+        windows: [{ id: '7d', label: '7d', remainingPercent: 100, resetsInMs: 10_000 }] },
+      { ...base, id: 'balance', providerId: 'balance', category: 'balance', status: 'ok',
+        balances: [{ id: 'balance.CNY', currency: 'CNY', amount: 42.80, multiplier: 0.5, equivalentAmount: 85.60 }] },
+      { ...base, id: 'failure', providerId: 'failure', category: 'balance', status: 'auth_error', updatedAt: null, errorReason: 'forbidden',
+        balances: [{ id: 'ignored', currency: 'USD', amount: 123.99 }] },
+    ] };
+  }
+
+  it.each([
+    [undefined, ''], [-1, '即将刷新'], [0, '即将刷新'], [1, '<1m'], [59_999, '<1m'], [60_000, '1m'],
+    [3_599_999, '59m'], [3_600_000, '1h00m'], [3_900_000, '1h05m'], [267_000_000, '74h10m'],
+  ])('formats a quota countdown of %s without an absolute timestamp', (value, expected) => {
+    expect(formatQuotaCountdown(value)).toBe(expected);
+  });
+
+  it('lays out source and quota at 120 and 80×24 without splitting CJK or progress bars', async () => {
+    const panel = new PanelController(DEFAULT_SETTINGS);
+    panel.setProviders(providers);
+    panel.openProviderManager('source');
+    await panel.loadProviderQuota(async () => quotaSnapshot(), vi.fn());
+    panel.selectProvider('ready');
+    const draw = (width: number) => {
+      const rendered = panel.render(width, 24, theme, DEFAULT_USAGE);
+      expect(rendered.length).toBeLessThanOrEqual(24);
+      expect(rendered.every(line => visibleWidth(line) <= width)).toBe(true);
+      const text = rendered.map(line => stripTerminalSequences(line).trimEnd()).join('\n');
+      expect(text).not.toContain('123.99');
+      expect(text).not.toContain('重置');
+      return text;
+    };
+    const wideSource = draw(120);
+    const narrowSource = draw(80);
+    panel.handleInput('2');
+    const wideQuota = draw(120);
+    const narrowQuota = draw(80);
+    const nearThreshold = draw(88);
+    for (const text of [wideQuota, narrowQuota, nearThreshold]) {
+      expect(text).toContain('[████████░░]');
+      expect(text).toContain('7d [██████░░░░]  62% (74h10m)');
+      expect(text).toContain('5h [██████░░░░]  64% (即将刷新)');
+      expect(text).toContain('鉴权失败 · 请重新登录或检查密钥');
+    }
+    expect({ wideSource, narrowSource, wideQuota, narrowQuota }).toMatchInlineSnapshot(`
+      {
+        "narrowQuota": "+ Provider 管理 ---------------------------------------------------------------+
+      | 1 来源  | [2 额度]  ·  5 分钟缓存                                            |
+      |订阅窗口                                                                      |
+      |› 官方订阅                                                                    |
+      |    5h [████████░░]  78% (2h14m)          7d [██████░░░░]  62% (74h10m)       |
+      |CPA 网关（逐账号）                                                            |
+      |  CPA · Claude #1 (旧)                                                        |
+      |    5h [██████░░░░]  64% (即将刷新)                                           |
+      |  CPA · Codex #2                                                              |
+      |    7d [██████████] 100% (<1m)                                                |
+      |账户余额                                                                      |
+      |  余额来源  ¥42.80                                                            |
+      |    余额 ¥42.80 (×0.5 折合 ¥85.60)                                            |
+      |  失效来源  鉴权失败 · 请重新登录或检查密钥                                   |
+      |                                                                              |
+      |↑↓ 选择 · Enter 详情 · r 刷新 · c 配置 · Esc 返回                             |
+      +------------------------------------------------------------------------------+",
+        "narrowSource": "+ Provider 管理 ---------------------------------------------------------------+
+      |[1 来源] |  2 额度   ·  R 复用本机凭据：OMP (Codex)                           |
+      |/ 搜索来源  输入名称筛选                                                      |
+      |  已启用 · 4                                                                  |
+      |  余额来源  ✓ 可用                                                      ¥42.80|
+      |  失效来源  ⚠ 异常                                                      ⚠ 额度|
+      |› 官方订阅  ✓ 可用                                                5h 78% 2h14m|
+      |  逐账号网关  ✓ 可用                                         2卡 · 5h 64% (旧)|
+      |                                                                              |
+      |  已停用 · 1                                                                  |
+      |  停用中转站  ○ 已停用                                                        |
+      |                                                                              |
+      |  可添加 · 2                                                                  |
+      |  可添加来源                                                                  |
+      |  + 添加自定义中转站 / CPA 网关                                               |
+      |↑↓ 选择 · Space 启停 · L 登录 · E 编辑 · T 测试 · F 刷模型                    |
+      |Enter 详情 · Tab 模型 · C 配额度 · R 复用 · D 移除 · Esc 返回                 |
+      +------------------------------------------------------------------------------+",
+        "wideQuota": "+ Provider 管理 -------------------------------------------------------------------------------------------------------+
+      | 1 来源  | [2 额度]  ·  5 分钟缓存                                                                                    |
+      |订阅窗口                                                                                                              |
+      |› 官方订阅                     5h [████████░░]  78% (2h14m)                7d [██████░░░░]  62% (74h10m)              |
+      |CPA 网关（逐账号）                                                                                                    |
+      |  CPA · Claude #1 (旧)         5h [██████░░░░]  64% (即将刷新)                                                        |
+      |  CPA · Codex #2               7d [██████████] 100% (<1m)                                                             |
+      |账户余额                                                                                                              |
+      |  余额来源                     余额 ¥42.80 (×0.5 折合 ¥85.60)                                                         |
+      |  失效来源                     鉴权失败 · 请重新登录或检查密钥                                                        |
+      |↑↓ 选择 · Enter 详情 · r 刷新 · c 配置 · Esc 返回                                                                     |
+      +----------------------------------------------------------------------------------------------------------------------+",
+        "wideSource": "+ Provider 管理 -------------------------------------------------------------------------------------------------------+
+      |[1 来源] |  2 额度   ·  R 复用本机凭据：OMP (Codex)                                                                   |
+      |/ 搜索来源  输入名称筛选                                                                                              |
+      |  已启用 · 4                                        │ 官方订阅                                                        |
+      |  余额来源  ✓ 可用                           ¥42.80 │ 认证方式    订阅账号                                            |
+      |  失效来源  ⚠ 异常                           ⚠ 额度 │ Endpoint    https://example.test/v1                             |
+      |› 官方订阅  ✓ 可用                     5h 78% 2h14m │ 协议        OpenAI Chat Completions                             |
+      |  逐账号网关  ✓ 可用              2卡 · 5h 64% (旧) │ 上次请求    尚未测试                                            |
+      |                                                    │ 默认模型    ready/one                                           |
+      |  已停用 · 1                                        │ 当前额度                                                        |
+      |  停用中转站  ○ 已停用                              │ 5h [████████░░]  78% (2h14m)                                    |
+      |                                                    │ 7d [██████░░░░]  62% (74h10m)                                   |
+      |  可添加 · 2                                        │ 模型 · 1                                                        |
+      |  可添加来源                                        │   ready/one · 默认                                  openai  500K|
+      |  + 添加自定义中转站 / CPA 网关                     │                                                                 |
+      |↑↓ 选择 · Space 启停 · L 登录 · E 编辑 · T 测试 · F 刷模型                                                            |
+      |Enter 详情 · Tab 模型 · C 配额度 · R 复用 · D 移除 · Esc 返回                                                         |
+      +----------------------------------------------------------------------------------------------------------------------+",
+      }
+    `);
+  });
+
+  it('handles Kitty tab shortcuts, toggles and opens contextual actions without dropping the shared quota', async () => {
+    const manager = new ProviderManagerController();
+    manager.setProviders(providers);
+    const list = vi.fn(async () => quotaSnapshot());
+    await manager.loadQuota(list, vi.fn());
+    expect(resolveCommand('/quota')?.id).toBe('quota');
+    expect(resolveCommand('/balance')?.id).toBe('quota');
+    manager.selectProvider('ready');
+    expect(manager.handleInput('\x1B[32u')).toMatchObject({ type: 'toggle', enabled: false, provider: { id: 'ready' } });
+    expect(manager.handleInput('\u001b[84u')).toMatchObject({ type: 'test' });
+    expect(manager.handleInput('\x1B[102u')).toMatchObject({ type: 'refreshModels' });
+    manager.handleInput('\t'); manager.handleInput('\r');
+    expect(manager.render(80, 24, theme).join('\n')).toContain('编辑模型');
+    manager.handleInput('\x1B[C');
+    expect(manager.handleInput('\u0013')).toMatchObject({ type: 'saveModel', alias: 'ready/one', value: { protocol: 'openai_responses' } });
+    manager.finishSave();
+    manager.handleInput('\x1B[50u');
+    expect(manager.render(80, 24, theme).join('\n')).toContain('官方订阅');
+    expect(manager.handleInput('\x1B[114u')).toEqual({ type: 'refreshQuota' });
+    expect(manager.handleInput('\x1B[99u')).toMatchObject({ type: 'configureQuota', provider: { id: 'ready' } });
+    expect(manager.handleInput('\x1B')).toEqual({ type: 'close' });
+    manager.handleInput('\x1B[49u');
+    manager.handleInput('\t');
+    expect(manager.render(80, 24, theme).join('\n')).toContain('5h 78% 2h14m');
+    expect(list).toHaveBeenCalledOnce();
+    manager.selectProvider('off');
+    expect(manager.handleInput(' ')).toMatchObject({ type: 'toggle', enabled: true });
+  });
+
+  it('requires affirmative OMP confirmation and never renders a quota management key', () => {
+    const manager = new ProviderManagerController();
+    manager.setProviders(providers);
+    manager.selectProvider('ready');
+    expect(manager.handleInput('r')).toBeUndefined();
+    expect(manager.handleInput('\r')).toBeUndefined();
+    manager.handleInput('r'); manager.handleInput('\u001b[A');
+    expect(manager.handleInput('\r')).toMatchObject({ type: 'local', provider: { localCredential: { id: 'omp-codex' } } });
+    manager.editQuota(providers[1]!, { mode: 'cpa', hasManagementKey: true, billingMultiplier: 0.5 });
+    for (let i = 0; i < 4; i++) manager.handleInput('\t');
+    manager.handleInput('\x1B[C'); manager.handleInput('\t'); manager.handleInput('YOUR_MANAGEMENT_KEY');
+    expect(manager.render(80, 24, theme).join('\n')).not.toContain('YOUR_MANAGEMENT_KEY');
+    expect(manager.handleInput('\u0013')).toMatchObject({ type: 'saveQuota', value: { mode: 'cpa', managementKey: 'YOUR_MANAGEMENT_KEY', billingMultiplier: 0.5 } });
+    manager.finishSave();
+    manager.editQuota(providers[1]!, { mode: 'cpa', hasManagementKey: true });
+    for (let i = 0; i < 4; i++) manager.handleInput('\t');
+    manager.handleInput('\x1B[D');
+    expect(manager.handleInput('\u0013')).toMatchObject({ type: 'saveQuota', value: { managementKey: null } });
+  });
+
+  it('renders the daemon IPC projection in config and /balance and probes /models without generating', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'vspi-provider-tui-'));
+    const home = join(root, 'home');
+    const workspace = join(root, 'workspace');
+    await mkdir(workspace);
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(`${request.method} ${request.url}`);
+      const replies: Record<string, object> = {
+        '/v1/models': { data: [{ id: 'example-model' }] },
+        '/api/status': { success: true, data: { quota_per_unit: 1000, quota_display_type: 'USD' } },
+        '/api/usage/token/': { success: true, data: { unlimited_quota: false, total_available: 18500 } },
+      };
+      const result = replies[request.url ?? ''];
+      response.writeHead(result ? 200 : 404, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(result ?? {}));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    let daemon: Awaited<ReturnType<typeof startRuntimeDaemon>> | undefined;
+    let client: RuntimeConnection | undefined;
+    let app: VspiApp | undefined;
+    try {
+      if (!address || typeof address === 'string') throw new Error('Expected loopback TCP address');
+      daemon = await startRuntimeDaemon({ homeDir: home, idleTimeoutMs: 0, env: { HOME: root, PATH: process.env.PATH },
+        hostIdentity: { productName: 'vspi-tui-test', version: '2.10.0-test', platform: 'test' } });
+      client = await connectRuntime(home);
+      const backend = new KlientChatBackend(client, workspace, 'new');
+      const terminal = new VirtualTerminal(80, 24);
+      const tui = new ScrollbackTUI(terminal);
+      app = new VspiApp(tui, theme, backend, { cwd: workspace, home,
+        settings: { ...DEFAULT_SETTINGS, summarizeSessionTitleOnExit: false }, attachments: new AttachmentService('quota-real', theme, { home }),
+        openOnStart: 'providers-if-empty', onExit: () => {} });
+      await app.start();
+      const draw = (rows: string[]) => rows.map(line => stripTerminalSequences(line)).join('\n');
+      expect(draw(app.render(80))).toContain('[1 来源]');
+      await client.klient.global.config.replaceSections({ sections: {
+        providers: { 'custom-example': { type: 'openai', name: '回环余额来源', baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          apiKey: 'YOUR_API_KEY', quota: { mode: 'newapi-token', billingMultiplier: 0.5 } } },
+        models: { 'custom-example/example-model': { provider: 'custom-example', model: 'example-model', maxContextSize: 500_000 } },
+        defaultModel: 'custom-example/example-model',
+      } });
+      const setup = new AuthSetupApp(new ScrollbackTUI(new VirtualTerminal(120, 24)), theme, client.klient, 'config', vi.fn(), false);
+      await setup.load();
+      await vi.waitFor(() => expect(draw(setup.render(120))).toContain('$18.50'));
+      setup.handleInput('2');
+      expect(draw(setup.render(120))).toContain('[2 额度]');
+      expect(draw(setup.render(120))).toContain('余额 $18.50 (×0.5 折合 $37.00)');
+      app.handleInput('\x1B');
+      for (const key of '/balance') app.handleInput(key);
+      app.handleInput('\r');
+      await vi.waitFor(() => expect(draw(app!.render(80))).toContain('余额 $18.50 (×0.5 折合 $37.00)'));
+      expect(draw(app.render(80))).toContain('[2 额度]');
+      const snapshot = await backend.getProviderQuota();
+      expect(snapshot.items.find(item => item.providerId === 'custom-example')).toMatchObject({ status: 'ok', balances: [{ amount: 18.5, equivalentAmount: 37 }] });
+      setup.handleInput('1'); setup.handleInput('t');
+      await vi.waitFor(() => expect(draw(setup.render(120))).toMatch(/可用.*耗时 \d+ms/u));
+      expect(requests).toContain('GET /api/usage/token/');
+      expect(requests).toContain('GET /v1/models');
+      expect(requests.some(entry => entry.startsWith('POST '))).toBe(false);
+    } finally {
+      await app?.dispose();
+      await client?.close();
+      await daemon?.close();
+      server.closeAllConnections();
+      await new Promise<void>(resolve => { server.close(() => resolve()); });
+      await rm(root, { recursive: true, force: true, maxRetries: 4 });
+    }
+  }, 20_000);
+
+  it('shows the probe result category and observed duration without passing through raw diagnostics', () => {
+    expect(providerCheckLabel({ ok: false, category: 'auth_error', providerId: 'ready', httpStatus: 401, durationMs: 19, diagnostic: 'not shown' }))
+      .toBe('✗ 鉴权失败（HTTP 401 · 耗时 19ms）');
   });
 });

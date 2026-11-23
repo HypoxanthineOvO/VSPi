@@ -23,6 +23,7 @@ import {
 	VStack,
 	wrapTextWithAnsi,
 } from "@moonshot-ai/pi-tui";
+import { providerCheckLabel, type ProviderManagerAction } from '../ui/provider-manager.js';
 import type { AgentRole } from "../agents/types.js";
 import type { AttachmentService } from "../attachments/service.js";
 import { writeClipboardText } from "../attachments/clipboard.js";
@@ -187,7 +188,7 @@ export interface VspiAppOptions {
 	/** /reload 续接进程 spawn 成功后回调：旧进程应立即静默移交 TTY。 */
 	onReloadSpawned?: () => void;
 	thinkingTranslator?: ThinkingTranslator;
-	openOnStart?: "sessions" | "providers";
+	openOnStart?: "sessions" | "providers" | "providers-if-empty";
 	startupRuntimeDiagnostic?: string;
 	onForegroundRelinquish?: () => void;
 	onForegroundResume?: () => void;
@@ -493,6 +494,7 @@ export class VspiApp implements Component, Focusable {
 	private startupRuntimeDefaultsDiagnostic: string | undefined;
 	private currentModelIdentity: { provider: string; id: string } | undefined;
 	private modelOptions: RuntimeModelOption[] = [];
+	private providerActionRunning = false;
 	private providerOptions: ProviderOption[] = [];
 	private authDialog: AuthDialog | undefined;
 	private sideQuestion: SideQuestionDialog | undefined;
@@ -960,8 +962,9 @@ export class VspiApp implements Component, Focusable {
 						"error",
 					);
 				}
-			} else if (this.options.openOnStart === "providers") {
-				this.panels.open("providers");
+			} else if (this.options.openOnStart === "providers" || this.options.openOnStart === "providers-if-empty"
+				&& this.providerOptions.every(provider => provider.status === '未配置' && !provider.storedCredential)) {
+				this.openProviderPanel('source');
 				this.showNotice("选择 Provider 后可登录订阅账号或配置 API Key", "info");
 			}
 		} catch (error) {
@@ -2323,6 +2326,9 @@ export class VspiApp implements Component, Focusable {
 		statusRows: number,
 		runtimeRows: number,
 	): number {
+		if (this.panels.kind === "providers") {
+			return Math.max(3, this.tui.terminal.rows - composerRows - activityRows - queuedRows - agentRows - statusRows - runtimeRows - 1);
+		}
 		if (this.panels.kind === "approval") {
 			return Math.min(
 				14,
@@ -3320,7 +3326,7 @@ export class VspiApp implements Component, Focusable {
 				this.panels.open("subagentModels");
 			} catch (error) { this.showNotice(`子模型配置读取失败：${error instanceof Error ? error.message : String(error)}`, "error"); }
 		}
-		else if (action.handler === "providers") this.panels.open("providers");
+		else if (action.handler === "providers" || action.handler === "quota") this.openProviderPanel(action.handler === "quota" ? "quota" : "source");
 		else if (action.handler === "tools") this.panels.open("tools");
 		else if (action.handler === "agents" || action.handler === "tasks") {
 			try {
@@ -3712,28 +3718,7 @@ export class VspiApp implements Component, Focusable {
 				);
 			}
 		} else if (event.type === 'providerManager') {
-			const action = event.action;
-			try {
-				if (action.type === 'save') {
-					if (!this.backend.saveProviderGateway) throw new Error('当前后端不支持 Provider 配置');
-					await this.backend.saveProviderGateway(action.value, action.provider);
-					this.panels.finishProviderSave();
-					await this.refreshRuntimeCatalog();
-					this.showNotice('Provider 已测试并原子保存到 Core 配置', 'success');
-				} else if (action.type === 'login') await this.startProviderLogin(action.provider, action.credential);
-				else if (action.type === 'remove') await this.removeProviderCredential(action.provider);
-				else if (action.type === 'test') {
-					await this.runProviderProbe(action.provider.id, 'check-config');
-					await this.runProviderProbe(action.provider.id, 'test-connection');
-				} else if (action.type === 'local') {
-					await this.startProviderLogin(action.provider, 'oauth', true);
-				}
-			} catch (error) {
-				const message = error instanceof Error ? error.message : 'Provider 操作失败';
-				if (action.type === 'save') this.panels.finishProviderSave(message);
-				else this.showNotice(message, 'error');
-			}
-
+			await this.performProviderAction(event.action);
 		} else if (event.type === "sessionsQuery") {
 			if (event.scopeChanged) {
 				const sessionsScope = this.panels.sessionsScope;
@@ -4100,7 +4085,7 @@ export class VspiApp implements Component, Focusable {
 	private async openLogin(raw: string): Promise<void> {
 		const providerRef = raw.trim().split(/\s+/, 2)[1];
 		if (!providerRef) {
-			this.panels.open("providers");
+			this.openProviderPanel('source');
 			this.showNotice("选择 Provider 后打开登录操作", "info");
 			this.requestRender();
 			return;
@@ -4123,7 +4108,7 @@ export class VspiApp implements Component, Focusable {
 	private async openLogout(raw: string): Promise<void> {
 		const providerRef = raw.trim().split(/\s+/, 2)[1];
 		if (!providerRef) {
-			this.panels.open("providers");
+			this.openProviderPanel('source');
 			this.showNotice("带有已保存凭据的 Provider 会显示“移除凭据”操作", "info");
 			this.requestRender();
 			return;
@@ -4173,7 +4158,8 @@ export class VspiApp implements Component, Focusable {
 			if (cancelled || dialog.signal.aborted) return;
 			this.authDialog = undefined;
 			await this.refreshRuntimeCatalog();
-			this.panels.open("providers");
+			this.panels.invalidateProviderQuota();
+			this.openProviderPanel('source');
 			this.panels.selectProvider(provider.id);
 			this.showNotice(
 				type === "oauth"
@@ -4208,7 +4194,8 @@ export class VspiApp implements Component, Focusable {
 				throw new Error("当前后端不支持移除 Provider 凭据");
 			await this.backend.logoutProvider(provider.id);
 			await this.refreshRuntimeCatalog();
-			this.panels.open("providers");
+			this.panels.invalidateProviderQuota();
+			this.openProviderPanel('source');
 			this.panels.selectProvider(provider.id);
 			this.showNotice(
 				`${provider.label} 的已保存凭据已移除；环境变量和外部 CLI 凭据未改变`,
@@ -5192,26 +5179,87 @@ export class VspiApp implements Component, Focusable {
 		return { kind: "approval", response };
 	}
 
-	private async runProviderProbe(
-		providerId: string,
-		mode: "check-config" | "test-connection" | "minimal-generation",
-		confirmCost?: () => Promise<boolean>,
-	): Promise<void> {
+	private openProviderPanel(tab: 'source' | 'quota'): void {
+		this.panels.openProviderManager(tab);
+		void this.loadProviderQuota();
+	}
+
+	private loadProviderQuota(refresh = false): Promise<void> {
+		const backend = this.backend;
+		if (refresh ? !backend.refreshProviderQuota : !backend.getProviderQuota) return Promise.resolve();
+		return this.panels.loadProviderQuota(
+			() => refresh ? backend.refreshProviderQuota!() : backend.getProviderQuota!(),
+			() => this.requestRender(),
+			refresh,
+		);
+	}
+
+	private async performProviderAction(action: ProviderManagerAction): Promise<void> {
+		if (action.type === 'close') return;
+		if (action.type === 'refreshQuota') { await this.loadProviderQuota(true); return; }
+		if (this.providerActionRunning) {
+			if (action.type === 'save' || action.type === 'saveQuota' || action.type === 'saveModel') this.panels.finishProviderSave('请等当前操作完成后再保存');
+			return;
+		}
+		this.providerActionRunning = true;
 		try {
-			if (!this.backend.runProviderProbe)
-				throw new Error("当前后端不支持 Provider probe");
-			const result = await this.backend.runProviderProbe(
-				providerId,
-				mode,
-				confirmCost,
-			);
-			this.panels.recordProviderCheck(providerId, result.diagnostic);
-			this.showNotice(result.diagnostic, result.ok ? "success" : "error");
+			if (action.type === 'login') { await this.startProviderLogin(action.provider, action.credential); return; }
+			if (action.type === 'local') { await this.startProviderLogin(action.provider, 'oauth', true); return; }
+			if (action.type === 'remove') { await this.removeProviderCredential(action.provider); return; }
+			if (action.type === 'test') {
+				if (!this.backend.checkProvider) throw new Error('当前后端不支持连通测试');
+				this.panels.recordProviderCheck(action.provider.id, '正在测试…');
+				this.requestRender();
+				const result = await this.backend.checkProvider(action.provider.id);
+				const label = providerCheckLabel(result);
+				this.panels.recordProviderCheck(action.provider.id, label);
+				this.showNotice(label, result.ok ? 'success' : 'error');
+				return;
+			}
+			if (action.type === 'configureQuota') {
+				if (!this.backend.getProviderQuotaSettings) throw new Error('当前后端不支持额度配置');
+				const settings = await this.backend.getProviderQuotaSettings(action.provider.id);
+				if (this.panels.kind === 'providers') this.panels.editProviderQuota(action.provider, settings);
+				return;
+			}
+			let notice: string;
+			if (action.type === 'save') {
+				if (!this.backend.saveProviderGateway) throw new Error('当前后端不支持 Provider 配置');
+				await this.backend.saveProviderGateway(action.value, action.provider);
+				notice = 'Provider 已保存';
+			} else if (action.type === 'saveQuota') {
+				if (!this.backend.setProviderQuota) throw new Error('当前后端不支持额度配置');
+				await this.backend.setProviderQuota(action.provider.id, action.value);
+				notice = '额度配置已保存';
+			} else if (action.type === 'toggle') {
+				if (!this.backend.setProviderEnabled) throw new Error('当前后端不支持来源启停');
+				await this.backend.setProviderEnabled(action.provider.id, action.enabled);
+				notice = action.enabled ? '来源已启用' : '来源已停用';
+			} else if (action.type === 'refreshModels') {
+				if (!this.backend.refreshProviderModels) throw new Error('当前后端不支持模型刷新');
+				this.showProgress('正在刷新模型…');
+				await this.backend.refreshProviderModels(action.provider);
+				notice = '模型已刷新';
+			} else if (action.type === 'saveModel') {
+				if (!this.backend.setProviderModelOverride) throw new Error('当前后端不支持单模型覆写');
+				await this.backend.setProviderModelOverride(action.provider.id, action.alias, action.value);
+				notice = '模型设置已保存';
+			} else return;
+			this.panels.finishProviderSave();
+			if (action.type !== 'saveQuota') await this.refreshRuntimeCatalog();
+			if (action.type === 'saveQuota' || action.type === 'save' || action.type === 'toggle') {
+				this.panels.invalidateProviderQuota();
+				void this.loadProviderQuota();
+			}
+			this.showNotice(notice, 'success');
 		} catch (error) {
-			this.showNotice(
-				`Provider probe 失败：${error instanceof Error ? error.message : "未知错误"}`,
-				"error",
-			);
+			const message = action.type === 'saveQuota' ? '额度配置未保存，请检查字段后重试' : error instanceof Error ? error.message : 'Provider 操作失败';
+			if (action.type === 'test') this.panels.recordProviderCheck(action.provider.id, '✗ 测试失败');
+			if (action.type === 'save' || action.type === 'saveQuota' || action.type === 'saveModel') this.panels.finishProviderSave(message);
+			else this.showNotice(message, 'error');
+		} finally {
+			this.providerActionRunning = false;
+			this.requestRender();
 		}
 	}
 

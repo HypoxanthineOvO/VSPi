@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { Input, Key, matchesKey } from "@moonshot-ai/pi-tui";
-import { ProviderManagerController, type ProviderManagerAction } from './provider-manager.js';
+import { ProviderManagerController, type ProviderManagerAction, type ProviderQuotaSettings } from './provider-manager.js';
+import type { QuotaSnapshot } from './quota-view.js';
 import type { AgentRunSnapshot, AgentSnapshot } from "../agents/types.js";
 import type {
 	AgentConversationActivity,
@@ -686,6 +687,15 @@ export class PanelController {
 	private skillScope: SkillScope = "user";
 	private readonly providerManager = new ProviderManagerController();
 
+	openProviderManager(tab: 'source' | 'quota'): void {
+		this.open('providers');
+		if (tab === 'quota') this.providerManager.open(tab);
+	}
+	loadProviderQuota(loader: () => Promise<QuotaSnapshot>, update: () => void, refresh = false): Promise<void> {
+		return this.providerManager.loadQuota(loader, update, refresh);
+	}
+	invalidateProviderQuota(): void { this.providerManager.invalidateQuota(); }
+	editProviderQuota(provider: ProviderOption, settings: ProviderQuotaSettings): void { this.providerManager.editQuota(provider, settings); }
 	finishProviderSave(error?: string): void { this.providerManager.finishSave(error); }
 	recordProviderCheck(id: string, diagnostic: string): void { this.providerManager.recordCheck(id, diagnostic); }
 
@@ -853,6 +863,7 @@ export class PanelController {
 	open(kind: PanelKind): void {
 		this.state = { kind, selected: 0, scroll: 0 };
 		if (kind === "commands") this.state.selected = 0;
+		if (kind === "providers") this.providerManager.open();
 		if (kind === "models") {
 			this.modelPicker.open();
 			this.modelNarrowDetail = false;
@@ -1500,7 +1511,7 @@ export class PanelController {
 			[title, body] = ["Subagent Model", this.subagentModelsPanel.render(bodyWidth, bodyRows, theme)];
 		else if (this.kind === "providers")
 			[title, body] = [
-				"Provider",
+				"Provider 管理",
 				this.renderProviders(bodyWidth, bodyRows, theme),
 			];
 		else if (this.kind === "sessions")
@@ -3118,7 +3129,7 @@ export class PanelController {
 		bodyRows: number,
 		theme: VspiTheme,
 	): string[] {
-		return this.providerManager.render(width, bodyRows, theme);
+		return this.providerManager.render(width, bodyRows, theme, width + 2);
 	}
 
 	private renderSessions(width: number, theme: VspiTheme): string[] {

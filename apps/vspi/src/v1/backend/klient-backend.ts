@@ -15,8 +15,9 @@ import type {
 import { KlientValidationError } from "@moonshot-ai/klient";
 import { RuntimeStoppedError, type RuntimeConnection } from "@vsp/vsp-runtime";
 import { loginProvider as configureProviderLogin } from '../providers/provider-login.js';
-import { checkProvider, loadProviderOptions, saveProviderGateway } from '../providers/provider-management.js';
-import type { GatewayFormValue } from '../ui/provider-manager.js';
+import { checkProvider, getProviderQuotaSettings, loadProviderOptions, refreshProviderGateway, saveProviderGateway, setProviderEnabled, setProviderModelOverride, setProviderQuota } from '../providers/provider-management.js';
+import type { ProviderModelOverridePatch } from '../providers/provider-contract.js';
+import type { GatewayFormValue, ProviderQuotaPatch } from '../ui/provider-manager.js';
 
 import type { AgentSnapshot } from "../agents/types.js";
 import type { CompactOptions } from "../continuity/compaction-profiles.js";
@@ -718,6 +719,26 @@ export class KlientChatBackend implements ChatBackend {
 	async getProviderOptions(): Promise<ProviderOption[]> {
 		return (await loadProviderOptions(this.connection.klient, formatProviderDisplayName)).filter(provider => !hiddenLegacyProvider(provider.id));
 	}
+
+	getProviderQuota() { return this.connection.klient.global.quota.list(); }
+	refreshProviderQuota() { return this.connection.klient.global.quota.refresh(); }
+	getProviderQuotaSettings(id: string) { return getProviderQuotaSettings(this.connection.klient, id); }
+	setProviderQuota(id: string, value: ProviderQuotaPatch) { return setProviderQuota(this.connection.klient, id, value); }
+	async setProviderEnabled(id: string, enabled: boolean): Promise<void> {
+		await setProviderEnabled(this.connection.klient, id, enabled);
+		this.modelOptionsPromise = undefined;
+		this.providerAvailability.delete(id);
+	}
+	async setProviderModelOverride(id: string, alias: string, value: ProviderModelOverridePatch): Promise<void> {
+		await setProviderModelOverride(this.connection.klient, id, alias, value);
+		this.modelOptionsPromise = undefined;
+	}
+	async refreshProviderModels(provider: ProviderOption): Promise<void> {
+		await refreshProviderGateway(this.connection.klient, provider);
+		this.modelOptionsPromise = undefined;
+		this.providerAvailability.delete(provider.id);
+	}
+	checkProvider(id: string) { return checkProvider(this.connection.klient, id); }
 
 	async getVsplabEndpoint(): Promise<'cn' | 'tech'> {
 		const config = await this.connection.klient.global.config.get<{ endpoint?: string }>('vsplab');
