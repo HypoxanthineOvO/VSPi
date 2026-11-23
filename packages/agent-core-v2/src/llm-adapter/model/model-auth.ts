@@ -267,11 +267,19 @@ export type ModelReadyFailureReason =
   | 'no-default'
   | 'dangling-alias'
   | 'provider-missing'
+  | 'provider-disabled'
   | 'unresolvable';
 
 export type ModelReadyResolution =
   | { readonly resolved: true }
-  | { readonly resolved: false; readonly reason: ModelReadyFailureReason };
+  | { readonly resolved: false; readonly reason: Exclude<ModelReadyFailureReason, 'provider-disabled'> }
+  | { readonly resolved: false; readonly reason: 'provider-disabled'; readonly providerId: string };
+
+export function providerDisabledError(modelId: string, providerId: string): Error2 {
+  return new Error2(CONFIG_INVALID_ERROR_CODE, `Provider "${providerId}" for model "${modelId}" is disabled.`, {
+    details: { model: modelId, provider: providerId, reason: 'provider-disabled' },
+  });
+}
 
 export function resolveModelForReady(
   modelId: string | undefined,
@@ -295,6 +303,9 @@ export function resolveModelForReady(
   const provider = providerId === undefined ? undefined : providers[providerId];
   if (providerId !== undefined && provider === undefined) {
     return { resolved: false, reason: 'provider-missing' };
+  }
+  if (providerId !== undefined && provider?.enabled === false) {
+    return { resolved: false, reason: 'provider-disabled', providerId };
   }
   const providerName = providerId ?? providerNameFromFlatModel(model);
   if (providerName === undefined) {

@@ -55,6 +55,7 @@ import {
   resolveModelAuthMaterial,
   resolveModelProtocol,
   effectiveModelConfig,
+  providerDisabledError,
 } from './model-auth';
 import { IModelOAuthTokens } from './model-oauth';
 import type { ResolvedModelAuthMaterial } from './model.types';
@@ -125,7 +126,7 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
     const out: string[] = [];
     for (const alias of this.runtime.aliases()) {
       const definition = this.runtime.lookup(alias);
-      if (definition === undefined) continue;
+      if (definition === undefined || this.runtime.providerInfo(definition.provider)?.enabled === false) continue;
       const record = rawRecordOf(definition);
       if (record.name === name || record.model === name || (record.aliases ?? []).includes(name)) {
         out.push(alias);
@@ -212,7 +213,7 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
     const out: ModelCatalogItem[] = [];
     for (const modelId of this.runtime.aliases()) {
       const definition = this.runtime.lookup(modelId);
-      if (definition === undefined) continue;
+      if (definition === undefined || this.runtime.providerInfo(definition.provider)?.enabled === false) continue;
       const record = rawRecordOf(definition);
       const providerType = this.providerTypeOf(record);
       let item: ModelCatalogItem;
@@ -335,7 +336,10 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
     const out: Record<string, ModelRecord> = {};
     for (const alias of this.runtime.aliases()) {
       const definition = this.runtime.lookup(alias);
-      if (definition !== undefined) out[alias] = rawRecordOf(definition);
+      if (definition === undefined) continue;
+      const record = rawRecordOf(definition);
+      out[alias] = record.providerId === undefined && record.provider === undefined
+        ? { ...record, provider: definition.provider } : record;
     }
     return out;
   }
@@ -367,7 +371,11 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
     provider: CatalogProviderInfo,
   ): Promise<boolean> {
     if (provider.oauth === undefined) return false;
-    return this.oauth.hasCachedAccessToken(providerId, provider.oauth);
+    try { return await this.oauth.hasCachedAccessToken(providerId, provider.oauth); }
+    catch (error) {
+      if (error instanceof Error && error.name === 'OmpCredentialExpiredError') return false;
+      throw error;
+    }
   }
 
   private providerTypeOf(record: ModelRecord): string | undefined {
@@ -501,6 +509,7 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
           `Provider "${providerId}" referenced by model "${id}" is not configured.`,
         );
       }
+      if (providerConfig.enabled === false) throw providerDisabledError(id, providerId);
       return {
         providerConfig,
         providerName: providerId,
@@ -566,6 +575,7 @@ export class ModelCatalog extends Disposable implements IModelCatalog {
       const resolve = (force = false) =>
         tokens.getRequestAuth?.(providerKey, oauthRef, { force }) ??
         tokens.getAccessToken(providerKey, oauthRef, { force }).then((apiKey) => ({ apiKey }));
+      if (oauthRef.key.startsWith('local-cli/omp-')) return { resolve };
       let refreshed: ReturnType<typeof resolve> | undefined;
       return {
         resolve: () => {

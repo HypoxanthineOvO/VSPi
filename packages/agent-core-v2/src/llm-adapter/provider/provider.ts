@@ -1,5 +1,6 @@
 import { createDecorator, type ServiceIdentifier } from '#/_base/di/instantiation';
 import type { Event, IWaitUntil } from '#/_base/event';
+import type { ProviderQuotaConfig } from '#/app/quota/quota-contract';
 
 export type ProviderType = string;
 
@@ -13,6 +14,8 @@ export type ModelSource = 'static' | 'discover' | 'oauth-catalog';
 
 export interface ProviderConfig {
   modelSource?: ModelSource;
+  enabled?: boolean;
+  quota?: ProviderQuotaConfig;
 
   baseUrl?: string;
   customHeaders?: Record<string, string>;

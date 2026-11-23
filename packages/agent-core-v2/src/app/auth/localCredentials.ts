@@ -6,6 +6,7 @@ import type { OAuthCredential } from '@earendil-works/pi-ai';
 import type { ProviderRequestAuth } from '#/llm-adapter/contract/provider';
 import { readCodexCredential } from './codexCredential';
 import { readDevinCredential } from './devinCredential';
+import { detectOmpCredentials, resolveOmpCredential } from './ompCredential';
 
 export interface LocalCredentialInfo {
   readonly id: string;
@@ -49,12 +50,12 @@ export class LocalCredentialRegistry {
         return info === undefined ? [] : [{ id: detector.id, provider: detector.provider, name: detector.name, account: info.account, expiresAt: info.expiresAt }];
       } catch { return []; }
     }));
-    return results.flat();
+    return [...results.flat(), ...detectOmpCredentials(this.context)];
   }
 
   async resolve(id: string, provider?: string, options?: { signal?: AbortSignal; fresh?: boolean }): Promise<ProviderRequestAuth | undefined> {
     const detector = this.detectors().find(item => item.id === id && (provider === undefined || item.provider === provider));
-    if (!detector) return undefined;
+    if (!detector) return id.startsWith('omp-') ? resolveOmpCredential(this.context, id, provider) : undefined;
     try {
       if (id !== 'github-copilot-cli') return await detector.resolve(this.context);
       const credential = await copilot(this.context);
@@ -107,7 +108,7 @@ async function codex(context: LocalCredentialContext) {
 async function kimi(context: LocalCredentialContext) {
   const directory = join(context.home, '.kimi', 'credentials');
   let files: string[];
-  try { files = (await readdir(directory)).filter(name => /^kimi-code[\w.-]*\.json$/.test(name)).sort().slice(0, 16); }
+  try { files = (await readdir(directory)).filter(name => /^kimi-code[\w.-]*\.json$/.test(name)).toSorted().slice(0, 16); }
   catch { return undefined; }
   for (const file of files) {
     const value = await readJson(join(directory, file));

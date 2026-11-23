@@ -44,6 +44,7 @@ export interface CatalogModelDefinition extends LlmModel {
 }
 
 export interface CatalogProviderInfo {
+  readonly enabled?: boolean;
   readonly type?: string;
   readonly apiKey?: string;
   readonly apiKeyEnv?: string;

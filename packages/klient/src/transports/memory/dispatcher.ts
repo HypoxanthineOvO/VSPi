@@ -48,6 +48,10 @@ import type {
   SaveOptions,
 } from '@moonshot-ai/agent-core-v2/app/file/fileService';
 import { FileErrors } from '@moonshot-ai/agent-core-v2/app/file/fileService';
+import { ConfigTarget, type IConfigService } from '@moonshot-ai/agent-core-v2/app/config/config';
+import type { IProviderService } from '@moonshot-ai/agent-core-v2/llm-adapter/provider/provider';
+import { configContract } from '../../contract/global/config.js';
+import { providersContract } from '../../contract/global/providers.js';
 import { DesktopSettingsConflictError } from '@moonshot-ai/agent-core-v2/app/config/desktopSettings';
 import { Error2, ErrorCodes } from '@moonshot-ai/agent-core-v2/errors';
 
@@ -308,6 +312,57 @@ type FileServiceWireTarget = {
   get(fileId: string): Promise<GetResult>;
 };
 
+function configRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function mapProviders(value: unknown, map: (provider: unknown, id: string) => unknown): unknown {
+  const providers = configRecord(value);
+  return providers === undefined ? value : Object.fromEntries(Object.entries(providers).map(([id, provider]) => [id, map(provider, id)]));
+}
+
+function redactProvider(provider: unknown): unknown {
+  const value = configRecord(provider);
+  const quota = configRecord(value?.['quota']);
+  if (!value || !quota) return provider;
+  const { managementKey, managementKeyRef, ...publicQuota } = quota;
+  return { ...value, quota: { ...publicQuota, hasManagementKey: typeof managementKey === 'string' && !!managementKey,
+    hasManagementKeyRef: typeof managementKeyRef === 'string' && !!managementKeyRef } };
+}
+
+function preserveQuotaSecrets(provider: unknown, previous: unknown): unknown {
+  const value = configRecord(provider);
+  const oldQuota = configRecord(configRecord(previous)?.['quota']);
+  const quota = configRecord(value?.['quota']);
+  if (!value || (!quota && !oldQuota)) return provider;
+  const { hasManagementKey: _key, hasManagementKeyRef: _ref, ...next } = quota ?? {};
+  for (const key of ['managementKey', 'managementKeyRef'] as const) {
+    if (!Object.hasOwn(next, key) && oldQuota?.[key] !== undefined) next[key] = oldQuota[key];
+    if (next[key] === null) next[key] = undefined;
+  }
+  return Object.keys(next).length > 0 ? { ...value, quota: next } : provider;
+}
+
+function projectProviderResult(service: string, method: string, arg: unknown, result: unknown): unknown {
+  const redact = (value: unknown) => mapProviders(value, redactProvider);
+  if (service === 'providerService') {
+    if (method === 'get') return redactProvider(result);
+    if (method === 'list') return redact(result);
+  }
+  if (service === 'configService') {
+    if (method === 'getAll') {
+      const value = configRecord(result);
+      return value && { ...value, providers: redact(value['providers']) };
+    }
+    if (arg === 'providers' && method === 'get') return redact(result);
+    if (arg === 'providers' && method === 'inspect') {
+      const value = configRecord(result);
+      return value && Object.fromEntries(Object.entries(value).map(([layer, records]) => [layer, redact(records)]));
+    }
+  }
+  return result;
+}
+
 export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
   /** Mirrors kap-server's `resolveScope`, incl. main-agent materialization. */
   async function resolveScope(scope: ScopeRef): Promise<ResolvedScope> {
@@ -465,7 +520,11 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
     return (emitter as (listener: (data: unknown) => void) => IDisposable).call(
       instance,
       (data) => {
-        handler(wireClone(data));
+        const event = source.service === 'configService' ? configRecord(data) : undefined;
+        if (event?.['domain'] === 'providers') {
+          handler(wireClone({ ...event, value: mapProviders(event['value'], redactProvider),
+            previousValue: mapProviders(event['previousValue'], redactProvider) }));
+        } else handler(wireClone(data));
       },
     );
   }
@@ -473,6 +532,10 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
   return {
     async call(scope, service, method, args) {
       if (service === 'oauthService' && !OAUTH_PUBLIC_METHODS.has(method)) {
+        throw new RPCError(REQUEST_INVALID, `method not found: ${service}.${method}`);
+      }
+      if ((service === 'configService' && !Object.hasOwn(configContract, method)) ||
+          (service === 'providerService' && !Object.hasOwn(providersContract, method))) {
         throw new RPCError(REQUEST_INVALID, `method not found: ${service}.${method}`);
       }
       const resolved = await resolveScope(scope);
@@ -517,6 +580,21 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
         return wireClone(member);
       }
       const clonedArgs = args.map(wireClone);
+      if (service === 'configService' && (method === 'replaceSections' || clonedArgs[0] === 'providers' && (method === 'set' || method === 'replace'))) {
+        const config = instance as unknown as IConfigService;
+        await config.ready;
+        const sectionIndex = method === 'replaceSections' ? 0 : 1;
+        const layers = config.inspect<Record<string, unknown>>('providers');
+        const current = clonedArgs[sectionIndex + 1] === ConfigTarget.Memory ? layers.memoryValue : layers.userValue;
+        const preserve = (value: unknown) => mapProviders(value, (provider, id) => preserveQuotaSecrets(provider, current?.[id]));
+        if (method === 'replaceSections') {
+          const sections = configRecord(clonedArgs[0]);
+          if (sections && Object.hasOwn(sections, 'providers')) clonedArgs[0] = { ...sections, providers: preserve(sections['providers']) };
+        } else clonedArgs[1] = preserve(clonedArgs[1]);
+      } else if (service === 'providerService' && method === 'set' && typeof clonedArgs[0] === 'string') {
+        const providers = instance as unknown as IProviderService;
+        clonedArgs[1] = preserveQuotaSecrets(clonedArgs[1], providers.get(clonedArgs[0]));
+      }
       if (service === 'sessionTerminalService') {
         assertTerminalArgs(method, clonedArgs);
       }
@@ -525,7 +603,7 @@ export function createMemoryDispatcher(root: ScopeLike): MemoryDispatcher {
         : clonedArgs;
       try {
         const result = await (member as (...a: unknown[]) => unknown).apply(instance, callArgs);
-        return wireClone(result);
+        return wireClone(projectProviderResult(service, method, clonedArgs[0], result));
       } catch (error) {
         if (service === 'modelsDevImport' && error instanceof Error2) {
           throw new RPCError(REQUEST_INVALID, error.message, error.details);

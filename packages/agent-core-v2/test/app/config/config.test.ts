@@ -2160,6 +2160,33 @@ describe('subagent config section', () => {
     disposables.dispose();
   });
 
+  it('skips a disabled secondary default and rejects an explicitly selected disabled model', async () => {
+    const { config, disposables } = await createConfig({}, `
+[providers.retired]
+type = "openai"
+enabled = false
+[providers.active]
+type = "openai"
+[models."retired/model"]
+provider = "retired"
+model = "model"
+[models."active/model"]
+provider = "active"
+model = "model"
+[secondary_model]
+default_model = "retired/model"
+[secondary_model.models]
+"retired/model" = "disabled"
+"active/model" = "available"
+`);
+    try {
+      const own = { modelAlias: 'provider/main', thinkingLevel: 'medium' };
+      expect(resolveSubagentBinding(config, own).model).toBe('active/model');
+      expect(resolveSubagentBinding(config, own, 'active/model').model).toBe('active/model');
+      expect(() => resolveSubagentBinding(config, own, 'retired/model')).toThrow('is disabled');
+    } finally { disposables.dispose(); }
+  });
+
   it('resolves the spawn binding: pool default, explicit alias, primary opt-in, inherit without pool', async () => {
     const own = { modelAlias: 'provider/main', thinkingLevel: 'medium' };
 

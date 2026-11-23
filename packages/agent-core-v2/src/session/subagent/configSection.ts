@@ -9,8 +9,12 @@ import {
   type IConfigService,
 } from '#/app/config/config';
 import { registerConfigSection } from '#/app/config/configSectionContributions';
-import { THINKING_SECTION } from '#/app/kosongConfig/configSection';
+import { DEFAULT_PROVIDER_SECTION, MODELS_SECTION, PROVIDERS_SECTION, THINKING_SECTION } from '#/app/kosongConfig/configSection';
 import type { IModelCatalog, Model } from '#/llm-adapter/model/catalog';
+import type { ModelRecord } from '#/llm-adapter/model/model';
+import { providerDisabledError } from '#/llm-adapter/model/model-auth';
+import { currentModelId } from '#/llm-adapter/model/retiredModelIds';
+import type { ProviderConfig } from '#/llm-adapter/provider/provider';
 import {
   declaredDefaultEffortForModel,
   modelSupportsThinking,
@@ -102,6 +106,19 @@ export function resolveSubagentModelPool(config: IConfigService): SubagentModelP
   return undefined;
 }
 
+function disabledProviderFor(config: IConfigService, alias: string): string | undefined {
+  const models = config.get<Record<string, ModelRecord> | undefined>(MODELS_SECTION);
+  const model = models?.[alias] ?? models?.[currentModelId(alias)];
+  if (model === undefined) return undefined;
+  const id = model.providerId ?? model.provider ?? config.get<string | undefined>(DEFAULT_PROVIDER_SECTION);
+  const providers = config.get<Record<string, ProviderConfig> | undefined>(PROVIDERS_SECTION);
+  return id !== undefined && providers?.[id]?.enabled === false ? id : undefined;
+}
+
+function isDisabledCatalogError(error: unknown): boolean {
+  return isError2(error) && error.code === ErrorCodes.CONFIG_INVALID && error.details?.['reason'] === 'provider-disabled';
+}
+
 export const SECONDARY_MODEL_FORCE_REQUIRES_DEFAULT_MESSAGE =
   '[secondary_model].default_model is required when [secondary_model].force is set';
 
@@ -152,6 +169,7 @@ export function assertValidSubagentModelPool(
     try {
       modelCatalog.get(alias);
     } catch (error) {
+      if (isDisabledCatalogError(error)) continue;
       throw new Error2(
         ErrorCodes.CONFIG_INVALID,
         `[secondary_model.models] entry "${alias}" could not be resolved: ${error instanceof Error ? error.message : String(error)}`,
@@ -194,7 +212,11 @@ function assertValidSubagentDefaultEffort(
       : normalizeRequestedThinkingEffort(section.defaultEffort);
   if (effort === undefined || pool === undefined) return;
   for (const alias of Object.keys(pool.models)) {
-    const model = modelCatalog.get(alias);
+    let model: Model;
+    try { model = modelCatalog.get(alias); } catch (error) {
+      if (isDisabledCatalogError(error)) continue;
+      throw error;
+    }
     if (effort === 'off' && model.alwaysThinking === true) {
       throw new Error2(
         ErrorCodes.CONFIG_INVALID,
@@ -266,6 +288,8 @@ export function resolveSubagentBinding(
         { details: { model: requested } },
       );
     }
+    const disabled = disabledProviderFor(config, forcedModel);
+    if (disabled !== undefined) throw providerDisabledError(forcedModel, disabled);
     return { model: forcedModel, thinking: section.defaultEffort, modelSource: 'forced' };
   }
   if (requested === PRIMARY_SUBAGENT_MODEL_CHOICE) {
@@ -291,20 +315,24 @@ export function resolveSubagentBinding(
       },
     });
   }
-  const choice = requested ?? pool.defaultModel;
+  const defaultDisabled = pool.defaultModel === undefined ? undefined : disabledProviderFor(config, pool.defaultModel);
+  const availableChoices = orderedPoolAliases(pool).filter(alias => disabledProviderFor(config, alias) === undefined);
+  const choice = requested ?? (defaultDisabled === undefined ? pool.defaultModel : availableChoices[0] ?? pool.defaultModel);
   if (choice === undefined) {
     throw new Error2(ErrorCodes.CONFIG_INVALID, SECONDARY_MODEL_DEFAULT_MODEL_REQUIRED_MESSAGE, {
       details: { section: SECONDARY_MODEL_SECTION, field: 'defaultModel' },
     });
   }
   if (!Object.hasOwn(pool.models, choice)) {
-    const available = [...Object.keys(pool.models), PRIMARY_SUBAGENT_MODEL_CHOICE];
+    const available = [...availableChoices, PRIMARY_SUBAGENT_MODEL_CHOICE];
     throw new Error2(
       ErrorCodes.CONFIG_INVALID,
       `Invalid model "${choice}". Available models: ${available.join(', ')}.`,
       { details: { model: choice, availableModels: available } },
     );
   }
+  const disabled = disabledProviderFor(config, choice);
+  if (disabled !== undefined) throw providerDisabledError(choice, disabled);
   return { model: choice, thinking: section?.defaultEffort, modelSource: 'secondary_pool' };
 }
 
@@ -325,8 +353,9 @@ export function buildSubagentModelDescriptions(
   if (!exposesSubagentModelChoice(config)) return undefined;
   const pool = resolveSubagentModelPool(config)!;
   const lines = ['Available models (pass via model):'];
-  const defaultModel = pool.defaultModel;
-  for (const alias of orderedPoolAliases(pool)) {
+  const aliases = orderedPoolAliases(pool).filter(alias => disabledProviderFor(config, alias) === undefined);
+  const defaultModel = aliases[0];
+  for (const alias of aliases) {
     const marker = alias === defaultModel ? ' [default]' : '';
     lines.push(formatPoolLine(`${alias}${marker}`, pool.models[alias]!));
   }
@@ -344,8 +373,8 @@ export function buildSubagentModelDescriptions(
 export function buildSubagentModelSummary(config: IConfigService): string | undefined {
   if (!exposesSubagentModelChoice(config)) return undefined;
   const pool = resolveSubagentModelPool(config)!;
-  const labels = orderedPoolAliases(pool).map((alias) =>
-    alias === pool.defaultModel ? `${alias} [default]` : alias,
+  const labels = orderedPoolAliases(pool).filter(alias => disabledProviderFor(config, alias) === undefined).map((alias, index) =>
+    index === 0 ? `${alias} [default]` : alias,
   );
   labels.push(`${PRIMARY_SUBAGENT_MODEL_CHOICE} (your current model and thinking level)`);
   return `Available models (pass via model): ${labels.join(', ')}.`;

@@ -117,6 +117,7 @@ export const providerCatalogItemSchema = z.object({
   default_model: z.string().min(1).optional(),
   api_key_env: z.string().optional(),
   has_api_key: z.boolean(),
+  enabled: z.boolean().optional(),
   status: providerCatalogStatusSchema,
   models: z.array(z.string().min(1)).optional(),
 });
@@ -243,6 +244,7 @@ export function toProtocolProvider(
     default_model: defaultModel,
     api_key_env: provider.apiKeyEnv,
     has_api_key: credential.hasApiKey,
+    enabled: provider.enabled,
     status: credential.hasCredentialConflict
       ? 'error'
       : credential.hasApiKey || credential.hasOAuthToken
@@ -257,7 +259,7 @@ export function modelIdsForProvider(
   providerId: string,
 ): string[] {
   return Object.entries(models)
-    .filter(([, record]) => record.provider === providerId)
+    .filter(([, record]) => (record.providerId ?? record.provider) === providerId)
     .map(([modelId]) => modelId);
 }
 

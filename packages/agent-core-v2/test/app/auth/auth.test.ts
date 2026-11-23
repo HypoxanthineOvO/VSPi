@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
+import { DatabaseSync } from 'node:sqlite';
 import { getGlobalDispatcher, setGlobalDispatcher } from 'undici';
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
@@ -263,6 +264,40 @@ describe('OAuthService', () => {
       expect(providers['anthropic']?.oauth).toBeUndefined();
       expect(await service.listLocalCredentials()).toContainEqual(expect.objectContaining({ id: 'example-local' }));
     } finally { unregister(); }
+  });
+
+  it('links only a reference to an OMP API key, ignores disabled rows and refuses expired tokens without I/O', async () => {
+    const omp = await mkdtemp(join(tmpdir(), 'example-omp-auth-'));
+    vi.stubEnv('OMP_HOME', omp);
+    await mkdir(join(omp, 'agent'));
+    const path = join(omp, 'agent', 'agent.db');
+    const db = new DatabaseSync(path);
+    db.exec('CREATE TABLE auth_credentials (provider TEXT, credential_type TEXT, data TEXT, disabled_cause TEXT, identity_key TEXT)');
+    const insert = db.prepare('INSERT INTO auth_credentials VALUES (?, ?, ?, ?, NULL)');
+    insert.run('deepseek', 'api_key', JSON.stringify({ key: 'YOUR_API_KEY' }), 'disabled');
+    insert.run('deepseek', 'api_key', JSON.stringify({ key: 'YOUR_OTHER_API_KEY' }), null);
+    insert.run('openai-codex', 'oauth', JSON.stringify({ access: 'EXAMPLE_OLD_ACCESS', refresh: 'EXAMPLE_REFRESH', expires: 1 }), null);
+    db.close();
+    const before = await readFile(path);
+    const network = vi.fn(() => Promise.reject(new Error('No network during OMP link')));
+    vi.stubGlobal('fetch', network);
+    try {
+      const service = createService();
+      expect(await service.listLocalCredentials()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'omp-deepseek', provider: 'deepseek' }),
+        expect.objectContaining({ id: 'omp-openai-codex', provider: 'openai-codex' }),
+      ]));
+      expect(providers['deepseek']).toBeUndefined();
+      await expect(service.useLocalCredential('omp-openai-codex')).rejects.toThrow('OMP 凭据已过期');
+      await service.useLocalCredential('omp-deepseek');
+      expect(providers['deepseek']).toMatchObject({ oauth: { storage: 'file', key: 'local-cli/omp-deepseek' }, source: { credential: 'local-cli' } });
+      expect(JSON.stringify(providers)).not.toContain('YOUR_OTHER_API_KEY');
+      expect((await service.resolveRequestAuth('deepseek', undefined, { force: true })).apiKey === 'YOUR_OTHER_API_KEY').toBe(true);
+      await service.logout('deepseek');
+      expect(providers['deepseek']?.oauth).toBeUndefined();
+      expect(network).not.toHaveBeenCalled();
+      expect((await readFile(path)).equals(before)).toBe(true);
+    } finally { await rm(omp, { recursive: true, force: true }); }
   });
 
   it('keeps the previous provider connection when local validation fails', async () => {

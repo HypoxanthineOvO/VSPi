@@ -49,6 +49,7 @@ import {
   resolveModelAuthMaterial,
   resolveModelForReady,
   providerNameFromFlatModel,
+  providerDisabledError,
   type ModelReadyFailureReason,
 } from '#/llm-adapter/model/model-auth';
 import { IModelService, type ModelRecord } from '#/llm-adapter/model/model';
@@ -268,7 +269,7 @@ export class OAuthService extends Disposable implements IOAuthService {
   async logout(provider = KIMI_CODE_PROVIDER_NAME): Promise<OAuthLogoutResponse> {
     if (this.localCredentialId(provider) !== undefined) {
       const current = this.providerService.get(provider);
-      if (current) await this.providerService.set(provider, { ...current, oauth: undefined });
+      if (current) await this.providerService.set(provider, { ...current, oauth: undefined, source: { ...current.source, credential: undefined } });
       return { logged_out: true, provider };
     }
     if (provider !== KIMI_CODE_PROVIDER_NAME && this.pi.handles(provider)) {
@@ -350,7 +351,7 @@ export class OAuthService extends Disposable implements IOAuthService {
       }
       signal.throwIfAborted();
       const current = this.providerService.get(entry.provider);
-      const type = id === 'kimi-cli' ? 'kimi-coding' : current?.type ?? entry.provider;
+      const type = id.startsWith('omp-') ? entry.provider : id === 'kimi-cli' ? 'kimi-coding' : current?.type ?? entry.provider;
       await this.provisionPiModels(entry.provider, type, {
         ...current, type, baseUrl: auth.baseUrl ?? current?.baseUrl,
         source: { ...current?.source, credential: 'local-cli' },
@@ -859,6 +860,9 @@ export class AuthSummaryService implements IAuthSummaryService {
       }
       const resolution = resolveModelForReady(modelId, models, providers, this.providerService.getDefaultProvider());
       if (!resolution.resolved) {
+        if (resolution.reason === 'provider-disabled' && modelId !== undefined) {
+          throw providerDisabledError(modelId, resolution.providerId);
+        }
         throw unresolvedModelError(modelId, resolution.reason, configured);
       }
 

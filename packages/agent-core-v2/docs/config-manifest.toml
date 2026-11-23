@@ -397,6 +397,18 @@ merge_all_available_skills = true
 # one [providers."<name>"] table per entry:
 # [providers."<name>"]
   # model_source: "static" | "discover" | "oauth-catalog"
+  # enabled: boolean
+  # quota: object
+    # mode: "off" | "auto" | "newapi-token" | "newapi-account" | "cpa"
+    # api_profile: "v8" | "v0-compat" | "account" | "token"
+    # management_url: string
+    # management_key: string
+    # management_key_env: string
+    # management_key_ref: string
+    # user_id: string
+    # billing_multiplier: number
+    # region: "cn" | "global"
+    # account_filter: string[]
   # base_url: string
   # custom_headers: record<string, string>
   # default_model: string
