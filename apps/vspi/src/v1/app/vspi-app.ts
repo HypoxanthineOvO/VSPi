@@ -5213,7 +5213,7 @@ export class VspiApp implements Component, Focusable {
 				const result = await this.backend.checkProvider(action.provider.id);
 				const label = providerCheckLabel(result);
 				this.panels.recordProviderCheck(action.provider.id, label);
-				this.showNotice(label, result.ok ? 'success' : 'error');
+				this.showNotice(label.replace(/^[✓✗] /u, ''), result.ok ? 'success' : 'error');
 				return;
 			}
 			if (action.type === 'configureQuota') {
