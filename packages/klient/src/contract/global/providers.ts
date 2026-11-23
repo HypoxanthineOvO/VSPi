@@ -37,6 +37,7 @@ export const providerQuotaConfigSchema = z.object({
 });
 
 export const providerConfigSchema = z.object({
+  name: z.string().optional(),
   modelSource: modelSourceSchema.optional(),
   enabled: z.boolean().optional(),
   quota: providerQuotaConfigSchema.optional(),

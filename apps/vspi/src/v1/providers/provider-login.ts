@@ -34,6 +34,9 @@ export async function loginProvider(klient: Klient, providerId: string, type: 'a
   }
   interaction.signal?.throwIfAborted();
   if (!current) await klient.global.kosong.configureBuiltinProvider(providerId, apiKey);
-  else await klient.global.config.replace({ domain: 'providers', value: { ...inspection.userValue, [providerId]: { ...current, apiKey, apiKeyEnv: undefined, oauth: undefined, source: undefined } } });
+  else {
+    const source = current.source as Record<string, unknown> | undefined;
+    await klient.global.config.replace({ domain: 'providers', value: { ...inspection.userValue, [providerId]: { ...current, apiKey, apiKeyEnv: undefined, oauth: undefined, source: source === undefined ? undefined : { ...source, credential: undefined } } } });
+  }
   interaction.notify({ type: 'info', message: current ? 'API Key 已保存；保留现有模型，未请求模型列表' : 'API Key 已验证并保存到 VSPi Core 配置' });
 }

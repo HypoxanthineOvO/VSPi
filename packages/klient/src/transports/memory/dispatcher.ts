@@ -325,9 +325,9 @@ function redactProvider(provider: unknown): unknown {
   const value = configRecord(provider);
   const quota = configRecord(value?.['quota']);
   if (!value || !quota) return provider;
-  const { managementKey, managementKeyRef, ...publicQuota } = quota;
-  return { ...value, quota: { ...publicQuota, hasManagementKey: typeof managementKey === 'string' && !!managementKey,
-    hasManagementKeyRef: typeof managementKeyRef === 'string' && !!managementKeyRef } };
+  const { managementKey, managementKeyRef, management_key: snakeKey, management_key_ref: snakeRef, ...publicQuota } = quota;
+  return { ...value, quota: { ...publicQuota, hasManagementKey: Boolean(managementKey ?? snakeKey),
+    hasManagementKeyRef: Boolean(managementKeyRef ?? snakeRef) } };
 }
 
 function preserveQuotaSecrets(provider: unknown, previous: unknown): unknown {

@@ -396,6 +396,7 @@ merge_all_available_skills = true
 
 # one [providers."<name>"] table per entry:
 # [providers."<name>"]
+  # name: string
   # model_source: "static" | "discover" | "oauth-catalog"
   # enabled: boolean
   # quota: object

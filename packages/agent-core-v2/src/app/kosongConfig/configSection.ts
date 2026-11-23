@@ -54,6 +54,7 @@ export const ProviderQuotaConfigSchema = z.object({
 });
 
 export const ProviderConfigSchema = z.object({
+  name: z.string().optional(),
   modelSource: ModelSourceSchema.optional(),
   enabled: z.boolean().optional(),
   quota: ProviderQuotaConfigSchema.optional(),
@@ -70,14 +71,17 @@ export const ProviderConfigSchema = z.object({
   source: z.record(z.string(), z.unknown()).optional(),
 });
 
-export const ProvidersSectionSchema = z.record(z.string(), ProviderConfigSchema);
+export const ProvidersSectionSchema = z.record(z.string(), ProviderConfigSchema.extend({
+  oauth: OAuthRefSchema.passthrough().optional(),
+  quota: ProviderQuotaConfigSchema.passthrough().optional(),
+}).passthrough());
 
 type _AssertOAuthRef = AssertExact<Equal<z.infer<typeof OAuthRefSchema>, OAuthRef>>;
 type _AssertProviderConfig = AssertExact<
   Equal<z.infer<typeof ProviderConfigSchema>, ProviderConfig>
 >;
 type _AssertProvidersSection = AssertExact<
-  Equal<z.infer<typeof ProvidersSectionSchema>, ProvidersSection>
+  z.infer<typeof ProvidersSectionSchema> extends ProvidersSection ? true : false
 >;
 
 export const providersEnvBindings = envBindings(ProvidersSectionSchema, {
@@ -140,11 +144,13 @@ function providerEntryToToml(
   }
   for (const [key, value] of Object.entries(provider)) {
     if ((key === 'oauth' || key === 'quota') && isPlainObject(value)) {
-      out[camelToSnake(key)] = plainObjectToToml(value, undefined);
+      const tomlKey = camelToSnake(key);
+      out[tomlKey] = preserveTomlTable(value, out[tomlKey], key === 'oauth' ? OAuthRefSchema : ProviderQuotaConfigSchema, true);
     } else if ((key === 'env' || key === 'customHeaders') && value !== undefined) {
       out[camelToSnake(key)] = cloneRecord(value);
     } else {
-      setDefined(out, camelToSnake(key), value);
+      const tomlKey = Object.hasOwn(ProviderConfigSchema.shape, key) || !Object.hasOwn(out, key) ? camelToSnake(key) : key;
+      setDefined(out, tomlKey, value);
     }
   }
   return out;
@@ -327,39 +333,37 @@ export const modelsToToml = (value: unknown, rawSnake: unknown): unknown => {
   const rawSub = cloneRecord(rawSnake);
   const out: Record<string, unknown> = {};
   for (const [id, entry] of Object.entries(value)) {
-    if (!isPlainObject(entry)) {
-      out[id] = entry;
-      continue;
-    }
-    const merged = cloneRecord(rawSub[id]);
-    for (const [key, field] of Object.entries(entry)) {
-      if (key === 'capabilities' && Array.isArray(field)) {
-        merged[camelToSnake(key)] = [...field];
-      } else if ((key === 'deepseek' || key === 'canonical') && isPlainObject(field)) {
-        merged[camelToSnake(key)] = plainObjectToToml(field, undefined);
-      } else if (key === 'overrides' && isPlainObject(field)) {
-        merged['overrides'] = modelOverridesToToml(field, merged['overrides']);
-      } else {
-        setDefined(merged, camelToSnake(key), field);
-      }
-    }
-    out[id] = merged;
+    out[id] = isPlainObject(entry) ? preserveTomlTable(entry, rawSub[id], ModelRecordSchema, true) : entry;
   }
   return out;
 };
 
-function modelOverridesToToml(
-  overrides: Record<string, unknown>,
-  rawSnake: unknown,
+function preserveTomlTable(
+  value: Record<string, unknown>,
+  raw: unknown,
+  schema: z.ZodObject,
+  snakeKeys: boolean,
 ): Record<string, unknown> {
-  const out = cloneRecord(rawSnake);
-  for (const [key, value] of Object.entries(overrides)) {
-    if ((key === 'deepseek' || key === 'canonical') && isPlainObject(value)) {
-      out[key] = plainObjectToToml(value, undefined);
-    } else if (key === 'capabilities' && Array.isArray(value)) {
-      out[camelToSnake(key)] = [...value];
+  const out = cloneRecord(raw);
+  const shape = schema.shape as Record<string, z.ZodTypeAny>;
+  const knownKey = (key: string) => snakeKeys ? camelToSnake(key) : key;
+  for (const key of Object.keys(shape)) {
+    if (!Object.hasOwn(value, key)) delete out[knownKey(key)];
+  }
+  for (const [key, field] of Object.entries(value)) {
+    const isKnown = Object.hasOwn(shape, key);
+    const storedKey = isKnown || !Object.hasOwn(out, key) ? knownKey(key) : key;
+    const child = isKnown ? unwrapWrapperSchema(shape[key]!) : undefined;
+    if (child instanceof z.ZodObject && isPlainObject(field)) {
+      const convertChildKeys = key === 'canonical' || key === 'deepseek' || key === 'overrides';
+      out[storedKey] = preserveTomlTable(field, out[storedKey], child, convertChildKeys);
+    } else if (child instanceof z.ZodArray && child.element instanceof z.ZodObject && Array.isArray(field)) {
+      const previous = out[storedKey];
+      out[storedKey] = field.map((entry: unknown, index) => isPlainObject(entry)
+        ? preserveTomlTable(entry, Array.isArray(previous) && previous.length === field.length ? previous[index] : undefined, child.element as z.ZodObject, false)
+        : entry);
     } else {
-      setDefined(out, camelToSnake(key), value);
+      setDefined(out, storedKey, field);
     }
   }
   return out;

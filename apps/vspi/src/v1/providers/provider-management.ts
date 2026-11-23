@@ -47,7 +47,7 @@ export async function loadProviderOptions(klient: Klient, label: (id: string) =>
       .toSorted((left, right) => Math.max(right.health?.lastSuccess ?? 0, right.health?.lastFailure?.at ?? 0) - Math.max(left.health?.lastSuccess ?? 0, left.health?.lastFailure?.at ?? 0))[0];
     return {
       modelHealth: latest?.health === undefined ? undefined : { model: latest.model, health: latest.health },
-      id: item.id, label: typeof config?.name === 'string' ? config.name : label(item.id), protocol: stationAuto ? 'auto' : isDevin ? item.type : builtinProviderProtocol(item.type) ?? item.type,
+      id: item.id, label: textField(config?.name) ?? textField(config?.displayName) ?? label(item.id), protocol: stationAuto ? 'auto' : isDevin ? item.type : builtinProviderProtocol(item.type) ?? item.type,
       enabled: item.enabled,
       status: item.enabled === false ? '已停用' : item.status === 'connected' ? '已配置' : item.status === 'error' ? '异常' : '未配置',
       detail: `${(item.models?.length ?? 0)} 个模型`, models: item.models, modelEntries, baseUrl: item.base_url, custom: true, localCredential,

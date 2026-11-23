@@ -7,7 +7,7 @@
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
@@ -16,6 +16,7 @@ import { once } from 'node:events';
 import { Service } from '@moonshot-ai/agent-core-v2/_base/di/service';
 import { overrideScopedService, ScopeActivation } from '@moonshot-ai/agent-core-v2/_base/di/scope';
 import { LifecycleScope } from '@moonshot-ai/agent-core-v2/app/scopes';
+import { IBootstrapService } from '@moonshot-ai/agent-core-v2/app/bootstrap/bootstrap';
 import { CommandContribution } from '@moonshot-ai/agent-core-v2/agent/command/commandContribution';
 import { IFeatureManager } from '@moonshot-ai/agent-core-v2/app/feature/featureManager';
 import {
@@ -556,6 +557,64 @@ export function defineKlientConformance(
         expect(await kosong.listModels()).toContainEqual(expect.objectContaining({ model: alias, max_context_size: 120_000 }));
         await expect(kosong.testProvider('conformance-missing')).resolves.toMatchObject({ ok: false, category: 'config_error' });
       } finally { await config.replaceSections({ sections: { providers: providers.userValue, models: models.userValue, defaultModel: defaultModel.userValue } }); }
+    });
+
+    it('preserves the source name and TOML extensions when toggling and editing', async () => {
+      const { config, kosong } = target.klient.global;
+      const path = target.app.accessor.get(IBootstrapService).configPath;
+      const original = await readFile(path, 'utf8');
+      const id = 'conformance-retained-name';
+      const alias = `${id}/example`;
+      const fixture = `
+[providers.${id}]
+name = "本地余额来源"
+type = "openai"
+base_url = "https://example.test/v1"
+api_key = "YOUR_API_KEY"
+future_hint = "provider metadata"
+[providers.${id}.quota]
+mode = "cpa"
+management_key_env = "YOUR_ENV_VAR"
+future_policy = "quota metadata"
+[providers.${id}.source]
+future_source = "source metadata"
+[models."${alias}"]
+provider = "${id}"
+model = "example"
+display_name = "我的模型"
+max_context_size = 131072
+future_model = "model metadata"
+[models."${alias}".overrides]
+max_context_size = 120000
+future_override = "override metadata"
+[models."${alias}".thinking]
+availability = "always"
+future_thinking = "thinking metadata"
+`;
+      type ConfigRecords = Record<string, Record<string, unknown>>;
+      try {
+        await writeFile(path, original + fixture);
+        await config.reload();
+        const providerValue = async () => (await config.inspect<ConfigRecords>('providers')).userValue;
+        const name = '本地余额来源';
+        for (const enabled of [false, true]) {
+          const current = await providerValue();
+          await config.replace({ domain: 'providers', value: { ...current, [id]: { ...current?.[id], enabled } } });
+          expect((await providerValue())?.[id]).toMatchObject({ name, enabled, futureHint: 'provider metadata', source: { future_source: 'source metadata' }, quota: { futurePolicy: 'quota metadata' } });
+          expect(await kosong.getProvider(id)).toMatchObject({ enabled });
+        }
+        const current = await providerValue();
+        await config.replace({ domain: 'providers', value: { ...current, [id]: { ...current?.[id], quota: { mode: 'off' } } } });
+        const { userValue: models } = await config.inspect<ConfigRecords>('models');
+        const model = models?.[alias];
+        await config.replace({ domain: 'models', value: { ...models, [alias]: { ...model, protocol: 'openai_responses', overrides: { ...model?.['overrides'] as object, maxContextSize: 140000 } } } });
+        await config.reload();
+        expect((await providerValue())?.[id]).toMatchObject({ name, enabled: true, futureHint: 'provider metadata', quota: { mode: 'off', futurePolicy: 'quota metadata' } });
+        expect((await providerValue())?.[id]?.['quota']).not.toHaveProperty('managementKeyEnv');
+        expect(await kosong.listModels()).toContainEqual(expect.objectContaining({ model: alias, display_name: '我的模型', protocol: 'openai_responses', max_context_size: 140000 }));
+        const saved = await readFile(path, 'utf8');
+        for (const key of ['future_hint', 'future_policy', 'future_source', 'future_model', 'future_override', 'future_thinking']) expect(saved).toContain(key);
+      } finally { await writeFile(path, original); await config.reload(); }
     });
 
     it('settings reads a sanitized snapshot and round-trips provider edits', async () => {

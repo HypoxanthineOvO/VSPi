@@ -13,6 +13,7 @@ export interface OAuthRef {
 export type ModelSource = 'static' | 'discover' | 'oauth-catalog';
 
 export interface ProviderConfig {
+  name?: string;
   modelSource?: ModelSource;
   enabled?: boolean;
   quota?: ProviderQuotaConfig;
