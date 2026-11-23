@@ -217,6 +217,41 @@ describe("VSPi auth setup", () => {
     expect(useLocalCredential).toHaveBeenCalledOnce();
   });
 
+  it.each([['codex-cli', 2], ['omp-openai-codex', 1]] as const)('offers both Codex credential sources and links only %s', async (credentialId, steps) => {
+    const useLocalCredential = vi.fn(async () => {});
+    const klient = { global: {
+      config: { get: async () => undefined, inspect: async () => ({ userValue: {} }) },
+      auth: { listLoginProviders: async () => [], listLocalCredentials: async () => [
+        { id: 'codex-cli', provider: 'openai-codex', name: 'Codex CLI' },
+        { id: 'kimi-cli', provider: 'kimi-coding', name: 'Kimi CLI' },
+        { id: 'omp-openai-codex', provider: 'openai-codex', name: 'OMP (openai-codex)' },
+      ], useLocalCredential },
+      kosong: {
+        listProviders: async () => [{ id: 'openai-codex', type: 'openai-codex', status: 'connected', models: ['example-model'] }],
+        listBuiltinProviders: async () => [],
+        listModels: async () => [{ provider: 'openai-codex', model: 'example-model' }],
+      },
+    } } as unknown as Klient;
+    const app = new AuthSetupApp(new TuiMainScreen(new VirtualTerminal(100, 30)), createTheme(detectTerminalCapabilities(), 'Terminal'), klient, 'config', vi.fn(), false);
+    const text = () => stripAnsi(app.render(100).join('\n'));
+    await app.load();
+    app.handleInput('r');
+    expect(text()).toContain('复用本机 Codex CLI');
+    expect(text()).toContain('复用本机 OMP (openai-codex)');
+    expect(text()).not.toContain('Kimi CLI');
+    expect(text()).toContain('› 取消');
+    app.handleInput('\r');
+    expect(useLocalCredential).not.toHaveBeenCalled();
+
+    app.handleInput('r');
+    for (let index = 0; index < steps; index++) app.handleInput('\u001B[A');
+    app.handleInput('\r');
+    expect(useLocalCredential).toHaveBeenCalledExactlyOnceWith(credentialId, expect.any(AbortSignal));
+    await vi.waitFor(() => expect(text()).toContain('默认模型'));
+    app.handleInput('\u001B');
+    await vi.waitFor(() => expect(text()).toContain('管理连接'));
+  });
+
   it('aborts an in-flight config local link when Escape closes the dialog', async () => {
     let signal: AbortSignal | undefined;
     const useLocalCredential = vi.fn(async (_id: string, pendingSignal?: AbortSignal) => {

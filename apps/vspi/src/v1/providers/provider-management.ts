@@ -1,7 +1,7 @@
 import type { Klient } from '@moonshot-ai/klient';
 import { accountProxyForUrl, builtinProviderProtocol, lookupBuiltinModelMetadata, withScopedProxy } from '@vsp/vsp-runtime';
 import type { ProviderOption } from '../domain/types.js';
-import type { GatewayFormValue } from '../ui/provider-manager.js';
+import type { GatewayFormValue, ProviderManagerOption } from '../ui/provider-manager.js';
 import type { LookupBuiltinModelMetadataView, ProviderConnectivityTestResult, ProviderModelOverridePatch, ProviderQuotaConfig } from './provider-contract.js';
 import { configuredProxy } from './proxy-setup.js';
 import { customProviderId, fetchProviderModels, modelsFromManualInput, type CustomProviderProtocol, type DiscoveredModel } from './custom-provider.js';
@@ -9,7 +9,7 @@ import { customProviderId, fetchProviderModels, modelsFromManualInput, type Cust
 type ConfigRecord = Record<string, unknown>;
 type ConfigRecords = Record<string, ConfigRecord>;
 
-export async function loadProviderOptions(klient: Klient, label: (id: string) => string): Promise<ProviderOption[]> {
+export async function loadProviderOptions(klient: Klient, label: (id: string) => string): Promise<ProviderManagerOption[]> {
   const [providers, builtins, logins, inspection, local, defaultModel, models, modelInspection] = await Promise.all([
     klient.global.kosong.listProviders(), klient.global.kosong.listBuiltinProviders(), klient.global.auth.listLoginProviders(),
     klient.global.config.inspect<Record<string, Record<string, unknown>>>('providers'),
@@ -25,8 +25,8 @@ export async function loadProviderOptions(klient: Klient, label: (id: string) =>
       (item.type === 'vsplab' || (item.id === 'vsplab' && item.type === 'openai')));
     const isDevin = item.type === 'devin' || item.id === 'devin';
     const linkedId = (oauth as { key?: string } | undefined)?.key?.split('local-cli/')[1];
-    const localCredential = local.find(entry => entry.provider === item.id && entry.id === linkedId)
-      ?? local.find(entry => entry.provider === item.id);
+    const localCredentials = local.filter(entry => entry.provider === item.id);
+    const localCredential = localCredentials.find(entry => entry.id === linkedId) ?? localCredentials[0];
     const modelEntries = item.models?.map(id => {
       const model = models.find(entry => entry.model === id && entry.provider === item.id);
       const record = modelInspection.value?.[id];
@@ -50,7 +50,7 @@ export async function loadProviderOptions(klient: Klient, label: (id: string) =>
       id: item.id, label: textField(config?.name) ?? textField(config?.displayName) ?? label(item.id), protocol: stationAuto ? 'auto' : isDevin ? item.type : builtinProviderProtocol(item.type) ?? item.type,
       enabled: item.enabled,
       status: item.enabled === false ? '已停用' : item.status === 'connected' ? '已配置' : item.status === 'error' ? '异常' : '未配置',
-      detail: `${(item.models?.length ?? 0)} 个模型`, models: item.models, modelEntries, baseUrl: item.base_url, custom: true, localCredential,
+      detail: `${(item.models?.length ?? 0)} 个模型`, models: item.models, modelEntries, baseUrl: item.base_url, custom: true, localCredential, localCredentials,
       storedCredential: oauth !== undefined ? 'oauth' : item.has_api_key || config?.apiKeyEnv !== undefined ? 'api_key' : undefined,
       authLabel: oauth !== undefined ? source?.credential === 'local-cli' || (oauth as { key?: string }).key?.startsWith('local-cli/')
         ? `复用本机 ${localCredential?.name ?? (isDevin ? 'Devin CLI' : 'CLI')} 凭据` : source?.credential === 'browser' ? '浏览器登录' : '订阅账号（来源未标注）' : undefined,
@@ -60,7 +60,7 @@ export async function loadProviderOptions(klient: Klient, label: (id: string) =>
         ...(localCredential !== undefined && !localCredential.id.startsWith('omp-')) || logins.some(login => login.id === item.id || login.id === item.type)
           ? [{ type: 'oauth' as const, label: '本机凭据 / 订阅账号' }] : [],
       ],
-    } satisfies ProviderOption;
+    } satisfies ProviderManagerOption;
   });
 }
 

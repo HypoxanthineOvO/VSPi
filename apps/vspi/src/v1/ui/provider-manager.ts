@@ -20,6 +20,10 @@ export function providerProtocolLabel(protocol: string): string {
 
 function printableChar(data: string): string { return decodeKittyPrintable(data) ?? data; }
 
+export interface ProviderManagerOption extends ProviderOption {
+  localCredentials?: readonly NonNullable<ProviderOption['localCredential']>[];
+}
+
 export interface ProviderManagerDetail {
   authLabel?: string;
   account?: string;
@@ -49,6 +53,10 @@ function providerModels(provider: ProviderOption, models = provider.models): rea
   return provider.modelEntries ?? models?.map(id => ({ id, wireModel: id })) ?? [];
 }
 
+function providerLocalCredentials(provider: ProviderManagerOption) {
+  return provider.localCredentials ?? (provider.localCredential ? [provider.localCredential] : []);
+}
+
 function safeEndpoint(value?: string): string {
   if (!value) return '由 Provider 管理';
   try {
@@ -59,7 +67,7 @@ function safeEndpoint(value?: string): string {
 }
 
 export function renderProviderManager(
-  providers: readonly ProviderOption[],
+  providers: readonly ProviderManagerOption[],
   state: ProviderManagerState,
   width: number,
   height: number,
@@ -73,7 +81,7 @@ export function renderProviderManager(
   const selected = providers[state.selected];
   const snapshotNow = quota?.now ?? now;
   const quotaFor = (provider: ProviderOption) => quota?.items.filter(item => item.providerId === provider.id) ?? [];
-  const local = [...new Set(providers.flatMap(provider => provider.localCredential ? [quotaLabel(provider.localCredential.name)] : []))];
+  const local = [...new Set(providers.flatMap(provider => providerLocalCredentials(provider).map(credential => quotaLabel(credential.name))))];
   const banner = local.length > 0 ? theme.success(`  ·  R 复用本机凭据：${local.join(' / ')}`) : '';
   const header = [renderProviderTabs('source', theme) + banner,
     `${theme.muted('/ 搜索来源  ')}${state.query || theme.muted('输入名称筛选')}${state.searching ? theme.inverse(' ') : ''}`];
@@ -183,7 +191,7 @@ type ProviderForm = ProviderGatewayForm | ProviderQuotaForm | ProviderModelForm;
 
 export class ProviderManagerController {
   readonly state: ProviderManagerState = { selected: 0, query: '', searching: false, detail: false, modelFocus: false, modelOffset: 0 };
-  private providers: ProviderOption[] = [];
+  private providers: ProviderManagerOption[] = [];
   private readonly search = new Input();
   private menu?: { label: string; action?: ProviderManagerAction }[];
   private menuSelected = 0;
@@ -221,7 +229,7 @@ export class ProviderManagerController {
     this.state.selected = Math.min(this.state.selected, Math.max(0, this.providers.length));
   }
 
-  setProviders(providers: readonly ProviderOption[]): void {
+  setProviders(providers: readonly ProviderManagerOption[]): void {
     const previous = this.visible()[this.state.selected]?.id;
     this.providers = SOURCE_GROUPS.flatMap(group => providers.filter(provider => sourceGroup(provider) === group));
     const index = this.visible().findIndex(provider => provider.id === previous);
@@ -373,9 +381,15 @@ export class ProviderManagerController {
       if (char === 'c') return { type: 'configureQuota', provider };
       if (char === 'f') return { type: 'refreshModels', provider };
     }
-    if (char === 'r' && provider.localCredential) {
-      this.menu = [{ label: `复用本机 ${quotaLabel(provider.localCredential.name)} → ${quotaLabel(provider.label)}`, action: { type: 'local', provider } }, { label: '取消' }];
-      this.menuSelected = 1;
+    if (char === 'r') {
+      const credentials = providerLocalCredentials(provider);
+      if (credentials.length === 0) return;
+      this.menu = [...credentials.map(localCredential => ({
+        label: `复用本机 ${localCredential.name} → ${provider.label}`,
+        action: { type: 'local' as const, provider: { ...provider, localCredential } },
+      })), { label: '取消' }];
+      this.menuSelected = credentials.length;
+      return;
     }
     if (char === 'd' && provider.storedCredential) {
       this.menu = [{ label: `确认移除 ${provider.label} 的凭据（不删除外部 CLI 文件）`, action: { type: 'remove', provider } }];
