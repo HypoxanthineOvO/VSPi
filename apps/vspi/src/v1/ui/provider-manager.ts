@@ -447,7 +447,7 @@ export class ProviderGatewayForm {
   constructor(
     private readonly submit: (value: GatewayFormValue) => void,
     private readonly cancel: () => void,
-    initial?: Partial<GatewayFormValue>,
+    private readonly initial?: Partial<GatewayFormValue>,
   ) {
     this.inputs[0]!.setValue(initial?.name ?? '');
     this.inputs[1]!.setValue(initial?.baseUrl ?? '');
@@ -483,11 +483,14 @@ export class ProviderGatewayForm {
   }
 
   render(width: number, theme: VspiTheme): string[] {
-    const labels = ['名称', 'Base URL', '协议', 'API Key', '模型 ID（自动发现失败时填写，逗号或空格分隔）'];
-    const values = [this.inputs[0]!.getValue(), this.inputs[1]!.getValue(), GATEWAY_PROTOCOLS[this.protocolIndex]!.label, '•'.repeat(Math.min(32, this.inputs[2]!.getValue().length)), this.inputs[3]!.getValue()];
+    const labels = ['名称', 'Base URL', '协议', 'API Key', '模型 ID（可手动填写，逗号或空格分隔）'];
+    const protocol = GATEWAY_PROTOCOLS[this.protocolIndex]!;
+    const values = [this.inputs[0]!.getValue(), this.inputs[1]!.getValue(), protocol.label, '•'.repeat(Math.min(32, this.inputs[2]!.getValue().length)), this.inputs[3]!.getValue()];
+    const keyHint = this.initial?.baseUrl === values[1]?.trim() && this.initial?.protocol === protocol.id ? '留空保留现有凭据' : '请输入 API Key';
+    const placeholders = ['请输入', 'https://gateway.example.com/v1', '', keyHint, '例如 model-a, model-b'];
     return [theme.bold(theme.focus('自定义中转站')), '',
       ...labels.flatMap((label, index) => [theme.muted(truncateToWidth(label, width)),
-        padLine(truncateToWidth(`${index === this.field ? '› ' : '  '}${values[index] || theme.muted(index === 4 ? '可选，例如 model-a, model-b' : index === 3 ? '留空保留现有凭据' : index === 1 ? 'https://gateway.example.com/v1' : '请输入')}${index === this.field ? theme.inverse(' ') : ''}${index === 2 ? theme.muted('  ← → 选择') : ''}`, width), width)]), '',
+        padLine(truncateToWidth(`${index === this.field ? '› ' : '  '}${values[index] || theme.muted(placeholders[index]!)}${index === this.field ? theme.inverse(' ') : ''}${index === 2 ? theme.muted('  ← → 选择') : ''}`, width), width)]), '',
       this.busy ? theme.muted('正在测试并保存…') : this.field === 5 ? theme.selected('› 测试并保存') : '  测试并保存',
       ...(this.error ? [theme.warning(truncateToWidth(this.error, width))] : []), '',
       truncateToWidth(theme.muted('Tab / Shift-Tab 切换字段 · Ctrl+S 测试并保存 · Esc 取消'), width)];

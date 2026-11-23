@@ -79,21 +79,29 @@ export async function saveProviderGateway(
   const auto = siteProtocol === undefined;
   const existingType = textField(current?.type);
   const type = auto ? id === 'vsplab' ? 'vsplab' : 'openai' : value.protocol === provider?.protocol ? existingType ?? siteProtocol : siteProtocol;
-  const inlineKey = value.apiKey.trim() || textField(current?.apiKey) || '';
+  const newKey = value.apiKey.trim();
   const protocolChanged = value.protocol !== provider?.protocol;
-  const connectionChanged = value.baseUrl !== provider?.baseUrl || protocolChanged;
-  if (!inlineKey && (value.apiKey || connectionChanged || !provider || requireDiscovery)) throw new Error('更改连接或添加中转站需要 API Key；账号凭据不能发送到自定义 Endpoint');
+  const configuredBaseUrl = textField(providerInspection.value?.[id]?.baseUrl) ?? textField(current?.baseUrl);
+  const connectionChanged = protocolChanged || value.baseUrl !== provider?.baseUrl ||
+    (configuredBaseUrl !== undefined && value.baseUrl !== configuredBaseUrl);
+  if (requireDiscovery && connectionChanged) throw new Error('来源连接已改变，请重新打开面板后刷新');
+  if (!newKey && (!provider || connectionChanged)) throw new Error('更改 Endpoint 或协议、添加中转站时，请重新输入 API Key');
+  const discoveryKey = newKey || (requireDiscovery && current?.oauth === undefined ? textField(current?.apiKey)?.trim() : undefined);
+  if (requireDiscovery && !discoveryKey) {
+    if (textField(current?.apiKeyEnv)?.trim()) throw new Error('此来源通过环境变量提供 API Key，暂不支持在面板内刷新模型；可按 E 手动填写模型 ID');
+    throw new Error('此来源没有可用于刷新模型的 API Key');
+  }
   let discovered: DiscoveredModel[] = [];
-  if (inlineKey) {
+  if (discoveryKey) {
     try {
       const proxy = accountProxyForUrl(value.baseUrl, await configuredProxy(klient));
-      discovered = await withScopedProxy(proxy, () => fetchProviderModels(value.baseUrl, siteProtocol ?? 'openai', inlineKey));
+      discovered = await withScopedProxy(proxy, () => fetchProviderModels(value.baseUrl, siteProtocol ?? 'openai', discoveryKey));
     } catch (error) {
       if (requireDiscovery) throw error;
       if (value.modelIds?.trim()) discovered = modelsFromManualInput(value.modelIds);
       else if (connectionChanged || !provider?.models?.length) throw new Error(`请填写模型 ID 后重试：${error instanceof Error ? error.message : '自动发现失败'}`, { cause: error });
     }
-  }
+  } else if (value.modelIds?.trim()) discovered = modelsFromManualInput(value.modelIds);
   const [latestProviders, latestModels, defaultModel] = await Promise.all([
     klient.global.config.inspect<ConfigRecords>('providers'),
     klient.global.config.inspect<ConfigRecords>('models'),
@@ -135,8 +143,8 @@ export async function saveProviderGateway(
   const source = current?.source as ConfigRecord | undefined;
   await klient.global.config.replaceSections({ sections: {
     providers: { ...latestProviders.userValue, [id]: { ...current, name: value.name, type, baseUrl: value.baseUrl,
-      apiKey: inlineKey || current?.apiKey, apiKeyEnv: inlineKey ? undefined : current?.apiKeyEnv, oauth: inlineKey ? undefined : current?.oauth,
-      source: { ...source, kind: source?.kind ?? (id === 'vsplab' ? 'vsp-models' : 'custom-gateway'), modelProtocol: auto ? 'auto' : 'explicit', credential: inlineKey ? undefined : source?.credential } } },
+      apiKey: newKey || current?.apiKey, apiKeyEnv: newKey ? undefined : current?.apiKeyEnv, oauth: newKey ? undefined : current?.oauth,
+      source: { ...source, kind: source?.kind ?? (id === 'vsplab' ? 'vsp-models' : 'custom-gateway'), modelProtocol: auto ? 'auto' : 'explicit', credential: newKey ? undefined : source?.credential } } },
     models: nextModels,
     defaultModel: defaultModel || Object.entries(nextModels).find(([, model]) => current?.enabled !== false && (model.providerId ?? model.provider) === id)?.[0],
   } });

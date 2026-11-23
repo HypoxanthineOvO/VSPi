@@ -59,6 +59,90 @@ describe("VSPi auth setup", () => {
     }
   });
 
+  function customGatewayFixture(credential: Record<string, unknown>) {
+    const id = 'custom-example';
+    const provider = { id, label: 'Example Gateway', protocol: 'openai', baseUrl: 'https://gateway.example.test/v1', status: '已配置' as const, detail: '', models: [`${id}/existing-model`] };
+    const current = { name: provider.label, baseUrl: provider.baseUrl, type: provider.protocol, ...credential };
+    const model = { provider: id, model: 'existing-model', overrides: { displayName: 'My model' } };
+    const sections: Record<string, unknown> = { providers: { [id]: current }, models: { [provider.models[0]!]: model }, defaultModel: provider.models[0] };
+    const replaceSections = vi.fn(async ({ sections: next }: { sections: Record<string, unknown> }) => { Object.assign(sections, next); });
+    const refreshProviders = vi.fn();
+    const klient = { global: {
+      config: { inspect: async (key: string) => ({ value: sections[key], userValue: sections[key] }), get: async (key: string) => sections[key], replaceSections },
+      kosong: { refreshProviders },
+    } } as unknown as Klient;
+    const fetch = vi.fn(async () => Response.json({ data: [{ id: 'existing-model' }, { id: 'discovered-model' }] }));
+    vi.stubGlobal('fetch', fetch);
+    const form = { name: provider.label, baseUrl: provider.baseUrl, protocol: provider.protocol, apiKey: '' };
+    return { klient, provider, form, model, sections, fetch, refreshProviders, replaceSections };
+  }
+
+  it('explains why an environment-only custom gateway cannot be refreshed without making a request', async () => {
+    const { refreshProviderGateway } = await import('../src/v1/providers/provider-management.js');
+    const { klient, provider, fetch, refreshProviders, replaceSections } = customGatewayFixture({ apiKeyEnv: 'EXAMPLE_API_KEY' });
+    await expect(refreshProviderGateway(klient, provider)).rejects.toThrow('此来源通过环境变量提供 API Key，暂不支持在面板内刷新模型；可按 E 手动填写模型 ID');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(refreshProviders).not.toHaveBeenCalled();
+    expect(replaceSections).not.toHaveBeenCalled();
+  });
+
+  it('refreshes a custom gateway with an inline API key at its configured Endpoint', async () => {
+    const { refreshProviderGateway } = await import('../src/v1/providers/provider-management.js');
+    const { klient, provider, model, sections, fetch } = customGatewayFixture({ apiKey: 'EXAMPLE_OLD_KEY' });
+    await refreshProviderGateway(klient, provider);
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(`${provider.baseUrl}/models`, expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer EXAMPLE_OLD_KEY' }) }));
+    expect(sections.models).toMatchObject({ [`${provider.id}/existing-model`]: model, [`${provider.id}/discovered-model`]: { model: 'discovered-model' } });
+  });
+
+  it.each([
+    { apiKey: 'EXAMPLE_OLD_KEY' }, { apiKeyEnv: 'EXAMPLE_API_KEY' }, { oauth: { key: 'local-cli/example' } },
+  ])('blocks Endpoint and protocol changes without a newly entered key (%j)', async credential => {
+    const { saveProviderGateway } = await import('../src/v1/providers/provider-management.js');
+    const { klient, provider, form, fetch, replaceSections } = customGatewayFixture(credential);
+    for (const changes of [{ baseUrl: 'https://new.example.test/v1' }, { protocol: 'openai_responses' }]) {
+      await expect(saveProviderGateway(klient, { ...form, ...changes }, provider)).rejects.toThrow('请重新输入 API Key');
+    }
+    expect(fetch).not.toHaveBeenCalled();
+    expect(replaceSections).not.toHaveBeenCalled();
+  });
+
+  it('sends only the newly entered key to a changed Endpoint and removes the subscription reference', async () => {
+    const { saveProviderGateway } = await import('../src/v1/providers/provider-management.js');
+    const { klient, provider, form, fetch, sections } = customGatewayFixture({ oauth: { key: 'local-cli/example' }, source: { credential: 'local-cli' } });
+    const baseUrl = 'https://new.example.test/v1';
+    await saveProviderGateway(klient, { ...form, baseUrl, apiKey: 'EXAMPLE_NEW_KEY' }, provider);
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(`${baseUrl}/models`, expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer EXAMPLE_NEW_KEY' }) }));
+    expect(sections.providers).toMatchObject({ [provider.id]: { baseUrl, apiKey: 'EXAMPLE_NEW_KEY', apiKeyEnv: undefined, oauth: undefined, source: { credential: undefined } } });
+  });
+
+  it.each([{ apiKeyEnv: 'EXAMPLE_API_KEY' }, { apiKey: 'EXAMPLE_OLD_KEY' }])('allows a name-only edit without requesting, changing or sending a key (%j)', async credential => {
+    const { saveProviderGateway } = await import('../src/v1/providers/provider-management.js');
+    const { klient, provider, form, model, sections, fetch } = customGatewayFixture(credential);
+    await saveProviderGateway(klient, { ...form, name: 'Renamed Gateway' }, provider);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(sections.providers).toMatchObject({ [provider.id]: { ...credential, name: 'Renamed Gateway' } });
+    expect(sections.models).toEqual({ [`${provider.id}/existing-model`]: model });
+    expect(sections.defaultModel).toBe(`${provider.id}/existing-model`);
+  });
+
+  it('accepts manual model IDs at the unchanged Endpoint with an environment credential', async () => {
+    const { saveProviderGateway } = await import('../src/v1/providers/provider-management.js');
+    const { klient, provider, form, sections, fetch } = customGatewayFixture({ apiKeyEnv: 'EXAMPLE_API_KEY' });
+    await saveProviderGateway(klient, { ...form, modelIds: 'manual-model' }, provider);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(sections.providers).toMatchObject({ [provider.id]: { apiKeyEnv: 'EXAMPLE_API_KEY' } });
+    expect(sections.models).toMatchObject({ [`${provider.id}/manual-model`]: { model: 'manual-model' } });
+  });
+
+  it('blocks a refresh or keyless edit if the selected Endpoint is no longer configured', async () => {
+    const { refreshProviderGateway, saveProviderGateway } = await import('../src/v1/providers/provider-management.js');
+    const { klient, provider, form, fetch, replaceSections } = customGatewayFixture({ apiKey: 'EXAMPLE_OLD_KEY', baseUrl: 'https://changed.example.test/v1' });
+    await expect(refreshProviderGateway(klient, provider)).rejects.toThrow('来源连接已改变');
+    await expect(saveProviderGateway(klient, form, provider)).rejects.toThrow('请重新输入 API Key');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(replaceSections).not.toHaveBeenCalled();
+  });
+
   it('isolates search input from letter actions and exits search with Escape', async () => {
     const { ProviderManagerController } = await import('../src/v1/ui/provider-manager.js');
     const manager = new ProviderManagerController();
@@ -199,7 +283,7 @@ describe("VSPi auth setup", () => {
     records()[gpt]!.overrides = { maxContextSize: 180_000, displayName: 'My model' };
     await setProviderModelOverride(klient, id, gpt, { protocol: 'openai_responses', maxContextSize: 200_000 });
     await setProviderEnabled(klient, id, false);
-    await saveProviderGateway(klient, { ...value, apiKey: '', protocol: 'openai' }, { id, label: value.name, protocol: 'auto', baseUrl: value.baseUrl, status: '已停用', detail: '' });
+    await saveProviderGateway(klient, { ...value, protocol: 'openai' }, { id, label: value.name, protocol: 'auto', baseUrl: value.baseUrl, status: '已停用', detail: '' });
     expect(records()[gpt]).toMatchObject({ protocol: 'openai_responses', defaultProtocol: 'openai', overrides: { maxContextSize: 200_000, displayName: 'My model' } });
     expect(records()[claude]?.defaultProtocol).toBe('openai');
     expect((sections.providers as Records)[id]).toMatchObject({ enabled: false, apiKey: 'YOUR_API_KEY' });
