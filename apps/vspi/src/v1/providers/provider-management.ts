@@ -127,7 +127,8 @@ export async function saveProviderGateway(
         adaptiveThinking: metadata?.adaptiveThinking, pricing: metadata?.pricing, pricingSource: metadata?.pricingSource,
         defaultProtocol,
       };
-      nextModels[alias] = { ...inherited, ...existing, provider: id, model: existing?.model ?? effective?.model ?? model.id,
+      const missing = Object.fromEntries(Object.entries(inherited).filter(([key, field]) => field !== undefined && effective?.[key] === undefined));
+      nextModels[alias] = { ...missing, ...existing, provider: id, model: existing?.model ?? effective?.model ?? model.id,
         defaultProtocol: protocolChanged ? defaultProtocol : existing?.defaultProtocol ?? effective?.defaultProtocol ?? defaultProtocol };
     }
   }
